@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-04
 
-**Status:** Design approved; written specification awaiting final review
+**Status:** Approved for implementation planning
 
 ## Summary
 
@@ -88,17 +88,17 @@ On narrow screens, refresh history stacks below the character list.
 
 The approved initial tokens are:
 
-| Role | Value |
-| --- | --- |
-| Page background | `#09090f` |
-| Raised surface | `#111119` |
-| Border | `#22222d` |
-| Primary text | `#f4f4f5` |
-| Muted text | `#858594` |
-| Frost-blue accent | `#38bdf8` |
-| Accent ink | `#062a3c` |
+| Role               | Value     |
+| ------------------ | --------- |
+| Page background    | `#09090f` |
+| Raised surface     | `#111119` |
+| Border             | `#22222d` |
+| Primary text       | `#f4f4f5` |
+| Muted text         | `#858594` |
+| Frost-blue accent  | `#38bdf8` |
+| Accent ink         | `#062a3c` |
 | Successful refresh | `#22c55e` |
-| Partial refresh | `#f59e0b` |
+| Partial refresh    | `#f59e0b` |
 
 Focus treatments must remain visible against obsidian, and text/action combinations must meet WCAG AA contrast requirements.
 
