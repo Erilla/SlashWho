@@ -9,6 +9,7 @@
 temp/
 tmp/
 .superpowers/
+.worktrees/
 
 # Operating-system metadata
 .DS_Store
