@@ -1,0 +1,39 @@
+name: Bug report
+description: Report behavior that is incorrect or unexpectedly fails
+title: "bug: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve SlashWho. Do not include credentials or private account data.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the incorrect behavior and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: character_url
+    attributes:
+      label: Raider.IO character URL
+      description: Include the public starting URL when it is relevant to the problem.
+      placeholder: https://raider.io/characters/eu/silvermoon/Ryii
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest sequence that reliably reproduces the problem.
+      placeholder: |
+        1. Open ...
+        2. Enter ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Add relevant screenshots, timestamps, or sanitized logs.
