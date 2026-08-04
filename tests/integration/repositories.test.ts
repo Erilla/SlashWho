@@ -162,6 +162,74 @@ describe("PostgreSQL repositories", () => {
     expect(counts.rows[0]).toEqual({ characters: "0", snapshots: "0" });
   });
 
+  it("avoids deadlocks for overlapping snapshots with inverse display order", async () => {
+    const firstRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const secondRun = await repositories.runs.createOrReuse(
+      altKey,
+      "anonymous"
+    );
+    await pool.query(`
+      CREATE FUNCTION test_pause_character_write() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_sleep(0.2);
+        RETURN NEW;
+      END
+      $$;
+      CREATE TRIGGER test_pause_character_write
+      AFTER INSERT OR UPDATE ON characters
+      FOR EACH ROW EXECUTE FUNCTION test_pause_character_write();
+    `);
+
+    let results: PromiseSettledResult<StoredSnapshot>[];
+    try {
+      results = await Promise.allSettled([
+        repositories.snapshots.create({
+          runId: firstRun.id,
+          rootKey,
+          state: "complete",
+          limitationCode: null,
+          refreshedAt: new Date("2026-08-04T12:00:00.000Z"),
+          characters: [
+            observation(rootKey, "Ryii"),
+            observation(altKey, "Other", "claimed")
+          ]
+        }),
+        repositories.snapshots.create({
+          runId: secondRun.id,
+          rootKey: altKey,
+          state: "complete",
+          limitationCode: null,
+          refreshedAt: new Date("2026-08-04T12:00:00.000Z"),
+          characters: [
+            observation(altKey, "Other"),
+            observation(rootKey, "Ryii", "claimed")
+          ]
+        })
+      ]);
+    } finally {
+      await pool.query("DROP TRIGGER test_pause_character_write ON characters");
+      await pool.query("DROP FUNCTION test_pause_character_write() CASCADE");
+    }
+
+    expect(results.every(({ status }) => status === "fulfilled")).toBe(true);
+    if (results[0]?.status === "fulfilled") {
+      expect(results[0].value.characters.map(({ key }) => key)).toEqual([
+        rootKey,
+        altKey
+      ]);
+    }
+    if (results[1]?.status === "fulfilled") {
+      expect(results[1].value.characters.map(({ key }) => key)).toEqual([
+        altKey,
+        rootKey
+      ]);
+    }
+  });
+
   it("rejects a snapshot whose root does not match its discovery run", async () => {
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
 

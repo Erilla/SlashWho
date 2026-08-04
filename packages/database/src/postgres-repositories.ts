@@ -327,7 +327,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           }
 
           const characterIds = new Map<string, string>();
-          for (const character of input.characters) {
+          const charactersByCanonicalKey = [...input.characters].sort(
+            (left, right) => {
+              const leftKey = `${left.key.region}\0${left.key.realm}\0${left.key.name}`;
+              const rightKey = `${right.key.region}\0${right.key.realm}\0${right.key.name}`;
+              return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+            }
+          );
+          for (const character of charactersByCanonicalKey) {
             const result = await client.query<{ id: string }>(
               `INSERT INTO characters
                 (region, realm_slug, normalized_name, display_name, class_name,

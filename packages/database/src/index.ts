@@ -1,5 +1,3 @@
-export { createDatabase } from "./client";
-export type { Database } from "./client";
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
 export type {
@@ -19,4 +17,3 @@ export type {
   StoredSnapshotCharacter,
   SuppressionRepository
 } from "./repositories";
-export * as schema from "./schema";
