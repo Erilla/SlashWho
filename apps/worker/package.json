@@ -1,0 +1,9 @@
+{
+  "name": "@slashwho/worker",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@slashwho/contracts",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  }
+}

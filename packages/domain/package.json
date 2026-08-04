@@ -1,0 +1,8 @@
+{
+  "name": "@slashwho/domain",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  }
+}
