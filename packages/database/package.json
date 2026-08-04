@@ -1,8 +1,19 @@
 {
   "name": "@slashwho/database",
   "private": true,
+  "exports": "./src/index.ts",
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/contracts": "workspace:*",
+    "@slashwho/domain": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.3",
+    "drizzle-kit": "^0.31.10"
   }
 }

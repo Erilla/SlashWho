@@ -5,3 +5,4 @@ dist
 pnpm-lock.yaml
 apps/web/next-env.d.ts
 docs/superpowers/plans/2026-08-04-slashwho-mvp.md
+packages/database/drizzle/meta

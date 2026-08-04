@@ -1,6 +1,7 @@
 {
   "name": "@slashwho/contracts",
   "private": true,
+  "exports": "./src/index.ts",
   "dependencies": {
     "zod": "^4.3.5"
   },
