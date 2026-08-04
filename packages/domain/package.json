@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build": "tsc --noEmit",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   }
 }
