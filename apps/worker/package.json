@@ -4,6 +4,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "dev": "tsx src/main.ts",
+    "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -12,7 +13,8 @@
     "@slashwho/domain": "workspace:*",
     "@slashwho/raiderio": "workspace:*",
     "pg": "^8.22.0",
-    "pino": "^10.1.0"
+    "pino": "^10.1.0",
+    "tsx": "4.23.5"
   },
   "devDependencies": {
     "@types/pg": "^8.20.3"

@@ -1,5 +1,6 @@
 export type WorkerConfig = {
   databaseUrl: string;
+  healthHost: "127.0.0.1" | "0.0.0.0";
   port: number;
   workerDrainTimeoutMs: number;
   databaseStartupAttempts: number;
@@ -24,9 +25,14 @@ export function loadWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): WorkerConfig {
   if (!environment.DATABASE_URL) throw new Error("database_url_required");
+  const healthHost = environment.WORKER_HEALTH_HOST ?? "127.0.0.1";
+  if (healthHost !== "127.0.0.1" && healthHost !== "0.0.0.0") {
+    throw new Error("invalid_worker_health_host");
+  }
 
   return {
     databaseUrl: environment.DATABASE_URL,
+    healthHost,
     port: positiveInteger(environment.PORT, 3001, "invalid_port"),
     workerDrainTimeoutMs: positiveInteger(
       environment.WORKER_DRAIN_TIMEOUT_MS,

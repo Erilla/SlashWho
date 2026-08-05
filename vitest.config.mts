@@ -9,7 +9,8 @@ export default defineConfig({
         test: {
           include: [
             "apps/**/src/**/*.test.{ts,tsx}",
-            "packages/**/src/**/*.test.ts"
+            "packages/**/src/**/*.test.ts",
+            "scripts/**/*.test.mts"
           ],
           name: "unit"
         }

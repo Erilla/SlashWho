@@ -7,6 +7,7 @@ import { main } from "./main";
 
 const config: WorkerConfig = {
   databaseUrl: "postgres://unused",
+  healthHost: "127.0.0.1",
   port: 0,
   workerDrainTimeoutMs: 1_000,
   databaseStartupAttempts: 1,

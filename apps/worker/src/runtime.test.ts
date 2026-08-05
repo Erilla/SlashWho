@@ -14,6 +14,7 @@ import { createWorkerRuntime } from "./runtime";
 
 const config: WorkerConfig = {
   databaseUrl: "postgres://worker:secret@database/slashwho",
+  healthHost: "127.0.0.1",
   port: 3001,
   workerDrainTimeoutMs: 12_345,
   databaseStartupAttempts: 3,

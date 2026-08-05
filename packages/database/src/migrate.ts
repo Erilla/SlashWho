@@ -6,7 +6,11 @@ import type { Pool } from "pg";
 
 const migrationLockKey = 0x534c4153;
 
-export function resolveMigrationsFolder(): string {
+export function resolveMigrationsFolder(
+  environment: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  const configured = environment.SLASHWHO_MIGRATIONS_FOLDER?.trim();
+  if (configured) return configured;
   return resolve(dirname(fileURLToPath(import.meta.url)), "../drizzle");
 }
 

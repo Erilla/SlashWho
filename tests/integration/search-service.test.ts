@@ -428,7 +428,8 @@ describe("PostgreSQL search policy", () => {
       callerBucketHash: `search:${"a".repeat(64)}`,
       limit: 2,
       expiresAt: new Date("2026-08-04T13:00:00.000Z"),
-      at: now
+      at: now,
+      freshnessCutoff: new Date("2026-08-03T12:00:00.000Z")
     });
     expect(reservation.kind).toBe("reserved");
 

@@ -41,6 +41,7 @@ export async function main(
   try {
     healthServer = await dependencies.startHealthServer({
       port: config.port,
+      host: config.healthHost,
       health: () => runtime.health()
     });
   } catch (error) {
