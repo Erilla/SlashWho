@@ -6,13 +6,24 @@ The checked-in settings follow Railway's current [config-as-code reference](http
 
 ## Create staging and production
 
-1. Create one Railway project with isolated `staging` and `production` environments.
+The environments are named `test` (staging, deploys `main`) and `prod` (production, deploys `prod`), matching SeriouslyCasualBotV2's Railway environments so both projects read the same way.
+
+1. Create one Railway project with isolated `test` and `prod` environments.
 2. In each environment, add a Railway PostgreSQL service, a web service from this repository, and a worker service from this repository.
 3. Set the web service's config-as-code path to `/railway.web.toml`; set the worker's to `/railway.worker.toml`.
 4. Confirm the web build uses `Dockerfile.web` and the worker build uses `Dockerfile.worker`.
 5. Add `DATABASE_URL` to both app services as a private reference to the environment's PostgreSQL `DATABASE_URL`. Do not paste the public TCP proxy URL into any service variable. Maintainer commands that must reach the database from outside Railway read `DATABASE_PUBLIC_URL` from the PostgreSQL service transiently instead; see [`docs/operations/removals.md`](../operations/removals.md).
 6. Generate a public domain for web only. Do not expose the worker or PostgreSQL services publicly.
-7. Configure both services to deploy `main` in staging and `prod` in production. Disable direct production deploys from feature branches.
+7. Configure both services to deploy `main` in `test` and `prod` in `prod`. Disable direct production deploys from feature branches.
+
+Steps 3 and 4 have no Railway CLI flag. Set the config-as-code path from each service's settings page, or through the public API:
+
+```bash
+# serviceInstanceUpdate(environmentId, serviceId, input: { railwayConfigFile })
+# web -> /railway.web.toml, worker -> /railway.worker.toml
+```
+
+Both Dockerfiles must give every BuildKit cache mount an explicit `id`. Railway's Metal builder rejects `--mount=type=cache,target=...` without one (`dockerfile invalid: flag ... is missing an id argument`), even though local Docker derives an id automatically — so this failure only appears on Railway.
 
 ## Variables
 
