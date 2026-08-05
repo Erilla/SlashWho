@@ -12,8 +12,12 @@ export interface DiscoveredCharacter {
   readonly source: DiscoverySource;
 }
 
-function characterId(key: CharacterKey): string {
-  return `${key.region}/${key.realm}/${key.name}`;
+export function canonicalCharacterId(key: CharacterKey): string {
+  return JSON.stringify([
+    key.region.toLocaleLowerCase("en-US"),
+    key.realm.toLocaleLowerCase("en-US"),
+    key.name.toLocaleLowerCase("en-US")
+  ]);
 }
 
 export function deduplicateCharacters(
@@ -22,7 +26,7 @@ export function deduplicateCharacters(
   const unique = new Set<string>();
 
   return characters.filter((character) => {
-    const id = characterId(character.key);
+    const id = canonicalCharacterId(character.key);
     if (unique.has(id)) return false;
     unique.add(id);
     return true;

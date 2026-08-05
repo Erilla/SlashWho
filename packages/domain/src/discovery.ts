@@ -1,5 +1,6 @@
 import { toRaiderIoUrl, type CharacterKey } from "./character-key";
 import {
+  canonicalCharacterId,
   deduplicateCharacters,
   type DiscoveredCharacter,
   type DiscoverySource
@@ -56,8 +57,59 @@ type PendingCharacter = {
   source: "input" | "declared_main";
 };
 
-function characterId(key: CharacterKey): string {
-  return `${key.region}/${key.realm}/${key.name}`;
+const budgetExhausted = Symbol("budget_exhausted");
+
+function isCharacterKey(value: unknown): value is CharacterKey {
+  if (typeof value !== "object" || value === null) return false;
+
+  return (
+    "region" in value &&
+    typeof value.region === "string" &&
+    "realm" in value &&
+    typeof value.realm === "string" &&
+    "name" in value &&
+    typeof value.name === "string"
+  );
+}
+
+function isRaiderIoCharacter(value: unknown): value is RaiderIoCharacter {
+  if (typeof value !== "object" || value === null) return false;
+
+  return (
+    "key" in value &&
+    isCharacterKey(value.key) &&
+    "displayName" in value &&
+    typeof value.displayName === "string" &&
+    "className" in value &&
+    typeof value.className === "string" &&
+    "level" in value &&
+    typeof value.level === "number" &&
+    "ownerId" in value &&
+    (typeof value.ownerId === "string" || value.ownerId === null) &&
+    "profileGuess" in value &&
+    (typeof value.profileGuess === "string" || value.profileGuess === null) &&
+    "declaredMain" in value &&
+    (isCharacterKey(value.declaredMain) || value.declaredMain === null)
+  );
+}
+
+function isCharacterList(
+  value: unknown
+): value is readonly RaiderIoCharacter[] {
+  return Array.isArray(value) && value.every(isRaiderIoCharacter);
+}
+
+function isRaiderIoProfile(value: unknown): value is RaiderIoProfile {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "characters" in value &&
+    isCharacterList(value.characters)
+  );
+}
+
+function schemaChanged(): { kind: "schema_drift" } {
+  return { kind: "schema_drift" };
 }
 
 function compareCharacterKeys(
@@ -122,10 +174,12 @@ export async function discoverCharacter(
   const inspectedCharacters: RaiderIoCharacter[] = [];
   const observations: DiscoveredCharacter[] = [];
 
-  async function request<T>(operation: () => Promise<T>): Promise<T | null> {
+  async function request<T>(
+    operation: () => Promise<T>
+  ): Promise<T | typeof budgetExhausted> {
     if (budget === 0) {
       capped = true;
-      return null;
+      return budgetExhausted;
     }
     budget -= 1;
     return operation();
@@ -145,7 +199,7 @@ export async function discoverCharacter(
   try {
     while (pendingCharacters.length > 0) {
       const pending = pendingCharacters.shift()!;
-      const id = characterId(pending.key);
+      const id = canonicalCharacterId(pending.key);
       if (
         visitedCharacters.has(id) ||
         (await options.isSuppressed(pending.key))
@@ -155,7 +209,8 @@ export async function discoverCharacter(
       visitedCharacters.add(id);
 
       const character = await request(() => gateway.getCharacter(pending.key));
-      if (character === null) break;
+      if (character === budgetExhausted) break;
+      if (!isRaiderIoCharacter(character)) throw schemaChanged();
 
       observations.push(discoveredCharacter(character, pending.source));
       inspectedCharacters.push(character);
@@ -174,7 +229,8 @@ export async function discoverCharacter(
         const claimed = await request(() =>
           gateway.getClaimedCharacters(character.ownerId!)
         );
-        if (claimed === null) break;
+        if (claimed === budgetExhausted) break;
+        if (!isCharacterList(claimed)) throw schemaChanged();
         await recordRelated(claimed, "claimed");
         continue;
       }
@@ -187,10 +243,9 @@ export async function discoverCharacter(
       );
       for (const guess of guesses) {
         const profile = await request(() => gateway.resolveProfileGuess(guess));
-        if (profile === null) {
-          if (capped) break;
-          continue;
-        }
+        if (profile === budgetExhausted) break;
+        if (profile === null) continue;
+        if (!isRaiderIoProfile(profile)) throw schemaChanged();
         await recordRelated(profile.characters, "profile_guess");
       }
       if (capped) break;

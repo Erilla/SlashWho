@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { CharacterKey } from "./character-key";
 import { deduplicateCharacters, type DiscoveredCharacter } from "./deduplicate";
 
 const first: DiscoveredCharacter = {
@@ -42,5 +43,23 @@ describe("deduplicateCharacters", () => {
         source: "claimed"
       }
     ]);
+  });
+
+  it("treats casing variants as the same character", () => {
+    // Break caught: structural CharacterKey values could bypass canonical deduplication.
+    expect(
+      deduplicateCharacters([
+        first,
+        {
+          ...first,
+          key: {
+            region: "EU",
+            realm: "Silvermoon",
+            name: "Ryii"
+          } as unknown as CharacterKey,
+          source: "claimed"
+        }
+      ])
+    ).toEqual([first]);
   });
 });

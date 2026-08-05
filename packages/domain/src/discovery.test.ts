@@ -259,6 +259,73 @@ describe("discoverCharacter", () => {
     });
   });
 
+  it("returns a schema failure when a gateway returns a null character", async () => {
+    // Break caught: an invalid character payload could be mistaken for budget exhaustion.
+    const invalidGateway = {
+      ...scriptedGateway({}),
+      getCharacter: async () => null
+    } as unknown as RaiderIoGateway;
+
+    await expect(
+      discoverCharacter(altKey, invalidGateway, options)
+    ).resolves.toEqual({
+      kind: "failure",
+      code: "upstream_schema_changed",
+      retryable: false
+    });
+  });
+
+  it("returns a schema failure when a gateway returns a null claimed list", async () => {
+    // Break caught: an invalid claim payload could create a trustworthy partial result.
+    const invalidGateway = {
+      ...scriptedGateway({
+        characters: [[altKey, character(altKey, { ownerId: "owner" })]]
+      }),
+      getClaimedCharacters: async () => null
+    } as unknown as RaiderIoGateway;
+
+    await expect(
+      discoverCharacter(altKey, invalidGateway, options)
+    ).resolves.toEqual({
+      kind: "failure",
+      code: "upstream_schema_changed",
+      retryable: false
+    });
+  });
+
+  it("treats a casing-variant declared main as an already visited character", async () => {
+    // Break caught: non-canonical keys could evade the declared-main cycle guard.
+    const casingVariant = {
+      region: "EU",
+      realm: "Silvermoon",
+      name: "Alt"
+    } as unknown as CharacterKey;
+    const gateway: RaiderIoGateway = {
+      getCharacter: async () =>
+        character(altKey, { declaredMain: casingVariant }),
+      getClaimedCharacters: async () => [],
+      resolveProfileGuess: async () => null
+    };
+
+    await expect(
+      discoverCharacter(altKey, gateway, { ...options, requestCap: 3 })
+    ).resolves.toEqual({
+      kind: "snapshot",
+      state: "partial",
+      limitationCode: "privacy_hidden",
+      characters: [
+        {
+          key: altKey,
+          displayName: "alt",
+          className: "Mage",
+          level: 80,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/alt",
+          source: "input"
+        }
+      ]
+    });
+  });
+
   it("returns a definitive absence when the input character is missing", async () => {
     // Break caught: a missing input could create an empty snapshot.
     const outcome = await discoverCharacter(
