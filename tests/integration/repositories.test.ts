@@ -415,6 +415,30 @@ describe("PostgreSQL repositories", () => {
     expect(second.nextCursor).toBeNull();
   });
 
+  it("does not skip or duplicate equal-timestamp history rows", async () => {
+    // Break caught: timestamp-only cursors could lose snapshots created in the same instant.
+    const refreshedAt = new Date("2026-08-04T12:00:00.000Z");
+    const snapshots = [
+      await seedCompleteSnapshot(repositories, { refreshedAt }),
+      await seedCompleteSnapshot(repositories, { refreshedAt }),
+      await seedCompleteSnapshot(repositories, { refreshedAt })
+    ];
+
+    const observed: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await repositories.snapshots.listHistory(rootKey, {
+        cursor,
+        limit: 1
+      });
+      observed.push(...page.items.map(({ id }) => id));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(new Set(observed)).toEqual(new Set(snapshots.map(({ id }) => id)));
+    expect(observed).toHaveLength(3);
+  });
+
   it("rejects malformed cursor UUIDs before querying PostgreSQL", async () => {
     const malformedCursor = Buffer.from(
       JSON.stringify({

@@ -12,6 +12,7 @@ import {
 import { startPostgres } from "./postgres";
 
 const queueName = "discover-character";
+const maintenanceQueueName = "maintenance-cleanup";
 const key: CharacterKey = {
   region: "eu",
   realm: "silvermoon",
@@ -114,6 +115,26 @@ describe("durable discovery queue", () => {
     await expect(
       inspector.findJobs(queueName, { id: first })
     ).resolves.toHaveLength(1);
+  });
+
+  it("keeps repeated maintenance scheduling idempotent", async () => {
+    // Break caught: restarts or replicas could create duplicate cleanup schedules.
+    const queue = createDiscoveryQueue({ connectionString });
+    const replica = createDiscoveryQueue({ connectionString });
+    cleanup.push(
+      () => queue.stop({ graceful: false, timeoutMs: 1_000 }),
+      () => replica.stop({ graceful: false, timeoutMs: 1_000 })
+    );
+    await Promise.all([queue.start(), replica.start()]);
+
+    await queue.scheduleMaintenanceCleanup(async () => {});
+    await replica.scheduleMaintenanceCleanup(async () => {});
+
+    const schedules = await applicationPool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM pgboss.schedule WHERE name = $1",
+      [maintenanceQueueName]
+    );
+    expect(schedules.rows[0]?.count).toBe("1");
   });
 
   it("moves a job through created, active, retry, and failed states", async () => {

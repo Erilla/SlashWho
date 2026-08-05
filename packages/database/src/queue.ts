@@ -2,6 +2,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import { PgBoss } from "pg-boss";
 
 export const discoverCharacterQueueName = "discover-character";
+export const maintenanceCleanupQueueName = "maintenance-cleanup";
 
 export type DiscoverCharacterJob = {
   runId: string;
@@ -32,6 +33,7 @@ export interface DiscoveryQueue {
       context: DiscoveryWorkContext
     ) => Promise<void>
   ): Promise<void>;
+  scheduleMaintenanceCleanup(handler: () => Promise<void>): Promise<void>;
   stop(options: { graceful: boolean; timeoutMs: number }): Promise<void>;
   isReady(): boolean;
 }
@@ -99,6 +101,7 @@ export function createDiscoveryQueue(
   const boss = new PgBoss(options.connectionString);
   const inFlight = new Set<Promise<void>>();
   let ready = false;
+  let maintenanceRegistered = false;
 
   async function settleInFlight(timeoutMs: number): Promise<void> {
     const executions = [...inFlight];
@@ -176,8 +179,44 @@ export function createDiscoveryQueue(
       );
     },
 
+    async scheduleMaintenanceCleanup(handler) {
+      if (!ready) throw new Error("discovery_queue_not_ready");
+      if (maintenanceRegistered) return;
+      await boss.createQueue(maintenanceCleanupQueueName, {
+        retryLimit: 2,
+        retryDelay: 60,
+        expireInSeconds: 300
+      });
+      await boss.updateQueue(maintenanceCleanupQueueName, {
+        retryLimit: 2,
+        retryDelay: 60,
+        expireInSeconds: 300
+      });
+      await boss.schedule(
+        maintenanceCleanupQueueName,
+        "0 * * * *",
+        {},
+        { tz: "UTC" }
+      );
+      await boss.work(
+        maintenanceCleanupQueueName,
+        { pollingIntervalSeconds: 0.5 },
+        async () => {
+          const execution = handler();
+          inFlight.add(execution);
+          try {
+            await execution;
+          } finally {
+            inFlight.delete(execution);
+          }
+        }
+      );
+      maintenanceRegistered = true;
+    },
+
     async stop({ graceful, timeoutMs }) {
       ready = false;
+      maintenanceRegistered = false;
       let stopError: unknown;
       try {
         await boss.stop({ graceful, timeout: timeoutMs });

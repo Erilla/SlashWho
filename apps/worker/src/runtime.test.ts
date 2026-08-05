@@ -34,15 +34,23 @@ function runtimeFakes() {
         context: DiscoveryWorkContext
       ) => Promise<void>)
     | undefined;
+  let maintenanceHandler: (() => Promise<void>) | undefined;
+  const pendingDispatches: DiscoverCharacterJob[] = [];
+  const recoveredDispatches: string[] = [];
+  const enqueued: DiscoverCharacterJob[] = [];
   const queue: DiscoveryQueue = {
     async start() {
       queueReady = true;
     },
-    async enqueue() {
-      return "job-id";
+    async enqueue(payload) {
+      enqueued.push(payload);
+      return payload.runId;
     },
     async work(handler) {
       workHandler = handler;
+    },
+    async scheduleMaintenanceCleanup(handler) {
+      maintenanceHandler = handler;
     },
     async stop() {
       queueReady = false;
@@ -63,13 +71,31 @@ function runtimeFakes() {
     }
   };
   const migrations = vi.fn(async () => {});
+  const cleanup = {
+    rateLimits: vi.fn(async () => 2),
+    negativeCache: vi.fn(async () => 3),
+    suppressions: vi.fn(async () => 4)
+  };
+  const repositories = {
+    searchReservations: {
+      async listPending() {
+        return [...pendingDispatches];
+      },
+      async markEnqueued(runId: string) {
+        recoveredDispatches.push(runId);
+      }
+    },
+    rateLimits: { cleanupExpired: cleanup.rateLimits },
+    negativeCache: { cleanupExpired: cleanup.negativeCache },
+    suppressions: { cleanupExpired: cleanup.suppressions }
+  } as unknown as Repositories;
   const sleeps: number[] = [];
 
   return {
     dependencies: {
       createPool: () => pool,
       runMigrations: migrations,
-      createRepositories: () => ({}) as Repositories,
+      createRepositories: () => repositories,
       createQueue: () => queue,
       createGateway: () => ({}) as RaiderIoGateway,
       createHandler: () => handler,
@@ -79,6 +105,10 @@ function runtimeFakes() {
     },
     handler,
     migrations,
+    cleanup,
+    pendingDispatches,
+    recoveredDispatches,
+    enqueued,
     queue,
     get connectionAttempts() {
       return connectionAttempts;
@@ -88,6 +118,9 @@ function runtimeFakes() {
     },
     get workHandler() {
       return workHandler;
+    },
+    get maintenanceHandler() {
+      return maintenanceHandler;
     },
     sleeps
   };
@@ -132,6 +165,36 @@ describe("worker runtime", () => {
       "00000000-0000-4000-8000-000000000003",
       context
     );
+    await runtime.stop();
+  });
+
+  it("registers maintenance cleanup through the durable queue", async () => {
+    // Break caught: expired abuse and suppression policy rows could accumulate forever.
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.maintenanceHandler).toBeTypeOf("function");
+    await fakes.maintenanceHandler?.();
+    expect(fakes.cleanup.rateLimits).toHaveBeenCalledOnce();
+    expect(fakes.cleanup.negativeCache).toHaveBeenCalledOnce();
+    expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
+    await runtime.stop();
+  });
+
+  it("recovers reservations left pending before registering workers", async () => {
+    // Break caught: a web-process crash before enqueue could strand a charged queued run.
+    const fakes = runtimeFakes();
+    fakes.pendingDispatches.push({
+      runId: "00000000-0000-4000-8000-000000000011",
+      key: { region: "eu", realm: "silvermoon", name: "pending" }
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.enqueued).toEqual(fakes.pendingDispatches);
+    expect(fakes.recoveredDispatches).toEqual([
+      "00000000-0000-4000-8000-000000000011"
+    ]);
     await runtime.stop();
   });
 

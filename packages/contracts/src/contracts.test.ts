@@ -5,6 +5,7 @@ import {
   historyPageSchema,
   historicalSnapshotSchema,
   jobStatusResponseSchema,
+  publicErrorHttpStatus,
   safeApiErrorSchema
 } from "./index";
 
@@ -101,4 +102,23 @@ it("validates every other public API response shape", () => {
       error: { code: "rate_limited", message: "Too many searches." }
     }).error.code
   ).toBe("rate_limited");
+});
+
+it("defines contract-safe authentication and trusted-boundary errors", () => {
+  // Break caught: HTTP adapters could emit auth errors outside the strict v1 schema.
+  expect(
+    safeApiErrorSchema.parse({
+      error: { code: "unauthorized", message: "Authentication failed." }
+    }).error.code
+  ).toBe("unauthorized");
+  expect(
+    safeApiErrorSchema.parse({
+      error: {
+        code: "trusted_client_ip_unavailable",
+        message: "The trusted client boundary is unavailable."
+      }
+    }).error.code
+  ).toBe("trusted_client_ip_unavailable");
+  expect(publicErrorHttpStatus.unauthorized).toBe(401);
+  expect(publicErrorHttpStatus.trusted_client_ip_unavailable).toBe(503);
 });

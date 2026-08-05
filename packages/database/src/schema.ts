@@ -174,6 +174,10 @@ export const rateLimitEvents = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     callerBucketHash: text("caller_bucket_hash").notNull(),
+    discoveryRunId: uuid("discovery_run_id").references(
+      () => discoveryRuns.id,
+      { onDelete: "cascade" }
+    ),
     occurredAt: timestamp("occurred_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -184,7 +188,10 @@ export const rateLimitEvents = pgTable(
       table.callerBucketHash,
       table.expiresAt
     ),
-    index("rate_limit_events_expiry_idx").on(table.expiresAt)
+    index("rate_limit_events_expiry_idx").on(table.expiresAt),
+    uniqueIndex("rate_limit_events_discovery_run_idx")
+      .on(table.discoveryRunId)
+      .where(sql`${table.discoveryRunId} IS NOT NULL`)
   ]
 );
 

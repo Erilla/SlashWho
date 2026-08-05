@@ -211,6 +211,160 @@ async function requireUpdated(
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
+    searchReservations: {
+      async reserve(input) {
+        if (!Number.isInteger(input.limit) || input.limit < 1) {
+          throw new RangeError("rate_limit_out_of_range");
+        }
+        if (input.expiresAt <= input.at) {
+          throw new RangeError("rate_limit_expiry_out_of_range");
+        }
+
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const rootLock = `root:${input.key.region}:${input.key.realm}:${input.key.name}`;
+          await client.query(
+            `SELECT pg_advisory_xact_lock(lock_id)
+             FROM (
+               SELECT DISTINCT hashtextextended(value, 0) AS lock_id
+               FROM unnest($1::text[]) AS value
+               ORDER BY lock_id
+             ) locks`,
+            [[`bucket:${input.callerBucketHash}`, rootLock]]
+          );
+
+          const active = await client.query<RunRow>(
+            `SELECT * FROM discovery_runs
+             WHERE root_region = $1
+               AND root_realm_slug = $2
+               AND root_normalized_name = $3
+               AND status IN ${activeRunSql}
+             FOR UPDATE`,
+            [input.key.region, input.key.realm, input.key.name]
+          );
+          if (active.rows[0]) {
+            await client.query("COMMIT");
+            return { kind: "active", run: mapRun(active.rows[0]) };
+          }
+
+          const usage = await client.query<{
+            count: string;
+            retry_at: Date | null;
+          }>(
+            `SELECT count(*)::text AS count, min(expires_at) AS retry_at
+             FROM rate_limit_events
+             WHERE caller_bucket_hash = $1 AND expires_at > $2`,
+            [input.callerBucketHash, input.at]
+          );
+          if (Number(usage.rows[0]!.count) >= input.limit) {
+            const retryAt = usage.rows[0]!.retry_at;
+            if (!retryAt) throw new Error("rate_limit_retry_missing");
+            await client.query("COMMIT");
+            return { kind: "rate_limited", retryAt };
+          }
+
+          const runResult = await client.query<RunRow>(
+            `INSERT INTO discovery_runs
+              (root_region, root_realm_slug, root_normalized_name, caller_class)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [
+              input.key.region,
+              input.key.realm,
+              input.key.name,
+              input.callerClass
+            ]
+          );
+          const run = mapRun(runResult.rows[0]!);
+          await client.query(
+            `INSERT INTO rate_limit_events
+              (caller_bucket_hash, discovery_run_id, expires_at)
+             VALUES ($1, $2, $3)`,
+            [input.callerBucketHash, run.id, input.expiresAt]
+          );
+          await client.query("COMMIT");
+          return { kind: "reserved", run };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async cancel(runId) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const failure = await client.query(
+            `UPDATE discovery_runs
+             SET status = 'failed', error_code = 'search_failed',
+                 completed_at = now(), next_retry_at = NULL
+             WHERE id = $1 AND status = 'queued'
+             RETURNING id`,
+            [runId]
+          );
+          if (failure.rowCount !== 1) {
+            throw new Error("search_reservation_not_cancellable");
+          }
+          const charge = await client.query(
+            "DELETE FROM rate_limit_events WHERE discovery_run_id = $1",
+            [runId]
+          );
+          if (charge.rowCount !== 1) {
+            throw new Error("search_reservation_charge_missing");
+          }
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async listPending(limit = 100) {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+          throw new RangeError("pending_dispatch_limit_out_of_range");
+        }
+        const result = await pool.query<{
+          id: string;
+          root_region: CharacterKey["region"];
+          root_realm_slug: string;
+          root_normalized_name: string;
+        }>(
+          `SELECT id, root_region, root_realm_slug, root_normalized_name
+           FROM discovery_runs
+           WHERE status = 'queued' AND queue_job_id IS NULL
+           ORDER BY created_at, id
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map((row) => ({
+          runId: row.id,
+          key: {
+            region: row.root_region,
+            realm: row.root_realm_slug,
+            name: row.root_normalized_name
+          }
+        }));
+      },
+
+      async markEnqueued(runId, queueJobId) {
+        const result = await pool.query(
+          `UPDATE discovery_runs
+           SET queue_job_id = $2
+           WHERE id = $1
+             AND (queue_job_id IS NULL OR queue_job_id = $2)`,
+          [runId, queueJobId]
+        );
+        if (result.rowCount !== 1) {
+          throw new Error("search_reservation_not_found");
+        }
+      }
+    },
+
     runs: {
       async createOrReuse(key, caller) {
         const result = await pool.query<RunRow>(
@@ -582,10 +736,64 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [key.region, key.realm, key.name, at]
         );
         return result.rowCount === 1;
+      },
+
+      async cleanupExpired(at = new Date()) {
+        const result = await pool.query(
+          `DELETE FROM suppressed_characters
+           WHERE expires_at IS NOT NULL AND expires_at <= $1`,
+          [at]
+        );
+        return result.rowCount ?? 0;
       }
     },
 
     rateLimits: {
+      async reserve(callerBucketHash, limit, expiresAt, at = new Date()) {
+        if (!Number.isInteger(limit) || limit < 1) {
+          throw new RangeError("rate_limit_out_of_range");
+        }
+        if (expiresAt <= at) {
+          throw new RangeError("rate_limit_expiry_out_of_range");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 1))",
+            [callerBucketHash]
+          );
+          const usage = await client.query<{
+            count: string;
+            retry_at: Date | null;
+          }>(
+            `SELECT count(*)::text AS count, min(expires_at) AS retry_at
+             FROM rate_limit_events
+             WHERE caller_bucket_hash = $1 AND expires_at > $2`,
+            [callerBucketHash, at]
+          );
+          if (Number(usage.rows[0]!.count) >= limit) {
+            await client.query("COMMIT");
+            return {
+              allowed: false,
+              retryAt: usage.rows[0]!.retry_at
+            };
+          }
+          await client.query(
+            `INSERT INTO rate_limit_events (caller_bucket_hash, expires_at)
+             VALUES ($1, $2)`,
+            [callerBucketHash, expiresAt]
+          );
+          await client.query("COMMIT");
+          return { allowed: true, retryAt: null };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
       async record(callerBucketHash, expiresAt) {
         await pool.query(
           `INSERT INTO rate_limit_events (caller_bucket_hash, expires_at)
@@ -678,6 +886,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0]
           ? { key, expiresAt: result.rows[0].expires_at }
           : null;
+      },
+
+      async cleanupExpired(at = new Date()) {
+        const result = await pool.query(
+          "DELETE FROM negative_character_cache WHERE expires_at <= $1",
+          [at]
+        );
+        return result.rowCount ?? 0;
       }
     }
   };

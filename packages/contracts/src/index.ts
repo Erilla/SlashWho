@@ -15,6 +15,7 @@ export type {
   SnapshotState
 } from "./character";
 export {
+  publicErrorHttpStatus,
   publicErrorCodeSchema,
   safeApiErrorSchema,
   safeErrorDetailSchema

@@ -91,9 +91,16 @@ export interface SuppressionRepository {
     expiresAt: Date | null
   ): Promise<void>;
   isActive(key: CharacterKey, at?: Date): Promise<boolean>;
+  cleanupExpired(at?: Date): Promise<number>;
 }
 
 export interface RateLimitRepository {
+  reserve(
+    callerBucketHash: string,
+    limit: number,
+    expiresAt: Date,
+    at?: Date
+  ): Promise<{ allowed: boolean; retryAt: Date | null }>;
   record(callerBucketHash: string, expiresAt: Date): Promise<void>;
   countActive(callerBucketHash: string, at?: Date): Promise<number>;
   cleanupExpired(at?: Date): Promise<number>;
@@ -113,9 +120,32 @@ export interface NegativeCacheRepository {
     options?: { signal?: AbortSignal }
   ): Promise<void>;
   find(key: CharacterKey, at?: Date): Promise<NegativeCacheEntry | null>;
+  cleanupExpired(at?: Date): Promise<number>;
+}
+
+export type SearchReservationResult =
+  | { kind: "active"; run: DiscoveryRun }
+  | { kind: "reserved"; run: DiscoveryRun }
+  | { kind: "rate_limited"; retryAt: Date };
+
+export interface SearchReservationRepository {
+  reserve(input: {
+    key: CharacterKey;
+    callerClass: CallerClass;
+    callerBucketHash: string;
+    limit: number;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<SearchReservationResult>;
+  cancel(runId: string): Promise<void>;
+  listPending(
+    limit?: number
+  ): Promise<Array<{ runId: string; key: CharacterKey }>>;
+  markEnqueued(runId: string, queueJobId: string): Promise<void>;
 }
 
 export interface Repositories {
+  searchReservations: SearchReservationRepository;
   runs: {
     createOrReuse(
       key: CharacterKey,

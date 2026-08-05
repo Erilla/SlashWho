@@ -86,6 +86,20 @@ function createMemoryRepositories(): Repositories {
   let snapshotSequence = 0;
 
   return {
+    searchReservations: {
+      async reserve() {
+        throw new Error("not used");
+      },
+      async cancel() {
+        throw new Error("not used");
+      },
+      async listPending() {
+        return [];
+      },
+      async markEnqueued() {
+        throw new Error("not used");
+      }
+    },
     runs: {
       async createOrReuse(key, callerClass) {
         const active = [...runs.values()].find(
@@ -211,9 +225,15 @@ function createMemoryRepositories(): Repositories {
       async suppress() {},
       async isActive() {
         return false;
+      },
+      async cleanupExpired() {
+        return 0;
       }
     },
     rateLimits: {
+      async reserve() {
+        return { allowed: true, retryAt: null };
+      },
       async record() {},
       async countActive() {
         return 0;
@@ -238,6 +258,9 @@ function createMemoryRepositories(): Repositories {
       async find(key, at = new Date()) {
         const expiresAt = negativeCache.get(keyId(key));
         return expiresAt && expiresAt > at ? { key, expiresAt } : null;
+      },
+      async cleanupExpired() {
+        return 0;
       }
     }
   };

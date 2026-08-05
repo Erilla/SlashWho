@@ -3,7 +3,8 @@ export { createPostgresRepositories } from "./postgres-repositories";
 export {
   createDiscoveryQueue,
   DiscoveryQueueStopTimeoutError,
-  discoverCharacterQueueName
+  discoverCharacterQueueName,
+  maintenanceCleanupQueueName
 } from "./queue";
 export type {
   CreateDiscoveryQueueOptions,
@@ -20,6 +21,8 @@ export type {
   NegativeCacheRepository,
   RateLimitRepository,
   Repositories,
+  SearchReservationRepository,
+  SearchReservationResult,
   SnapshotCharacterInput,
   SnapshotHistoryItem,
   SnapshotHistoryPage,

@@ -36,14 +36,18 @@ describe("database migrations", () => {
     ]);
   });
 
-  it("can run repeatedly without applying the initial migration twice", async () => {
+  it("can run repeatedly without applying migrations twice", async () => {
     await runMigrations(pool);
-    await runMigrations(pool);
-
-    const result = await pool.query<{ count: string }>(
+    const before = await pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations"
     );
-    expect(result.rows[0]?.count).toBe("1");
+    await runMigrations(pool);
+    const after = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations"
+    );
+
+    expect(Number(before.rows[0]?.count)).toBeGreaterThan(0);
+    expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
   });
 
   it("serializes concurrent migration attempts with an advisory lock", async () => {
@@ -53,10 +57,14 @@ describe("database migrations", () => {
 
     await Promise.all([runMigrations(pool), runMigrations(pool)]);
 
-    const result = await pool.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations"
+    const result = await pool.query<{ column_name: string }>(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'rate_limit_events'
+         AND column_name = 'discovery_run_id'`
     );
-    expect(result.rows[0]?.count).toBe("1");
+    expect(result.rows).toEqual([{ column_name: "discovery_run_id" }]);
   });
 
   it("enforces canonical character uniqueness in PostgreSQL", async () => {

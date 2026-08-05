@@ -97,12 +97,18 @@ importers:
 
   packages/application:
     dependencies:
+      '@slashwho/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@slashwho/database':
         specifier: workspace:*
         version: link:../database
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: ^4.1.5
+        version: 4.4.3
 
   packages/contracts:
     dependencies:

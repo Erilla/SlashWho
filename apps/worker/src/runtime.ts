@@ -1,5 +1,7 @@
 import {
+  cleanupExpired,
   createDiscoveryJobHandler,
+  recoverPendingSearches,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions
 } from "@slashwho/application";
@@ -88,6 +90,11 @@ export async function createWorkerRuntime(
       negativeCacheTtlMs: config.negativeCacheTtlMs
     });
     await initializedQueue.start();
+    await recoverPendingSearches(repositories, initializedQueue);
+    await initializedQueue.scheduleMaintenanceCleanup(async () => {
+      await cleanupExpired(repositories);
+      await recoverPendingSearches(repositories, initializedQueue);
+    });
     await initializedQueue.work(async (payload, context) => {
       await handler.execute(payload.runId, context);
     });
