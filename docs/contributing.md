@@ -2,8 +2,8 @@
 
 ## Branch strategy
 
-- `main` is the trunk and will deploy to the persistent Railway staging environment.
-- `prod` represents the version deployed to Railway production.
+- `main` is the trunk and deploys to the persistent Railway staging environment, named `test`.
+- `prod` represents the version deployed to Railway production, in the environment named `prod`.
 - Feature branches use `feat/<short-description>`.
 - Bug fixes use `fix/<short-description>`.
 - Maintenance and documentation use `chore/<short-description>` or `docs/<short-description>`.

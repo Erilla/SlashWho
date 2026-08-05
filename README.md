@@ -61,7 +61,7 @@ Live Raider.IO traffic is never part of the pull-request gate. Automated discove
 
 The running site serves the API reference at `/api` and privacy policy at `/privacy`. Bot compatibility examples are locked in [`tests/fixtures/contracts/bot-client-v1.json`](tests/fixtures/contracts/bot-client-v1.json). Removal requests use the [public issue template](.github/ISSUE_TEMPLATE/removal-request.yml); maintainer procedure is in [`docs/operations/removals.md`](docs/operations/removals.md).
 
-Railway setup, variables, health checks, backups, and validation are documented in [`docs/deployment/railway.md`](docs/deployment/railway.md). `main` deploys to staging. Production is promoted only by fast-forwarding the staging-validated commit to `prod`.
+Railway setup, variables, health checks, backups, and validation are documented in [`docs/deployment/railway.md`](docs/deployment/railway.md). `main` deploys to the `test` environment. Production is promoted only by fast-forwarding the staging-validated commit to `prod`.
 
 ## Repository guidance
 

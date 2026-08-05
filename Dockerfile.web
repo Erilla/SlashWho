@@ -14,7 +14,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/raiderio/package.json packages/raiderio/package.json
-RUN --mount=type=cache,target=/pnpm/store pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=slashwho-web-pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile
 
 COPY . .
 RUN pnpm --filter @slashwho/web build

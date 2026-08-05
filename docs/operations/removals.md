@@ -12,7 +12,7 @@ Instead, enable the PostgreSQL service's TCP proxy once per environment and read
 
 ```bash
 railway link
-export DATABASE_URL="$(railway variables list --service Postgres --environment staging --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
+export DATABASE_URL="$(railway variables list --service Postgres --environment test --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
 test -n "$DATABASE_URL" || echo "enable the Postgres TCP proxy for this environment first"
 ```
 
@@ -22,7 +22,7 @@ Run `unset DATABASE_URL` when the operation is finished, and never paste the val
 
 1. Accept requests only through the public removal-request issue template. Ask for private ownership evidence through a private maintainer channel if it is needed; never request it in GitHub comments.
 2. Normalize the submitted Raider.IO URL and record the GitHub issue number as the reason, for example `github-issue-123`.
-3. Export the staging `DATABASE_URL` as above, then apply and verify the suppression in staging first:
+3. Export the `test` environment's `DATABASE_URL` as above, then apply and verify the suppression in staging first:
 
 ```bash
 corepack pnpm ops:removals -- add "https://raider.io/characters/eu/silvermoon/Ryii" --reason "github-issue-123"
@@ -37,7 +37,7 @@ The command prints only the canonical public character identity and whether supp
 Re-export `DATABASE_URL` from the production PostgreSQL service, then run the same commands using the exact reviewed URL and issue reason:
 
 ```bash
-export DATABASE_URL="$(railway variables list --service Postgres --environment production --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
+export DATABASE_URL="$(railway variables list --service Postgres --environment prod --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
 corepack pnpm ops:removals -- add "https://raider.io/characters/eu/silvermoon/Ryii" --reason "github-issue-123"
 corepack pnpm ops:removals -- verify "https://raider.io/characters/eu/silvermoon/Ryii"
 ```
