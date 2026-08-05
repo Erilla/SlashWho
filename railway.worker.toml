@@ -1,0 +1,13 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.worker"
+
+[deploy]
+preDeployCommand = "/app/migrate/node_modules/.bin/tsx /app/migrate/src/cli-migrate.ts"
+startCommand = "/app/worker/node_modules/.bin/tsx /app/worker/src/main.ts"
+healthcheckPath = "/ready"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+overlapSeconds = 10
+drainingSeconds = 35

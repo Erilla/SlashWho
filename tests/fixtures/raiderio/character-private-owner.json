@@ -1,0 +1,20 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Veiled",
+        "level": 79,
+        "class": { "name": "Rogue" },
+        "realm": { "slug": "Draenor" },
+        "region": { "slug": "EU" }
+      },
+      "user": null,
+      "characterCustomizations": {
+        "isClaimed": true,
+        "discord_profile": "profile-candidate",
+        "main_character": null
+      }
+    }
+  }
+}

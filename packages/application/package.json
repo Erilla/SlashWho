@@ -1,0 +1,16 @@
+{
+  "name": "@slashwho/application",
+  "private": true,
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --root ../.. --project unit packages/application/src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/contracts": "workspace:*",
+    "@slashwho/database": "workspace:*",
+    "@slashwho/domain": "workspace:*",
+    "zod": "^4.3.5"
+  }
+}

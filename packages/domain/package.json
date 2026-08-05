@@ -1,0 +1,10 @@
+{
+  "name": "@slashwho/domain",
+  "private": true,
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --root ../.. --project unit packages/domain/src",
+    "typecheck": "tsc --noEmit"
+  }
+}

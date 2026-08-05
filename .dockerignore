@@ -1,0 +1,14 @@
+.git
+.git*
+.github
+**/.next
+.superpowers
+.worktrees
+**/node_modules
+playwright-report
+test-results
+**/tmp
+*.log
+.env
+.env.*
+!.env.example

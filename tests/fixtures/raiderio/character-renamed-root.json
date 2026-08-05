@@ -1,0 +1,19 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Sentinelle",
+        "level": 0,
+        "class": { "name": "Mage" },
+        "realm": { "slug": "Silvermoon-Alias" },
+        "region": { "slug": "EU" }
+      },
+      "user": { "name": "owner-alpha" },
+      "characterCustomizations": {
+        "discord_profile": null,
+        "main_character": null
+      }
+    }
+  }
+}

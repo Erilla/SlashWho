@@ -1,0 +1,40 @@
+{
+  "name": "slashwho",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --parallel --filter @slashwho/web --filter @slashwho/worker dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "ops:removals": "tsx scripts/removals.mts",
+    "typecheck": "tsc -p tsconfig.tools.json && pnpm -r typecheck",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "playwright test"
+  },
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@slashwho/contracts": "workspace:*",
+    "@slashwho/database": "workspace:*",
+    "@slashwho/domain": "workspace:*",
+    "@testcontainers/postgresql": "^12.0.4",
+    "@types/node": "26.1.2",
+    "@types/pg": "^8.20.3",
+    "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "10.8.0",
+    "pg": "^8.22.0",
+    "pg-boss": "^12.27.0",
+    "playwright": "1.62.1",
+    "prettier": "3.9.6",
+    "tsx": "4.23.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.66.0",
+    "vitest": "4.1.10"
+  }
+}

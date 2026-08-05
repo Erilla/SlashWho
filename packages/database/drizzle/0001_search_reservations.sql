@@ -1,0 +1,3 @@
+ALTER TABLE "rate_limit_events" ADD COLUMN "discovery_run_id" uuid;--> statement-breakpoint
+ALTER TABLE "rate_limit_events" ADD CONSTRAINT "rate_limit_events_discovery_run_id_discovery_runs_id_fk" FOREIGN KEY ("discovery_run_id") REFERENCES "public"."discovery_runs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "rate_limit_events_discovery_run_idx" ON "rate_limit_events" USING btree ("discovery_run_id") WHERE "rate_limit_events"."discovery_run_id" IS NOT NULL;

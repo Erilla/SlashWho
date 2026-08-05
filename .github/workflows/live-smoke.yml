@@ -1,0 +1,34 @@
+name: live-smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slashwho-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.15.0
+          cache: pnpm
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm tsx scripts/live-smoke.mts
+        env:
+          SLASHWHO_BASE_URL: ${{ vars.SLASHWHO_PRODUCTION_URL }}
+          SLASHWHO_SMOKE_CHARACTER_URL: ${{ vars.SLASHWHO_SMOKE_CHARACTER_URL }}
+          SLASHWHO_BOT_API_KEY: ${{ secrets.SLASHWHO_BOT_API_KEY }}

@@ -1,0 +1,28 @@
+name: Character removal request
+description: Request that a public Raider.IO character identity be hidden from SlashWho.
+title: "[Removal] "
+labels:
+  - needs-triage
+body:
+  - type: input
+    id: character_url
+    attributes:
+      label: Raider.IO character URL
+      description: Provide the public character URL that should be hidden.
+      placeholder: https://raider.io/characters/eu/silvermoon/Ryii
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Request reason
+      description: Briefly explain why this public identity should be hidden.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy_warning
+    attributes:
+      label: Privacy warning
+      options:
+        - label: I have not included BattleTags, Discord handles, API keys, account details, or private ownership evidence in this public issue.
+          required: true

@@ -1,0 +1,28 @@
+{
+  "status": 200,
+  "body": {
+    "viewUserCharactersApi": {
+      "name": "owner-alpha",
+      "characters": [
+        {
+          "character": {
+            "name": "Firstalt",
+            "level": 80,
+            "class": { "name": "Paladin" },
+            "realm": { "slug": "Silvermoon" },
+            "region": { "slug": "EU" }
+          }
+        },
+        {
+          "character": {
+            "name": "Secondalt",
+            "level": 76,
+            "class": { "name": "Shaman" },
+            "realm": { "slug": "Area-52" },
+            "region": { "slug": "US" }
+          }
+        }
+      ]
+    }
+  }
+}

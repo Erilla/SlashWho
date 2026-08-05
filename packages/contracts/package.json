@@ -1,0 +1,13 @@
+{
+  "name": "@slashwho/contracts",
+  "private": true,
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "zod": "^4.3.5"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --root ../.. --project unit packages/contracts/src",
+    "typecheck": "tsc --noEmit"
+  }
+}

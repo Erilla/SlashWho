@@ -8,8 +8,18 @@
 *.tmp
 temp/
 tmp/
+.superpowers/
+.worktrees/
 
 # Operating-system metadata
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Dependencies and build output
+node_modules/
+.next/
+coverage/
+dist/
+playwright-report/
+test-results/

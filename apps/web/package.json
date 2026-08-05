@@ -1,0 +1,30 @@
+{
+  "name": "@slashwho/web",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/application": "workspace:*",
+    "@slashwho/contracts": "workspace:*",
+    "@slashwho/database": "workspace:*",
+    "@slashwho/domain": "workspace:*",
+    "next": "16.3.0",
+    "pg": "^8.22.0",
+    "pino": "^10.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
+    "@types/node": "26.1.2",
+    "@types/pg": "^8.20.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "jsdom": "^30.0.1"
+  }
+}

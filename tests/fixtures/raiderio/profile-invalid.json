@@ -1,0 +1,19 @@
+{
+  "status": 200,
+  "body": {
+    "viewUserCharactersApi": {
+      "name": "different-profile",
+      "characters": [
+        {
+          "character": {
+            "name": "Falsematch",
+            "level": 80,
+            "class": { "name": "Warlock" },
+            "realm": { "slug": "Draenor" },
+            "region": { "slug": "EU" }
+          }
+        }
+      ]
+    }
+  }
+}
