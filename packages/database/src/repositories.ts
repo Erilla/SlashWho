@@ -72,7 +72,10 @@ export interface SnapshotHistoryPage {
 }
 
 export interface SnapshotRepository {
-  create(input: CreateSnapshotInput): Promise<StoredSnapshot>;
+  create(
+    input: CreateSnapshotInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
   find(id: string): Promise<StoredSnapshot | null>;
   listHistory(
@@ -103,6 +106,12 @@ export interface NegativeCacheEntry {
 
 export interface NegativeCacheRepository {
   put(key: CharacterKey, expiresAt: Date): Promise<void>;
+  putAndFailRun(
+    key: CharacterKey,
+    expiresAt: Date,
+    runId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<void>;
   find(key: CharacterKey, at?: Date): Promise<NegativeCacheEntry | null>;
 }
 
@@ -112,6 +121,7 @@ export interface Repositories {
       key: CharacterKey,
       caller: CallerClass
     ): Promise<DiscoveryRun>;
+    claim(id: string, attempt: number): Promise<DiscoveryRun | null>;
     markRunning(id: string): Promise<void>;
     markRetrying(id: string, attempt: number, nextRetryAt: Date): Promise<void>;
     complete(id: string, snapshotId: string): Promise<void>;

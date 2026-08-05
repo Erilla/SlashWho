@@ -21,9 +21,18 @@ export interface RaiderIoProfile {
 }
 
 export interface RaiderIoGateway {
-  getCharacter(key: CharacterKey): Promise<RaiderIoCharacter>;
-  getClaimedCharacters(ownerId: string): Promise<readonly RaiderIoCharacter[]>;
-  resolveProfileGuess(value: string): Promise<RaiderIoProfile | null>;
+  getCharacter(
+    key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<RaiderIoCharacter>;
+  getClaimedCharacters(
+    ownerId: string,
+    signal?: AbortSignal
+  ): Promise<readonly RaiderIoCharacter[]>;
+  resolveProfileGuess(
+    value: string,
+    signal?: AbortSignal
+  ): Promise<RaiderIoProfile | null>;
 }
 
 export type DiscoveryOutcome =
@@ -51,6 +60,7 @@ export type DiscoveryOutcome =
 export type DiscoverCharacterOptions = {
   requestCap: number;
   isSuppressed(key: CharacterKey): Promise<boolean>;
+  signal?: AbortSignal;
 };
 
 type PendingCharacter = {
@@ -189,6 +199,10 @@ export async function discoverCharacter(
   const inspectedCharacters: RaiderIoCharacter[] = [];
   const observations: DiscoveredCharacter[] = [];
 
+  function throwIfAborted(): void {
+    options.signal?.throwIfAborted();
+  }
+
   async function request<T>(
     operation: () => Promise<T>
   ): Promise<T | typeof budgetExhausted> {
@@ -205,7 +219,9 @@ export async function discoverCharacter(
     source: "claimed" | "profile_guess"
   ): Promise<void> {
     for (const character of characters) {
+      throwIfAborted();
       if (!(await options.isSuppressed(character.key))) {
+        throwIfAborted();
         observations.push(discoveredCharacter(character, source));
       }
     }
@@ -213,6 +229,7 @@ export async function discoverCharacter(
 
   try {
     while (pendingCharacters.length > 0) {
+      throwIfAborted();
       const pending = pendingCharacters.shift()!;
       const id = canonicalCharacterId(pending.key);
       if (
@@ -223,7 +240,10 @@ export async function discoverCharacter(
       }
       visitedCharacters.add(id);
 
-      const character = await request(() => gateway.getCharacter(pending.key));
+      const character = await request(() =>
+        gateway.getCharacter(pending.key, options.signal)
+      );
+      throwIfAborted();
       if (character === budgetExhausted) break;
       if (!isRaiderIoCharacter(character)) throw schemaChanged();
 
@@ -242,8 +262,9 @@ export async function discoverCharacter(
         if (visitedOwners.has(character.ownerId)) continue;
         visitedOwners.add(character.ownerId);
         const claimed = await request(() =>
-          gateway.getClaimedCharacters(character.ownerId!)
+          gateway.getClaimedCharacters(character.ownerId!, options.signal)
         );
+        throwIfAborted();
         if (claimed === budgetExhausted) break;
         if (!isCharacterList(claimed)) throw schemaChanged();
         await recordRelated(claimed, "claimed");
@@ -257,7 +278,10 @@ export async function discoverCharacter(
         )
       );
       for (const guess of guesses) {
-        const profile = await request(() => gateway.resolveProfileGuess(guess));
+        const profile = await request(() =>
+          gateway.resolveProfileGuess(guess, options.signal)
+        );
+        throwIfAborted();
         if (profile === budgetExhausted) break;
         if (profile === null) continue;
         if (!isRaiderIoProfile(profile)) throw schemaChanged();
@@ -266,6 +290,7 @@ export async function discoverCharacter(
       if (capped) break;
     }
   } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason;
     return failureOutcome(error);
   }
 

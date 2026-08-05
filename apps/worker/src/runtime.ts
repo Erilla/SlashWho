@@ -87,8 +87,8 @@ export async function createWorkerRuntime(
       negativeCacheTtlMs: config.negativeCacheTtlMs
     });
     await initializedQueue.start();
-    await initializedQueue.work(async (payload) => {
-      await handler.execute(payload.runId);
+    await initializedQueue.work(async (payload, context) => {
+      await handler.execute(payload.runId, context);
     });
     ready = true;
 

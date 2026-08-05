@@ -226,6 +226,21 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return mapRun(result.rows[0]!);
       },
 
+      async claim(id, attempt) {
+        const result = await pool.query<RunRow>(
+          `UPDATE discovery_runs
+           SET status = 'running', attempt = $2,
+               started_at = COALESCE(started_at, now()),
+               next_retry_at = NULL
+           WHERE id = $1
+             AND attempt < $2
+             AND status IN ${activeRunSql}
+           RETURNING *`,
+          [id, attempt]
+        );
+        return result.rows[0] ? mapRun(result.rows[0]) : null;
+      },
+
       async markRunning(id) {
         await requireUpdated(
           pool,
@@ -303,9 +318,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     snapshots: {
-      async create(input) {
+      async create(input, options) {
         const client = await pool.connect();
         try {
+          options?.signal?.throwIfAborted();
           await client.query("BEGIN");
           const runResult = await client.query(
             `SELECT 1 FROM discovery_runs
@@ -427,6 +443,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const snapshot = await loadSnapshot(client, snapshotId);
           if (!snapshot) throw new Error("snapshot_not_found");
+          options?.signal?.throwIfAborted();
           await client.query("COMMIT");
           return snapshot;
         } catch (error) {
@@ -605,6 +622,48 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = now()`,
           [key.region, key.realm, key.name, expiresAt]
         );
+      },
+
+      async putAndFailRun(key, expiresAt, runId, options) {
+        const client = await pool.connect();
+        try {
+          options?.signal?.throwIfAborted();
+          await client.query("BEGIN");
+          const cacheResult = await client.query(
+            `INSERT INTO negative_character_cache
+              (region, realm_slug, normalized_name, expires_at)
+             SELECT $1, $2, $3, $4
+             WHERE EXISTS (
+               SELECT 1 FROM discovery_runs
+               WHERE id = $5 AND status IN ${activeRunSql}
+             )
+             ON CONFLICT (region, realm_slug, normalized_name)
+             DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = now()
+             RETURNING normalized_name`,
+            [key.region, key.realm, key.name, expiresAt, runId]
+          );
+          if (cacheResult.rowCount !== 1) {
+            throw new Error("discovery_run_not_active");
+          }
+          options?.signal?.throwIfAborted();
+          const failure = await client.query(
+            `UPDATE discovery_runs
+             SET status = 'failed', error_code = 'character_not_found',
+                 completed_at = now(), next_retry_at = NULL
+             WHERE id = $1 AND status IN ${activeRunSql}`,
+            [runId]
+          );
+          if (failure.rowCount !== 1) {
+            throw new Error("discovery_run_not_active");
+          }
+          options?.signal?.throwIfAborted();
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
       },
 
       async find(key, at = new Date()) {

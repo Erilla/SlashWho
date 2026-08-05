@@ -67,25 +67,37 @@ export function createRaiderIoClient(
 
   async function request<T>(
     url: URL,
-    normalize: (value: unknown) => T
+    normalize: (value: unknown) => T,
+    signal?: AbortSignal
   ): Promise<T> {
+    const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
     let response: Response;
     try {
       response = await options.fetch(url, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(options.timeoutMs)
+        signal: requestSignal
       });
     } catch {
+      if (signal?.aborted) throw signal.reason;
       throw createRaiderIoError({ kind: "transient" });
     }
 
+    signal?.throwIfAborted();
     if (!response.ok) throw createRaiderIoError(responseFailure(response));
 
     let value: unknown;
     try {
       value = await response.json();
+      signal?.throwIfAborted();
       return normalize(value);
     } catch {
+      if (signal?.aborted) throw signal.reason;
+      if (requestSignal.aborted) {
+        throw createRaiderIoError({ kind: "transient" });
+      }
       throw createRaiderIoError({ kind: "schema_drift" });
     }
   }
@@ -96,7 +108,10 @@ export function createRaiderIoClient(
     return url;
   }
 
-  async function getCharacter(key: CharacterKey): Promise<RaiderIoCharacter> {
+  async function getCharacter(
+    key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<RaiderIoCharacter> {
     const validKey = validatedCharacterKey(key);
     const path = [
       "api",
@@ -108,15 +123,21 @@ export function createRaiderIoClient(
       .map(encodeURIComponent)
       .join("/");
 
-    return request(new URL(`/${path}`, baseUrl), normalizeCharacterResponse);
+    return request(
+      new URL(`/${path}`, baseUrl),
+      normalizeCharacterResponse,
+      signal
+    );
   }
 
   async function getClaimedCharacters(
-    ownerId: string
+    ownerId: string,
+    signal?: AbortSignal
   ): Promise<readonly RaiderIoCharacter[]> {
     const profile = await request(
       profileUrl(ownerId),
-      normalizeProfileResponse
+      normalizeProfileResponse,
+      signal
     );
     if (
       profile.validationName.toLocaleLowerCase("en-US") !==
@@ -128,12 +149,14 @@ export function createRaiderIoClient(
   }
 
   async function resolveProfileGuess(
-    value: string
+    value: string,
+    signal?: AbortSignal
   ): Promise<RaiderIoProfile | null> {
     try {
       const profile = await request(
         profileUrl(value),
-        normalizeProfileResponse
+        normalizeProfileResponse,
+        signal
       );
       if (
         profile.validationName.toLocaleLowerCase("en-US") !==

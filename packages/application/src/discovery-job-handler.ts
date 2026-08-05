@@ -1,4 +1,4 @@
-import type { Repositories } from "@slashwho/database";
+import type { DiscoveryWorkContext, Repositories } from "@slashwho/database";
 import { discoverCharacter, type RaiderIoGateway } from "@slashwho/domain";
 
 export type DiscoveryJobHandlerOptions = {
@@ -26,6 +26,18 @@ function retryableError(retryAfterMs: number): RetryableDiscoveryError {
   });
 }
 
+function isRetryableDiscoveryError(
+  error: unknown
+): error is RetryableDiscoveryError {
+  return (
+    error instanceof Error &&
+    "retryable" in error &&
+    error.retryable === true &&
+    "retryAfterMs" in error &&
+    typeof error.retryAfterMs === "number"
+  );
+}
+
 export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   const now = options.now ?? (() => new Date());
   const random = options.random ?? Math.random;
@@ -36,80 +48,151 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   const negativeCacheTtlMs = options.negativeCacheTtlMs ?? 300_000;
 
   return {
-    async execute(runId: string): Promise<void> {
-      const run = await options.repositories.runs.find(runId);
-      if (!run) throw new Error("discovery_run_not_found");
-      if (run.status === "complete" || run.status === "failed") return;
-
-      const executionTime = now();
-      if (
-        executionTime.getTime() - run.createdAt.getTime() >=
-        maxJobLifetimeMs
-      ) {
-        await options.repositories.runs.fail(runId, "upstream_unavailable");
-        return;
-      }
-
-      await options.repositories.runs.markRunning(runId);
-      const outcome = await discoverCharacter(run.rootKey, options.gateway, {
-        requestCap: options.requestCap,
-        isSuppressed: (key) => options.repositories.suppressions.isActive(key)
-      });
-
-      if (outcome.kind === "snapshot") {
-        await options.repositories.snapshots.create({
-          runId,
-          rootKey: run.rootKey,
-          state: outcome.state,
-          limitationCode:
-            outcome.state === "partial" ? outcome.limitationCode : null,
-          refreshedAt: now(),
-          characters: [...outcome.characters]
-        });
-        return;
-      }
-
-      if (!outcome.retryable) {
-        if (outcome.code === "character_not_found") {
-          await options.repositories.negativeCache.put(
-            run.rootKey,
-            new Date(now().getTime() + negativeCacheTtlMs)
-          );
-          await options.repositories.runs.fail(runId, "character_not_found");
+    async execute(
+      runId: string,
+      workContext?: DiscoveryWorkContext
+    ): Promise<void> {
+      let context = workContext;
+      if (!context) {
+        const existing = await options.repositories.runs.find(runId);
+        if (!existing) throw new Error("discovery_run_not_found");
+        if (existing.status === "complete" || existing.status === "failed") {
           return;
         }
-        await options.repositories.runs.fail(runId, "search_failed");
-        return;
+        context = {
+          attempt: existing.attempt + 1,
+          maxAttempts,
+          signal: new AbortController().signal
+        };
       }
 
-      const attempt = run.attempt + 1;
-      const failureTime = now();
-      const remainingLifetimeMs = Math.max(
-        0,
-        run.createdAt.getTime() + maxJobLifetimeMs - failureTime.getTime()
-      );
-      const exponentialDelay =
-        baseRetryDelayMs * 2 ** Math.max(0, attempt - 1) * (0.5 + random() / 2);
-      const retryCeilingSeconds = Math.floor(
-        Math.min(maxRetryDelayMs, remainingLifetimeMs) / 1_000
-      );
-      const requestedRetrySeconds = Math.max(
-        1,
-        Math.ceil(Math.max(exponentialDelay, outcome.retryAfterMs ?? 0) / 1_000)
-      );
-      const retryAfterMs =
-        Math.min(retryCeilingSeconds, requestedRetrySeconds) * 1_000;
+      const run = await options.repositories.runs.claim(runId, context.attempt);
+      if (!run) return;
 
-      if (attempt >= maxAttempts || retryCeilingSeconds === 0) {
-        await options.repositories.runs.fail(runId, "upstream_unavailable");
-        return;
+      try {
+        context.signal.throwIfAborted();
+        const executionTime = now();
+        if (
+          executionTime.getTime() - run.createdAt.getTime() >=
+          maxJobLifetimeMs
+        ) {
+          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          return;
+        }
+
+        const outcome = await discoverCharacter(run.rootKey, options.gateway, {
+          requestCap: options.requestCap,
+          isSuppressed: (key) =>
+            options.repositories.suppressions.isActive(key),
+          signal: context.signal
+        });
+        context.signal.throwIfAborted();
+        const persistenceTime = now();
+        if (
+          persistenceTime.getTime() - run.createdAt.getTime() >=
+          maxJobLifetimeMs
+        ) {
+          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          return;
+        }
+
+        if (outcome.kind === "snapshot") {
+          context.signal.throwIfAborted();
+          await options.repositories.snapshots.create(
+            {
+              runId,
+              rootKey: run.rootKey,
+              state: outcome.state,
+              limitationCode:
+                outcome.state === "partial" ? outcome.limitationCode : null,
+              refreshedAt: persistenceTime,
+              characters: [...outcome.characters]
+            },
+            { signal: context.signal }
+          );
+          return;
+        }
+
+        if (!outcome.retryable) {
+          if (outcome.code === "character_not_found") {
+            context.signal.throwIfAborted();
+            await options.repositories.negativeCache.putAndFailRun(
+              run.rootKey,
+              new Date(persistenceTime.getTime() + negativeCacheTtlMs),
+              runId,
+              { signal: context.signal }
+            );
+            return;
+          }
+          await options.repositories.runs.fail(runId, "search_failed");
+          return;
+        }
+
+        const failureTime = now();
+        const remainingLifetimeMs = Math.max(
+          0,
+          run.createdAt.getTime() + maxJobLifetimeMs - failureTime.getTime()
+        );
+        const exponentialDelay =
+          baseRetryDelayMs *
+          2 ** Math.max(0, context.attempt - 1) *
+          (0.5 + random() / 2);
+        const retryCeilingSeconds = Math.floor(
+          Math.min(maxRetryDelayMs, remainingLifetimeMs) / 1_000
+        );
+        const requestedRetrySeconds = Math.max(
+          1,
+          Math.ceil(
+            Math.max(exponentialDelay, outcome.retryAfterMs ?? 0) / 1_000
+          )
+        );
+        const retryAfterMs =
+          Math.min(retryCeilingSeconds, requestedRetrySeconds) * 1_000;
+
+        if (
+          context.attempt >= context.maxAttempts ||
+          retryCeilingSeconds === 0
+        ) {
+          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          return;
+        }
+        await options.repositories.runs.markRetrying(
+          runId,
+          context.attempt,
+          new Date(failureTime.getTime() + retryAfterMs)
+        );
+        throw retryableError(retryAfterMs);
+      } catch (error) {
+        if (context.signal.aborted) throw context.signal.reason;
+        if (isRetryableDiscoveryError(error)) throw error;
+
+        const current = await options.repositories.runs.find(runId);
+        if (current?.status === "complete" || current?.status === "failed") {
+          if (current.status === "complete") return;
+          throw error;
+        }
+        if (context.attempt >= context.maxAttempts) {
+          await options.repositories.runs.fail(runId, "search_failed");
+          throw error;
+        }
+
+        const retryAt = new Date(
+          now().getTime() +
+            Math.min(
+              maxRetryDelayMs,
+              Math.max(
+                1_000,
+                baseRetryDelayMs * 2 ** Math.max(0, context.attempt - 1)
+              )
+            )
+        );
+        await options.repositories.runs.markRetrying(
+          runId,
+          context.attempt,
+          retryAt
+        );
+        throw retryableError(retryAt.getTime() - now().getTime());
       }
-      await options.repositories.runs.markRetrying(
-        runId,
-        attempt,
-        new Date(failureTime.getTime() + retryAfterMs)
-      );
-      throw retryableError(retryAfterMs);
     }
   };
 }

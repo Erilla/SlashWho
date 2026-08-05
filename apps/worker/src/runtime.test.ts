@@ -2,6 +2,7 @@ import type { DiscoveryJobHandler } from "@slashwho/application";
 import type {
   DiscoverCharacterJob,
   DiscoveryQueue,
+  DiscoveryWorkContext,
   Repositories
 } from "@slashwho/database";
 import type { RaiderIoGateway } from "@slashwho/domain";
@@ -27,7 +28,11 @@ function runtimeFakes() {
   let ended = false;
   let queueReady = false;
   let workHandler:
-    ((payload: DiscoverCharacterJob) => Promise<void>) | undefined;
+    | ((
+        payload: DiscoverCharacterJob,
+        context: DiscoveryWorkContext
+      ) => Promise<void>)
+    | undefined;
   const queue: DiscoveryQueue = {
     async start() {
       queueReady = true;
@@ -109,13 +114,22 @@ describe("worker runtime", () => {
     const fakes = runtimeFakes();
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
-    await fakes.workHandler?.({
-      runId: "00000000-0000-4000-8000-000000000003",
-      key: { region: "eu", realm: "silvermoon", name: "private-value" }
-    });
+    const context = {
+      attempt: 3,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    };
+    await fakes.workHandler?.(
+      {
+        runId: "00000000-0000-4000-8000-000000000003",
+        key: { region: "eu", realm: "silvermoon", name: "private-value" }
+      },
+      context
+    );
 
     expect(fakes.handler.execute).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000003"
+      "00000000-0000-4000-8000-000000000003",
+      context
     );
     await runtime.stop();
   });

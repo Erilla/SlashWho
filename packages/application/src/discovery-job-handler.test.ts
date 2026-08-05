@@ -43,17 +43,32 @@ function character(key: CharacterKey): RaiderIoCharacter {
 class MutableGateway implements RaiderIoGateway {
   failure: Error | null = null;
 
-  async getCharacter(): Promise<RaiderIoCharacter> {
+  async getCharacter(
+    _key?: CharacterKey,
+    _signal?: AbortSignal
+  ): Promise<RaiderIoCharacter> {
+    void _key;
+    void _signal;
     if (this.failure) throw this.failure;
     return character(rootKey);
   }
 
-  async getClaimedCharacters(): Promise<readonly RaiderIoCharacter[]> {
+  async getClaimedCharacters(
+    _ownerId?: string,
+    _signal?: AbortSignal
+  ): Promise<readonly RaiderIoCharacter[]> {
+    void _ownerId;
+    void _signal;
     if (this.failure) throw this.failure;
     return [character(secondKey), character(thirdKey)];
   }
 
-  async resolveProfileGuess(): Promise<null> {
+  async resolveProfileGuess(
+    _guess?: string,
+    _signal?: AbortSignal
+  ): Promise<null> {
+    void _guess;
+    void _signal;
     if (this.failure) throw this.failure;
     return null;
   }
@@ -95,6 +110,21 @@ function createMemoryRepositories(): Repositories {
           snapshotId: null
         };
         runs.set(run.id, run);
+        return run;
+      },
+      async claim(id, attempt) {
+        const run = runs.get(id);
+        if (
+          !run ||
+          !["queued", "running", "retrying"].includes(run.status) ||
+          run.attempt >= attempt
+        ) {
+          return null;
+        }
+        run.status = "running";
+        run.attempt = attempt;
+        run.startedAt ??= new Date("2026-08-05T08:00:00.000Z");
+        run.nextRetryAt = null;
         return run;
       },
       async markRunning(id) {
@@ -196,6 +226,15 @@ function createMemoryRepositories(): Repositories {
       async put(key, expiresAt) {
         negativeCache.set(keyId(key), expiresAt);
       },
+      async putAndFailRun(key, expiresAt, runId, options) {
+        options?.signal?.throwIfAborted();
+        negativeCache.set(keyId(key), expiresAt);
+        const run = runs.get(runId);
+        if (!run) throw new Error("discovery_run_not_found");
+        run.status = "failed";
+        run.errorCode = "character_not_found";
+        run.completedAt = new Date("2026-08-05T08:00:00.000Z");
+      },
       async find(key, at = new Date()) {
         const expiresAt = negativeCache.get(keyId(key));
         return expiresAt && expiresAt > at ? { key, expiresAt } : null;
@@ -229,6 +268,14 @@ function handlerFor(
     negativeCacheTtlMs: 300_000,
     ...overrides
   });
+}
+
+function delivery(attempt = 1, maxAttempts = 5) {
+  return {
+    attempt,
+    maxAttempts,
+    signal: new AbortController().signal
+  };
 }
 
 describe("discovery job handler", () => {
@@ -372,6 +419,203 @@ describe("discovery job handler", () => {
       status: "failed",
       errorCode: "upstream_unavailable",
       nextRetryAt: null
+    });
+  });
+
+  it("lets only one duplicate delivery perform discovery", async () => {
+    // Break caught: duplicate same-attempt workers could both call the gateway.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    let calls = 0;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const base = new MutableGateway();
+    const gateway: RaiderIoGateway = {
+      async getCharacter(key) {
+        calls += 1;
+        started();
+        await blocked;
+        return base.getCharacter(key);
+      },
+      getClaimedCharacters: (owner) => base.getClaimedCharacters(owner),
+      resolveProfileGuess: (value) => base.resolveProfileGuess(value)
+    };
+    const handler = handlerFor(repositories, gateway);
+
+    const first = handler.execute(run.id, delivery());
+    await firstStarted;
+    const duplicate = handler.execute(run.id, delivery());
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(calls).toBe(1);
+    await expect(duplicate).resolves.toBeUndefined();
+    release();
+    await first;
+    await expect(repositories.negativeCache.find(rootKey)).resolves.toBeNull();
+  });
+
+  it("reconciles an unexpected persistence error to retrying", async () => {
+    // Break caught: snapshot failure could leave a non-final run stuck in running.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.snapshots.create = async () => {
+      throw new Error("controlled_snapshot_failure");
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway()).execute(
+        run.id,
+        delivery(1)
+      )
+    ).rejects.toMatchObject({ retryable: true });
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "retrying",
+      attempt: 1
+    });
+  });
+
+  it("reconciles an unexpected final-delivery error to failed", async () => {
+    // Break caught: fifth-delivery persistence failure could leave an active run forever.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.snapshots.create = async () => {
+      throw new Error("controlled_snapshot_failure");
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway()).execute(
+        run.id,
+        delivery(5)
+      )
+    ).rejects.toThrow("controlled_snapshot_failure");
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "failed",
+      attempt: 5,
+      errorCode: "search_failed"
+    });
+  });
+
+  it("does not persist any outcome after delivery cancellation", async () => {
+    // Break caught: an aborted gateway call could still publish or negative-cache.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const controller = new AbortController();
+    const base = new MutableGateway();
+    const gateway: RaiderIoGateway = {
+      async getCharacter(key, signal) {
+        expect(signal).toBe(controller.signal);
+        controller.abort(new DOMException("drain timeout", "AbortError"));
+        return base.getCharacter(key);
+      },
+      getClaimedCharacters: (owner, signal) =>
+        base.getClaimedCharacters(owner, signal),
+      resolveProfileGuess: (value, signal) =>
+        base.resolveProfileGuess(value, signal)
+    };
+
+    await expect(
+      handlerFor(repositories, gateway).execute(run.id, {
+        ...delivery(),
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "running",
+      attempt: 1,
+      snapshotId: null,
+      errorCode: null
+    });
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toBeNull();
+    await expect(repositories.negativeCache.find(rootKey)).resolves.toBeNull();
+  });
+
+  it("rechecks the lifetime deadline after discovery before publication", async () => {
+    // Break caught: a slow successful discovery could publish after the 30-minute bound.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    run.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    const times = [
+      new Date("2026-08-05T07:59:59.000Z"),
+      new Date("2026-08-05T08:00:01.000Z")
+    ];
+
+    await handlerFor(repositories, new MutableGateway(), {
+      now: () => times.shift() ?? new Date("2026-08-05T08:00:01.000Z")
+    }).execute(run.id, delivery());
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "upstream_unavailable",
+      snapshotId: null
+    });
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toBeNull();
+  });
+
+  it("recovers a one-shot retry-state persistence failure", async () => {
+    // Break caught: a recoverable markRetrying error could strand a running run.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const persistRetry = repositories.runs.markRetrying;
+    let writes = 0;
+    repositories.runs.markRetrying = async (...arguments_) => {
+      writes += 1;
+      if (writes === 1) throw new Error("controlled_retry_write_failure");
+      return persistRetry(...arguments_);
+    };
+    const gateway = new MutableGateway();
+    gateway.failure = Object.assign(new Error("unavailable"), {
+      kind: "transient"
+    });
+
+    await expect(
+      handlerFor(repositories, gateway).execute(run.id, delivery(1))
+    ).rejects.toMatchObject({ retryable: true });
+
+    expect(writes).toBe(2);
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "retrying",
+      attempt: 1
+    });
+  });
+
+  it("recovers a one-shot final failure-state persistence error", async () => {
+    // Break caught: the final delivery could exhaust pg-boss with the run still active.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const persistFailure = repositories.runs.fail;
+    let writes = 0;
+    repositories.runs.fail = async (...arguments_) => {
+      writes += 1;
+      if (writes === 1) throw new Error("controlled_failure_write_failure");
+      return persistFailure(...arguments_);
+    };
+    const gateway = new MutableGateway();
+    gateway.failure = Object.assign(new Error("unavailable"), {
+      kind: "transient"
+    });
+
+    await expect(
+      handlerFor(repositories, gateway).execute(run.id, delivery(5))
+    ).rejects.toThrow("controlled_failure_write_failure");
+
+    expect(writes).toBe(2);
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "failed",
+      attempt: 5,
+      errorCode: "search_failed"
     });
   });
 });

@@ -26,17 +26,25 @@ const sensitiveKeys = new Set([
   "authorization",
   "cookie",
   "body",
+  "owner",
   "ownerid",
+  "profile",
   "profileguess",
+  "validationguess",
   "validationname",
+  "rawurl",
   "rawpayload",
   "rawupstreampayload"
 ]);
 
-function sanitize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitize);
+function sanitize(value: unknown, visited = new WeakSet<object>()): unknown {
   if (typeof value !== "object" || value === null || value instanceof Date) {
     return value;
+  }
+  if (visited.has(value)) return "[Circular]";
+  visited.add(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitize(item, visited));
   }
 
   return Object.fromEntries(
@@ -44,7 +52,7 @@ function sanitize(value: unknown): unknown {
       key,
       sensitiveKeys.has(key.toLowerCase().replaceAll(/[^a-z]/g, ""))
         ? "[Redacted]"
-        : sanitize(item)
+        : sanitize(item, visited)
     ])
   );
 }

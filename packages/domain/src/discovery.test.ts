@@ -384,4 +384,32 @@ describe("discoverCharacter", () => {
       retryAfterMs: 30_000
     });
   });
+
+  it("propagates cancellation and stops at the next discovery checkpoint", async () => {
+    // Break caught: an aborted delivery could continue traversal and later publish.
+    const controller = new AbortController();
+    let claimedCalls = 0;
+    const gateway = {
+      async getCharacter(_key: CharacterKey, signal?: AbortSignal) {
+        expect(signal).toBe(controller.signal);
+        controller.abort(new DOMException("drain timeout", "AbortError"));
+        return character(altKey, { ownerId: "owner" });
+      },
+      async getClaimedCharacters() {
+        claimedCalls += 1;
+        return [];
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await expect(
+      discoverCharacter(altKey, gateway, {
+        ...options,
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(claimedCalls).toBe(0);
+  });
 });

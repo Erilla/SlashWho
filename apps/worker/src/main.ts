@@ -1,16 +1,44 @@
-import { loadWorkerConfig } from "./config";
-import { startHealthServer } from "./health-server";
+import { loadWorkerConfig, type WorkerConfig } from "./config";
+import {
+  startHealthServer,
+  type HealthServer,
+  type HealthServerOptions
+} from "./health-server";
 import { createWorkerLogger } from "./logger";
-import { createWorkerRuntime } from "./runtime";
+import { createWorkerRuntime, type WorkerRuntime } from "./runtime";
 
-export async function main(): Promise<void> {
-  const config = loadWorkerConfig();
-  const logger = createWorkerLogger();
-  const runtime = await createWorkerRuntime(config);
-  const healthServer = await startHealthServer({
-    port: config.port,
-    health: () => runtime.health()
-  });
+type WorkerLogger = { info(value: object): void };
+
+export type WorkerMainDependencies = {
+  loadConfig(): WorkerConfig;
+  createLogger(): WorkerLogger;
+  createRuntime(config: WorkerConfig): Promise<WorkerRuntime>;
+  startHealthServer(options: HealthServerOptions): Promise<HealthServer>;
+};
+
+const defaultDependencies: WorkerMainDependencies = {
+  loadConfig: loadWorkerConfig,
+  createLogger: createWorkerLogger,
+  createRuntime: createWorkerRuntime,
+  startHealthServer
+};
+
+export async function main(
+  dependencies: WorkerMainDependencies = defaultDependencies
+): Promise<void> {
+  const config = dependencies.loadConfig();
+  const logger = dependencies.createLogger();
+  const runtime = await dependencies.createRuntime(config);
+  let healthServer: HealthServer;
+  try {
+    healthServer = await dependencies.startHealthServer({
+      port: config.port,
+      health: () => runtime.health()
+    });
+  } catch (error) {
+    await runtime.stop().catch(() => undefined);
+    throw error;
+  }
   let stopping: Promise<void> | undefined;
   const stop = (signal: "SIGTERM" | "SIGINT") => {
     stopping ??= (async () => {

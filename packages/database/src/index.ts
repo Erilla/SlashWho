@@ -4,7 +4,8 @@ export { createDiscoveryQueue, discoverCharacterQueueName } from "./queue";
 export type {
   CreateDiscoveryQueueOptions,
   DiscoverCharacterJob,
-  DiscoveryQueue
+  DiscoveryQueue,
+  DiscoveryWorkContext
 } from "./queue";
 export type {
   CallerClass,

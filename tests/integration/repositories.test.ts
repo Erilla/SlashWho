@@ -100,6 +100,22 @@ describe("PostgreSQL repositories", () => {
     expect(new Set(results.map((result) => result.id)).size).toBe(1);
   });
 
+  it("atomically grants one claim for a delivery attempt", async () => {
+    // Break caught: duplicate deliveries could both perform discovery and persistence.
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+
+    const claims = await Promise.all([
+      repositories.runs.claim(run.id, 1),
+      repositories.runs.claim(run.id, 1)
+    ]);
+
+    expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "running",
+      attempt: 1
+    });
+  });
+
   it("records retry and failure lifecycle fields without leaking diagnostics", async () => {
     const run = await repositories.runs.createOrReuse(rootKey, "bot");
     const retryAt = new Date("2026-08-04T12:05:00.000Z");

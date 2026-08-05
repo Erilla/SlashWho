@@ -113,3 +113,52 @@ PostgreSQL 16; no PostgreSQL or pg-boss mocks were used.
   default `pgboss.job` schema because v12.27 exposes no active-job option update.
   Revalidate that one integration test before upgrading pg-boss or configuring a
   non-default pg-boss schema.
+
+## Fix Round 1
+
+### Changes
+
+- Added pg-boss delivery attempt/finality metadata, deterministic run-ID job
+  identity, atomic run claiming, and safe duplicate-delivery rejection.
+- Reconciled unexpected pre/post-discovery failures to `retrying` or terminal
+  `failed`, while preserving the original final-delivery error.
+- Propagated pg-boss cancellation through the handler, domain traversal, and
+  Raider.IO fetch, including response-body reads; shutdown now waits for the
+  aborted handler to finish before the application pool closes.
+- Made snapshot publication and confirmed-absence cache/failure persistence
+  abort-aware and transactional, with final cancellation checks before commit.
+- Rechecked the 30-minute wall-clock deadline after discovery and before writes.
+- Stopped an initialized runtime when health binding fails, without installing
+  signal handlers; hardened cyclic logger sanitization and sensitive key
+  coverage; required exactly one row from the Retry-After SQL update.
+
+### TDD and PostgreSQL evidence
+
+- RED/GREEN: two concurrent run claims initially had no CAS; real PostgreSQL
+  now grants exactly one claim, and overlapping handler delivery calls invoke
+  the gateway once.
+- RED/GREEN: repeated enqueue returned two pg-boss IDs; the same run ID now
+  produces one durable job.
+- RED/GREEN: cancellation during delayed snapshot and negative-cache inserts
+  initially committed data; real PostgreSQL tests now prove both transactions
+  roll back with no snapshot/cache/final state.
+- RED/GREEN: timed drain returned before an aborted handler finished; the real
+  queue/runtime test now proves the handler finishes and can still query the
+  application pool before stop returns.
+- RED/GREEN: gateway, persistence, health-bind, cyclic logger, body-read abort,
+  post-discovery deadline, and zero-row Retry-After regressions each failed
+  before their corresponding implementation change and passed afterward.
+
+### Verification
+
+- Node.js `v22.23.2`, pnpm `11.20.0`.
+- Full Vitest suite: PASS, 16 files and 99/99 tests, including PostgreSQL 16 and
+  real pg-boss queue/concurrency/atomicity coverage.
+- ESLint, Prettier check, all seven workspace TypeScript checks, and
+  `git diff --check`: PASS.
+
+### Remaining concern
+
+- The existing pg-boss default-schema coupling for active Retry-After updates
+  remains; the update is now guarded by `RETURNING id` and an exact one-row
+  assertion so schema/API drift fails closed.

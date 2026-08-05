@@ -89,6 +89,70 @@ describe("Raider.IO gateway", () => {
     });
   });
 
+  it("combines delivery cancellation with the request timeout", async () => {
+    // Break caught: shutdown cancellation could be ignored until the HTTP timeout.
+    const controller = new AbortController();
+    const baseFetch = fixtureFetch("character-visible-owner");
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      await new Promise<void>((resolveDelay, reject) => {
+        const timer = setTimeout(resolveDelay, 10);
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(init.signal?.reason);
+          },
+          { once: true }
+        );
+      });
+      return baseFetch(input, init);
+    };
+    const client = createRaiderIoClient({
+      fetch,
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 1_000
+    });
+
+    const request = client.getCharacter(sentinel, controller.signal);
+    controller.abort(new DOMException("drain timeout", "AbortError"));
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("preserves delivery cancellation while reading the response body", async () => {
+    // Break caught: body-read cancellation could be mislabeled as schema drift.
+    const controller = new AbortController();
+    let bodyStarted!: () => void;
+    const readingBody = new Promise<void>((resolve) => {
+      bodyStarted = resolve;
+    });
+    const bodyFetch: typeof globalThis.fetch = async (_input, init) =>
+      ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () =>
+          new Promise((_resolve, reject) => {
+            bodyStarted();
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason),
+              { once: true }
+            );
+          })
+      }) as Response;
+    const client = createRaiderIoClient({
+      fetch: bodyFetch,
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 1_000
+    });
+    const request = client.getCharacter(sentinel, controller.signal);
+    await readingBody;
+    controller.abort(new DOMException("drain timeout", "AbortError"));
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("represents a privacy-hidden owner without inventing an identity", async () => {
     const character = await clientFor("character-private-owner").getCharacter(
       sentinel

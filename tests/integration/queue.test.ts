@@ -1,8 +1,14 @@
 import type { CharacterKey } from "@slashwho/domain";
+import { Pool } from "pg";
 import { PgBoss } from "pg-boss";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { createDiscoveryQueue } from "../../packages/database/src";
+import { createDiscoveryJobHandler } from "../../packages/application/src";
+import {
+  createDiscoveryQueue,
+  createPostgresRepositories,
+  runMigrations
+} from "../../packages/database/src";
 import { startPostgres } from "./postgres";
 
 const queueName = "discover-character";
@@ -25,17 +31,23 @@ async function eventually(
 
 describe("durable discovery queue", () => {
   let connectionString: string;
+  let applicationPool: Pool;
   let stopPostgres: () => Promise<void>;
   const cleanup: Array<() => Promise<void>> = [];
 
   beforeAll(async () => {
     const postgres = await startPostgres();
+    applicationPool = postgres.pool;
     connectionString = postgres.pool.options.connectionString!;
     stopPostgres = postgres.stop;
+    await runMigrations(applicationPool);
   });
 
   afterEach(async () => {
     await Promise.allSettled(cleanup.splice(0).map((stop) => stop()));
+    await applicationPool.query("DELETE FROM pgboss.job WHERE name = $1", [
+      queueName
+    ]);
   });
 
   afterAll(async () => {
@@ -80,6 +92,30 @@ describe("durable discovery queue", () => {
     expect(invocationCount).toBe(1);
   });
 
+  it("deduplicates repeated enqueue for one public run id", async () => {
+    // Break caught: enqueue retries could create multiple durable deliveries for one run.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const payload = {
+      runId: "00000000-0000-4000-8000-000000000006",
+      key
+    };
+
+    const [first, second] = await Promise.all([
+      queue.enqueue(payload),
+      queue.enqueue(payload)
+    ]);
+
+    expect(first).toBe(second);
+    const inspector = new PgBoss(connectionString);
+    cleanup.push(() => inspector.stop({ graceful: false, timeout: 1_000 }));
+    await inspector.start();
+    await expect(
+      inspector.findJobs(queueName, { id: first })
+    ).resolves.toHaveLength(1);
+  });
+
   it("moves a job through created, active, retry, and failed states", async () => {
     // Break caught: failed work could bypass retry or exceed the five-attempt bound.
     const queue = createDiscoveryQueue({ connectionString });
@@ -106,6 +142,7 @@ describe("durable discovery queue", () => {
     const firstBlock = new Promise<void>((resolve) => {
       unblockFirst = resolve;
     });
+    cleanup.push(async () => unblockFirst());
     await queue.work(async () => {
       attempts += 1;
       if (attempts === 1) {
@@ -140,6 +177,40 @@ describe("durable discovery queue", () => {
     });
     expect(attempts).toBe(5);
   }, 50_000);
+
+  it("provides durable attempt metadata and cancellation to work", async () => {
+    // Break caught: the handler could not distinguish a final delivery or observe shutdown.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    let observed:
+      { attempt: number; maxAttempts: number; aborted: boolean } | undefined;
+    let handled!: () => void;
+    const complete = new Promise<void>((resolve) => {
+      handled = resolve;
+    });
+    await queue.work(async (_payload, context) => {
+      if (!context) {
+        observed = { attempt: 0, maxAttempts: 0, aborted: false };
+        handled();
+        return;
+      }
+      observed = {
+        attempt: context.attempt,
+        maxAttempts: context.maxAttempts,
+        aborted: context.signal.aborted
+      };
+      handled();
+    });
+
+    await queue.enqueue({
+      runId: "00000000-0000-4000-8000-000000000007",
+      key
+    });
+    await complete;
+
+    expect(observed).toEqual({ attempt: 1, maxAttempts: 5, aborted: false });
+  });
 
   it("schedules retry no earlier than a longer upstream Retry-After", async () => {
     // Break caught: pg-boss backoff could retry before the application-owned upstream delay.
@@ -182,6 +253,7 @@ describe("durable discovery queue", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
+    cleanup.push(async () => release());
     let claimed!: () => void;
     const started = new Promise<void>((resolve) => {
       claimed = resolve;
@@ -213,5 +285,92 @@ describe("durable discovery queue", () => {
     await expect(inspector.findJobs(queueName, { id: jobId })).resolves.toEqual(
       [expect.objectContaining({ state: "completed" })]
     );
+  });
+
+  it("waits for an aborted handler after the drain timeout", async () => {
+    // Break caught: runtime could close its pool while aborted work still unwinds.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    let started!: () => void;
+    const claimed = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let abortObserved = false;
+    let handlerFinished = false;
+    let persistenceError: unknown;
+    const repositories = createPostgresRepositories(applicationPool);
+    const run = await repositories.runs.createOrReuse(
+      { region: "eu", realm: "silvermoon", name: "abort-root" },
+      "anonymous"
+    );
+    const handler = createDiscoveryJobHandler({
+      repositories,
+      requestCap: 12,
+      gateway: {
+        async getCharacter(_key, signal) {
+          started();
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+                setTimeout(resolve, 250);
+              },
+              { once: true }
+            );
+          });
+          try {
+            await applicationPool.query("SELECT pg_sleep(0.1)");
+          } catch (error) {
+            persistenceError = error;
+          }
+          return {
+            key: { region: "eu", realm: "silvermoon", name: "abort-root" },
+            displayName: "Abort Root",
+            className: "Mage",
+            level: 80,
+            ownerId: "owner",
+            profileGuess: null,
+            declaredMain: null
+          };
+        },
+        async getClaimedCharacters() {
+          return [];
+        },
+        async resolveProfileGuess() {
+          return null;
+        }
+      }
+    });
+    await queue.work(async (payload, context) => {
+      try {
+        await handler.execute(payload.runId, context);
+      } finally {
+        handlerFinished = true;
+      }
+    });
+    await queue.enqueue({
+      runId: run.id,
+      key
+    });
+    await claimed;
+
+    await queue.stop({ graceful: true, timeoutMs: 1_000 });
+
+    expect(abortObserved).toBe(true);
+    expect(handlerFinished).toBe(true);
+    expect(persistenceError).toBeUndefined();
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "running",
+      snapshotId: null,
+      errorCode: null
+    });
+    await expect(
+      repositories.snapshots.getCurrent(run.rootKey)
+    ).resolves.toBeNull();
+    await expect(
+      repositories.negativeCache.find(run.rootKey)
+    ).resolves.toBeNull();
   });
 });

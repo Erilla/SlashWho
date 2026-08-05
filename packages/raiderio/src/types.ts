@@ -15,7 +15,16 @@ export interface RaiderIoProfile {
 }
 
 export interface RaiderIoGateway {
-  getCharacter(key: CharacterKey): Promise<RaiderIoCharacter>;
-  getClaimedCharacters(ownerId: string): Promise<readonly RaiderIoCharacter[]>;
-  resolveProfileGuess(value: string): Promise<RaiderIoProfile | null>;
+  getCharacter(
+    key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<RaiderIoCharacter>;
+  getClaimedCharacters(
+    ownerId: string,
+    signal?: AbortSignal
+  ): Promise<readonly RaiderIoCharacter[]>;
+  resolveProfileGuess(
+    value: string,
+    signal?: AbortSignal
+  ): Promise<RaiderIoProfile | null>;
 }

@@ -39,4 +39,32 @@ describe("worker logger", () => {
     expect(captured).toContain("safe_event");
     expect(captured).not.toContain(marker);
   });
+
+  it("handles cycles and redacts generic private lookup keys", async () => {
+    // Break caught: cyclic diagnostic data could crash logging or expose lookup secrets.
+    const marker = "UNIQUE_CYCLIC_MARKER_b6221e";
+    const output = new PassThrough();
+    let captured = "";
+    output.on("data", (chunk) => {
+      captured += chunk.toString();
+    });
+    const logger = createWorkerLogger(output);
+    const value: Record<string, unknown> = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "normalized-root",
+      rawUrl: marker,
+      owner: marker,
+      profile: marker,
+      validationGuess: marker
+    };
+    value.self = value;
+
+    expect(() => logger.info({ value }, "cyclic_event")).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(captured).toContain("normalized-root");
+    expect(captured).toContain("[Circular]");
+    expect(captured).not.toContain(marker);
+  });
 });
