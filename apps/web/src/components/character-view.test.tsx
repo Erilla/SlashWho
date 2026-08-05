@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CharacterResource,
@@ -187,6 +194,126 @@ describe("CharacterPageClient", () => {
       "/api/v1/characters/eu/silvermoon/ryii",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("keeps the active state and retries after a bounded rate-limit delay", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/v1/searches/")) {
+        if (fetchMock.mock.calls.length === 1) {
+          return new Response(
+            JSON.stringify({
+              error: { code: "rate_limited", message: "Too many requests." }
+            }),
+            {
+              status: 429,
+              headers: {
+                "content-type": "application/json",
+                "retry-after": "30"
+              }
+            }
+          );
+        }
+        return Response.json({
+          jobId,
+          status: "running",
+          characterUrl: "/characters/eu/silvermoon/ryii",
+          createdAt: "2026-08-04T18:06:00.000Z",
+          startedAt: "2026-08-04T18:06:01.000Z",
+          completedAt: null,
+          retryAt: null,
+          error: null
+        });
+      }
+      return new Promise(() => undefined);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderCharacter();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Refreshing")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_999);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hydrates current and history data before cleaning up a completed poll", async () => {
+    let resolveCurrent: ((response: Response) => void) | undefined;
+    let resolveHistory: ((response: Response) => void) | undefined;
+    const refreshedResource: CharacterResource = {
+      ...staleResourceWithActiveJob,
+      snapshot: {
+        ...staleResourceWithActiveJob.snapshot,
+        refreshedAt: "2026-08-04T18:09:00.000Z",
+        characterCount: 1,
+        characters: [staleResourceWithActiveJob.snapshot.characters[0]]
+      },
+      activeJob: null
+    };
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, options?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/v1/searches/")) {
+          return Promise.resolve(
+            Response.json({
+              jobId,
+              status: "complete",
+              characterUrl: "/characters/eu/silvermoon/ryii",
+              createdAt: "2026-08-04T18:06:00.000Z",
+              startedAt: "2026-08-04T18:06:01.000Z",
+              completedAt: "2026-08-04T18:09:00.000Z",
+              retryAt: null,
+              error: null
+            })
+          );
+        }
+        if (url.endsWith("/history")) {
+          return new Promise<Response>((resolve, reject) => {
+            resolveHistory = resolve;
+            options?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError"))
+            );
+          });
+        }
+        return new Promise<Response>((resolve, reject) => {
+          resolveCurrent = resolve;
+          options?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError"))
+          );
+        });
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderCharacter();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(resolveCurrent).toBeDefined();
+    expect(resolveHistory).toBeDefined();
+
+    await act(async () => {
+      resolveCurrent?.(Response.json(refreshedResource));
+      resolveHistory?.(Response.json(history));
+    });
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByLabelText("Refresh status")).getByText("1 character")
+      ).toBeVisible();
+    });
+    expect(screen.queryByText("Refreshing")).not.toBeInTheDocument();
   });
 
   it("shows a safe failed state when a job terminates without a snapshot", () => {

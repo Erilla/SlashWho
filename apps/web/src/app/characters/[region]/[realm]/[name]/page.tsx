@@ -28,8 +28,19 @@ export default async function CharacterPage({
   const raw = await params;
   const identity = parseRoute(raw);
   const canonicalPath = toCharacterPath(identity);
+  const jobParam = (await searchParams).job;
+  const jobValues = Array.isArray(jobParam)
+    ? jobParam
+    : jobParam
+      ? [jobParam]
+      : [];
+  const canonicalQuery = new URLSearchParams(
+    jobValues.map((value) => ["job", value])
+  ).toString();
   if (`/characters/${raw.region}/${raw.realm}/${raw.name}` !== canonicalPath) {
-    permanentRedirect(canonicalPath);
+    permanentRedirect(
+      canonicalQuery ? `${canonicalPath}?${canonicalQuery}` : canonicalPath
+    );
   }
 
   const { searches } = await getContainer();
@@ -37,7 +48,6 @@ export default async function CharacterPage({
   const history = resource
     ? await searches.getHistory(identity)
     : { items: [], nextCursor: null };
-  const jobParam = (await searchParams).job;
   const jobId = typeof jobParam === "string" ? jobParam : null;
   const job =
     jobId &&

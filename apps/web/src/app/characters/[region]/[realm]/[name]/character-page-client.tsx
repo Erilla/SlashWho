@@ -34,6 +34,7 @@ type CharacterPageClientProps = Readonly<{
 
 const activeStates = new Set(["queued", "running", "retrying"]);
 const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
+const maxRetryAfterMs = pollDelaysMs[pollDelaysMs.length - 1];
 
 function safeResponseError(response: Response, body: unknown): string {
   if (response.status === 404) return "The character was not found.";
@@ -94,6 +95,22 @@ export function CharacterPageClient({
       return response.json().catch(() => null);
     }
 
+    function retryAfterDelay(response: Response): number {
+      const retryAfter = response.headers.get("retry-after");
+      if (!retryAfter || !/^\d+$/.test(retryAfter)) {
+        return pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
+      }
+      return Math.min(
+        Math.max(Number(retryAfter) * 1_000, pollDelaysMs[0]),
+        maxRetryAfterMs
+      );
+    }
+
+    function schedulePoll(delay: number) {
+      attempt += 1;
+      timeout = setTimeout(() => void poll(), delay);
+    }
+
     async function refreshPublicData() {
       const [resourceResponse, historyResponse] = await Promise.all([
         fetch(`/api/v1${canonicalPath}`, { signal: controller.signal }),
@@ -132,7 +149,12 @@ export function CharacterPageClient({
         });
         const body = await readJson(response);
         if (!response.ok) {
-          if (!stopped) setError(safeResponseError(response, body));
+          if (!stopped) {
+            setError(safeResponseError(response, body));
+            if (response.status === 429) {
+              schedulePoll(retryAfterDelay(response));
+            }
+          }
           return;
         }
         const parsed = jobStatusResponseSchema.safeParse(body);
@@ -142,20 +164,21 @@ export function CharacterPageClient({
           return;
         }
         if (stopped) return;
-        setJob(parsed.data);
         if (parsed.data.status === "complete") {
           await refreshPublicData();
+          if (!stopped) setJob(parsed.data);
           return;
         }
         if (parsed.data.status === "failed") {
+          setJob(parsed.data);
           setError(
             parsed.data.error?.message ?? "The refresh could not be completed."
           );
           return;
         }
+        setJob(parsed.data);
         const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
-        attempt += 1;
-        timeout = setTimeout(() => void poll(), delay);
+        schedulePoll(delay);
       } catch (caught) {
         if (
           stopped ||
@@ -165,8 +188,7 @@ export function CharacterPageClient({
         }
         setError("The refresh status could not be loaded. Retrying…");
         const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
-        attempt += 1;
-        timeout = setTimeout(() => void poll(), delay);
+        schedulePoll(delay);
       }
     }
 
