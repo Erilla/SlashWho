@@ -245,3 +245,59 @@ PostgreSQL 16; no PostgreSQL or pg-boss mocks were used.
   including the real pg-boss/PostgreSQL integration projects.
 - pnpm `11.20.0`: all seven workspace TypeScript checks, ESLint, Prettier
   check, and `git diff --check`: PASS.
+
+## Fix Round 4
+
+### Changes
+
+- Changed the application retry scheduler to derive the exact whole-second
+  delay pg-boss can persist before comparing it with the remaining wall-clock
+  lifetime. A rounded delay that does not fit now makes the run terminal.
+- Kept the existing configured Retry-After ceiling, five-attempt bound, and
+  exact-deadline behavior. With 1,500 ms remaining, a requested 1 second is
+  valid while a requested 2 seconds is terminal; a 2,001 ms request cannot be
+  squeezed into a fractional 2,500 ms remainder.
+- Removed the queue adapter's semantic `Math.ceil` step. It now accepts only an
+  already-whole-second `retryAfterMs` directive and persists its exact integer
+  seconds; malformed fractional directives remain on the queue's normal retry
+  policy rather than being rounded upward.
+
+### TDD evidence
+
+- RED: `corepack pnpm vitest run packages/application/src/discovery-job-handler.test.ts`
+  failed 2/18 tests. The handler emitted `retryAfterMs: 1500` for a requested
+  2 seconds with 1,500 ms remaining, and `retryAfterMs: 2500` for a requested
+  2,001 ms with 2,500 ms remaining.
+- GREEN: the same focused handler suite passed 18/18 tests after whole-second
+  derivation moved ahead of the lifetime comparison. The existing 999 ms and
+  exactly 1,000 ms cases remained green.
+- RED: `corepack pnpm vitest run --project integration tests/integration/queue.test.ts -t "does not round a fractional application retry directive"`
+  failed against real PostgreSQL/pg-boss: the adapter changed 1,500 ms into
+  `retryDelay: 2`, `retryBackoff: false`, and `retryDelayMax: 2`.
+- GREEN: the same real scheduling test passed after exact adapter validation;
+  the focused application/adapter unit command passed 19/19 tests, and the two
+  focused real scheduling tests passed 2/2 with 7 skipped.
+
+### Files
+
+- `packages/application/src/discovery-job-handler.ts`
+- `packages/application/src/discovery-job-handler.test.ts`
+- `packages/database/src/queue.ts`
+- `tests/integration/queue.test.ts`
+- `.superpowers/sdd/2026-08-04-slashwho-mvp/task-6-report.md`
+
+### Verification
+
+- Node.js `v22.15.0`, pnpm `11.20.0`.
+- Full `corepack pnpm test`: PASS, 16 files and 109/109 tests, including real
+  PostgreSQL 16 and pg-boss scheduling coverage.
+- All seven workspace TypeScript checks, ESLint, Prettier check, and
+  `git diff --check`: PASS.
+
+### Remaining concern
+
+- The application-to-queue retry directive remains a structural error
+  contract. The adapter now rejects fractional or out-of-range values instead
+  of silently rounding them; such malformed values use pg-boss's configured
+  default retry policy. The production handler emits only validated
+  whole-second values.

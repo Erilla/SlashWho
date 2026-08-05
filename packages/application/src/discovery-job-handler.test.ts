@@ -524,6 +524,82 @@ describe("discovery job handler", () => {
     });
   });
 
+  it("enforces the durable-delay contract with 1,500 milliseconds remaining", async () => {
+    // Break caught: capping in milliseconds could let pg-boss round past the deadline.
+    const retryableRepositories = createMemoryRepositories();
+    const retryableRun = await retryableRepositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    retryableRun.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    const oneSecondGateway = new MutableGateway();
+    oneSecondGateway.failure = Object.assign(new Error("unavailable"), {
+      kind: "transient",
+      retryAfterMs: 1_000
+    });
+
+    await expect(
+      handlerFor(retryableRepositories, oneSecondGateway, {
+        now: () => new Date("2026-08-05T07:59:58.500Z")
+      }).execute(retryableRun.id, delivery(1))
+    ).rejects.toMatchObject({ retryable: true, retryAfterMs: 1_000 });
+    await expect(
+      retryableRepositories.runs.find(retryableRun.id)
+    ).resolves.toMatchObject({
+      status: "retrying",
+      nextRetryAt: new Date("2026-08-05T07:59:59.500Z")
+    });
+
+    const terminalRepositories = createMemoryRepositories();
+    const terminalRun = await terminalRepositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    terminalRun.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    const twoSecondGateway = new MutableGateway();
+    twoSecondGateway.failure = Object.assign(new Error("unavailable"), {
+      kind: "transient",
+      retryAfterMs: 2_000
+    });
+
+    await expect(
+      handlerFor(terminalRepositories, twoSecondGateway, {
+        now: () => new Date("2026-08-05T07:59:58.500Z")
+      }).execute(terminalRun.id, delivery(1))
+    ).resolves.toBeUndefined();
+    await expect(
+      terminalRepositories.runs.find(terminalRun.id)
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "upstream_unavailable",
+      nextRetryAt: null
+    });
+  });
+
+  it("rejects a rounded multi-second delay that exceeds fractional lifetime", async () => {
+    // Break caught: a 2,001 ms request could be capped to 2,500 ms then persisted as 3 seconds.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    run.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    const gateway = new MutableGateway();
+    gateway.failure = Object.assign(new Error("unavailable"), {
+      kind: "transient",
+      retryAfterMs: 2_001
+    });
+
+    await expect(
+      handlerFor(repositories, gateway, {
+        now: () => new Date("2026-08-05T07:59:57.500Z")
+      }).execute(run.id, delivery(1))
+    ).resolves.toBeUndefined();
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "upstream_unavailable",
+      nextRetryAt: null
+    });
+  });
+
   it("fails an unexpected error when reconciliation reaches the lifetime deadline", async () => {
     // Break caught: an error crossing the lifetime boundary could still retry.
     const repositories = createMemoryRepositories();

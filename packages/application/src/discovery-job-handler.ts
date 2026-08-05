@@ -58,13 +58,18 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       0,
       createdAt.getTime() + maxJobLifetimeMs - failureTime.getTime()
     );
-    if (attempt >= attemptLimit || remainingLifetimeMs < 1_000) return null;
-
-    const retryAfterMs = Math.min(
-      maxRetryDelayMs,
-      remainingLifetimeMs,
-      Math.max(1_000, Math.ceil(requestedDelayMs / 1_000) * 1_000)
+    const retryAfterMs = Math.max(
+      1_000,
+      Math.ceil(Math.min(requestedDelayMs, maxRetryDelayMs) / 1_000) * 1_000
     );
+    if (
+      attempt >= attemptLimit ||
+      retryAfterMs > maxRetryDelayMs ||
+      retryAfterMs > remainingLifetimeMs
+    ) {
+      return null;
+    }
+
     return {
       retryAfterMs,
       nextRetryAt: new Date(failureTime.getTime() + retryAfterMs)

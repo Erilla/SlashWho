@@ -244,6 +244,38 @@ describe("durable discovery queue", () => {
     );
   });
 
+  it("does not round a fractional application retry directive", async () => {
+    // Break caught: the adapter could independently round milliseconds and change the schedule.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const inspector = new PgBoss(connectionString);
+    cleanup.push(() => inspector.stop({ graceful: false, timeout: 1_000 }));
+    await inspector.start();
+
+    await queue.work(async () => {
+      throw Object.assign(new Error("invalid_fractional_retry_directive"), {
+        retryable: true,
+        retryAfterMs: 1_500
+      });
+    });
+    const jobId = await queue.enqueue({
+      runId: "00000000-0000-4000-8000-000000000008",
+      key
+    });
+
+    await eventually(async () => {
+      const [job] = await inspector.findJobs(queueName, { id: jobId });
+      return job?.state === "retry";
+    });
+    const [retrying] = await inspector.findJobs(queueName, { id: jobId });
+    expect(retrying).toMatchObject({
+      retryDelay: 1,
+      retryBackoff: true,
+      retryDelayMax: 1_800
+    });
+  });
+
   it("gracefully drains claimed work before stopping", async () => {
     // Break caught: shutdown could return an in-flight job to the queue before its drain window.
     const queue = createDiscoveryQueue({ connectionString });

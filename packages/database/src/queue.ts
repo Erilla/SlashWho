@@ -48,7 +48,7 @@ const queueOptions = {
   expireInSeconds: 1_800
 } as const;
 
-function requestedRetryDelayMs(error: unknown): number | null {
+function requestedRetryDelaySeconds(error: unknown): number | null {
   if (
     typeof error !== "object" ||
     error === null ||
@@ -56,12 +56,16 @@ function requestedRetryDelayMs(error: unknown): number | null {
     error.retryable !== true ||
     !("retryAfterMs" in error) ||
     typeof error.retryAfterMs !== "number" ||
-    !Number.isFinite(error.retryAfterMs) ||
-    error.retryAfterMs < 0
+    !Number.isFinite(error.retryAfterMs)
   ) {
     return null;
   }
-  return Math.min(error.retryAfterMs, queueOptions.retryDelayMax * 1_000);
+  const retryDelaySeconds = error.retryAfterMs / 1_000;
+  return Number.isInteger(retryDelaySeconds) &&
+    retryDelaySeconds >= 1 &&
+    retryDelaySeconds <= queueOptions.retryDelayMax
+    ? retryDelaySeconds
+    : null;
 }
 
 type SqlExecutor = {
@@ -151,12 +155,8 @@ export function createDiscoveryQueue(
                 signal: job.signal
               });
             } catch (error) {
-              const retryDelayMs = requestedRetryDelayMs(error);
-              if (retryDelayMs !== null) {
-                const retryDelaySeconds = Math.max(
-                  1,
-                  Math.ceil(retryDelayMs / 1_000)
-                );
+              const retryDelaySeconds = requestedRetryDelaySeconds(error);
+              if (retryDelaySeconds !== null) {
                 await updateActiveRetryDelay(
                   boss.getDb(),
                   job.id,
