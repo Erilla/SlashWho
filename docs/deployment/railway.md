@@ -10,7 +10,7 @@ The checked-in settings follow Railway's current [config-as-code reference](http
 2. In each environment, add a Railway PostgreSQL service, a web service from this repository, and a worker service from this repository.
 3. Set the web service's config-as-code path to `/railway.web.toml`; set the worker's to `/railway.worker.toml`.
 4. Confirm the web build uses `Dockerfile.web` and the worker build uses `Dockerfile.worker`.
-5. Add `DATABASE_URL` to both app services as a private reference to the environment's PostgreSQL `DATABASE_URL`. Do not paste the public TCP proxy URL.
+5. Add `DATABASE_URL` to both app services as a private reference to the environment's PostgreSQL `DATABASE_URL`. Do not paste the public TCP proxy URL into any service variable. Maintainer commands that must reach the database from outside Railway read `DATABASE_PUBLIC_URL` from the PostgreSQL service transiently instead; see [`docs/operations/removals.md`](../operations/removals.md).
 6. Generate a public domain for web only. Do not expose the worker or PostgreSQL services publicly.
 7. Configure both services to deploy `main` in staging and `prod` in production. Disable direct production deploys from feature branches.
 
