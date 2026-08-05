@@ -211,6 +211,24 @@ function policyFixture(
 }
 
 describe("search freshness policy", () => {
+  it("authorizes public reads through the independent read bucket", async () => {
+    // Break caught: direct character/history reads could bypass auth and read limits.
+    const fixture = policyFixture({ readLimit: 1 });
+
+    await expect(
+      fixture.service.authorizePublicRead(fixture.command.headers)
+    ).resolves.toEqual({ allowed: true });
+    await expect(
+      fixture.service.authorizePublicRead(fixture.command.headers)
+    ).resolves.toEqual({ allowed: false, retryAfterSeconds: 60 });
+    await expect(
+      fixture.service.authorizePublicRead(new Headers())
+    ).resolves.toEqual({
+      allowed: false,
+      code: "trusted_client_ip_unavailable"
+    });
+  });
+
   it("returns contract-mappable auth failures without touching persistence", async () => {
     // Break caught: invalid Bearer could downgrade or missing Railway identity could proceed.
     const fixture = policyFixture();

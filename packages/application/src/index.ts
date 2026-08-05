@@ -26,6 +26,7 @@ export {
 export type {
   CreateSearchCommand,
   CreateSearchResult,
+  PublicReadAuthorizationResult,
   SearchService
 } from "./search-service";
 export {

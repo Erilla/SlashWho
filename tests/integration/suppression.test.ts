@@ -46,6 +46,7 @@ describe("application suppression policy", () => {
   let repositories: Repositories;
   let enqueued: string[];
   let seededRunId: string;
+  let seededSnapshotId: string;
   let service: ReturnType<typeof createSearchService>;
 
   beforeAll(async () => {
@@ -66,7 +67,7 @@ describe("application suppression policy", () => {
     repositories = createPostgresRepositories(pool);
     const run = await repositories.runs.createOrReuse(root, "anonymous");
     seededRunId = run.id;
-    await repositories.snapshots.create({
+    const snapshot = await repositories.snapshots.create({
       runId: run.id,
       rootKey: root,
       state: "complete",
@@ -77,6 +78,7 @@ describe("application suppression policy", () => {
         observation(related, "Related", "profile_guess")
       ]
     });
+    seededSnapshotId = snapshot.id;
     enqueued = [];
     const queue: Pick<DiscoveryQueue, "enqueue"> = {
       async enqueue(payload) {
@@ -144,6 +146,19 @@ describe("application suppression policy", () => {
     );
 
     await expect(service.getRun(seededRunId)).resolves.toBeNull();
+  });
+
+  it("hides a pre-existing historical snapshot after its root is suppressed", async () => {
+    // Break caught: a direct immutable-snapshot URL could bypass a root removal.
+    await repositories.suppressions.suppress(
+      root,
+      "verified private removal reason",
+      null
+    );
+
+    await expect(
+      service.getSnapshot(root, seededSnapshotId)
+    ).resolves.toBeNull();
   });
 
   it("cleans expired negative cache and suppression rows while retaining active rows", async () => {

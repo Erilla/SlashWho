@@ -54,6 +54,14 @@ export type CreateSearchResult =
   | { kind: "rate_limited"; retryAfterSeconds: number }
   | { kind: "failed"; code: "search_failed" };
 
+export type PublicReadAuthorizationResult =
+  | { allowed: true }
+  | {
+      allowed: false;
+      code: "unauthorized" | "trusted_client_ip_unavailable";
+    }
+  | { allowed: false; retryAfterSeconds: number };
+
 const searchJobResultSchema = z
   .object({
     kind: z.literal("job"),
@@ -67,6 +75,9 @@ const searchJobResultSchema = z
 
 export interface SearchService {
   create(input: CreateSearchCommand): Promise<CreateSearchResult>;
+  authorizePublicRead(
+    headers: Pick<Headers, "get">
+  ): Promise<PublicReadAuthorizationResult>;
   getRun(jobId: string): Promise<JobStatusResponse | null>;
   getCurrent(key: CharacterKey): Promise<CharacterResource | null>;
   getHistory(key: CharacterKey, cursor?: string): Promise<HistoryPage | null>;
@@ -311,6 +322,25 @@ export function createSearchService(options: {
         .markEnqueued(reservation.run.id, queueJobId)
         .catch(() => undefined);
       return jobResult(reservation, staleCharacter);
+    },
+
+    async authorizePublicRead(headers) {
+      let caller: CallerIdentity;
+      try {
+        caller = classifyCaller(headers, options.config);
+      } catch (error) {
+        if (error instanceof AuthenticationError) {
+          return { allowed: false, code: error.code };
+        }
+        throw error;
+      }
+      const decision = await rateLimiter.reservePublicRead(caller);
+      return decision.allowed
+        ? { allowed: true }
+        : {
+            allowed: false,
+            retryAfterSeconds: decision.retryAfterSeconds ?? 1
+          };
     },
 
     async getRun(jobId) {

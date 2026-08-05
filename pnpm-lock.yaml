@@ -50,9 +50,27 @@ importers:
 
   apps/web:
     dependencies:
+      '@slashwho/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@slashwho/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@slashwho/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@slashwho/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       next:
         specifier: 16.3.0
         version: 16.3.0(@types/node@26.1.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      pino:
+        specifier: ^10.1.0
+        version: 10.3.1
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -63,6 +81,9 @@ importers:
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
+      '@types/pg':
+        specifier: ^8.20.3
+        version: 8.20.3
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18

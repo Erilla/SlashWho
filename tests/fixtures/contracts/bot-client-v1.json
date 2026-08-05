@@ -1,0 +1,109 @@
+{
+  "version": "v1",
+  "search": {
+    "endpoint": "POST /api/v1/searches",
+    "request": {
+      "characterUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+    },
+    "response": {
+      "kind": "job",
+      "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145",
+      "status": "queued",
+      "statusUrl": "/api/v1/searches/54f14e37-7df7-43db-91d5-21e797d1d145",
+      "characterUrl": "/characters/eu/silvermoon/ryii"
+    }
+  },
+  "job": {
+    "endpoint": "GET /api/v1/searches/{jobId}",
+    "response": {
+      "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145",
+      "status": "retrying",
+      "characterUrl": "/characters/eu/silvermoon/ryii",
+      "createdAt": "2026-08-04T12:00:00.000Z",
+      "startedAt": "2026-08-04T12:01:00.000Z",
+      "completedAt": null,
+      "retryAt": "2026-08-04T12:02:00.000Z",
+      "error": null
+    }
+  },
+  "character": {
+    "endpoint": "GET /api/v1/characters/{region}/{realm}/{name}",
+    "response": {
+      "character": {
+        "region": "eu",
+        "realm": "silvermoon",
+        "name": "Ryii",
+        "className": "Mage",
+        "level": 80,
+        "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+      },
+      "snapshot": {
+        "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
+        "state": "complete",
+        "refreshedAt": "2026-08-04T12:30:00.000Z",
+        "characterCount": 1,
+        "characters": [
+          {
+            "region": "eu",
+            "realm": "silvermoon",
+            "name": "Ryii",
+            "className": "Mage",
+            "level": 80,
+            "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+          }
+        ]
+      },
+      "activeJob": null
+    }
+  },
+  "history": {
+    "endpoint": "GET /api/v1/characters/{region}/{realm}/{name}/history",
+    "response": {
+      "items": [
+        {
+          "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
+          "refreshedAt": "2026-08-04T12:30:00.000Z",
+          "state": "complete",
+          "characterCount": 1,
+          "url": "/api/v1/characters/eu/silvermoon/ryii/history/13af3173-e97c-4c78-a6cb-a54b647b209f",
+          "characterUrl": "/characters/eu/silvermoon/ryii"
+        }
+      ],
+      "nextCursor": null
+    }
+  },
+  "snapshot": {
+    "endpoint": "GET /api/v1/characters/{region}/{realm}/{name}/history/{snapshotId}",
+    "response": {
+      "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
+      "root": {
+        "region": "eu",
+        "realm": "silvermoon",
+        "name": "Ryii",
+        "className": "Mage",
+        "level": 80,
+        "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+      },
+      "refreshedAt": "2026-08-04T12:30:00.000Z",
+      "state": "complete",
+      "characters": [
+        {
+          "region": "eu",
+          "realm": "silvermoon",
+          "name": "Ryii",
+          "className": "Mage",
+          "level": 80,
+          "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+        }
+      ]
+    }
+  },
+  "error": {
+    "response": {
+      "error": {
+        "code": "rate_limited",
+        "message": "Too many requests."
+      }
+    }
+  }
+}

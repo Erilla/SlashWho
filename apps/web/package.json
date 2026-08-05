@@ -7,12 +7,19 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@slashwho/application": "workspace:*",
+    "@slashwho/contracts": "workspace:*",
+    "@slashwho/database": "workspace:*",
+    "@slashwho/domain": "workspace:*",
     "next": "16.3.0",
+    "pg": "^8.22.0",
+    "pino": "^10.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@types/node": "26.1.2",
+    "@types/pg": "^8.20.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4"
   }
