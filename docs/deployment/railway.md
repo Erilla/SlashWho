@@ -28,11 +28,9 @@ ANONYMOUS_SEARCHES_PER_HOUR=10
 BOT_SEARCHES_PER_HOUR=60
 PUBLIC_READS_PER_MINUTE=300
 FRESHNESS_HOURS=24
-NEGATIVE_CACHE_MINUTES=15
-DISCOVERY_REQUEST_CAP=12
 ```
 
-Worker variables:
+Worker variables. `DISCOVERY_REQUEST_CAP` and `NEGATIVE_CACHE_TTL_MS` are read only by the worker, so set them on the worker service alone; `NEGATIVE_CACHE_TTL_MS` defaults to 300000 milliseconds (5 minutes) when unset:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}

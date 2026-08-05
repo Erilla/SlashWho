@@ -1,0 +1,46 @@
+{
+  "status": 200,
+  "body": {
+    "viewUserCharactersApi": {
+      "name": "owner-alpha",
+      "characters": [
+        {
+          "character": {
+            "name": "Firstalt",
+            "level": 80,
+            "class": { "name": "Paladin" },
+            "realm": { "slug": "Silvermoon" },
+            "region": { "slug": "EU" }
+          }
+        },
+        {
+          "character": {
+            "name": "Fledgling",
+            "level": 0,
+            "class": { "name": "Warrior" },
+            "realm": { "slug": "Silvermoon" },
+            "region": { "slug": "EU" }
+          }
+        },
+        {
+          "character": {
+            "name": "Yunfeng",
+            "level": 80,
+            "class": { "name": "Monk" },
+            "realm": { "slug": "Aegwynn" },
+            "region": { "slug": "CN" }
+          }
+        },
+        {
+          "character": {
+            "name": "Spaced Realm",
+            "level": 80,
+            "class": { "name": "Rogue" },
+            "realm": { "slug": "Not A Slug" },
+            "region": { "slug": "EU" }
+          }
+        }
+      ]
+    }
+  }
+}

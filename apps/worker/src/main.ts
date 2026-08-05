@@ -9,12 +9,15 @@ import {
 import { createWorkerLogger } from "./logger";
 import { createWorkerRuntime, type WorkerRuntime } from "./runtime";
 
-type WorkerLogger = { info(value: object): void };
+type WorkerLogger = { info(value: Record<string, unknown>): void };
 
 export type WorkerMainDependencies = {
   loadConfig(): WorkerConfig;
   createLogger(): WorkerLogger;
-  createRuntime(config: WorkerConfig): Promise<WorkerRuntime>;
+  createRuntime(
+    config: WorkerConfig,
+    logger: WorkerLogger
+  ): Promise<WorkerRuntime>;
   startHealthServer(options: HealthServerOptions): Promise<HealthServer>;
   terminate(exitCode: number): void;
 };
@@ -22,7 +25,8 @@ export type WorkerMainDependencies = {
 const defaultDependencies: WorkerMainDependencies = {
   loadConfig: loadWorkerConfig,
   createLogger: createWorkerLogger,
-  createRuntime: createWorkerRuntime,
+  createRuntime: (config, logger) =>
+    createWorkerRuntime(config, undefined, logger),
   startHealthServer,
   terminate: (exitCode) => process.exit(exitCode)
 };
@@ -32,7 +36,7 @@ export async function main(
 ): Promise<void> {
   const config = dependencies.loadConfig();
   const logger = dependencies.createLogger();
-  const runtime = await dependencies.createRuntime(config);
+  const runtime = await dependencies.createRuntime(config, logger);
   const terminateAfterStopFailure = () => {
     logger.info({ event: "worker_stop_failed" });
     dependencies.terminate(1);

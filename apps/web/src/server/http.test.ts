@@ -117,6 +117,55 @@ describe("HTTP result mapping", () => {
     ).toBe("private, no-store");
   });
 
+  it("varies cacheable public resources by Authorization", async () => {
+    // Break caught: a shared cache could serve an authenticated private response to
+    // anonymous callers because the response body varies by credential presence.
+    expect(publicResourceResponse(character).headers.get("vary")).toBe(
+      "authorization"
+    );
+    expect(
+      publicResourceResponse(character, { authenticated: true }).headers.get(
+        "vary"
+      )
+    ).toBe("authorization");
+  });
+
+  it("logs the failing error class without its message or payload", async () => {
+    // Break caught: an unhandled handler failure could be invisible in production, or
+    // could log an upstream body, URL, or guess string while becoming visible.
+    const marker = "UNIQUE_HTTP_FAILURE_MARKER_4c81ab";
+    const events: Record<string, unknown>[] = [];
+    class UpstreamReadError extends Error {}
+    const response = await withHttpRequest(
+      "character",
+      async () => {
+        throw new UpstreamReadError(marker);
+      },
+      {
+        info(event) {
+          events.push(event);
+        }
+      },
+      () => 100
+    );
+
+    expect(response.status).toBe(500);
+    expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+      "search_failed"
+    );
+    expect(events).toEqual([
+      {
+        event: "http_request",
+        correlationId: response.headers.get("x-request-id"),
+        endpoint: "character",
+        status: 500,
+        durationMs: 0,
+        errorName: "UpstreamReadError"
+      }
+    ]);
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
   it("attaches a generated correlation id and logs only request metadata", async () => {
     // Break caught: requests could be impossible to correlate without logging user input.
     const events: Record<string, unknown>[] = [];

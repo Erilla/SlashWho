@@ -64,7 +64,7 @@ describe("discovery snapshot atomicity", () => {
         return character(rootKey.name);
       },
       async getClaimedCharacters() {
-        return [character("related")];
+        return { characters: [character("related")] };
       },
       async resolveProfileGuess() {
         return null;
@@ -124,7 +124,7 @@ describe("discovery snapshot atomicity", () => {
         return character(rootKey.name);
       },
       async getClaimedCharacters() {
-        return [character("related")];
+        return { characters: [character("related")] };
       },
       async resolveProfileGuess() {
         return null;
@@ -178,7 +178,7 @@ describe("discovery snapshot atomicity", () => {
         return character(rootKey.name);
       },
       async getClaimedCharacters() {
-        return [character("related")];
+        return { characters: [character("related")] };
       },
       async resolveProfileGuess() {
         return null;
@@ -239,7 +239,7 @@ describe("discovery snapshot atomicity", () => {
         throw missing;
       },
       async getClaimedCharacters() {
-        return [];
+        return { characters: [] };
       },
       async resolveProfileGuess() {
         return null;
@@ -291,7 +291,7 @@ describe("discovery snapshot atomicity", () => {
         throw new Error("unexpected gateway failure");
       },
       async getClaimedCharacters() {
-        return [];
+        return { characters: [] };
       },
       async resolveProfileGuess() {
         return null;
@@ -338,7 +338,7 @@ describe("discovery snapshot atomicity", () => {
         return character(rootKey.name);
       },
       async getClaimedCharacters() {
-        return [];
+        return { characters: [] };
       },
       async resolveProfileGuess() {
         return null;

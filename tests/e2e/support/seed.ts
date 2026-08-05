@@ -1,5 +1,9 @@
+import type { StoredSnapshot } from "@slashwho/database";
+// Value import only: the @slashwho/database entry point re-exports `migrate.ts`,
+// whose `import.meta.url` cannot be transpiled by Playwright's CommonJS TypeScript
+// loader ("Cannot use 'import.meta' outside a module"). The type import above is
+// erased at compile time, so it can use the package entry point.
 import { createPostgresRepositories } from "../../../packages/database/src/postgres-repositories";
-import type { StoredSnapshot } from "../../../packages/database/src/repositories";
 import { toRaiderIoUrl, type CharacterKey } from "@slashwho/domain";
 import { Pool } from "pg";
 

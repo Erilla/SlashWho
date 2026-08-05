@@ -67,7 +67,7 @@ function scriptedGateway(script: Script): RaiderIoGateway {
       return value;
     },
     async getClaimedCharacters(ownerId) {
-      return script.claimed?.[ownerId] ?? [];
+      return { characters: script.claimed?.[ownerId] ?? [] };
     },
     async resolveProfileGuess(value) {
       const characters = script.profiles?.[value];
@@ -241,21 +241,32 @@ describe("discoverCharacter", () => {
   });
 
   it("treats a non-finite request cap as an exhausted budget", async () => {
-    // Break caught: an invalid cap could silently permit an unbounded crawl.
-    const outcome = await discoverCharacter(
-      altKey,
-      scriptedGateway({
-        characters: [[altKey, character(altKey, { ownerId: "owner" })]],
-        claimed: { owner: [character(secondAltKey)] }
-      }),
-      { ...options, requestCap: Number.NaN }
-    );
+    // Break caught: an invalid cap could silently permit an unbounded crawl, or
+    // publish a rootless snapshot that no read can ever anchor.
+    let characterCalls = 0;
+    const gateway: RaiderIoGateway = {
+      async getCharacter(key) {
+        characterCalls += 1;
+        return character(key);
+      },
+      async getClaimedCharacters() {
+        return { characters: [character(secondAltKey)] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
 
+    const outcome = await discoverCharacter(altKey, gateway, {
+      ...options,
+      requestCap: Number.NaN
+    });
+
+    expect(characterCalls).toBe(0);
     expect(outcome).toEqual({
-      kind: "snapshot",
-      state: "partial",
-      limitationCode: "request_cap",
-      characters: []
+      kind: "failure",
+      code: "upstream_unavailable",
+      retryable: true
     });
   });
 
@@ -303,7 +314,7 @@ describe("discoverCharacter", () => {
     const gateway: RaiderIoGateway = {
       getCharacter: async () =>
         character(altKey, { declaredMain: casingVariant }),
-      getClaimedCharacters: async () => [],
+      getClaimedCharacters: async () => ({ characters: [] }),
       resolveProfileGuess: async () => null
     };
 
@@ -323,6 +334,108 @@ describe("discoverCharacter", () => {
           source: "input"
         }
       ]
+    });
+  });
+
+  it("reports a partial snapshot when a claimed member cannot be represented", async () => {
+    // Break caught: an out-of-scope claimed member could be silently dropped from a
+    // snapshot still advertised as a complete alt list.
+    const gateway: RaiderIoGateway = {
+      async getCharacter() {
+        return character(altKey, { ownerId: "owner" });
+      },
+      async getClaimedCharacters() {
+        return { characters: [character(secondAltKey)], omittedMembers: true };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    const outcome = await discoverCharacter(altKey, gateway, options);
+
+    expect(outcome).toMatchObject({
+      kind: "snapshot",
+      state: "partial",
+      limitationCode: "unsupported_member"
+    });
+    expect(
+      outcome.kind === "snapshot" && outcome.characters.map((item) => item.key)
+    ).toEqual([altKey, secondAltKey]);
+  });
+
+  it("reports a partial snapshot when an inspected character omits a relation", async () => {
+    // Break caught: an unrepresentable declared main could vanish without marking the
+    // snapshot incomplete.
+    const gateway: RaiderIoGateway = {
+      async getCharacter() {
+        return character(altKey, { ownerId: "owner", omittedMembers: true });
+      },
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await expect(
+      discoverCharacter(altKey, gateway, options)
+    ).resolves.toMatchObject({
+      state: "partial",
+      limitationCode: "unsupported_member"
+    });
+  });
+
+  it("fails definitively when the input character is suppressed after reservation", async () => {
+    // Break caught: suppression landing after reservation could publish a rootless
+    // snapshot that no read can ever serve.
+    let characterCalls = 0;
+    const gateway: RaiderIoGateway = {
+      async getCharacter() {
+        characterCalls += 1;
+        return character(altKey);
+      },
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await expect(
+      discoverCharacter(altKey, gateway, {
+        ...options,
+        isSuppressed: async (key) => keyId(key) === keyId(altKey)
+      })
+    ).resolves.toEqual({
+      kind: "failure",
+      code: "character_not_found",
+      retryable: false
+    });
+    expect(characterCalls).toBe(0);
+  });
+
+  it("refuses to publish a snapshot whose root observation is absent", async () => {
+    // Break caught: an upstream key that diverges from the requested key could produce
+    // a snapshot the repository can never anchor to its root.
+    const gateway: RaiderIoGateway = {
+      async getCharacter() {
+        return character(mainKey);
+      },
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await expect(discoverCharacter(altKey, gateway, options)).resolves.toEqual({
+      kind: "failure",
+      code: "character_not_found",
+      retryable: false
     });
   });
 
@@ -397,7 +510,7 @@ describe("discoverCharacter", () => {
       },
       async getClaimedCharacters() {
         claimedCalls += 1;
-        return [];
+        return { characters: [] };
       },
       async resolveProfileGuess() {
         return null;

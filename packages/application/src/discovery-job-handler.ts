@@ -1,6 +1,10 @@
 import type { DiscoveryWorkContext, Repositories } from "@slashwho/database";
 import { discoverCharacter, type RaiderIoGateway } from "@slashwho/domain";
 
+export type DiscoveryLogger = {
+  info(value: Record<string, unknown>): void;
+};
+
 export type DiscoveryJobHandlerOptions = {
   repositories: Repositories;
   gateway: RaiderIoGateway;
@@ -12,6 +16,27 @@ export type DiscoveryJobHandlerOptions = {
   maxJobLifetimeMs?: number;
   maxAttempts?: number;
   negativeCacheTtlMs?: number;
+  logger?: DiscoveryLogger;
+  monotonic?: () => number;
+};
+
+/**
+ * One operational record per discovery run. The field set is an allowlist: run
+ * identity, the canonical (public) character key, the delivery attempt, and the
+ * outcome. Never an owner id, a profile guess, an upstream body, or an IP.
+ */
+type DiscoveryRunRecord = {
+  event: "discovery_run";
+  runId: string;
+  region: string;
+  realm: string;
+  name: string;
+  attempt: number;
+  outcome: string;
+  state: string | null;
+  limitationCode: string | null;
+  characterCount: number;
+  durationMs: number;
 };
 
 export type RetryableDiscoveryError = Error & {
@@ -46,6 +71,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   const maxJobLifetimeMs = options.maxJobLifetimeMs ?? 1_800_000;
   const maxAttempts = options.maxAttempts ?? 5;
   const negativeCacheTtlMs = options.negativeCacheTtlMs ?? 300_000;
+  const monotonic = options.monotonic ?? performance.now.bind(performance);
 
   function retrySchedule(
     createdAt: Date,
@@ -98,6 +124,21 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       const run = await options.repositories.runs.claim(runId, context.attempt);
       if (!run) return;
 
+      const observedAt = monotonic();
+      const record: DiscoveryRunRecord = {
+        event: "discovery_run",
+        runId,
+        region: run.rootKey.region,
+        realm: run.rootKey.realm,
+        name: run.rootKey.name,
+        attempt: context.attempt,
+        outcome: "unknown",
+        state: null,
+        limitationCode: null,
+        characterCount: 0,
+        durationMs: 0
+      };
+
       try {
         context.signal.throwIfAborted();
         const executionTime = now();
@@ -105,6 +146,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           executionTime.getTime() - run.createdAt.getTime() >=
           maxJobLifetimeMs
         ) {
+          record.outcome = "lifetime_exceeded";
           await options.repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
@@ -121,12 +163,18 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           persistenceTime.getTime() - run.createdAt.getTime() >=
           maxJobLifetimeMs
         ) {
+          record.outcome = "lifetime_exceeded";
           await options.repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
 
         if (outcome.kind === "snapshot") {
           context.signal.throwIfAborted();
+          record.outcome = "snapshot";
+          record.state = outcome.state;
+          record.limitationCode =
+            outcome.state === "partial" ? outcome.limitationCode : null;
+          record.characterCount = outcome.characters.length;
           await options.repositories.snapshots.create(
             {
               runId,
@@ -143,6 +191,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         }
 
         if (!outcome.retryable) {
+          record.outcome = outcome.code;
           if (outcome.code === "character_not_found") {
             context.signal.throwIfAborted();
             await options.repositories.negativeCache.putAndFailRun(
@@ -171,9 +220,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
 
         if (!schedule) {
+          record.outcome = "upstream_unavailable";
           await options.repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
+        record.outcome = "retrying";
         await options.repositories.runs.markRetrying(
           runId,
           context.attempt,
@@ -181,8 +232,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
         throw retryableError(schedule.retryAfterMs);
       } catch (error) {
-        if (context.signal.aborted) throw context.signal.reason;
+        if (context.signal.aborted) {
+          record.outcome = "cancelled";
+          throw context.signal.reason;
+        }
         if (isRetryableDiscoveryError(error)) throw error;
+        record.outcome = "unexpected_error";
 
         const current = await options.repositories.runs.find(runId);
         if (current?.status === "complete" || current?.status === "failed") {
@@ -198,16 +253,23 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           baseRetryDelayMs * 2 ** Math.max(0, context.attempt - 1)
         );
         if (!schedule) {
+          record.outcome = "search_failed";
           await options.repositories.runs.fail(runId, "search_failed");
           throw error;
         }
 
+        record.outcome = "retrying";
         await options.repositories.runs.markRetrying(
           runId,
           context.attempt,
           schedule.nextRetryAt
         );
         throw retryableError(schedule.retryAfterMs);
+      } finally {
+        if (options.logger) {
+          record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
+          options.logger.info({ ...record });
+        }
       }
     }
   };

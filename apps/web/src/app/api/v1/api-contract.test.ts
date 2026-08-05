@@ -372,6 +372,13 @@ it("keeps every bot-facing v1 fixture compatible with shared contracts", () => {
   expect(
     jobStatusResponseSchema.parse(botClientFixture.job.response).status
   ).toBe("retrying");
+  const stale = createSearchResponseSchema.parse(
+    botClientFixture.staleRefresh.response
+  );
+  expect(stale.kind).toBe("character");
+  expect(
+    stale.kind === "character" ? stale.character.activeJob?.statusUrl : null
+  ).toBe(botClientFixture.staleRefresh.headers.Location);
   expect(
     characterResourceSchema.parse(botClientFixture.character.response).character
       .name

@@ -43,12 +43,32 @@ export default function ApiPage() {
         </li>
       </ul>
 
+      <h2>Search responses</h2>
+      <p>
+        <code>POST /api/v1/searches</code> answers in one of three shapes. A new
+        search returns <code>202</code> with <code>kind: &quot;job&quot;</code>,
+        a <code>Location</code> header, and a status URL to poll. A search for
+        fresh data returns <code>200</code> with{" "}
+        <code>kind: &quot;character&quot;</code> and{" "}
+        <code>activeJob: null</code> — nothing to poll. A search for a stale
+        snapshot also returns <code>200</code> with{" "}
+        <code>kind: &quot;character&quot;</code>, serving the stale snapshot
+        immediately while a refresh is queued: the queued job appears both in
+        the <code>Location</code> header and in{" "}
+        <code>character.activeJob.statusUrl</code>.
+      </p>
+      <p>
+        So handle both: if <code>kind</code> is <code>job</code>, poll{" "}
+        <code>statusUrl</code>; if <code>kind</code> is <code>character</code>,
+        use the returned snapshot and poll <code>activeJob.statusUrl</code> only
+        when <code>activeJob</code> is not <code>null</code>.
+      </p>
+
       <h2>Polling</h2>
       <p>
-        A new search may return <code>202</code> with a status URL. Poll that
-        URL while the status is <code>queued</code>, <code>running</code>, or{" "}
-        <code>retrying</code>, using bounded backoff. Stop on{" "}
-        <code>complete</code> or <code>failed</code>. Respect{" "}
+        Poll a status URL while the status is <code>queued</code>,{" "}
+        <code>running</code>, or <code>retrying</code>, using bounded backoff.
+        Stop on <code>complete</code> or <code>failed</code>. Respect{" "}
         <code>Retry-After</code> on any <code>429</code> response.
       </p>
 

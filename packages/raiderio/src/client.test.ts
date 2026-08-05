@@ -11,9 +11,12 @@ type FixtureName =
   | "character-visible-owner"
   | "character-private-owner"
   | "character-declared-main"
+  | "character-declared-main-out-of-scope"
+  | "character-renamed-root"
   | "profile-valid"
   | "profile-invalid"
   | "claimed-characters"
+  | "claimed-characters-out-of-scope"
   | "missing-character"
   | "rate-limited"
   | "server-error"
@@ -41,7 +44,8 @@ function fixtureFetch(name: FixtureName): typeof globalThis.fetch {
     const expectsProfile =
       name === "profile-valid" ||
       name === "profile-invalid" ||
-      name === "claimed-characters";
+      name === "claimed-characters" ||
+      name === "claimed-characters-out-of-scope";
     const expectedPath = expectsProfile
       ? "/api/user/view-characters"
       : "/api/characters/eu/silvermoon/sentinel";
@@ -177,26 +181,74 @@ describe("Raider.IO gateway", () => {
   it("normalizes every character claimed by a visible owner", async () => {
     await expect(
       clientFor("claimed-characters").getClaimedCharacters("owner-alpha")
-    ).resolves.toEqual([
-      {
-        key: { region: "eu", realm: "silvermoon", name: "firstalt" },
-        displayName: "Firstalt",
-        className: "Paladin",
-        level: 80,
-        ownerId: null,
-        profileGuess: null,
-        declaredMain: null
-      },
-      {
-        key: { region: "us", realm: "area-52", name: "secondalt" },
-        displayName: "Secondalt",
-        className: "Shaman",
-        level: 76,
-        ownerId: null,
-        profileGuess: null,
-        declaredMain: null
-      }
+    ).resolves.toEqual({
+      characters: [
+        {
+          key: { region: "eu", realm: "silvermoon", name: "firstalt" },
+          displayName: "Firstalt",
+          className: "Paladin",
+          level: 80,
+          ownerId: null,
+          profileGuess: null,
+          declaredMain: null
+        },
+        {
+          key: { region: "us", realm: "area-52", name: "secondalt" },
+          displayName: "Secondalt",
+          className: "Shaman",
+          level: 76,
+          ownerId: null,
+          profileGuess: null,
+          declaredMain: null
+        }
+      ]
+    });
+  });
+
+  it("skips claimed members outside the supported key space and flags the omission", async () => {
+    // Break caught: one out-of-scope claimed character could turn every search for
+    // that player into a permanent schema-drift failure.
+    const profile = await clientFor(
+      "claimed-characters-out-of-scope"
+    ).getClaimedCharacters("owner-alpha");
+
+    expect(profile.characters.map((item) => item.key)).toEqual([
+      { region: "eu", realm: "silvermoon", name: "firstalt" },
+      { region: "eu", realm: "silvermoon", name: "fledgling" }
     ]);
+    expect(profile.omittedMembers).toBe(true);
+  });
+
+  it("preserves an upstream level of zero rather than rejecting the member", async () => {
+    // Break caught: the accepted upstream range could diverge from the public schema
+    // and commit an immutable snapshot no read can parse.
+    const profile = await clientFor(
+      "claimed-characters-out-of-scope"
+    ).getClaimedCharacters("owner-alpha");
+
+    expect(profile.characters.at(-1)?.level).toBe(0);
+  });
+
+  it("keeps the requested key when upstream reports a different realm or name", async () => {
+    // Break caught: a realm alias or rename could produce a snapshot whose root row
+    // never matches the requested key, rolling back every attempt.
+    const character = await clientFor("character-renamed-root").getCharacter(
+      sentinel
+    );
+
+    expect(character.key).toEqual(sentinel);
+    expect(character.displayName).toBe("Sentinelle");
+  });
+
+  it("drops an out-of-scope declared main and flags the omission", async () => {
+    // Break caught: an unsupported declared main could fail the whole search instead
+    // of yielding a knowingly partial result.
+    const character = await clientFor(
+      "character-declared-main-out-of-scope"
+    ).getCharacter(sentinel);
+
+    expect(character.declaredMain).toBeNull();
+    expect(character.omittedMembers).toBe(true);
   });
 
   it("accepts a profile guess only when the response independently names it", async () => {

@@ -17,6 +17,7 @@ export type {
 export {
   publicErrorHttpStatus,
   publicErrorCodeSchema,
+  publicErrorMessages,
   safeApiErrorSchema,
   safeErrorDetailSchema
 } from "./errors";

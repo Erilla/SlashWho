@@ -389,7 +389,7 @@ describe("durable discovery queue", () => {
           };
         },
         async getClaimedCharacters() {
-          return [];
+          return { characters: [] };
         },
         async resolveProfileGuess() {
           return null;

@@ -6,7 +6,8 @@ import type {
 import type {
   CharacterKey,
   RaiderIoCharacter,
-  RaiderIoGateway
+  RaiderIoGateway,
+  RaiderIoProfile
 } from "@slashwho/domain";
 import { describe, expect, it } from "vitest";
 
@@ -56,11 +57,11 @@ class MutableGateway implements RaiderIoGateway {
   async getClaimedCharacters(
     _ownerId?: string,
     _signal?: AbortSignal
-  ): Promise<readonly RaiderIoCharacter[]> {
+  ): Promise<RaiderIoProfile> {
     void _ownerId;
     void _signal;
     if (this.failure) throw this.failure;
-    return [character(secondKey), character(thirdKey)];
+    return { characters: [character(secondKey), character(thirdKey)] };
   }
 
   async resolveProfileGuess(
@@ -302,6 +303,76 @@ function delivery(attempt = 1, maxAttempts = 5) {
 }
 
 describe("discovery job handler", () => {
+  it("emits one allowlisted operational record per completed discovery", async () => {
+    // Break caught: a production discovery could succeed or fail with nothing
+    // operable in the logs, or could log private lookup values while becoming visible.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const events: Record<string, unknown>[] = [];
+
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: {
+        info(event) {
+          events.push(event);
+        }
+      },
+      monotonic: () => 0
+    }).execute(run.id, delivery(2));
+
+    expect(events).toEqual([
+      {
+        event: "discovery_run",
+        runId: run.id,
+        region: "eu",
+        realm: "silvermoon",
+        name: "root",
+        attempt: 2,
+        outcome: "snapshot",
+        state: "complete",
+        limitationCode: null,
+        characterCount: 3,
+        durationMs: 0
+      }
+    ]);
+  });
+
+  it("records a failure outcome without upstream detail", async () => {
+    // Break caught: a permanent failure could log the upstream body, an owner id, or
+    // a guess string while explaining itself.
+    const marker = "UNIQUE_UPSTREAM_MARKER_a4f7c2";
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const gateway = new MutableGateway();
+    gateway.failure = Object.assign(new Error(marker), { kind: "not_found" });
+    const events: Record<string, unknown>[] = [];
+
+    await handlerFor(repositories, gateway, {
+      logger: {
+        info(event) {
+          events.push(event);
+        }
+      },
+      monotonic: () => 0
+    }).execute(run.id, delivery());
+
+    expect(events).toEqual([
+      {
+        event: "discovery_run",
+        runId: run.id,
+        region: "eu",
+        realm: "silvermoon",
+        name: "root",
+        attempt: 1,
+        outcome: "character_not_found",
+        state: null,
+        limitationCode: null,
+        characterCount: 0,
+        durationMs: 0
+      }
+    ]);
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
   it("atomically persists a trustworthy snapshot and completes the run", async () => {
     // Break caught: a successful discovery could publish status without membership.
     const repositories = createMemoryRepositories();

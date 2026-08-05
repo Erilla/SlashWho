@@ -1,11 +1,14 @@
 import { expect, it } from "vitest";
 import {
   characterResourceSchema,
+  characterSchema,
   createSearchResponseSchema,
   historyPageSchema,
   historicalSnapshotSchema,
   jobStatusResponseSchema,
+  publicErrorCodeSchema,
   publicErrorHttpStatus,
+  publicErrorMessages,
   safeApiErrorSchema
 } from "./index";
 
@@ -40,6 +43,30 @@ it("rejects internal provenance in a public character response", () => {
   };
 
   expect(characterResourceSchema.safeParse(value).success).toBe(false);
+});
+
+it("accepts every character value the upstream normalizer accepts", () => {
+  // Break caught: a level the Raider.IO normalizer commits to an immutable snapshot
+  // could be rejected by the public schema, breaking that character page forever.
+  expect(characterSchema.parse({ ...character, level: 0 }).level).toBe(0);
+  expect(characterSchema.safeParse({ ...character, level: -1 }).success).toBe(
+    false
+  );
+  expect(characterSchema.safeParse({ ...character, level: 1.5 }).success).toBe(
+    false
+  );
+});
+
+it("publishes one public message per error code", () => {
+  // Break caught: duplicated message tables could drift so one code yields two
+  // different public messages depending on which adapter produced it.
+  for (const code of publicErrorCodeSchema.options) {
+    expect(
+      safeApiErrorSchema.parse({
+        error: { code, message: publicErrorMessages[code] }
+      }).error.message
+    ).toBe(publicErrorMessages[code]);
+  }
 });
 
 it("accepts queued and cached search outcomes", () => {

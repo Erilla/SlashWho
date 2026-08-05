@@ -155,7 +155,7 @@ importers:
         specifier: workspace:*
         version: link:../domain
       zod:
-        specifier: ^4.1.5
+        specifier: ^4.3.5
         version: 4.4.3
 
   packages/contracts:

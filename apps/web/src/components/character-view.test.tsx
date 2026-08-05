@@ -130,6 +130,24 @@ describe("CharacterPageClient", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders refresh timestamps in a labelled fixed zone", () => {
+    // Break caught: timestamps could silently render in the server's timezone with no
+    // indication they are not the reader's, and would differ per deployment host.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => undefined))
+    );
+    renderCharacter();
+
+    expect(
+      within(screen.getByLabelText("Refresh status")).getByRole("time")
+    ).toHaveTextContent("4 Aug 2026, 18:07 UTC");
+    const firstHistoryRow = screen.getAllByRole("listitem")[2];
+    expect(within(firstHistoryRow).getByRole("time")).toHaveTextContent(
+      "4 Aug 2026, 18:07 UTC"
+    );
+  });
+
   it("renders partial snapshots distinctly without exposing provenance", () => {
     renderCharacter({
       ...staleResourceWithActiveJob,

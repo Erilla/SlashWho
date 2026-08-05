@@ -241,10 +241,7 @@ export function CharacterPageClient({
             <span aria-hidden="true">·</span>
             <span>
               Last refreshed{" "}
-              <time
-                dateTime={resource.snapshot.refreshedAt}
-                suppressHydrationWarning
-              >
+              <time dateTime={resource.snapshot.refreshedAt}>
                 {formatRefreshTime(resource.snapshot.refreshedAt)}
               </time>
             </span>

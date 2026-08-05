@@ -1,4 +1,7 @@
-import type { DiscoveryJobHandler } from "@slashwho/application";
+import type {
+  DiscoveryJobHandler,
+  DiscoveryJobHandlerOptions
+} from "@slashwho/application";
 import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import type {
   DiscoverCharacterJob,
@@ -99,7 +102,10 @@ function runtimeFakes() {
       createRepositories: () => repositories,
       createQueue: () => queue,
       createGateway: () => ({}) as RaiderIoGateway,
-      createHandler: () => handler,
+      createHandler: (options: DiscoveryJobHandlerOptions) => {
+        void options;
+        return handler;
+      },
       sleep: async (milliseconds: number) => {
         sleeps.push(milliseconds);
       }
@@ -142,6 +148,28 @@ describe("worker runtime", () => {
       live: true,
       ready: true
     });
+  });
+
+  it("gives the discovery handler the redacting worker logger", async () => {
+    // Break caught: discovery could run with no operational logging at all.
+    const fakes = runtimeFakes();
+    const logger = { info() {} };
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.dependencies.createHandler = (
+      options: DiscoveryJobHandlerOptions
+    ) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+
+    expect(handlerOptions?.logger).toBe(logger);
+    await runtime.stop();
   });
 
   it("routes only run ids to the handler", async () => {

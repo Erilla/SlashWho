@@ -14,10 +14,18 @@ export interface RaiderIoCharacter {
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;
+  /**
+   * True when the upstream payload named at least one related character this
+   * system cannot represent (for example a character in an unsupported region),
+   * so anything derived from it is knowingly incomplete.
+   */
+  readonly omittedMembers?: boolean;
 }
 
 export interface RaiderIoProfile {
   readonly characters: readonly RaiderIoCharacter[];
+  /** See {@link RaiderIoCharacter.omittedMembers}. */
+  readonly omittedMembers?: boolean;
 }
 
 export interface RaiderIoGateway {
@@ -28,7 +36,7 @@ export interface RaiderIoGateway {
   getClaimedCharacters(
     ownerId: string,
     signal?: AbortSignal
-  ): Promise<readonly RaiderIoCharacter[]>;
+  ): Promise<RaiderIoProfile>;
   resolveProfileGuess(
     value: string,
     signal?: AbortSignal
@@ -44,7 +52,7 @@ export type DiscoveryOutcome =
   | {
       kind: "snapshot";
       state: "partial";
-      limitationCode: "privacy_hidden" | "request_cap";
+      limitationCode: "privacy_hidden" | "request_cap" | "unsupported_member";
       characters: readonly DiscoveredCharacter[];
     }
   | {
@@ -191,6 +199,7 @@ export async function discoverCharacter(
     : 0;
   let capped = false;
   let privacyHidden = false;
+  let omittedMembers = false;
   const visitedCharacters = new Set<string>();
   const visitedOwners = new Set<string>();
   const pendingCharacters: PendingCharacter[] = [
@@ -215,11 +224,13 @@ export async function discoverCharacter(
   }
 
   async function recordRelated(
-    characters: readonly RaiderIoCharacter[],
+    profile: RaiderIoProfile,
     source: "claimed" | "profile_guess"
   ): Promise<void> {
-    for (const character of characters) {
+    if (profile.omittedMembers) omittedMembers = true;
+    for (const character of profile.characters) {
       throwIfAborted();
+      if (character.omittedMembers) omittedMembers = true;
       if (!(await options.isSuppressed(character.key))) {
         throwIfAborted();
         observations.push(discoveredCharacter(character, source));
@@ -228,6 +239,13 @@ export async function discoverCharacter(
   }
 
   try {
+    // Suppression can land between reservation and execution. Discovering a
+    // suppressed root would otherwise publish a snapshot with no root row, which
+    // no read can ever anchor and no retry can ever repair.
+    if (await options.isSuppressed(root)) {
+      return { kind: "failure", code: "character_not_found", retryable: false };
+    }
+
     while (pendingCharacters.length > 0) {
       throwIfAborted();
       const pending = pendingCharacters.shift()!;
@@ -246,6 +264,7 @@ export async function discoverCharacter(
       throwIfAborted();
       if (character === budgetExhausted) break;
       if (!isRaiderIoCharacter(character)) throw schemaChanged();
+      if (character.omittedMembers) omittedMembers = true;
 
       observations.push(discoveredCharacter(character, pending.source));
       inspectedCharacters.push(character);
@@ -266,7 +285,7 @@ export async function discoverCharacter(
         );
         throwIfAborted();
         if (claimed === budgetExhausted) break;
-        if (!isCharacterList(claimed)) throw schemaChanged();
+        if (!isRaiderIoProfile(claimed)) throw schemaChanged();
         await recordRelated(claimed, "claimed");
         continue;
       }
@@ -285,7 +304,7 @@ export async function discoverCharacter(
         if (profile === budgetExhausted) break;
         if (profile === null) continue;
         if (!isRaiderIoProfile(profile)) throw schemaChanged();
-        await recordRelated(profile.characters, "profile_guess");
+        await recordRelated(profile, "profile_guess");
       }
       if (capped) break;
     }
@@ -306,6 +325,16 @@ export async function discoverCharacter(
     .sort(compareCharacterKeys);
   const characters = deduplicateCharacters([...primary, ...related]);
 
+  // A snapshot is anchored to its root character. Without a root observation the
+  // repository write cannot complete, so refuse rather than publishing a snapshot
+  // that is guaranteed to roll back and burn every retry.
+  const rootId = canonicalCharacterId(root);
+  if (!characters.some((item) => canonicalCharacterId(item.key) === rootId)) {
+    return capped
+      ? { kind: "failure", code: "upstream_unavailable", retryable: true }
+      : { kind: "failure", code: "character_not_found", retryable: false };
+  }
+
   if (capped) {
     return {
       kind: "snapshot",
@@ -319,6 +348,14 @@ export async function discoverCharacter(
       kind: "snapshot",
       state: "partial",
       limitationCode: "privacy_hidden",
+      characters
+    };
+  }
+  if (omittedMembers) {
+    return {
+      kind: "snapshot",
+      state: "partial",
+      limitationCode: "unsupported_member",
       characters
     };
   }

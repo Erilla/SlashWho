@@ -6,11 +6,18 @@ type RefreshHistoryProps = Readonly<{
   selectedSnapshotId: string | null;
 }>;
 
+/**
+ * Refresh times render in UTC with a visible zone label. A fixed zone keeps the
+ * server-rendered text correct for every reader (rather than silently showing the
+ * container's timezone as if it were theirs) and keeps hydration deterministic.
+ */
 export function formatRefreshTime(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
+  const formatted = new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
-    timeStyle: "short"
+    timeStyle: "short",
+    timeZone: "UTC"
   }).format(new Date(value));
+  return `${formatted} UTC`;
 }
 
 function characterCount(count: number): string {
@@ -37,7 +44,7 @@ export function RefreshHistory({
                   selectedSnapshotId === item.id ? "page" : undefined
                 }
               >
-                <time dateTime={item.refreshedAt} suppressHydrationWarning>
+                <time dateTime={item.refreshedAt}>
                   {formatRefreshTime(item.refreshedAt)}
                 </time>
                 <span className="history-state" data-state={item.state}>

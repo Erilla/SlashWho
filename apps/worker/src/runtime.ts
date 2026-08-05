@@ -3,7 +3,8 @@ import {
   createDiscoveryJobHandler,
   recoverPendingSearches,
   type DiscoveryJobHandler,
-  type DiscoveryJobHandlerOptions
+  type DiscoveryJobHandlerOptions,
+  type DiscoveryLogger
 } from "@slashwho/application";
 import {
   createDiscoveryQueue,
@@ -58,7 +59,8 @@ const defaultDependencies: WorkerRuntimeDependencies = {
 
 export async function createWorkerRuntime(
   config: WorkerConfig,
-  dependencies: WorkerRuntimeDependencies = defaultDependencies
+  dependencies: WorkerRuntimeDependencies = defaultDependencies,
+  logger?: DiscoveryLogger
 ): Promise<WorkerRuntime> {
   const pool = dependencies.createPool(config.databaseUrl);
   let queue: DiscoveryQueue | undefined;
@@ -87,7 +89,8 @@ export async function createWorkerRuntime(
       repositories,
       gateway,
       requestCap: config.discoveryRequestCap,
-      negativeCacheTtlMs: config.negativeCacheTtlMs
+      negativeCacheTtlMs: config.negativeCacheTtlMs,
+      ...(logger ? { logger } : {})
     });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);

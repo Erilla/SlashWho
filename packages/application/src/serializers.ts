@@ -3,12 +3,12 @@ import {
   historicalSnapshotSchema,
   historyPageSchema,
   jobStatusResponseSchema,
+  publicErrorMessages,
   type Character,
   type CharacterResource,
   type HistoricalSnapshot,
   type HistoryPage,
-  type JobStatusResponse,
-  type PublicErrorCode
+  type JobStatusResponse
 } from "@slashwho/contracts";
 import type {
   DiscoveryRun,
@@ -17,17 +17,6 @@ import type {
   StoredSnapshotCharacter
 } from "@slashwho/database";
 import { toCharacterPath, type CharacterKey } from "@slashwho/domain";
-
-const errorMessages: Record<PublicErrorCode, string> = {
-  invalid_character_url: "The character URL is invalid.",
-  character_not_found: "The character was not found.",
-  rate_limited: "Too many requests.",
-  upstream_unavailable: "Character data is temporarily unavailable.",
-  search_failed: "The search could not be completed.",
-  suppressed_character: "The character was not found.",
-  unauthorized: "Authentication failed.",
-  trusted_client_ip_unavailable: "The trusted client boundary is unavailable."
-};
 
 function serializeCharacter(character: StoredSnapshotCharacter): Character {
   return {
@@ -87,7 +76,7 @@ export function serializeJobStatus(run: DiscoveryRun): JobStatusResponse {
     completedAt: run.completedAt?.toISOString() ?? null,
     retryAt: run.nextRetryAt?.toISOString() ?? null,
     error: run.errorCode
-      ? { code: run.errorCode, message: errorMessages[run.errorCode] }
+      ? { code: run.errorCode, message: publicErrorMessages[run.errorCode] }
       : null
   });
 }

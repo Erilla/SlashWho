@@ -39,9 +39,7 @@ it("migrates and initializes the durable queue before serving searches", async (
         ANONYMOUS_SEARCHES_PER_HOUR: 10,
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
-        FRESHNESS_HOURS: 24,
-        NEGATIVE_CACHE_MINUTES: 15,
-        DISCOVERY_REQUEST_CAP: 12
+        FRESHNESS_HOURS: 24
       }
     },
     {

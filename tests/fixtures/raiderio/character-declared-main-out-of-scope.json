@@ -1,0 +1,24 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Sentinel",
+        "level": 80,
+        "class": { "name": "Mage" },
+        "realm": { "slug": "Silvermoon" },
+        "region": { "slug": "EU" }
+      },
+      "user": null,
+      "characterCustomizations": {
+        "discord_profile": null,
+        "main_character": {
+          "name": "Yunfeng",
+          "path": "/characters/CN/Aegwynn/Yunfeng",
+          "realm": { "slug": "Aegwynn" },
+          "region": { "slug": "CN" }
+        }
+      }
+    }
+  }
+}

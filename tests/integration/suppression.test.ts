@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   applicationConfigSchema,
+  createDiscoveryJobHandler,
   createSearchService
 } from "../../packages/application/src";
 import {
@@ -159,6 +160,54 @@ describe("application suppression policy", () => {
     await expect(
       service.getSnapshot(root, seededSnapshotId)
     ).resolves.toBeNull();
+  });
+
+  it("fails a reserved run whose root is suppressed before the worker executes it", async () => {
+    // Break caught: suppression landing after reservation could publish a rootless
+    // snapshot, roll the write back with snapshot_root_missing, burn every retry, and
+    // leave the run permanently search_failed.
+    const reserved = await repositories.runs.createOrReuse(root, "anonymous");
+    await repositories.suppressions.suppress(
+      root,
+      "verified private removal reason",
+      null
+    );
+    const handler = createDiscoveryJobHandler({
+      repositories,
+      gateway: {
+        async getCharacter() {
+          throw new Error("gateway_must_not_be_called");
+        },
+        async getClaimedCharacters() {
+          throw new Error("gateway_must_not_be_called");
+        },
+        async resolveProfileGuess() {
+          throw new Error("gateway_must_not_be_called");
+        }
+      },
+      requestCap: 12,
+      now: () => now
+    });
+
+    await expect(
+      handler.execute(reserved.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(repositories.runs.find(reserved.id)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "character_not_found",
+      snapshotId: null
+    });
+    await expect(
+      pool.query(
+        "SELECT count(*)::int AS total FROM snapshots WHERE discovery_run_id = $1",
+        [reserved.id]
+      )
+    ).resolves.toMatchObject({ rows: [{ total: 0 }] });
   });
 
   it("cleans expired negative cache and suppression rows while retaining active rows", async () => {

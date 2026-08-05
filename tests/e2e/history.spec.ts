@@ -33,9 +33,11 @@ test("opens an immutable historical refresh without internal provenance", async 
   await expect(
     page.getByRole("heading", { name: "Refresh history" })
   ).toBeVisible();
+  // Asserted literally and independently of the host timezone: refresh times render
+  // in UTC with a visible zone label, so this text is the same on every machine.
   await expect(
     page.locator('time[datetime="2025-01-02T03:04:00.000Z"]')
-  ).toHaveText("2 Jan 2025, 03:04");
+  ).toHaveText("2 Jan 2025, 03:04 UTC");
 
   await page.getByRole("link", { name: "1 character" }).click();
   await expect(page).toHaveURL(

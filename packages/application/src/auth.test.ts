@@ -26,10 +26,10 @@ describe("application configuration", () => {
       ANONYMOUS_SEARCHES_PER_HOUR: 10,
       BOT_SEARCHES_PER_HOUR: 60,
       PUBLIC_READS_PER_MINUTE: 300,
-      FRESHNESS_HOURS: 24,
-      NEGATIVE_CACHE_MINUTES: 15,
-      DISCOVERY_REQUEST_CAP: 12
+      FRESHNESS_HOURS: 24
     });
+    expect(config).not.toHaveProperty("NEGATIVE_CACHE_MINUTES");
+    expect(config).not.toHaveProperty("DISCOVERY_REQUEST_CAP");
   });
 
   it("rejects short secrets and non-positive limits", () => {

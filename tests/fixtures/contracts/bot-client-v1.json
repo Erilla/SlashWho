@@ -13,6 +13,49 @@
       "characterUrl": "/characters/eu/silvermoon/ryii"
     }
   },
+  "staleRefresh": {
+    "endpoint": "POST /api/v1/searches",
+    "note": "A search for a character that already has a snapshot but is past its freshness window returns HTTP 200 with kind \"character\" and the stale snapshot, not 202. The queued refresh is reachable two ways: the Location header, and character.activeJob.statusUrl. Clients must handle this alongside the 202-then-poll shape: read activeJob and poll it if present, otherwise the data is current.",
+    "status": 200,
+    "headers": {
+      "Location": "/api/v1/searches/54f14e37-7df7-43db-91d5-21e797d1d145",
+      "Cache-Control": "no-store"
+    },
+    "response": {
+      "kind": "character",
+      "character": {
+        "character": {
+          "region": "eu",
+          "realm": "silvermoon",
+          "name": "Ryii",
+          "className": "Mage",
+          "level": 80,
+          "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+        },
+        "snapshot": {
+          "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
+          "state": "complete",
+          "refreshedAt": "2026-08-02T09:15:00.000Z",
+          "characterCount": 1,
+          "characters": [
+            {
+              "region": "eu",
+              "realm": "silvermoon",
+              "name": "Ryii",
+              "className": "Mage",
+              "level": 80,
+              "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+            }
+          ]
+        },
+        "activeJob": {
+          "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145",
+          "status": "queued",
+          "statusUrl": "/api/v1/searches/54f14e37-7df7-43db-91d5-21e797d1d145"
+        }
+      }
+    }
+  },
   "job": {
     "endpoint": "GET /api/v1/searches/{jobId}",
     "response": {

@@ -125,7 +125,7 @@ export function createRaiderIoClient(
 
     return request(
       new URL(`/${path}`, baseUrl),
-      normalizeCharacterResponse,
+      (value) => normalizeCharacterResponse(value, validKey),
       signal
     );
   }
@@ -133,7 +133,7 @@ export function createRaiderIoClient(
   async function getClaimedCharacters(
     ownerId: string,
     signal?: AbortSignal
-  ): Promise<readonly RaiderIoCharacter[]> {
+  ): Promise<RaiderIoProfile> {
     const profile = await request(
       profileUrl(ownerId),
       normalizeProfileResponse,
@@ -145,7 +145,10 @@ export function createRaiderIoClient(
     ) {
       throw createRaiderIoError({ kind: "schema_drift" });
     }
-    return profile.characters;
+    return {
+      characters: profile.characters,
+      ...(profile.omittedMembers ? { omittedMembers: true } : {})
+    };
   }
 
   async function resolveProfileGuess(
@@ -164,7 +167,10 @@ export function createRaiderIoClient(
       ) {
         return null;
       }
-      return { characters: profile.characters };
+      return {
+        characters: profile.characters,
+        ...(profile.omittedMembers ? { omittedMembers: true } : {})
+      };
     } catch (error) {
       if (isRaiderIoFailure(error) && error.kind === "not_found") return null;
       throw error;

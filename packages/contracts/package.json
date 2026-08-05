@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --root ../.. --project unit packages/contracts/src",
     "typecheck": "tsc --noEmit"
   }
 }

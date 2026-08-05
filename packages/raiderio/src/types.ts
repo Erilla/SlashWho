@@ -8,10 +8,17 @@ export interface RaiderIoCharacter {
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;
+  /**
+   * True when the upstream payload named at least one related character this
+   * system cannot represent, so anything derived from it is knowingly incomplete.
+   */
+  readonly omittedMembers?: boolean;
 }
 
 export interface RaiderIoProfile {
   readonly characters: readonly RaiderIoCharacter[];
+  /** See {@link RaiderIoCharacter.omittedMembers}. */
+  readonly omittedMembers?: boolean;
 }
 
 export interface RaiderIoGateway {
@@ -22,7 +29,7 @@ export interface RaiderIoGateway {
   getClaimedCharacters(
     ownerId: string,
     signal?: AbortSignal
-  ): Promise<readonly RaiderIoCharacter[]>;
+  ): Promise<RaiderIoProfile>;
   resolveProfileGuess(
     value: string,
     signal?: AbortSignal

@@ -6,7 +6,10 @@ const allowedFields = new Set([
   "endpoint",
   "status",
   "durationMs",
-  "count"
+  "count",
+  // The error class only. Messages, bodies, URLs, and payloads stay out by
+  // construction: any field not named here is dropped before serialization.
+  "errorName"
 ]);
 
 function allowlistedLog(

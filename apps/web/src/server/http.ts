@@ -5,6 +5,7 @@ import type {
 import {
   createSearchResponseSchema,
   publicErrorHttpStatus,
+  publicErrorMessages,
   safeApiErrorSchema,
   type PublicErrorCode
 } from "@slashwho/contracts";
@@ -14,17 +15,6 @@ import { randomUUID } from "node:crypto";
 import { webLogger } from "./logger";
 
 const resourceCacheControl = "public, max-age=60, stale-while-revalidate=300";
-
-const errorMessages: Record<PublicErrorCode, string> = {
-  invalid_character_url: "The character URL is invalid.",
-  character_not_found: "The character was not found.",
-  rate_limited: "Too many requests.",
-  upstream_unavailable: "Character data is temporarily unavailable.",
-  search_failed: "The search could not be completed.",
-  suppressed_character: "The character was not found.",
-  unauthorized: "Authentication failed.",
-  trusted_client_ip_unavailable: "The trusted client boundary is unavailable."
-};
 
 export function apiError(
   code: PublicErrorCode,
@@ -36,7 +26,7 @@ export function apiError(
   }
   return Response.json(
     safeApiErrorSchema.parse({
-      error: { code, message: errorMessages[code] }
+      error: { code, message: publicErrorMessages[code] }
     }),
     { status: publicErrorHttpStatus[code], headers }
   );
@@ -105,7 +95,10 @@ export function publicResourceResponse(
     headers: {
       "cache-control": options.authenticated
         ? "private, no-store"
-        : resourceCacheControl
+        : resourceCacheControl,
+      // The cacheability of this response depends on whether the caller presented
+      // credentials, so shared caches must key on that header.
+      vary: "authorization"
     }
   });
 }
@@ -164,6 +157,18 @@ type HttpLogger = {
   info(value: Record<string, unknown>): void;
 };
 
+/**
+ * The error's class name, reduced to identifier characters and bounded in length.
+ * Never its message, the request URL, the request body, or an upstream payload.
+ */
+function errorName(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? (error.constructor?.name ?? error.name)
+      : typeof error;
+  return raw.replaceAll(/[^A-Za-z0-9_]/g, "").slice(0, 64) || "unknown";
+}
+
 async function publicResponseCount(
   response: Response
 ): Promise<number | undefined> {
@@ -197,9 +202,11 @@ export async function withHttpRequest(
   const correlationId = randomUUID();
   const startedAt = clock();
   let response: Response;
+  let failure: string | undefined;
   try {
     response = await action();
-  } catch {
+  } catch (error) {
+    failure = errorName(error);
     response = apiError("search_failed");
   }
   response.headers.set("x-request-id", correlationId);
@@ -210,7 +217,8 @@ export async function withHttpRequest(
     endpoint,
     status: response.status,
     durationMs: Math.max(0, Math.round(clock() - startedAt)),
-    ...(count === undefined ? {} : { count })
+    ...(count === undefined ? {} : { count }),
+    ...(failure === undefined ? {} : { errorName: failure })
   });
   return response;
 }

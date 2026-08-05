@@ -8,7 +8,10 @@ export const characterSchema = z
     realm: z.string().regex(/^[a-z0-9-]+$/),
     name: z.string().min(1),
     className: z.string().min(1),
-    level: z.number().int().min(1),
+    // Raider.IO reports 0 for characters it has seen but not yet levelled. The
+    // normalizer in @slashwho/raiderio accepts any non-negative integer, and a
+    // value it commits to an immutable snapshot must remain readable here forever.
+    level: z.number().int().nonnegative(),
     raiderIoUrl: z.url().startsWith("https://raider.io/characters/")
   })
   .strict();

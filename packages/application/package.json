@@ -11,6 +11,6 @@
     "@slashwho/contracts": "workspace:*",
     "@slashwho/database": "workspace:*",
     "@slashwho/domain": "workspace:*",
-    "zod": "^4.1.5"
+    "zod": "^4.3.5"
   }
 }
