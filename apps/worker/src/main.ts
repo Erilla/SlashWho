@@ -1,3 +1,5 @@
+import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
+
 import { loadWorkerConfig, type WorkerConfig } from "./config";
 import {
   startHealthServer,
@@ -31,6 +33,10 @@ export async function main(
   const config = dependencies.loadConfig();
   const logger = dependencies.createLogger();
   const runtime = await dependencies.createRuntime(config);
+  const terminateAfterStopFailure = () => {
+    logger.info({ event: "worker_stop_failed" });
+    dependencies.terminate(1);
+  };
   let healthServer: HealthServer;
   try {
     healthServer = await dependencies.startHealthServer({
@@ -38,7 +44,13 @@ export async function main(
       health: () => runtime.health()
     });
   } catch (error) {
-    await runtime.stop().catch(() => undefined);
+    try {
+      await runtime.stop();
+    } catch (stopError) {
+      if (stopError instanceof DiscoveryQueueStopTimeoutError) {
+        terminateAfterStopFailure();
+      }
+    }
     throw error;
   }
   let stopping: Promise<void> | undefined;
@@ -53,10 +65,7 @@ export async function main(
   };
 
   const requestStop = (signal: "SIGTERM" | "SIGINT") => {
-    void stop(signal).catch(() => {
-      logger.info({ event: "worker_stop_failed" });
-      dependencies.terminate(1);
-    });
+    void stop(signal).catch(terminateAfterStopFailure);
   };
   process.once("SIGTERM", () => requestStop("SIGTERM"));
   process.once("SIGINT", () => requestStop("SIGINT"));

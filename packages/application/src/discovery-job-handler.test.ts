@@ -481,8 +481,8 @@ describe("discovery job handler", () => {
     });
   });
 
-  it("caps unexpected-error retry state at the run lifetime deadline", async () => {
-    // Break caught: reconciliation could schedule nextRetryAt beyond 30 minutes.
+  it("fails when less than one durable retry second remains", async () => {
+    // Break caught: pg-boss would round a sub-second retry beyond the deadline.
     const repositories = createMemoryRepositories();
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
     run.createdAt = new Date("2026-08-05T07:30:00.000Z");
@@ -492,9 +492,31 @@ describe("discovery job handler", () => {
 
     await expect(
       handlerFor(repositories, new MutableGateway(), {
-        now: () => new Date("2026-08-05T07:59:59.750Z")
+        now: () => new Date("2026-08-05T07:59:59.001Z")
       }).execute(run.id, delivery(1))
-    ).rejects.toMatchObject({ retryable: true, retryAfterMs: 250 });
+    ).rejects.toThrow("controlled_snapshot_failure");
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "search_failed",
+      nextRetryAt: null
+    });
+  });
+
+  it("allows a one-second durable retry at the lifetime boundary", async () => {
+    // Break caught: the whole-second boundary could terminate one retry too early.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    run.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    repositories.snapshots.create = async () => {
+      throw new Error("controlled_snapshot_failure");
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        now: () => new Date("2026-08-05T07:59:59.000Z")
+      }).execute(run.id, delivery(1))
+    ).rejects.toMatchObject({ retryable: true, retryAfterMs: 1_000 });
 
     await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
       status: "retrying",

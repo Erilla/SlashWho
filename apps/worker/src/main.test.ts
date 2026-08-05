@@ -1,3 +1,4 @@
+import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
@@ -46,6 +47,34 @@ describe("worker main", () => {
     } finally {
       await occupied.stop();
     }
+  });
+
+  it("requests termination once when health-bind cleanup times out", async () => {
+    // Break caught: failed-start cleanup could suppress a non-cooperative stop timeout.
+    const bindError = Object.assign(new Error("health bind failed"), {
+      code: "EADDRINUSE"
+    });
+    const terminate = vi.fn();
+
+    await expect(
+      main({
+        loadConfig: () => config,
+        createLogger: () => ({ info() {} }),
+        createRuntime: async () => ({
+          health: async () => ({ live: true, ready: true }),
+          stop: async () => {
+            throw new DiscoveryQueueStopTimeoutError();
+          }
+        }),
+        startHealthServer: async () => {
+          throw bindError;
+        },
+        terminate
+      })
+    ).rejects.toBe(bindError);
+
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(terminate).toHaveBeenCalledWith(1);
   });
 
   it("consumes a signal-stop rejection and requests non-graceful termination", async () => {

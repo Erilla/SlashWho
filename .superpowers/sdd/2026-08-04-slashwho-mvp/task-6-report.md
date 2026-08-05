@@ -213,3 +213,35 @@ PostgreSQL 16; no PostgreSQL or pg-boss mocks were used.
   after the typed settlement timeout. In that exceptional path, PostgreSQL
   pool closure is best-effort because awaiting it could recreate the unbounded
   shutdown being prevented.
+
+## Fix Round 3
+
+### Changes
+
+- Tightened the shared retry scheduler to require at least one full second of
+  remaining run lifetime. This matches pg-boss v12's whole-second
+  `retry_delay` and prevents durable `startAfter` from crossing the exact
+  30-minute deadline.
+- Routed a typed discovery-queue settlement timeout during health-bind failure
+  through the same injected/default fatal terminator used by signal shutdown.
+  Startup still rethrows the original bind failure; the fatal terminator is
+  invoked exactly once, and the cleanup rejection is consumed.
+
+### TDD evidence
+
+- RED: with 999 ms remaining, unexpected-error reconciliation emitted a
+  retryable result that pg-boss would round to 1 second. GREEN: the run becomes
+  terminal `search_failed`; with exactly 1,000 ms remaining it still retries
+  once and records `nextRetryAt` exactly at the lifetime deadline.
+- RED: a health-bind failure whose runtime cleanup threw
+  `DiscoveryQueueStopTimeoutError` made zero fatal-termination calls. GREEN:
+  cleanup requests termination once with exit code 1, without installing
+  signal handlers or emitting an unhandled rejection.
+
+### Commands and output
+
+- Focused handler/main/runtime Vitest command: PASS, 3 files and 25/25 tests.
+- Full `vitest run` under Node.js `v22.23.2`: PASS, 16 files and 106/106 tests,
+  including the real pg-boss/PostgreSQL integration projects.
+- pnpm `11.20.0`: all seven workspace TypeScript checks, ESLint, Prettier
+  check, and `git diff --check`: PASS.
