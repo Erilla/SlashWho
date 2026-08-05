@@ -6,6 +6,7 @@ import {
 import {
   createDiscoveryQueue,
   createPostgresRepositories,
+  DiscoveryQueueStopTimeoutError,
   runMigrations,
   type DiscoveryQueue,
   type Repositories
@@ -113,9 +114,15 @@ export async function createWorkerRuntime(
               graceful: true,
               timeoutMs: config.workerDrainTimeoutMs
             });
-          } finally {
+          } catch (error) {
+            if (error instanceof DiscoveryQueueStopTimeoutError) {
+              void pool.end().catch(() => undefined);
+              throw error;
+            }
             await pool.end();
+            throw error;
           }
+          await pool.end();
         })();
         return stopping;
       }

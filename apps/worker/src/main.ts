@@ -14,13 +14,15 @@ export type WorkerMainDependencies = {
   createLogger(): WorkerLogger;
   createRuntime(config: WorkerConfig): Promise<WorkerRuntime>;
   startHealthServer(options: HealthServerOptions): Promise<HealthServer>;
+  terminate(exitCode: number): void;
 };
 
 const defaultDependencies: WorkerMainDependencies = {
   loadConfig: loadWorkerConfig,
   createLogger: createWorkerLogger,
   createRuntime: createWorkerRuntime,
-  startHealthServer
+  startHealthServer,
+  terminate: (exitCode) => process.exit(exitCode)
 };
 
 export async function main(
@@ -50,8 +52,14 @@ export async function main(
     return stopping;
   };
 
-  process.once("SIGTERM", () => void stop("SIGTERM"));
-  process.once("SIGINT", () => void stop("SIGINT"));
+  const requestStop = (signal: "SIGTERM" | "SIGINT") => {
+    void stop(signal).catch(() => {
+      logger.info({ event: "worker_stop_failed" });
+      dependencies.terminate(1);
+    });
+  };
+  process.once("SIGTERM", () => requestStop("SIGTERM"));
+  process.once("SIGINT", () => requestStop("SIGINT"));
   logger.info({ event: "worker_ready", port: healthServer.port });
 }
 

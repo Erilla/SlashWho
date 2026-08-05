@@ -1,6 +1,10 @@
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
-export { createDiscoveryQueue, discoverCharacterQueueName } from "./queue";
+export {
+  createDiscoveryQueue,
+  DiscoveryQueueStopTimeoutError,
+  discoverCharacterQueueName
+} from "./queue";
 export type {
   CreateDiscoveryQueueOptions,
   DiscoverCharacterJob,

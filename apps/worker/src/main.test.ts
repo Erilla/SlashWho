@@ -35,7 +35,8 @@ describe("worker main", () => {
             health: async () => ({ live: true, ready: true }),
             stop
           }),
-          startHealthServer
+          startHealthServer,
+          terminate() {}
         })
       ).rejects.toMatchObject({ code: "EADDRINUSE" });
 
@@ -44,6 +45,52 @@ describe("worker main", () => {
       expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
     } finally {
       await occupied.stop();
+    }
+  });
+
+  it("consumes a signal-stop rejection and requests non-graceful termination", async () => {
+    // Break caught: voiding a rejected stop promise could emit unhandledRejection.
+    const existing = new Set(process.listeners("SIGTERM"));
+    let terminated!: () => void;
+    const terminationRequested = new Promise<void>((resolve) => {
+      terminated = resolve;
+    });
+    const terminate = vi.fn(() => terminated());
+    let onUnhandled!: () => void;
+    const unhandled = new Promise<"unhandled">((resolve) => {
+      onUnhandled = () => resolve("unhandled");
+      process.once("unhandledRejection", onUnhandled);
+    });
+    await main({
+      loadConfig: () => config,
+      createLogger: () => ({ info() {} }),
+      createRuntime: async () => ({
+        health: async () => ({ live: true, ready: true }),
+        stop: async () => {
+          throw Object.assign(new Error("queue settlement timed out"), {
+            code: "discovery_queue_stop_timeout"
+          });
+        }
+      }),
+      startHealthServer: async () => ({ port: 3001, async stop() {} }),
+      terminate
+    });
+    const listener = process
+      .listeners("SIGTERM")
+      .find((candidate) => !existing.has(candidate));
+    expect(listener).toBeTypeOf("function");
+
+    try {
+      listener!("SIGTERM");
+      const outcome = await Promise.race([
+        terminationRequested.then(() => "terminated" as const),
+        unhandled
+      ]);
+      expect(outcome).toBe("terminated");
+      expect(terminate).toHaveBeenCalledWith(1);
+    } finally {
+      process.removeListener("SIGTERM", listener!);
+      process.removeListener("unhandledRejection", onUnhandled);
     }
   });
 });

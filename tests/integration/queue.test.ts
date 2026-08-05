@@ -373,4 +373,52 @@ describe("durable discovery queue", () => {
       repositories.negativeCache.find(run.rootKey)
     ).resolves.toBeNull();
   });
+
+  it("fails within a second bounded window when aborted work does not settle", async () => {
+    // Break caught: a non-cooperative handler could make shutdown wait forever.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    let claimed!: () => void;
+    const started = new Promise<void>((resolve) => {
+      claimed = resolve;
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let finished!: () => void;
+    const handlerFinished = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    await queue.work(async () => {
+      claimed();
+      await blocked;
+      finished();
+    });
+    await queue.enqueue({
+      runId: "00000000-0000-4000-8000-000000000009",
+      key
+    });
+    await started;
+    const watchdog = setTimeout(release, 4_000);
+    const startedAt = Date.now();
+    let failure: unknown;
+
+    try {
+      await queue.stop({ graceful: true, timeoutMs: 1_000 });
+    } catch (error) {
+      failure = error;
+    } finally {
+      release();
+      await handlerFinished;
+      clearTimeout(watchdog);
+    }
+
+    expect(failure).toMatchObject({
+      name: "DiscoveryQueueStopTimeoutError",
+      code: "discovery_queue_stop_timeout"
+    });
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+  });
 });

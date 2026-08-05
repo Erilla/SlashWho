@@ -14,6 +14,15 @@ export type DiscoveryWorkContext = {
   signal: AbortSignal;
 };
 
+export class DiscoveryQueueStopTimeoutError extends Error {
+  readonly code = "discovery_queue_stop_timeout" as const;
+
+  constructor() {
+    super("discovery queue work did not settle before shutdown deadline");
+    this.name = "DiscoveryQueueStopTimeoutError";
+  }
+}
+
 export interface DiscoveryQueue {
   start(): Promise<void>;
   enqueue(payload: DiscoverCharacterJob): Promise<string>;
@@ -87,6 +96,25 @@ export function createDiscoveryQueue(
   const inFlight = new Set<Promise<void>>();
   let ready = false;
 
+  async function settleInFlight(timeoutMs: number): Promise<void> {
+    const executions = [...inFlight];
+    if (executions.length === 0) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new DiscoveryQueueStopTimeoutError()),
+        timeoutMs
+      );
+      timer.unref();
+    });
+    try {
+      await Promise.race([Promise.allSettled(executions), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   return {
     async start() {
       await boss.start();
@@ -150,8 +178,14 @@ export function createDiscoveryQueue(
 
     async stop({ graceful, timeoutMs }) {
       ready = false;
-      await boss.stop({ graceful, timeout: timeoutMs });
-      await Promise.allSettled([...inFlight]);
+      let stopError: unknown;
+      try {
+        await boss.stop({ graceful, timeout: timeoutMs });
+      } catch (error) {
+        stopError = error;
+      }
+      await settleInFlight(timeoutMs);
+      if (stopError) throw stopError;
     },
 
     isReady() {

@@ -1,4 +1,5 @@
 import type { DiscoveryJobHandler } from "@slashwho/application";
+import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import type {
   DiscoverCharacterJob,
   DiscoveryQueue,
@@ -160,6 +161,45 @@ describe("worker runtime", () => {
     releaseDrain();
     await stopping;
     expect(fakes.ended).toBe(true);
+  });
+
+  it("propagates a queue settlement timeout without awaiting a blocked pool close", async () => {
+    // Break caught: runtime could reintroduce an unbounded wait after queue timeout.
+    const fakes = runtimeFakes();
+    const stopError = new DiscoveryQueueStopTimeoutError();
+    fakes.queue.stop = async () => {
+      throw stopError;
+    };
+    let releasePool!: () => void;
+    const blockedPool = new Promise<void>((resolve) => {
+      releasePool = resolve;
+    });
+    fakes.dependencies.createPool = () => ({
+      async query() {
+        return { rows: [{ "?column?": 1 }] };
+      },
+      async end() {
+        await blockedPool;
+      }
+    });
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    const stopping = runtime.stop();
+
+    try {
+      const result = await Promise.race([
+        stopping.then(
+          () => ({ kind: "resolved" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error })
+        ),
+        new Promise<{ kind: "pending" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "pending" }), 50)
+        )
+      ]);
+      expect(result).toEqual({ kind: "rejected", error: stopError });
+    } finally {
+      releasePool();
+      await stopping.catch(() => undefined);
+    }
   });
 
   it("fails after the bounded startup attempt count", async () => {

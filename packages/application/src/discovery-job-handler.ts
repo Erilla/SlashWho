@@ -47,6 +47,30 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   const maxAttempts = options.maxAttempts ?? 5;
   const negativeCacheTtlMs = options.negativeCacheTtlMs ?? 300_000;
 
+  function retrySchedule(
+    createdAt: Date,
+    failureTime: Date,
+    attempt: number,
+    attemptLimit: number,
+    requestedDelayMs: number
+  ): { retryAfterMs: number; nextRetryAt: Date } | null {
+    const remainingLifetimeMs = Math.max(
+      0,
+      createdAt.getTime() + maxJobLifetimeMs - failureTime.getTime()
+    );
+    if (attempt >= attemptLimit || remainingLifetimeMs === 0) return null;
+
+    const retryAfterMs = Math.min(
+      maxRetryDelayMs,
+      remainingLifetimeMs,
+      Math.max(1_000, Math.ceil(requestedDelayMs / 1_000) * 1_000)
+    );
+    return {
+      retryAfterMs,
+      nextRetryAt: new Date(failureTime.getTime() + retryAfterMs)
+    };
+  }
+
   return {
     async execute(
       runId: string,
@@ -129,39 +153,28 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         }
 
         const failureTime = now();
-        const remainingLifetimeMs = Math.max(
-          0,
-          run.createdAt.getTime() + maxJobLifetimeMs - failureTime.getTime()
-        );
         const exponentialDelay =
           baseRetryDelayMs *
           2 ** Math.max(0, context.attempt - 1) *
           (0.5 + random() / 2);
-        const retryCeilingSeconds = Math.floor(
-          Math.min(maxRetryDelayMs, remainingLifetimeMs) / 1_000
+        const schedule = retrySchedule(
+          run.createdAt,
+          failureTime,
+          context.attempt,
+          context.maxAttempts,
+          Math.max(exponentialDelay, outcome.retryAfterMs ?? 0)
         );
-        const requestedRetrySeconds = Math.max(
-          1,
-          Math.ceil(
-            Math.max(exponentialDelay, outcome.retryAfterMs ?? 0) / 1_000
-          )
-        );
-        const retryAfterMs =
-          Math.min(retryCeilingSeconds, requestedRetrySeconds) * 1_000;
 
-        if (
-          context.attempt >= context.maxAttempts ||
-          retryCeilingSeconds === 0
-        ) {
+        if (!schedule) {
           await options.repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
         await options.repositories.runs.markRetrying(
           runId,
           context.attempt,
-          new Date(failureTime.getTime() + retryAfterMs)
+          schedule.nextRetryAt
         );
-        throw retryableError(retryAfterMs);
+        throw retryableError(schedule.retryAfterMs);
       } catch (error) {
         if (context.signal.aborted) throw context.signal.reason;
         if (isRetryableDiscoveryError(error)) throw error;
@@ -171,27 +184,25 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           if (current.status === "complete") return;
           throw error;
         }
-        if (context.attempt >= context.maxAttempts) {
+        const failureTime = now();
+        const schedule = retrySchedule(
+          run.createdAt,
+          failureTime,
+          context.attempt,
+          context.maxAttempts,
+          baseRetryDelayMs * 2 ** Math.max(0, context.attempt - 1)
+        );
+        if (!schedule) {
           await options.repositories.runs.fail(runId, "search_failed");
           throw error;
         }
 
-        const retryAt = new Date(
-          now().getTime() +
-            Math.min(
-              maxRetryDelayMs,
-              Math.max(
-                1_000,
-                baseRetryDelayMs * 2 ** Math.max(0, context.attempt - 1)
-              )
-            )
-        );
         await options.repositories.runs.markRetrying(
           runId,
           context.attempt,
-          retryAt
+          schedule.nextRetryAt
         );
-        throw retryableError(retryAt.getTime() - now().getTime());
+        throw retryableError(schedule.retryAfterMs);
       }
     }
   };

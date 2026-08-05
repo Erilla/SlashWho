@@ -162,3 +162,54 @@ PostgreSQL 16; no PostgreSQL or pg-boss mocks were used.
 - The existing pg-boss default-schema coupling for active Retry-After updates
   remains; the update is now guarded by `RETURNING id` and an exact one-row
   assertion so schema/API drift fails closed.
+
+## Fix Round 2
+
+### Changes
+
+- Added `DiscoveryQueueStopTimeoutError` with stable code
+  `discovery_queue_stop_timeout`. After pg-boss finishes its bounded drain, the
+  queue now gives aborted executions one additional bounded settlement window
+  instead of awaiting them indefinitely.
+- Preserved cooperative shutdown ordering: handlers that observe cancellation
+  settle before the runtime closes PostgreSQL. A non-cooperative handler causes
+  prompt typed rejection; runtime starts best-effort pool closure without
+  awaiting a potentially blocked pool, and the top-level signal handler
+  consumes the rejection before invoking non-graceful termination.
+- Reused one retry-scheduling helper for known transient and unexpected errors.
+  It treats the final attempt or exhausted lifetime as terminal and caps both
+  `nextRetryAt` and `retryAfterMs` at `createdAt + maxJobLifetimeMs`.
+
+### TDD evidence
+
+- RED: a real pg-boss handler that ignored cancellation kept `queue.stop()`
+  pending until a 1.5-second test watchdog released it, with no typed error.
+  GREEN: it rejects with `DiscoveryQueueStopTimeoutError` inside the secondary
+  bounded window.
+- RED: runtime remained pending behind a deliberately blocked `pool.end()`
+  after the queue timeout. GREEN: it propagates the typed timeout promptly and
+  observes best-effort pool cleanup in the background.
+- RED: the signal callback produced `unhandledRejection` when runtime stop
+  failed. GREEN: it consumes the rejection and requests exit code 1 through
+  the injected/default terminator.
+- RED: unexpected-error reconciliation scheduled 1 second beyond the
+  30-minute deadline and retried after the lifetime had elapsed. GREEN: the
+  near-boundary retry is capped to the remaining 250 ms, while an exhausted
+  run becomes terminal `search_failed`.
+
+### Commands and output
+
+- `vitest run packages/application/src/discovery-job-handler.test.ts apps/worker/src/runtime.test.ts apps/worker/src/main.test.ts`:
+  PASS, 3 files and 23/23 tests.
+- `vitest run tests/integration/queue.test.ts tests/integration/snapshot-atomicity.test.ts`:
+  PASS, 2 files and 14/14 real pg-boss/PostgreSQL tests.
+- Full `vitest run` under Node.js `v22.23.2`: PASS, 16 files and 104/104 tests.
+- pnpm `11.20.0`: all seven workspace TypeScript checks, ESLint, Prettier
+  check, and `git diff --check`: PASS.
+
+### Remaining concern
+
+- Non-cooperative shutdown intentionally chooses forced process termination
+  after the typed settlement timeout. In that exceptional path, PostgreSQL
+  pool closure is best-effort because awaiting it could recreate the unbounded
+  shutdown being prevented.

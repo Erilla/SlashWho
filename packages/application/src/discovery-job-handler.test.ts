@@ -481,6 +481,54 @@ describe("discovery job handler", () => {
     });
   });
 
+  it("caps unexpected-error retry state at the run lifetime deadline", async () => {
+    // Break caught: reconciliation could schedule nextRetryAt beyond 30 minutes.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    run.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    repositories.snapshots.create = async () => {
+      throw new Error("controlled_snapshot_failure");
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        now: () => new Date("2026-08-05T07:59:59.750Z")
+      }).execute(run.id, delivery(1))
+    ).rejects.toMatchObject({ retryable: true, retryAfterMs: 250 });
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "retrying",
+      nextRetryAt: new Date("2026-08-05T08:00:00.000Z")
+    });
+  });
+
+  it("fails an unexpected error when reconciliation reaches the lifetime deadline", async () => {
+    // Break caught: an error crossing the lifetime boundary could still retry.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    run.createdAt = new Date("2026-08-05T07:30:00.000Z");
+    repositories.snapshots.create = async () => {
+      throw new Error("controlled_snapshot_failure");
+    };
+    const times = [
+      new Date("2026-08-05T07:59:59.900Z"),
+      new Date("2026-08-05T07:59:59.950Z"),
+      new Date("2026-08-05T08:00:00.001Z")
+    ];
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        now: () => times.shift() ?? new Date("2026-08-05T08:00:00.001Z")
+      }).execute(run.id, delivery(1))
+    ).rejects.toThrow("controlled_snapshot_failure");
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "search_failed",
+      nextRetryAt: null
+    });
+  });
+
   it("reconciles an unexpected final-delivery error to failed", async () => {
     // Break caught: fifth-delivery persistence failure could leave an active run forever.
     const repositories = createMemoryRepositories();
