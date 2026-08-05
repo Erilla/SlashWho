@@ -126,7 +126,10 @@ export interface NegativeCacheRepository {
 export type SearchReservationResult =
   | { kind: "active"; run: DiscoveryRun }
   | { kind: "reserved"; run: DiscoveryRun }
-  | { kind: "rate_limited"; retryAt: Date };
+  | { kind: "rate_limited"; retryAt: Date }
+  | { kind: "fresh" }
+  | { kind: "negative" }
+  | { kind: "suppressed" };
 
 export interface SearchReservationRepository {
   reserve(input: {
@@ -136,6 +139,7 @@ export interface SearchReservationRepository {
     limit: number;
     expiresAt: Date;
     at: Date;
+    freshnessCutoff: Date;
   }): Promise<SearchReservationResult>;
   cancel(runId: string): Promise<void>;
   listPending(

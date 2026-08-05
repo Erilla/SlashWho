@@ -1,10 +1,12 @@
 import {
   createSearchResponseSchema,
+  characterResourceSchema,
   type CharacterResource,
   type HistoricalSnapshot,
   type HistoryPage,
   type JobStatusResponse
 } from "@slashwho/contracts";
+import { z } from "zod";
 import type {
   DiscoveryQueue,
   Repositories,
@@ -51,6 +53,17 @@ export type CreateSearchResult =
   | { kind: "client_ip_unavailable"; code: "trusted_client_ip_unavailable" }
   | { kind: "rate_limited"; retryAfterSeconds: number }
   | { kind: "failed"; code: "search_failed" };
+
+const searchJobResultSchema = z
+  .object({
+    kind: z.literal("job"),
+    jobId: z.uuid(),
+    status: z.enum(["queued", "running", "retrying"]),
+    statusUrl: z.string().startsWith("/api/v1/searches/"),
+    characterUrl: z.string().startsWith("/characters/"),
+    staleCharacter: characterResourceSchema.nullable()
+  })
+  .strict();
 
 export interface SearchService {
   create(input: CreateSearchCommand): Promise<CreateSearchResult>;
@@ -135,7 +148,10 @@ export function createSearchService(options: {
   }
 
   function jobResult(
-    reservation: Exclude<SearchReservationResult, { kind: "rate_limited" }>,
+    reservation: Extract<
+      SearchReservationResult,
+      { kind: "active" | "reserved" }
+    >,
     staleCharacter: CharacterResource | null
   ): Extract<CreateSearchResult, { kind: "job" }> {
     if (
@@ -154,14 +170,14 @@ export function createSearchService(options: {
       characterUrl: toCharacterPath(reservation.run.rootKey)
     });
     if (response.kind !== "job") throw new Error("invalid_job_response");
-    return {
+    return searchJobResultSchema.parse({
       kind: "job",
       jobId: response.jobId,
       status,
       statusUrl: response.statusUrl,
       characterUrl: response.characterUrl,
       staleCharacter
-    };
+    });
   }
 
   return {
@@ -226,7 +242,11 @@ export function createSearchService(options: {
           callerBucketHash: searchPolicy.bucketHash,
           limit: searchPolicy.limit,
           expiresAt: searchPolicy.expiresAt,
-          at: searchPolicy.at
+          at: searchPolicy.at,
+          freshnessCutoff: new Date(
+            searchPolicy.at.getTime() -
+              options.config.FRESHNESS_HOURS * 60 * 60 * 1_000
+          )
         }
       );
       if (reservation.kind === "rate_limited") {
@@ -238,6 +258,34 @@ export function createSearchService(options: {
           kind: "rate_limited",
           retryAfterSeconds: decision.retryAfterSeconds ?? 1
         };
+      }
+
+      if (reservation.kind === "suppressed") {
+        return limitedRead(caller, {
+          kind: "not_found",
+          code: "suppressed_character"
+        });
+      }
+      if (reservation.kind === "negative") {
+        return limitedRead(caller, {
+          kind: "not_found",
+          code: "character_not_found"
+        });
+      }
+      if (reservation.kind === "fresh") {
+        const fresh = await options.repositories.snapshots.getCurrent(key);
+        if (fresh) {
+          return limitedRead(caller, {
+            kind: "character",
+            character: serializeCharacterResource(fresh)
+          });
+        }
+        return limitedRead(caller, {
+          kind: "not_found",
+          code: (await options.repositories.suppressions.isActive(key, at))
+            ? "suppressed_character"
+            : "character_not_found"
+        });
       }
 
       const staleCharacter = current

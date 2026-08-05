@@ -60,6 +60,21 @@ async function seedSnapshot(
   });
 }
 
+async function holdRootLock(
+  pool: Pool,
+  key: CharacterKey
+): Promise<() => Promise<void>> {
+  const client = await pool.connect();
+  await client.query("BEGIN");
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    `root:${key.region}:${key.realm}:${key.name}`
+  ]);
+  return async () => {
+    await client.query("COMMIT");
+    client.release();
+  };
+}
+
 describe("PostgreSQL search policy", () => {
   let pool: Pool;
   let stop: () => Promise<void>;
@@ -119,6 +134,89 @@ describe("PostgreSQL search policy", () => {
         (SELECT count(*)::text FROM rate_limit_events) AS events
     `);
     expect(counts.rows[0]).toEqual({ runs: "1", events: "1" });
+  });
+
+  it("rechecks suppression under the reservation root lock", async () => {
+    // Break caught: a suppression racing an initial cache miss could still charge and queue work.
+    const key = { region: "eu", realm: "silvermoon", name: "locked" } as const;
+    const release = await holdRootLock(pool, key);
+    const suppression = repositories.suppressions.suppress(
+      key,
+      "verified_removal",
+      null
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const reservation = repositories.searchReservations.reserve({
+      key,
+      callerClass: "anonymous",
+      callerBucketHash: `search:${"b".repeat(64)}`,
+      limit: 2,
+      expiresAt: new Date("2026-08-04T13:00:00.000Z"),
+      at: now,
+      freshnessCutoff: new Date("2026-08-03T12:00:00.000Z")
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await release();
+
+    await suppression;
+    await expect(reservation).resolves.toEqual({ kind: "suppressed" });
+    const counts = await pool.query<{ runs: string; events: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM discovery_runs) AS runs,
+        (SELECT count(*)::text FROM rate_limit_events) AS events
+    `);
+    expect(counts.rows[0]).toEqual({ runs: "0", events: "0" });
+  });
+
+  it("rechecks freshness after a concurrent snapshot publication", async () => {
+    // Break caught: a publish racing a stale request could create a redundant refresh job.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "published"
+    } as const;
+    await seedSnapshot(repositories, key, new Date("2026-08-03T11:00:00.000Z"));
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const release = await holdRootLock(pool, key);
+    const publication = repositories.snapshots.create({
+      runId: run.id,
+      rootKey: key,
+      state: "complete",
+      limitationCode: null,
+      refreshedAt: now,
+      characters: [
+        {
+          key,
+          displayName: "Published",
+          className: "Mage",
+          level: 80,
+          raiderIoUrl: `https://raider.io/characters/${key.region}/${key.realm}/${key.name}`,
+          source: "input"
+        }
+      ]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const reservation = repositories.searchReservations.reserve({
+      key,
+      callerClass: "anonymous",
+      callerBucketHash: `search:${"c".repeat(64)}`,
+      limit: 2,
+      expiresAt: new Date("2026-08-04T13:00:00.000Z"),
+      at: now,
+      freshnessCutoff: new Date("2026-08-03T12:00:00.000Z")
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await release();
+
+    await publication;
+    await expect(reservation).resolves.toEqual({ kind: "fresh" });
+    const counts = await pool.query<{ runs: string; events: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM discovery_runs) AS runs,
+        (SELECT count(*)::text FROM rate_limit_events) AS events
+    `);
+    expect(counts.rows[0]).toEqual({ runs: "2", events: "0" });
   });
 
   it("serves fresh cache through the read bucket and stale cache through one refresh", async () => {

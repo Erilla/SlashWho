@@ -58,6 +58,12 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 
 const activeRunSql = "('queued', 'running', 'retrying')";
 
+async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    `root:${key.region}:${key.realm}:${key.name}`
+  ]);
+}
+
 function mapRun(row: RunRow): DiscoveryRun {
   return {
     id: row.id,
@@ -233,6 +239,55 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              ) locks`,
             [[`bucket:${input.callerBucketHash}`, rootLock]]
           );
+
+          const suppression = await client.query(
+            `SELECT 1 FROM suppressed_characters
+             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+               AND (expires_at IS NULL OR expires_at > $4)
+             LIMIT 1`,
+            [input.key.region, input.key.realm, input.key.name, input.at]
+          );
+          if (suppression.rowCount === 1) {
+            await client.query("COMMIT");
+            return { kind: "suppressed" };
+          }
+
+          const current = await client.query<{ id: string }>(
+            `SELECT snapshot.id
+             FROM snapshots snapshot
+             JOIN characters root ON root.id = snapshot.root_character_id
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE root.region = $1 AND root.realm_slug = $2
+               AND root.normalized_name = $3
+               AND run.status = 'complete'
+               AND snapshot.refreshed_at > $4
+             ORDER BY snapshot.refreshed_at DESC, snapshot.id DESC
+             LIMIT 1`,
+            [
+              input.key.region,
+              input.key.realm,
+              input.key.name,
+              input.freshnessCutoff
+            ]
+          );
+          if (current.rowCount === 1) {
+            await client.query("COMMIT");
+            return { kind: "fresh" };
+          }
+
+          if (current.rowCount === 0) {
+            const negative = await client.query(
+              `SELECT 1 FROM negative_character_cache
+               WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                 AND expires_at > $4
+               LIMIT 1`,
+              [input.key.region, input.key.realm, input.key.name, input.at]
+            );
+            if (negative.rowCount === 1) {
+              await client.query("COMMIT");
+              return { kind: "negative" };
+            }
+          }
 
           const active = await client.query<RunRow>(
             `SELECT * FROM discovery_runs
@@ -477,6 +532,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           options?.signal?.throwIfAborted();
           await client.query("BEGIN");
+          await lockRoot(client, input.rootKey);
           const runResult = await client.query(
             `SELECT 1 FROM discovery_runs
              WHERE id = $1
@@ -712,17 +768,28 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
     suppressions: {
       async suppress(key, reason, expiresAt) {
-        await pool.query(
-          `INSERT INTO suppressed_characters
-            (region, realm_slug, normalized_name, reason, expires_at)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (region, realm_slug, normalized_name)
-           DO UPDATE SET
-             suppressed_at = now(),
-             reason = EXCLUDED.reason,
-             expires_at = EXCLUDED.expires_at`,
-          [key.region, key.realm, key.name, reason, expiresAt]
-        );
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockRoot(client, key);
+          await client.query(
+            `INSERT INTO suppressed_characters
+              (region, realm_slug, normalized_name, reason, expires_at)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (region, realm_slug, normalized_name)
+             DO UPDATE SET
+               suppressed_at = now(),
+               reason = EXCLUDED.reason,
+               expires_at = EXCLUDED.expires_at`,
+            [key.region, key.realm, key.name, reason, expiresAt]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
       },
 
       async isActive(key, at = new Date()) {
@@ -822,14 +889,25 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
     negativeCache: {
       async put(key, expiresAt) {
-        await pool.query(
-          `INSERT INTO negative_character_cache
-            (region, realm_slug, normalized_name, expires_at)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (region, realm_slug, normalized_name)
-           DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = now()`,
-          [key.region, key.realm, key.name, expiresAt]
-        );
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockRoot(client, key);
+          await client.query(
+            `INSERT INTO negative_character_cache
+              (region, realm_slug, normalized_name, expires_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (region, realm_slug, normalized_name)
+             DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = now()`,
+            [key.region, key.realm, key.name, expiresAt]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
       },
 
       async putAndFailRun(key, expiresAt, runId, options) {
@@ -837,6 +915,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           options?.signal?.throwIfAborted();
           await client.query("BEGIN");
+          await lockRoot(client, key);
           const cacheResult = await client.query(
             `INSERT INTO negative_character_cache
               (region, realm_slug, normalized_name, expires_at)
