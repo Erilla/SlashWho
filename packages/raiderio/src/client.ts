@@ -75,8 +75,7 @@ export function createRaiderIoClient(
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(options.timeoutMs)
       });
-    } catch (error) {
-      if (isRaiderIoFailure(error)) throw error;
+    } catch {
       throw createRaiderIoError({ kind: "transient" });
     }
 

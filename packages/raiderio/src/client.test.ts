@@ -197,6 +197,35 @@ describe("Raider.IO gateway", () => {
     });
   });
 
+  it("replaces a tagged transport error without preserving its sensitive data", async () => {
+    const marker = "private-transport-identity";
+    const transportError = Object.assign(new Error(marker), {
+      kind: "transient" as const,
+      identity: marker
+    });
+    const taggedErrorFetch: typeof globalThis.fetch = async () => {
+      throw transportError;
+    };
+    const client = createRaiderIoClient({
+      fetch: taggedErrorFetch,
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    let failure: unknown;
+    try {
+      await client.resolveProfileGuess(marker);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ kind: "transient" });
+    expect(failure).not.toBe(transportError);
+    expect(failure).not.toHaveProperty("identity");
+    expect((failure as Error).message).not.toContain(marker);
+    expect(JSON.stringify(failure)).not.toContain(marker);
+  });
+
   it("classifies a timeout as transient without exposing the request", async () => {
     const timeoutFetch: typeof globalThis.fetch = async (_input, init) =>
       new Promise((_resolve, reject) => {
