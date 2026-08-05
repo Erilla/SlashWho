@@ -1,8 +1,14 @@
 {
   "name": "@slashwho/raiderio",
   "private": true,
+  "exports": "./src/index.ts",
   "scripts": {
     "build": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/raiderio/src/client.test.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/domain": "workspace:*",
+    "zod": "^4.3.5"
   }
 }

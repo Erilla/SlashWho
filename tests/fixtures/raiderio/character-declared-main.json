@@ -1,0 +1,25 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Sidekick",
+        "level": 80,
+        "class": { "name": "Hunter" },
+        "realm": { "slug": "Argent-Dawn" },
+        "region": { "slug": "EU" }
+      },
+      "user": null,
+      "characterCustomizations": {
+        "isClaimed": true,
+        "discord_profile": null,
+        "main_character": {
+          "name": "Mainkeeper",
+          "path": "/characters/EU/Tarren-Mill/Mainkeeper",
+          "realm": { "slug": "Tarren-Mill" },
+          "region": { "slug": "EU" }
+        }
+      }
+    }
+  }
+}

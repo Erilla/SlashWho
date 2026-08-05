@@ -1,0 +1,20 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Sentinel",
+        "level": 80,
+        "class": { "name": "Mage" },
+        "realm": { "slug": "Silvermoon" },
+        "region": { "slug": "EU" }
+      },
+      "user": { "name": "owner-alpha" },
+      "characterCustomizations": {
+        "isClaimed": true,
+        "discord_profile": "public-alias",
+        "main_character": null
+      }
+    }
+  }
+}

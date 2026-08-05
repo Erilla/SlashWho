@@ -101,7 +101,14 @@ importers:
 
   packages/domain: {}
 
-  packages/raiderio: {}
+  packages/raiderio:
+    dependencies:
+      '@slashwho/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: ^4.3.5
+        version: 4.4.3
 
 packages:
 

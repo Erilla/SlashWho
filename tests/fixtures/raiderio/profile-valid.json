@@ -1,0 +1,19 @@
+{
+  "status": 200,
+  "body": {
+    "viewUserCharactersApi": {
+      "name": "SENSITIVE-VALUE",
+      "characters": [
+        {
+          "character": {
+            "name": "Profilealt",
+            "level": 78,
+            "class": { "name": "Priest" },
+            "realm": { "slug": "Twisting-Nether" },
+            "region": { "slug": "EU" }
+          }
+        }
+      ]
+    }
+  }
+}
