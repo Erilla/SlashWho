@@ -1,8 +1,13 @@
 {
   "name": "@slashwho/application",
   "private": true,
+  "exports": "./src/index.ts",
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/database": "workspace:*",
+    "@slashwho/domain": "workspace:*"
   }
 }

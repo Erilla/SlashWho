@@ -5,5 +5,16 @@
     "build": "tsc --noEmit",
     "dev": "tsx src/main.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/application": "workspace:*",
+    "@slashwho/database": "workspace:*",
+    "@slashwho/domain": "workspace:*",
+    "@slashwho/raiderio": "workspace:*",
+    "pg": "^8.22.0",
+    "pino": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.3"
   }
 }

@@ -45,6 +45,7 @@ export type DiscoveryOutcome =
         | "upstream_unavailable"
         | "upstream_schema_changed";
       retryable: boolean;
+      retryAfterMs?: number;
     };
 
 export type DiscoverCharacterOptions = {
@@ -153,7 +154,21 @@ function failureOutcome(error: unknown): DiscoveryOutcome {
       retryable: false
     };
   }
-  return { kind: "failure", code: "upstream_unavailable", retryable: true };
+  const retryAfterMs =
+    typeof error === "object" &&
+    error !== null &&
+    "retryAfterMs" in error &&
+    typeof error.retryAfterMs === "number" &&
+    Number.isFinite(error.retryAfterMs) &&
+    error.retryAfterMs >= 0
+      ? error.retryAfterMs
+      : undefined;
+  return {
+    kind: "failure",
+    code: "upstream_unavailable",
+    retryable: true,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs })
+  };
 }
 
 export async function discoverCharacter(

@@ -1,0 +1,42 @@
+import { PassThrough } from "node:stream";
+import { describe, expect, it } from "vitest";
+
+import { createWorkerLogger } from "./logger";
+
+describe("worker logger", () => {
+  it("redacts credentials, bodies, and private lookup values", async () => {
+    // Break caught: sensitive lookup or request values could enter structured logs.
+    const marker = "UNIQUE_PRIVATE_MARKER_9f103d";
+    const output = new PassThrough();
+    let captured = "";
+    output.on("data", (chunk) => {
+      captured += chunk.toString();
+    });
+    const logger = createWorkerLogger(output);
+
+    logger.info(
+      {
+        authorization: marker,
+        cookie: marker,
+        ownerId: marker,
+        profileGuess: marker,
+        validationName: marker,
+        req: {
+          headers: { authorization: marker, cookie: marker },
+          body: { rawUpstreamPayload: marker }
+        },
+        context: {
+          upstream: {
+            owner_id: marker,
+            validation_name: marker
+          }
+        }
+      },
+      "safe_event"
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(captured).toContain("safe_event");
+    expect(captured).not.toContain(marker);
+  });
+});

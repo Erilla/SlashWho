@@ -25,6 +25,7 @@
     "eslint": "10.8.0",
     "pg": "^8.22.0",
     "playwright": "1.62.1",
+    "pg-boss": "^12.27.0",
     "prettier": "3.9.6",
     "tsx": "4.23.5",
     "typescript": "5.9.3",

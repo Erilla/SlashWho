@@ -357,4 +357,31 @@ describe("discoverCharacter", () => {
       expect(outcome).toEqual({ kind: "failure", code, retryable });
     }
   );
+
+  it("preserves an upstream retry delay on transient failure", async () => {
+    // Break caught: the worker could retry before a longer upstream Retry-After.
+    const fail = async () => {
+      throw Object.assign(new Error("transient"), {
+        kind: "transient",
+        retryAfterMs: 30_000
+      });
+    };
+
+    await expect(
+      discoverCharacter(
+        altKey,
+        {
+          getCharacter: fail,
+          getClaimedCharacters: fail,
+          resolveProfileGuess: fail
+        },
+        options
+      )
+    ).resolves.toEqual({
+      kind: "failure",
+      code: "upstream_unavailable",
+      retryable: true,
+      retryAfterMs: 30_000
+    });
+  });
 });

@@ -1,5 +1,11 @@
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
+export { createDiscoveryQueue, discoverCharacterQueueName } from "./queue";
+export type {
+  CreateDiscoveryQueueOptions,
+  DiscoverCharacterJob,
+  DiscoveryQueue
+} from "./queue";
 export type {
   CallerClass,
   CreateSnapshotInput,
