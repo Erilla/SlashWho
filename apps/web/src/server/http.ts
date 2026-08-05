@@ -97,9 +97,16 @@ export function publicReadAuthorizationResponse(
   return apiError(result.code);
 }
 
-export function publicResourceResponse(value: unknown): Response {
+export function publicResourceResponse(
+  value: unknown,
+  options: { authenticated?: boolean } = {}
+): Response {
   return Response.json(value, {
-    headers: { "cache-control": resourceCacheControl }
+    headers: {
+      "cache-control": options.authenticated
+        ? "private, no-store"
+        : resourceCacheControl
+    }
   });
 }
 
@@ -128,6 +135,29 @@ export function parseCharacterRoute(params: {
 
 export function canonicalApiCharacterPath(key: CharacterKey): string {
   return `/api/v1/characters/${key.region}/${key.realm}/${key.name}`;
+}
+
+export function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
+export function isHistoryCursor(value: string): boolean {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return false;
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8")
+    ) as { refreshedAt?: unknown; id?: unknown };
+    return (
+      typeof parsed.refreshedAt === "string" &&
+      !Number.isNaN(new Date(parsed.refreshedAt).valueOf()) &&
+      typeof parsed.id === "string" &&
+      isUuid(parsed.id)
+    );
+  } catch {
+    return false;
+  }
 }
 
 type HttpLogger = {

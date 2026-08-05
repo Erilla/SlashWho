@@ -88,9 +88,19 @@ export async function createWebContainer(
   }
 }
 
-let containerPromise: Promise<WebContainer> | undefined;
-
-export function getContainer(): Promise<WebContainer> {
-  containerPromise ??= createWebContainer(loadWebConfig());
-  return containerPromise;
+export function createContainerProvider(
+  factory: () => Promise<WebContainer>
+): () => Promise<WebContainer> {
+  let promise: Promise<WebContainer> | undefined;
+  return () => {
+    promise ??= factory().catch((error: unknown) => {
+      promise = undefined;
+      throw error;
+    });
+    return promise;
+  };
 }
+
+export const getContainer = createContainerProvider(() =>
+  createWebContainer(loadWebConfig())
+);

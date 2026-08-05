@@ -2,6 +2,7 @@ import { getContainer } from "../../../../../../../../../server/container";
 import {
   apiError,
   canonicalApiCharacterPath,
+  isUuid,
   parseCharacterRoute,
   publicReadAuthorizationResponse,
   publicResourceResponse,
@@ -21,6 +22,7 @@ export async function GET(
 ): Promise<Response> {
   return withHttpRequest("snapshot", async () => {
     const params = await context.params;
+    if (!isUuid(params.snapshotId)) return apiError("character_not_found");
     let parsed: ReturnType<typeof parseCharacterRoute>;
     try {
       parsed = parseCharacterRoute(params);
@@ -43,7 +45,9 @@ export async function GET(
     if (denied) return denied;
     const result = await searches.getSnapshot(parsed.key, params.snapshotId);
     return result
-      ? publicResourceResponse(result)
+      ? publicResourceResponse(result, {
+          authenticated: request.headers.get("authorization") !== null
+        })
       : apiError("character_not_found");
   });
 }

@@ -110,6 +110,11 @@ describe("HTTP result mapping", () => {
     expect(response.headers.get("cache-control")).toBe(
       "public, max-age=60, stale-while-revalidate=300"
     );
+    expect(
+      publicResourceResponse(character, { authenticated: true }).headers.get(
+        "cache-control"
+      )
+    ).toBe("private, no-store");
   });
 
   it("attaches a generated correlation id and logs only request metadata", async () => {

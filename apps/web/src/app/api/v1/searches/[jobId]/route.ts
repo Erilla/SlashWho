@@ -1,6 +1,7 @@
 import { getContainer } from "../../../../../server/container";
 import {
   apiError,
+  isUuid,
   jobStatusResponse,
   withHttpRequest
 } from "../../../../../server/http";
@@ -11,6 +12,7 @@ export async function GET(
 ): Promise<Response> {
   return withHttpRequest("job", async () => {
     const { jobId } = await context.params;
+    if (!isUuid(jobId)) return apiError("character_not_found");
     const { searches } = await getContainer();
     const result = await searches.getRun(jobId);
     return result ? jobStatusResponse(result) : apiError("character_not_found");

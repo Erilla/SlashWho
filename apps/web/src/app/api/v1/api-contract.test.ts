@@ -17,6 +17,11 @@ import type {
   SearchService
 } from "@slashwho/application";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AuthenticationError,
+  applicationConfigSchema,
+  classifyCaller
+} from "@slashwho/application";
 
 import botClientFixture from "../../../../../../tests/fixtures/contracts/bot-client-v1.json";
 
@@ -91,10 +96,22 @@ let currentResult: CharacterResource | null;
 let historyResult: HistoryPage | null;
 let snapshotResult: HistoricalSnapshot | null;
 let readAuthorization: PublicReadAuthorizationResult;
+const authConfig = applicationConfigSchema.parse({
+  BOT_API_KEY: "bot-secret-that-is-at-least-32-characters",
+  RATE_LIMIT_HASH_SECRET: "rate-secret-that-is-at-least-32-characters"
+});
 
 const searches: SearchService = {
-  async create() {
-    return searchResult;
+  async create(command) {
+    try {
+      classifyCaller(command.headers, authConfig);
+      return searchResult;
+    } catch (error) {
+      if (error instanceof AuthenticationError) {
+        return { kind: "unauthorized", code: "unauthorized" };
+      }
+      throw error;
+    }
   },
   async authorizePublicRead() {
     return readAuthorization;
@@ -256,7 +273,7 @@ describe("GET API resources", () => {
     // Break caught: history adapters could drop cursors or fetch the current snapshot by mistake.
     const historyResponse = await GET_HISTORY(
       new Request(
-        "https://slashwho.example/api/v1/characters/eu/silvermoon/ryii/history?cursor=opaque"
+        "https://slashwho.example/api/v1/characters/eu/silvermoon/ryii/history?cursor=eyJyZWZyZXNoZWRBdCI6IjIwMjYtMDgtMDRUMTI6MzA6MDAuMDAwWiIsImlkIjoiMTNhZjMxNzMtZTk3Yy00Yzc4LWE2Y2ItYTU0YjY0N2IyMDlmIn0"
       ),
       characterContext
     );
@@ -299,6 +316,52 @@ describe("GET API resources", () => {
       "/api/v1/characters/eu/silvermoon/ryii"
     );
   });
+
+  it("returns safe 400/404 responses for malformed pagination and identifiers", async () => {
+    // Break caught: malformed database identifiers/cursors could become opaque 500s.
+    const badCursor = await GET_HISTORY(
+      new Request(
+        "https://slashwho.example/api/v1/characters/eu/silvermoon/ryii/history?cursor=not-a-cursor"
+      ),
+      characterContext
+    );
+    expect(badCursor.status).toBe(400);
+
+    const badJob = await GET_JOB(
+      new Request("https://slashwho.example/api/v1/searches/not-a-uuid"),
+      { params: Promise.resolve({ jobId: "not-a-uuid" }) }
+    );
+    expect(badJob.status).toBe(404);
+
+    const badSnapshot = await GET_SNAPSHOT(
+      new Request(
+        "https://slashwho.example/api/v1/characters/eu/silvermoon/ryii/history/not-a-uuid"
+      ),
+      {
+        params: Promise.resolve({
+          ...(await characterContext.params),
+          snapshotId: "not-a-uuid"
+        })
+      }
+    );
+    expect(badSnapshot.status).toBe(404);
+  });
+});
+
+it("passes Bearer credentials to the real caller classification boundary", async () => {
+  // Break caught: a route could drop Authorization and accidentally treat bot calls as anonymous.
+  const invalid = await POST(
+    jsonRequest({ characterUrl }, { authorization: "Bearer wrong-secret" })
+  );
+  expect(invalid.status).toBe(401);
+
+  const valid = await POST(
+    jsonRequest(
+      { characterUrl },
+      { authorization: "Bearer bot-secret-that-is-at-least-32-characters" }
+    )
+  );
+  expect(valid.status).toBe(202);
 });
 
 it("keeps every bot-facing v1 fixture compatible with shared contracts", () => {

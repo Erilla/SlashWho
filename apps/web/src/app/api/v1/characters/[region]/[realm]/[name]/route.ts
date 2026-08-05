@@ -37,7 +37,9 @@ export async function GET(
     if (denied) return denied;
     const result = await searches.getCurrent(parsed.key);
     return result
-      ? publicResourceResponse(result)
+      ? publicResourceResponse(result, {
+          authenticated: request.headers.get("authorization") !== null
+        })
       : apiError("character_not_found");
   });
 }

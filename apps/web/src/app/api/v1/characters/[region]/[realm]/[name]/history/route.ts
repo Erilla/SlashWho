@@ -2,6 +2,7 @@ import { getContainer } from "../../../../../../../../server/container";
 import {
   apiError,
   canonicalApiCharacterPath,
+  isHistoryCursor,
   parseCharacterRoute,
   publicReadAuthorizationResponse,
   publicResourceResponse,
@@ -22,6 +23,10 @@ export async function GET(
       return apiError("invalid_character_url");
     }
     const url = new URL(request.url);
+    const cursor = url.searchParams.get("cursor");
+    if (cursor !== null && !isHistoryCursor(cursor)) {
+      return apiError("invalid_character_url");
+    }
     if (!parsed.canonical) {
       const canonical = `${canonicalApiCharacterPath(parsed.key)}/history`;
       return new Response(null, {
@@ -37,12 +42,11 @@ export async function GET(
       await searches.authorizePublicRead(request.headers)
     );
     if (denied) return denied;
-    const result = await searches.getHistory(
-      parsed.key,
-      url.searchParams.get("cursor") ?? undefined
-    );
+    const result = await searches.getHistory(parsed.key, cursor ?? undefined);
     return result
-      ? publicResourceResponse(result)
+      ? publicResourceResponse(result, {
+          authenticated: request.headers.get("authorization") !== null
+        })
       : apiError("character_not_found");
   });
 }
