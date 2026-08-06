@@ -23,7 +23,7 @@ Steps 3 and 4 have no Railway CLI flag. Set the config-as-code path from each se
 # web -> /railway.web.toml, worker -> /railway.worker.toml
 ```
 
-Both Dockerfiles must give every BuildKit cache mount an explicit `id`. Railway's Metal builder rejects `--mount=type=cache,target=...` without one (`dockerfile invalid: flag ... is missing an id argument`), even though local Docker derives an id automatically — so this failure only appears on Railway.
+Neither Dockerfile uses a BuildKit cache mount. Railway's Metal builder accepts one only when its id is literally `s/<service id>-<target path>`, and [its Dockerfile guide](https://docs.railway.com/builds/dockerfiles) notes that environment variables are invalid inside a cache mount id — so keeping the mount would mean hardcoding this project's Railway service UUIDs, differently per service, into files that CI and local builds also use. Docker layer caching already covers the install step unless the lockfile changes, so the mount was dropped instead. Do not reintroduce one without that literal id; local Docker accepts ids Railway rejects, so the failure appears only on deploy.
 
 ## Variables
 
