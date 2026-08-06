@@ -68,7 +68,40 @@ After each staging deploy, verify `/health`, `/ready`, one new search, one stale
 
 ## Backups
 
-Before production launch, open the PostgreSQL service's **Backups** tab and enable at least daily scheduled volume backups. Railway documents daily, weekly, and monthly schedules in its [backup guide](https://docs.railway.com/volumes/backups). Record a restore drill in the launch checklist; a schedule that has never been restored is not a verified backup. For a longer recovery window, evaluate Railway's PostgreSQL point-in-time recovery separately.
+**Production currently has no backups, and this is a known, accepted gap.**
+
+Railway's scheduled volume backups and point-in-time recovery are paid-plan features. This project runs on the Hobby plan, so the [backup guide](https://docs.railway.com/volumes/backups)'s daily/weekly/monthly schedules cannot be enabled — the API rejects `volumeInstanceBackupScheduleUpdate` with `Not Authorized`, and both the schedule list and the backup list are empty for every environment. An earlier revision of this document instructed enabling them anyway; that instruction was impossible to follow.
+
+### What a lost volume would actually cost
+
+| Table                                                        | Recoverability                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `suppressedCharacters`                                       | **Reconstructible.** Every suppression records its GitHub issue number as the reason, so the list can be rebuilt by re-running `ops:removals add` from the issues and the private operations log. This is what makes [`docs/operations/removals.md`](../operations/removals.md)'s "record the canonical identity, issue reason, environment, command timestamp" step load-bearing rather than merely tidy — it is the off-database copy of a privacy commitment. |
+| `snapshots`, `snapshotCharacters`                            | **Irreplaceable.** A fresh search rediscovers the _current_ alt list; nothing rediscovers what it looked like last month. This is the dated history the product promises, and it is the only genuinely unrecoverable data.                                                                                                                                                                                                                                       |
+| `characters`                                                 | Regenerable by searching again.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `discoveryRuns`, `rateLimitEvents`, `negativeCharacterCache` | Operational and short-lived; regenerable.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+The exposure therefore grows with time rather than being constant. Shortly after launch the irreplaceable set is a handful of snapshots and losing it would barely matter; after a year of accumulated history it is the product.
+
+### Taking a manual checkpoint
+
+`pg_dump` has to reach the database from outside Railway, so it needs the public connection string rather than the private `${{Postgres.DATABASE_URL}}` reference — the same constraint, and the same transient-export pattern, as [`docs/operations/removals.md`](../operations/removals.md). Enable the PostgreSQL service's TCP proxy for the environment first.
+
+Running the client in Docker avoids installing a matching client locally, and the image tag must match the server's major version (the service runs `postgres-ssl:18`):
+
+```bash
+export DATABASE_URL="$(railway variables list --service Postgres --environment prod --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
+test -n "$DATABASE_URL" || echo "enable the Postgres TCP proxy for this environment first"
+docker run --rm -e DATABASE_URL postgres:18-alpine \
+  pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > "slashwho-prod-$(date -u +%Y%m%dT%H%M%SZ).dump"
+unset DATABASE_URL
+```
+
+Restore with `pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" <file>`. Store dumps outside this repository: they contain the suppression list and the full character corpus, and this repository is public. A dump that has never been restored is not a verified backup — restore one into a scratch database before relying on it.
+
+### When to revisit
+
+Add automation once the accumulated history is worth more than the effort of protecting it. The option that does not require a plan upgrade is a small scheduled Railway service running the dump above inside the private network and uploading to object storage — no TCP proxy, no public exposure. Upgrading the Railway plan is the alternative, and buys point-in-time recovery as well as scheduled snapshots.
 
 ## Local artifact validation
 
