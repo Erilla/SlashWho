@@ -28,15 +28,34 @@ document states its own "last updated" date, that is recorded alongside.
 | Blizzard Developer API Terms of Use | <https://www.blizzard.com/en-us/legal/a2989b50-5f16-43b1-abec-2ae17cc09dd6/blizzard-developer-api-terms-of-use> | Last updated 1 October 2019 | 2026-08-06 |
 | Blizzard developer portal — Getting Started guide | <https://community.developer.battle.net/documentation/guides/getting-started> (`develop.battle.net` 301-redirects here) | none shown on page | 2026-08-06 |
 | Blizzard developer portal — WoW Profile APIs | <https://community.developer.battle.net/documentation/world-of-warcraft/profile-apis> | none shown on page | 2026-08-06 |
-| API Discussion forum — Blizzard staff posts on rate-limit scope | threads [14354](https://us.forums.blizzard.com/en/blizzard/t/are-api-limits-tied-to-application-key-or-user-token/14354), [12158](https://us.forums.blizzard.com/en/blizzard/t/request-rate-limit-increase/12158), [5602](https://us.forums.blizzard.com/en/blizzard/t/api-access-clients-rate-limits/5602) | 2020–2021 | 2026-08-06 |
-| Blizzard API Discussion forum — "Data Protection Notice and FAQ" (Blizzard staff, Veltarii) | <https://us.forums.blizzard.com/en/blizzard/t/data-protection-notice-and-faq/609> | Posted 19 September 2019 | 2026-08-06 |
+| Blizzard developer portal — Using OAuth guide | <https://community.developer.battle.net/documentation/guides/using-oauth> | none shown on page | 2026-08-06 |
+| API Discussion forum — "Request Rate Limit increase?" (**Blizzard staff**, Maguthul) | <https://us.forums.blizzard.com/en/blizzard/t/request-rate-limit-increase/12158> | 30 September 2020 | 2026-08-06 |
+| API Discussion forum — "Data Protection Notice and FAQ" (**Blizzard staff**, Veltarii) | <https://us.forums.blizzard.com/en/blizzard/t/data-protection-notice-and-faq/609> | 19 September 2019 | 2026-08-06 |
+| API Discussion forum — rate-limit scope threads (**community MVP, secondary**) | [14354](https://us.forums.blizzard.com/en/blizzard/t/are-api-limits-tied-to-application-key-or-user-token/14354), [5602](https://us.forums.blizzard.com/en/blizzard/t/api-access-clients-rate-limits/5602) | 2020–2026 | 2026-08-06 |
 | Blizzard Entertainment Online Privacy Policy | <https://www.blizzard.com/en-us/legal/a4380ee5-5c8d-4e3b-83b7-ea26d01a9918/blizzard-entertainment-online-privacy-policy> | Last updated 27 June 2025 | 2026-08-06 |
+| Support — "Enabling / Disabling Sharing Game Data With Developers" | <https://us.support.blizzard.com/en/article/375447> | Updated 5 May 2026 | 2026-08-06 |
+| Support — "404 Error When a Community App Tries to Access My Battle.net Data" | <https://us.support.blizzard.com/en/article/257277> | Updated 5 February 2026 | 2026-08-06 |
 
 The controlling document is the **Blizzard Developer API Terms of Use** ("the ToU"). It is a
 single agreement accepted at the point of registering an OAuth client, and it is the document
 that binds SlashWho. Notably it is still dated **1 October 2019** — it has not been revised since
 the GDPR/CCPA-driven overhaul of that year, so nothing in it was written with inference-style
-applications in mind.
+applications in mind. There is no other developer policy document; see §2.4.
+
+**Two retrieval caveats, both of which affected the findings.**
+
+1. The developer portal has moved: `develop.battle.net` 301-redirects to
+   `community.developer.battle.net`, and the new portal is a JavaScript single-page app that
+   returns an empty shell to plain fetches. Blizzard's legal index at `blizzard.com/en-gb/legal/`
+   and the support site are likewise JS-gated. Support article text and dates below were read
+   from Blizzard's own first-party JSON endpoint
+   (`us.support.blizzard.com/services/bft/api/article/en/{id}`). Portal documentation quotes were
+   obtained through a text proxy — the words are Blizzard's, but **confirm the exact phrasing in
+   a browser before relying on any portal quote verbatim.**
+2. Blizzard's forum renders author badges client-side, so a Blizzard employee and a community
+   volunteer look identical in a scraped page. Every forum citation here was checked against the
+   Discourse JSON API for a `staff` flag; see the attribution table in §2.3. This check changed
+   the status of the most widely repeated rate-limit "answer" on the internet.
 
 ---
 
@@ -56,9 +75,28 @@ applications in mind.
 >
 > — ToU §2, "API And Data License"
 
-A public website is expressly a contemplated form of Application. Registration is mandatory, and
-the registration form asks for the intent of use and the application URL (per the 2019 staff
-announcement, §3.3 below) — so the account-linkage purpose has to be declared at registration.
+A public website is expressly a contemplated form of Application.
+
+Registration is mandatory and compels a **declaration of purpose**, which is the practical choke
+point for this feature:
+
+> "In the Intended Use field, specify how you intend to use this client. For example, your client
+> will provide players information about their World of Warcraft characters or your client will
+> display information about Hearthstone cards."
+>
+> — <https://community.developer.battle.net/documentation/guides/getting-started>, retrieved 2026-08-06
+
+Note the example Blizzard chose: "information about **their** World of Warcraft characters". Also
+a hard gate on the account itself:
+
+> "Next, attach a Battle.net Authenticator to your account. Two-factor authentication is required
+> for any API usage"
+>
+> — same URL and date
+
+The Intended Use field means we cannot proceed without telling Blizzard, in writing, what we are
+building. That is a feature, not an obstacle: it converts the ambiguity in §4 into a question
+Blizzard has to look at, and it makes "register first, ask later" a bad idea (see §5).
 
 ### 1.2 The purpose limitation: "benefit the Blizzard player community"
 
@@ -238,45 +276,68 @@ returns HTTP 429 for the balance of that second. The documentation says **nothin
 `Retry-After` header, any `X-RateLimit-*` response headers, a quota-introspection endpoint, or a
 ban policy. A client must track its own budget.
 
-### 2.3 Enforcement scope: per application
+### 2.3 Enforcement scope: undocumented, and the popular answer is not Blizzard's
 
 **The documentation does not say.** "API clients are limited to…" is never defined against client
 id, application, token, or IP. The docs are silent, and this is a gap worth noting.
 
-The authoritative answer is a Blizzard staff post, not documentation:
+**A note on forum attribution.** Blizzard's Discourse forum renders author badges client-side, so
+a casual read cannot distinguish a Blizzard employee from a community MVP — and the two most
+frequently cited "answers" on rate limits come from an MVP, not from Blizzard. Every forum
+citation in this note was checked against the Discourse JSON API
+(`https://us.forums.blizzard.com/en/blizzard/t/{id}.json`), which exposes a per-post `staff`
+boolean and `user_title`. Verified 2026-08-06:
+
+| Account | `staff` | `user_title` | Status |
+| --- | --- | --- | --- |
+| Veltarii-1769 | `true` | Blizzard Developer | **First-party** |
+| Maguthul-11152 | `true` | Blizzard Developer | **First-party** |
+| Araspir | `true` | Blizzard Developer | **First-party** |
+| Schiller-1822 | `false` | MVP | Community volunteer — **secondary** |
+| Ulminia-1676 | `false` | MVP | Community volunteer — **secondary** |
+
+Anyone revisiting this should re-run that check rather than trusting a rendered page.
+
+**The one genuine first-party statement on scope** does not answer the client/application/IP
+question head-on, but it does establish the anti-circumvention rule:
+
+> "In regards to multiple API clients, we do not allow consumers to register multiple API clients
+> simply to bypass rate limiting restrictions. However, where we do permit multiple API clients is
+> when each client is used to consume data from a specific 'region'."
+>
+> — Maguthul-11152 (**Blizzard**, `staff: true`, "Blizzard Developer"), 30 September 2020,
+> <https://us.forums.blizzard.com/en/blizzard/t/request-rate-limit-increase/12158>, retrieved 2026-08-06
+
+The questioner there was the operator of dataforazeroth.com, a large public WoW data site, asking
+directly for an increase after a traffic spike. That is the closest analogue to SlashWho's
+situation on the public record.
+
+**SECONDARY — community MVP, widely repeated but not Blizzard's word.** The commonly cited
+"per application" answer is from an MVP and was never confirmed by staff:
 
 > "Limits are applied per application."
 >
-> — Schiller-1822 (Blizzard staff), 5 January 2021,
+> — Schiller-1822 (**community MVP**, `staff: false`), 5 January 2021,
 > <https://us.forums.blizzard.com/en/blizzard/t/are-api-limits-tied-to-application-key-or-user-token/14354>,
 > retrieved 2026-08-06
 
 > "You may create one pair of client credentials per application/website, and yes, each will have
 > 36k request limit."
 >
-> — Schiller-1822 (Blizzard staff), 13 April 2020,
+> — Schiller-1822 (**community MVP**, `staff: false`), 13 April 2020,
 > <https://us.forums.blizzard.com/en/blizzard/t/api-access-clients-rate-limits/5602>, retrieved 2026-08-06
 
-And the anti-circumvention rule, also first-party staff:
+**Where that leaves us.** The working assumption — one client per application, 36,000/hour, with
+per-region clients as the only sanctioned multiplier — is consistent with the ToU's own "You may
+not use other third-party services to make additional requests on Your behalf" (§2.1) and with
+Maguthul's staff post. But the precise unit of enforcement rests on community testimony, so it
+belongs on the list of things to confirm with Blizzard rather than to design around.
 
-> "We do not allow consumers to register multiple API clients simply to bypass rate limiting
-> restrictions."
-
-> "where we do permit multiple API clients is when each client is used to consume data from a
-> specific 'region'"
->
-> — Maguthul-11152 (Blizzard staff), 30 September 2020,
-> <https://us.forums.blizzard.com/en/blizzard/t/request-rate-limit-increase/12158>, retrieved 2026-08-06
-
-So: **one client per application, 36,000/hour, with per-region clients as the only sanctioned
-multiplier.** The portal permits up to 50 clients per developer account, but the rule above
-governs what may actually be done with them. This aligns with the ToU's own sentence, "You may
-not use other third-party services to make additional requests on Your behalf" (§2.1).
-
-Not answered anywhere first-party: whether enforcement additionally keys on originating IP. A
-community question on exactly that point (edissone-2722, 4 January 2026, thread 5602) drew no
-staff reply. Treat IP-scoping as unknown — relevant if SlashWho ever runs multiple Railway
-replicas behind one client id.
+Not answered anywhere, first-party or otherwise: whether enforcement additionally keys on
+originating IP. A community question on exactly that point (edissone-2722, 4 January 2026, thread
+5602) drew no staff reply, only an MVP's warning that reusing multiple clients risks a lockout.
+Treat IP-scoping as unknown — it matters if SlashWho ever runs multiple Railway replicas behind
+one client id.
 
 ### 2.4 Higher tier
 
@@ -286,14 +347,24 @@ sizeable public WoW site asked for an increase, the Blizzard staff answer offere
 splitting instead of a raised limit and named no escalation route (thread 12158, above). Plan on
 36,000/hour/application being the ceiling, with no negotiated relief available.
 
+Relatedly, there is **no separate developer policy document to find**. Beyond the API Terms of
+Use there is no "API Policy", "Developer Acceptable Use Policy", or attribution/branding policy
+linked anywhere from the portal, whose only navigation items are API Access, Documentation and
+Forums. (The "Custom Game Acceptable Use Policy" on blizzard.com/legal governs in-game
+Arcade/Workshop custom games, not the web APIs.) The attribution requirement in §1.5 is the
+entire attribution policy.
+
 ### 2.5 Budget implications for SlashWho
 
 - **Headroom is ample at current scale.** Tens to low hundreds of searches a day sits far inside
   36,000/hour, even at several calls per character.
 - **The binding constraint is not search traffic, it is the §3.1 revalidation duty.** Every stored
-  character must be re-checked at least every 30 days. That is a background cost proportional to
-  the whole corpus, growing with it, and it is what will eventually consume the quota — not user
-  searches.
+  character must be re-checked at least every 30 days — a background cost proportional to the
+  whole corpus and growing with it, unlike search traffic. The good news is that the Character
+  Profile Status endpoint (§3.1) makes this **one cheap call per character per 30 days**, so
+  36,000/hour supports a very large corpus on revalidation alone. The cost that actually bites is
+  re-deriving fingerprints for characters whose status call comes back valid but whose achievement
+  data has changed.
 - **Per-character cost is high.** The modern API is granular; a character achievements fetch is a
   separate sub-resource call from the character summary. Community commentary (SECONDARY —
   Ulminia-1676, non-staff, 2 September 2022,
@@ -319,14 +390,14 @@ splitting instead of a raised limit and named no escalation route (thread 12158,
 
 All community, none substituting for a documented figure:
 
-- **SECONDARY** — thread 5602 (Knoot-21130 and others, non-staff, 2020–2026): community
-  understanding that each client credential pair gets an independent 36k/hour, with peer warnings
-  that running several clients for one application risks a lockout. Consistent with the staff
-  position, but note the community says "per client" where staff say "per application". Trust the
-  staff wording; the difference is the loophole Maguthul closed.
-- **SECONDARY** — thread 300 (2019, posts not flagged as staff): "The only rate limit response
-  you'll get as far as I know is the HTTP 429 code when you reach the limit." Corroborates the
-  documentation's silence on rate-limit headers.
+- **SECONDARY** — thread 5602 (2020–2026): community understanding that each client credential
+  pair gets an independent 36k/hour, with peer warnings that running several clients for one
+  application risks a lockout. Note the community says "per client" where the MVP answer says
+  "per application" — and neither is Blizzard's word. The only staff statement on the subject is
+  Maguthul's anti-circumvention rule, which closes the loophole without defining the unit.
+- **SECONDARY** — thread 300 (2019, non-staff): "The only rate limit response you'll get as far
+  as I know is the HTTP 429 code when you reach the limit." Corroborates the documentation's
+  silence on rate-limit headers.
 - **HISTORICAL, does not apply** — a 2013 Blizzard post describing a credit-based system of
   roughly 3,000 requests/day. That is the retired pre-OAuth Community API and contradicts current
   documentation. Recorded only so it is not mistaken for current guidance.
@@ -371,6 +442,31 @@ is explicitly rejected as a substitute for deletion:
 > all our players and developers to be as protected as possible."
 >
 > — same thread
+
+The API documentation operationalises this through a dedicated endpoint, and spells out the exact
+loop expected of us:
+
+> "Returns the status and a unique ID for a character. A client should delete information about a
+> character from their application if any of the following conditions occur: an HTTP 404 Not
+> Found error is returned; the is_valid value is false; the returned character ID doesn't match
+> the previously recorded value for the character."
+
+> "A client requests and stores information about a character, including its unique character ID
+> and the timestamp of the request. After 30 days, the client makes a request to the status
+> endpoint to verify if the character information is still valid. If character cannot be found,
+> is not valid, or the characters IDs do not match, the client removes the information from their
+> application. If the character is valid and the character IDs match, the client retains the data
+> for another 30 days."
+>
+> — Character Profile Status, WoW Profile APIs reference,
+> <https://community.developer.battle.net/documentation/world-of-warcraft/profile-apis>,
+> retrieved 2026-08-06 (no version date shown on page)
+
+This is good news for the request budget: revalidation costs **one** status call per character per
+30 days, not a full re-fetch. It is the cheapest possible form of the obligation. Note the third
+condition — a changed character ID also forces deletion, and Blizzard staff confirmed in 2019 that
+"unique character IDs do not persist across server transfers", so a transferred character's stored
+fingerprint must be discarded, not migrated.
 
 **Consequence for SlashWho.** The ticket's context describes "permanent, crawlable public
 character pages". Permanent retention of Blizzard-sourced achievement timestamps is directly
@@ -517,6 +613,23 @@ Silence is a finding, so it is recorded plainly. The ToU says **nothing** about:
   but the ToU itself says nothing about honouring per-application objections beyond §11.)
 - Whether an account-wide achievement timestamp is treated as "personal information".
 - Robots/indexing of pages built from the Data.
+- **Whether a derived artefact is itself "Data".** The ToU defines Data as what you *retrieve*
+  from the APIs, and never says whether a stored edge asserting "A and B share an account" — which
+  holds no retrieved field — falls inside the definition, and therefore inside the 30-day TTL and
+  the erasure duty. This is the most consequential silence in the document.
+- **Derivative works generally.** There is no general derivative-works clause. The phrase
+  "anonymous, aggregate or derived data" appears exactly once in the entire ToU, confined to the
+  ad-network/data-broker transfer ban (§1.3). Blizzard's drafters thought about derived data in
+  one narrow place and nowhere else.
+- **Database rights.** No sui generis database right clause and no EU Database Directive
+  reference. The IP clause is drafted around the *APIs* ("any modifications to or derivatives of
+  the Blizzard Developer APIs"); its reach over a third-party-built inference graph is unresolved.
+- Bulk export of our own derived output by our own users.
+- Named prohibited application categories — no "no alt-tracking", no "no player-lookup". Every
+  restriction of that kind is routed through a sole-discretion standard instead.
+- A grace period on the 404 deletion trigger. Asked in the 2019 FAQ thread (Deadlystrike-1144,
+  4 October 2019 — is it 404 *and* 30 days, or immediately on 404 even during an API wobble?) and
+  never answered by staff.
 
 The absence of an express prohibition is **not** permission, because the discretion clauses in
 §4.1 and §4.2 are written precisely to cover cases the drafters did not enumerate.
@@ -548,12 +661,41 @@ Three consequences, and they are significant:
    all. It is not merely a ToU covenant; it is the scope of the disclosure. An application
    outside that purpose is receiving data outside the basis on which the player's data was
    shared.
-2. **There is a player-facing opt-out, and it operates upstream of us.** A player who disables
-   game-data sharing in Battle.net account management drops out of the API. This is the mechanism
-   behind the 404s that §3.1 requires us to treat as deletion signals. So there already exists a
-   population of players who have affirmatively refused to be in third-party tools — and the only
-   way we respect that refusal is by revalidating and deleting on 404. A permanent cached page
-   silently defies an opt-out the player has already exercised.
+2. **There is a player-facing opt-out, and it operates upstream of us.** Blizzard documents it in
+   two current support articles — the most recently updated primary sources in this whole note:
+
+   > "Sharing your Data with Developers is an option listed in World of Warcraft that allows your
+   > account's game data to appear in third party websites, leaderboards, etc. If you wish to
+   > Enable / Disable this feature you can do it by following these steps: Go to the Privacy &
+   > Communications tab on your Battle.net account Management. Scroll down to 'Game Data and
+   > Profile Privacy'. Enable / Disable the 'Share my game data with community developers'
+   > option. … **Disabling this feature may take up to 30 days to process.**"
+   >
+   > — "Enabling / Disabling Sharing Game Data With Developers",
+   > <https://us.support.blizzard.com/en/article/375447>, article `000375447`,
+   > **updated 2026-05-05**, retrieved 2026-08-06 (emphasis added)
+
+   > "If a community site or app displays a 404 error when attempting to login via Battle.net or
+   > when accessing your Battle.net info, you may have sharing disabled for game data."
+   >
+   > — "404 Error When a Community App Tries to Access My Battle.net Data",
+   > <https://us.support.blizzard.com/en/article/257277>, article `000257277`,
+   > **updated 2026-02-05**, retrieved 2026-08-06
+
+   (Both pages are JS-gated; the text above was read from Blizzard's own first-party JSON endpoint
+   `us.support.blizzard.com/services/bft/api/article/en/{id}`, which also supplies the `updated`
+   timestamps quoted.)
+
+   Three things follow. First, **the whole compliance system is one closed loop**: the opt-out
+   produces a 404, the 404 obliges deletion, and the 30-day TTL guarantees we ask often enough to
+   see it. "Disabling this feature may take up to 30 days to process" is the same 30 days,
+   deliberately. Second, **there is already a population of players who have refused to appear in
+   third-party tools**, and the only way we honour that refusal is by revalidating and deleting.
+   A permanently cached page silently defies an opt-out the player has already exercised. Third,
+   and most awkwardly for this feature: **the opt-out is all-or-nothing and upstream.** A player
+   who objects to SlashWho specifically has no route to it other than leaving every community tool
+   at once. Whether that counts as an adequate opt-out for a service the player never chose is
+   question 5 in §5.
 3. **Some players' data is legitimately public and stays public.** The policy also says:
 
    > "Blizzard also may publicly display certain personal information about you, including
@@ -581,7 +723,52 @@ consent. That is not a term, and it is not a prohibition — but it is a clear s
 and it makes an adverse reading of "invasive of the privacy of another person" more likely rather
 than less.
 
-### 4.7 On the ethical question being decided elsewhere
+### 4.7 The GDPR exposure sits with us, not Blizzard
+
+Two clauses combine into the sharpest legal risk, and it is not a Blizzard-relations risk.
+
+> "(e) You and Your Applications comply with all applicable laws, rules, and regulations,
+> including but not limited to the CCPA and the EU's General Data Protection Regulation."
+>
+> — ToU §5, "Representations And Warranties"
+
+Read with the CCPA clause in §1.2, which requires us to remain a **Service Provider** and "not do
+anything that would change your status … from being a Service Provider to being a Purchaser of the
+Blizzard Data". A Service Provider processes on the controller's behalf and for the controller's
+purposes. Generating a novel inference about a player that the controller does not itself
+generate, and publishing it for our own purpose, is arguably the act of a controller in our own
+right — which the ToU expressly forbids.
+
+The ToU is silent on GDPR roles (it names only the CCPA status). That silence matters for a
+UK-based operator: if SlashWho is an independent controller for the linkage inference, then the
+usual controller obligations attach directly to us — lawful basis, transparency to the data
+subject, and the Article 21 right to object. Legitimate interests is the only candidate basis, and
+it would have to survive a balancing test against the data subject's reasonable expectations —
+expectations that Blizzard's own consent gate (§4.6) and Real ID design help establish *against*
+us. The uncapped indemnity (§1.9) means a single complaint to a supervisory authority is our
+exposure, not Blizzard's.
+
+This is flagged, not resolved: it is a legal question beyond what a documentation review can
+settle, and it deserves its own ticket rather than a paragraph here.
+
+### 4.8 Precedent: the technique is publicly known, and Blizzard has never commented
+
+The exact fingerprint was described openly on Blizzard's own API forum in 2019:
+
+> "search for a few key account-wide achievements and check their completed timestamp for a match"
+>
+> — Schiller-1822, 21 August 2019,
+> <https://us.forums.blizzard.com/en/blizzard/t/wow-tips-on-detecting-characters-of-same-account/286>,
+> retrieved 2026-08-06
+
+**This is not approval and must not be cited as such.** Verified via the Discourse JSON API:
+Schiller-1822 is `staff: false`, user title "MVP" — a community volunteer. No Blizzard employee
+replied in that thread. The thread establishes only that the technique has been public knowledge
+for seven years and that Blizzard has neither blessed nor blocked it. Notably, Blizzard has also
+not closed the hole in that time, despite adding the consent gate elsewhere — which cuts both
+ways and should not be over-read in either direction.
+
+### 4.9 On the ethical question being decided elsewhere
 
 The ticket asks whether anything in the terms bears on publishing inferences a player may not
 want published. It does, in two places, and this should feed the separate ethics ticket rather
@@ -621,7 +808,10 @@ Ask before registering the client, and quote the intended use precisely.
    prohibited distribution of "Data outside of your authorized Applications"?
 5. **Opt-out standing.** Must we honour a de-linking request from a player who has never used
    SlashWho and never authorised it — i.e. does §11's "any individual" cover every player whose
-   public character data we hold, on request?
+   public character data we hold, on request? And is the upstream "Share my game data with
+   community developers" toggle intended to be the *sufficient* opt-out for a service of this
+   kind, given it is all-or-nothing across every community tool and takes up to 30 days? If a
+   player asks to leave the linkage graph without disabling data sharing, what does §11 require?
 6. **Consent-gated linkage.** Blizzard exposes account-scoped character lists only behind the
    player's own OAuth consent, and cross-character visibility between players only behind mutual
    Real ID friendship. Is reconstructing that linkage from public per-character data, without
@@ -630,7 +820,17 @@ Ask before registering the client, and quote the intended use precisely.
 7. **Rate limit scope.** Confirm whether the 36,000/hour ceiling is enforced per client id, per
    application, or additionally per originating IP (relevant to running multiple replicas behind
    one client id), and whether any elevated allowance exists for a non-commercial community
-   project. Also confirm whether OAuth token requests count against the quota.
+   project. Also confirm whether OAuth token requests count against the quota. Worth asking
+   because the widely repeated "per application" answer turns out to be a community MVP's, never
+   confirmed by staff (§2.3).
+8. **Controller or processor.** Does Blizzard regard the developer as controller or processor
+   under GDPR/UK GDPR for an inference the developer generates rather than retrieves? The ToU
+   designates us a CCPA "Service Provider" and forbids acting so as to change that status; does
+   publishing a novel inference about a player cross that line? (§4.7)
+9. **Design mitigations.** Would any of these change Blizzard's assessment: showing linkage only
+   to the authenticated account owner rather than publicly; a per-site opt-out register; a
+   confidence threshold; `noindex` on linkage pages? Knowing which mitigations count is more
+   useful than a bare yes/no.
 
 Question 1 is the one that decides the effort. It should be asked in writing, with the answer
 recorded, before any implementation work.
@@ -655,12 +855,15 @@ write down, that is itself the answer to question 1.
   hundreds of searches a day sits far inside the documented ceiling. Conditions we do not
   currently meet — a published privacy policy, Blizzard attribution, an immediate-response
   removal channel — are real but tractable.
-- **(b) Storage as currently envisaged is prohibited.** This is the one flat "no" in the note.
-  The 30-day maximum TTL is explicit,
-  Blizzard staff have confirmed anonymisation is not an acceptable substitute for deletion, and
-  "permanent, crawlable public character pages" backed by retained achievement timestamps cannot
-  be squared with it. This alone forces a redesign: continuous re-validation of the entire corpus
-  rather than fetch-once-and-keep.
+- **(b) Storage as currently envisaged is prohibited, but the fix is mechanical.** This is the
+  one flat "no" in the note. The 30-day maximum TTL is explicit, Blizzard staff confirmed
+  anonymisation is not an acceptable substitute for deletion, and "permanent, crawlable public
+  character pages" backed by retained achievement timestamps cannot be squared with it. It forces
+  a redesign — continuous revalidation of the whole corpus rather than fetch-once-and-keep — but
+  the Character Profile Status endpoint makes that one cheap call per character per 30 days, well
+  within budget. What remains genuinely unresolved is whether a *derived* linkage edge, holding no
+  raw timestamps, is itself "Data" subject to the TTL. Nothing in the terms answers that; it is
+  question 2 in §5, and until it is answered the safe assumption is that it is.
 - **(c) Publishing the derived inference is unresolved and cannot be resolved by reading.** The
   terms neither permit nor prohibit it in terms. They instead route it through "invasive of the
   privacy of another person ... as determined by Blizzard in Blizzard's sole discretion" and
@@ -671,6 +874,13 @@ write down, that is itself the answer to question 1.
   "benefit our player community" basis, the upstream player opt-out, and Blizzard's practice of
   gating cross-character visibility behind consent — tilts an adverse reading more likely than a
   favourable one.
+
+Two things worth carrying out of this note beyond the three-way split. First, the **larger legal
+exposure may not be Blizzard at all**: the ToU makes us warrant GDPR compliance and indemnify
+Blizzard without cap, so the realistic worst case is a player complaint to a supervisory authority
+landing on us, not a terse email from Irvine (§4.7). Second, **the technique has been public since
+2019 and Blizzard has never commented on it** (§4.8) — which is not permission, and should not be
+read as any.
 
 **The single most important open question:** *does Blizzard consider an Application that publicly
 links characters to a shared account, against the apparent wishes of that account's owner, to
