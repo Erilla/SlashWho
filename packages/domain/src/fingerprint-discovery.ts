@@ -242,10 +242,12 @@ export async function discoverFingerprintMatches(
       }
       seen.add(candidateId);
 
-      if (await options.isSuppressed(candidate.key)) continue;
+      const isSuppressed = await options.isSuppressed(candidate.key);
       throwIfAborted();
-      if (await options.isPrivacyHidden(candidate.key)) continue;
+      if (isSuppressed) continue;
+      const isPrivacyHidden = await options.isPrivacyHidden(candidate.key);
       throwIfAborted();
+      if (isPrivacyHidden) continue;
 
       const candidateFingerprint = await request(() =>
         gateway.getAchievementFingerprint(candidate.key, options.signal)
@@ -256,10 +258,16 @@ export async function discoverFingerprintMatches(
       if (!fingerprintMatches(rootFingerprint, candidateFingerprint, options)) {
         continue;
       }
-      if (await options.isSuppressed(candidate.key)) continue;
+      const isSuppressedBeforeAdmission = await options.isSuppressed(
+        candidate.key
+      );
       throwIfAborted();
-      if (await options.isPrivacyHidden(candidate.key)) continue;
+      if (isSuppressedBeforeAdmission) continue;
+      const isPrivacyHiddenBeforeAdmission = await options.isPrivacyHidden(
+        candidate.key
+      );
       throwIfAborted();
+      if (isPrivacyHiddenBeforeAdmission) continue;
 
       matches.push(discoveredCharacter(candidate));
     }

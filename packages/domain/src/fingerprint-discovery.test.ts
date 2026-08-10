@@ -210,6 +210,34 @@ describe("discoverFingerprintMatches", () => {
     });
   });
 
+  it("throws the abort reason when a suppressing policy callback aborts", async () => {
+    // Break caught: a callback that excludes a candidate could bypass the next
+    // abort checkpoint and let an abandoned sweep return a result.
+    const aborted = new AbortController();
+    const abortReason = new DOMException("drain timeout", "AbortError");
+    const outcome = discoverFingerprintMatches(
+      root,
+      gatewayFor([candidate(matchingKey)], {
+        [keyId(root)]: fingerprint(200),
+        [keyId(matchingKey)]: fingerprint(200)
+      }),
+      {
+        ...options,
+        isSuppressed: async (key) => {
+          if (keyId(key) === keyId(matchingKey)) {
+            aborted.abort(abortReason);
+            return true;
+          }
+          return false;
+        },
+        isPrivacyHidden: async () => false,
+        signal: aborted.signal
+      }
+    );
+
+    await expect(outcome).rejects.toBe(abortReason);
+  });
+
   it("returns a retryable failure for a 429", async () => {
     // Break caught: rate limiting could publish a partial match set instead of
     // restarting the atomic sweep through the worker retry path.
