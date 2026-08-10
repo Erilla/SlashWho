@@ -41,7 +41,13 @@ PUBLIC_READS_PER_MINUTE=300
 FRESHNESS_HOURS=24
 ```
 
-Worker variables. `DISCOVERY_REQUEST_CAP` and `NEGATIVE_CACHE_TTL_MS` are read only by the worker, so set them on the worker service alone; `NEGATIVE_CACHE_TTL_MS` defaults to 300000 milliseconds (5 minutes) when unset:
+Worker variables. `DISCOVERY_REQUEST_CAP`, `NEGATIVE_CACHE_TTL_MS`, and the
+Blizzard fingerprint settings are read only by the worker, so set them on the
+worker service alone. `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET` must
+be Railway secret variables. `NEGATIVE_CACHE_TTL_MS` defaults to 300000
+milliseconds (5 minutes) when unset; the fingerprint budget defaults shown
+below are the application defaults and can be omitted after the required
+credentials and sweep cap are configured:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
@@ -53,6 +59,13 @@ DATABASE_STARTUP_ATTEMPTS=5
 DATABASE_STARTUP_RETRY_MS=1000
 WORKER_DRAIN_TIMEOUT_MS=30000
 WORKER_HEALTH_HOST=0.0.0.0
+BLIZZARD_CLIENT_ID=<Blizzard OAuth client ID secret>
+BLIZZARD_CLIENT_SECRET=<Blizzard OAuth client secret>
+BLIZZARD_SWEEP_REQUEST_CAP=300
+BLIZZARD_HOURLY_REQUEST_BUDGET=28800
+FINGERPRINT_MINIMUM_COMMON=200
+FINGERPRINT_MINIMUM_IDENTICAL_PERCENT=20
+FINGERPRINT_SWEEP_CADENCE_HOURS=168
 ```
 
 Railway currently documents `X-Real-IP` as the single remote-client header supplied by its public proxy. SlashWho intentionally accepts only that header for anonymous rate-limit identity and fails closed when it is absent or invalid; it does not trust an arbitrary forwarded chain or a runtime-selectable header name. Verify this exact contract against Railway's public-networking documentation before first launch and after any proxy change.
