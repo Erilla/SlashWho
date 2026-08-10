@@ -226,7 +226,8 @@ describe("application suppression policy", () => {
     await expect(service.cleanupExpired(now)).resolves.toEqual({
       rateLimits: 0,
       negativeCache: 1,
-      suppressions: 1
+      suppressions: 1,
+      fingerprintRequests: 0
     });
     await expect(repositories.suppressions.isActive(root, now)).resolves.toBe(
       true

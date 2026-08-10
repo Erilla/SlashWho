@@ -120,6 +120,9 @@ importers:
       '@slashwho/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@slashwho/blizzard':
+        specifier: workspace:*
+        version: link:../../packages/blizzard
       '@slashwho/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -145,6 +148,9 @@ importers:
 
   packages/application:
     dependencies:
+      '@slashwho/blizzard':
+        specifier: workspace:*
+        version: link:../blizzard
       '@slashwho/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -157,6 +163,12 @@ importers:
       zod:
         specifier: ^4.3.5
         version: 4.4.3
+
+  packages/blizzard:
+    dependencies:
+      '@slashwho/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/contracts:
     dependencies:

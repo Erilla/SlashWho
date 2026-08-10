@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@slashwho/application": "workspace:*",
+    "@slashwho/blizzard": "workspace:*",
     "@slashwho/database": "workspace:*",
     "@slashwho/domain": "workspace:*",
     "@slashwho/raiderio": "workspace:*",

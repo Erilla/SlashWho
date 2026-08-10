@@ -178,6 +178,93 @@ describe("PostgreSQL repositories", () => {
     expect(counts.rows[0]).toEqual({ characters: "0", snapshots: "0" });
   });
 
+  it("rolls back fingerprint cadence completion when merged snapshot publication cannot finish", async () => {
+    // Break caught: a crash between snapshot completion and cadence advancement
+    // could make the public snapshot visible while the sweep stayed reusable.
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key: rootKey,
+      requestCap: 1,
+      hourlyBudget: 2,
+      cadenceCutoff: new Date("2026-08-01T12:00:00.000Z"),
+      at: new Date("2026-08-08T12:00:00.000Z")
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+
+    await expect(
+      repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey,
+          state: "complete",
+          limitationCode: null,
+          refreshedAt: new Date("2026-08-08T12:00:00.000Z"),
+          characters: [observation(rootKey, "Ryii")]
+        },
+        {
+          reservationId: "00000000-0000-4000-8000-000000000999",
+          finishedAt: new Date("2026-08-08T12:00:00.000Z"),
+          limitationCode: null
+        }
+      )
+    ).rejects.toThrow("fingerprint_reservation_not_active");
+
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toBeNull();
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "running",
+      snapshotId: null
+    });
+  });
+
+  it("publishes the snapshot and advances fingerprint cadence together", async () => {
+    // Break caught: a successful combined publication could commit the snapshot
+    // but leave the next run eligible for another sweep immediately.
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const at = new Date("2026-08-08T12:00:00.000Z");
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key: rootKey,
+      requestCap: 1,
+      hourlyBudget: 2,
+      cadenceCutoff: new Date("2026-08-01T12:00:00.000Z"),
+      at
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+
+    await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: run.id,
+        rootKey,
+        state: "complete",
+        limitationCode: null,
+        refreshedAt: at,
+        characters: [observation(rootKey, "Ryii")]
+      },
+      {
+        reservationId: admission.reservationId,
+        finishedAt: at,
+        limitationCode: null
+      }
+    );
+
+    const nextRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: nextRun.id,
+        key: rootKey,
+        requestCap: 1,
+        hourlyBudget: 2,
+        cadenceCutoff: new Date("2026-08-01T12:00:00.000Z"),
+        at: new Date("2026-08-08T12:01:00.000Z")
+      })
+    ).resolves.toEqual({ kind: "not_due" });
+  });
+
   it("avoids deadlocks for overlapping snapshots with inverse display order", async () => {
     const firstRun = await repositories.runs.createOrReuse(
       rootKey,
@@ -491,5 +578,378 @@ describe("PostgreSQL repositories", () => {
     expect(
       await repositories.rateLimits.countActive("sha256:active", now)
     ).toBe(1);
+  });
+
+  it("admits only the FIFO head when two caps would exceed the rolling budget", async () => {
+    // Break caught: later sweeps could jump the queue or oversubscribe the global hourly budget.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const firstKey = rootKey;
+    const secondKey = altKey;
+    const firstRun = await repositories.runs.createOrReuse(
+      firstKey,
+      "anonymous"
+    );
+    const secondRun = await repositories.runs.createOrReuse(
+      secondKey,
+      "anonymous"
+    );
+    const first = {
+      runId: firstRun.id,
+      key: firstKey,
+      requestCap: 3,
+      hourlyBudget: 5,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    };
+    const second = { ...first, runId: secondRun.id, key: secondKey };
+
+    const admitted =
+      await repositories.fingerprintSweeps.requestAdmission(first);
+    expect(admitted).toMatchObject({ kind: "admitted", requestCap: 3 });
+    if (admitted.kind !== "admitted")
+      throw new Error("first_sweep_not_admitted");
+
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission(second)
+    ).resolves.toMatchObject({ kind: "waiting" });
+    await expect(
+      repositories.fingerprintSweeps.listWaiting(10)
+    ).resolves.toEqual([secondRun.id]);
+
+    await repositories.fingerprintSweeps.finish(admitted.reservationId, {
+      published: true,
+      at,
+      limitationCode: null
+    });
+
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission(second)
+    ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
+  });
+
+  it("atomically returns a budget-waiting discovery run to its unconsumed delivery", async () => {
+    // Break caught: a crash after persisting private admission could leave the
+    // run running, or its redispatch could start past the original retry count.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const blockerRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const waitingRun = await repositories.runs.createOrReuse(
+      altKey,
+      "anonymous"
+    );
+    await repositories.runs.claim(waitingRun.id, 1);
+    const blocker = await repositories.fingerprintSweeps.requestAdmission({
+      runId: blockerRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    });
+    expect(blocker.kind).toBe("admitted");
+
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: waitingRun.id,
+        key: altKey,
+        requestCap: 1,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at
+      })
+    ).resolves.toMatchObject({ kind: "waiting" });
+
+    await expect(repositories.runs.find(waitingRun.id)).resolves.toMatchObject({
+      status: "queued",
+      attempt: 0
+    });
+  });
+
+  it("admits a durable waiting run through private admission dispatch after budget frees", async () => {
+    // Break caught: waiting sweeps could need another discovery delivery instead of being admitted privately.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const firstRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const waitingRun = await repositories.runs.createOrReuse(
+      altKey,
+      "anonymous"
+    );
+    const first = {
+      runId: firstRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 5,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    };
+    const waiting = { ...first, runId: waitingRun.id, key: altKey };
+    const admitted =
+      await repositories.fingerprintSweeps.requestAdmission(first);
+    if (admitted.kind !== "admitted")
+      throw new Error("first_sweep_not_admitted");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission(waiting)
+    ).resolves.toMatchObject({ kind: "waiting" });
+
+    await repositories.fingerprintSweeps.release(admitted.reservationId, at);
+
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(
+        waitingRun.id,
+        new Date("2026-08-10T12:01:00.000Z")
+      )
+    ).resolves.toEqual({ kind: "admitted" });
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        ...waiting,
+        at: new Date("2026-08-10T12:01:00.000Z")
+      })
+    ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
+  });
+
+  it("keeps an admitted sweep dispatch-pending until its discovery job is durably enqueued", async () => {
+    // Break caught: a crash after budget reservation could lose a run before discovery is re-enqueued.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: run.id,
+        key: rootKey,
+        requestCap: 3,
+        hourlyBudget: 5,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at
+      })
+    ).resolves.toMatchObject({ kind: "admitted" });
+
+    await expect(
+      repositories.fingerprintSweeps.listAdmittedUndispatched(10)
+    ).resolves.toEqual([run.id]);
+    await repositories.fingerprintSweeps.markDispatched(run.id, at);
+    await expect(
+      repositories.fingerprintSweeps.listAdmittedUndispatched(10)
+    ).resolves.toEqual([]);
+  });
+
+  it("does not advance cadence or retain unused capacity after an aborted sweep", async () => {
+    // Break caught: aborts could consume future cadence or the entire unused reservation.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const input = {
+      runId: run.id,
+      key: rootKey,
+      requestCap: 5,
+      hourlyBudget: 8,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    };
+    const admitted =
+      await repositories.fingerprintSweeps.requestAdmission(input);
+    expect(admitted).toMatchObject({ kind: "admitted" });
+    if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
+
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      3,
+      at
+    );
+    await repositories.fingerprintSweeps.release(admitted.reservationId, at);
+
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        ...input,
+        at: new Date("2026-08-10T12:01:00.000Z")
+      })
+    ).resolves.toMatchObject({ kind: "admitted", requestCap: 5 });
+  });
+
+  it("prunes fingerprint request events only once they leave the rolling hour", async () => {
+    // Break caught: one row per Blizzard request accumulates without limit, and
+    // a prune keyed on the reservation would delete events the rolling-hour
+    // budget still has to count.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_request_events,
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const sweptRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const admitted = await repositories.fingerprintSweeps.requestAdmission({
+      runId: sweptRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at: new Date("2026-08-10T12:00:00.000Z")
+    });
+    if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      1,
+      new Date("2026-08-10T12:10:00.000Z")
+    );
+    const lastRequestedAt = new Date("2026-08-10T12:55:00.000Z");
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      2,
+      lastRequestedAt
+    );
+    await repositories.fingerprintSweeps.release(
+      admitted.reservationId,
+      lastRequestedAt
+    );
+    await repositories.runs.fail(sweptRun.id, "upstream_unavailable");
+
+    const at = new Date("2026-08-10T13:20:00.000Z");
+    await expect(
+      repositories.fingerprintSweeps.cleanupExpired(at)
+    ).resolves.toBe(1);
+    const retained = await pool.query<{ requested_at: Date }>(
+      `SELECT requested_at FROM fingerprint_sweep_request_events
+       ORDER BY requested_at`
+    );
+    expect(retained.rows.map((row) => row.requested_at)).toEqual([
+      lastRequestedAt,
+      lastRequestedAt
+    ]);
+
+    const nextRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: nextRun.id,
+        key: rootKey,
+        requestCap: 2,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at
+      })
+    ).resolves.toMatchObject({
+      kind: "waiting",
+      retryAt: new Date("2026-08-10T13:55:00.000Z")
+    });
+  });
+
+  it("retains each physical fingerprint request for its own rolling hour", async () => {
+    // Break caught: extending a reservation expiry from its admission time can
+    // undercount late Profile API requests and admit a budget-overlapping sweep.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_request_events,
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const admittedAt = new Date("2026-08-10T12:00:00.000Z");
+    const firstRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const admitted = await repositories.fingerprintSweeps.requestAdmission({
+      runId: firstRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at: admittedAt
+    });
+    if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
+    const usedAt = new Date("2026-08-10T12:55:00.000Z");
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      3,
+      usedAt
+    );
+    await repositories.fingerprintSweeps.release(
+      admitted.reservationId,
+      usedAt
+    );
+    await repositories.runs.fail(firstRun.id, "upstream_unavailable");
+
+    const secondRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: secondRun.id,
+        key: rootKey,
+        requestCap: 1,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at: new Date("2026-08-10T13:10:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      kind: "waiting",
+      retryAt: new Date("2026-08-10T13:55:00.000Z")
+    });
+  });
+
+  it("returns not due only after a published sweep within its cadence", async () => {
+    // Break caught: a partial, unpublished, or aborted sweep could suppress a later sweep.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const admitted = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key: rootKey,
+      requestCap: 1,
+      hourlyBudget: 2,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    });
+    if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
+    await repositories.fingerprintSweeps.finish(admitted.reservationId, {
+      published: true,
+      at,
+      limitationCode: null
+    });
+    await repositories.runs.fail(run.id, "upstream_unavailable");
+
+    const nextRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: nextRun.id,
+        key: rootKey,
+        requestCap: 1,
+        hourlyBudget: 2,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at: new Date("2026-08-10T12:01:00.000Z")
+      })
+    ).resolves.toEqual({ kind: "not_due" });
   });
 });

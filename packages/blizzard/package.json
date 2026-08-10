@@ -1,0 +1,13 @@
+{
+  "name": "@slashwho/blizzard",
+  "private": true,
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/blizzard/src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slashwho/domain": "workspace:*"
+  }
+}

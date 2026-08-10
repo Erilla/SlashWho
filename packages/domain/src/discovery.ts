@@ -53,6 +53,8 @@ export type DiscoveryOutcome =
       kind: "snapshot";
       state: "partial";
       limitationCode: "privacy_hidden" | "request_cap" | "unsupported_member";
+      /** Privacy-hidden ownership was observed even when another limitation won. */
+      privacyHiddenObserved?: true;
       characters: readonly DiscoveredCharacter[];
     }
   | {
@@ -340,6 +342,7 @@ export async function discoverCharacter(
       kind: "snapshot",
       state: "partial",
       limitationCode: "request_cap",
+      ...(privacyHidden ? { privacyHiddenObserved: true as const } : {}),
       characters
     };
   }

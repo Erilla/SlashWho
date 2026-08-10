@@ -129,7 +129,12 @@ const searches: SearchService = {
     return snapshotResult;
   },
   async cleanupExpired() {
-    return { rateLimits: 0, negativeCache: 0, suppressions: 0 };
+    return {
+      rateLimits: 0,
+      negativeCache: 0,
+      suppressions: 0,
+      fingerprintRequests: 0
+    };
   }
 };
 

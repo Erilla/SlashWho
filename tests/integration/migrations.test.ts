@@ -28,6 +28,10 @@ describe("database migrations", () => {
     expect(result.rows.map(({ name }) => name)).toEqual([
       "characters",
       "discovery_runs",
+      "fingerprint_sweep_admissions",
+      "fingerprint_sweep_request_events",
+      "fingerprint_sweep_reservations",
+      "fingerprint_sweep_states",
       "negative_character_cache",
       "rate_limit_events",
       "snapshot_characters",

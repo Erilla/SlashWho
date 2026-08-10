@@ -45,6 +45,28 @@ it("rejects internal provenance in a public character response", () => {
   expect(characterResourceSchema.safeParse(value).success).toBe(false);
 });
 
+it("rejects fingerprint sweep internals in a public character response", () => {
+  // Break caught: adding a worker-only field to a public API response would
+  // disclose the source or confidence of a fingerprint-derived link.
+  const value = {
+    ...currentCharacter,
+    discoverySource: "fingerprint",
+    snapshot: {
+      ...currentCharacter.snapshot,
+      reservationId: "private-reservation-id",
+      characters: [
+        {
+          ...character,
+          source: "fingerprint",
+          fingerprintScore: 100
+        }
+      ]
+    }
+  };
+
+  expect(characterResourceSchema.safeParse(value).success).toBe(false);
+});
+
 it("accepts every character value the upstream normalizer accepts", () => {
   // Break caught: a level the Raider.IO normalizer commits to an immutable snapshot
   // could be rejected by the public schema, breaking that character page forever.

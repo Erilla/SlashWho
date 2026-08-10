@@ -34,7 +34,21 @@ const sensitiveKeys = new Set([
   "validationname",
   "rawurl",
   "rawpayload",
-  "rawupstreampayload"
+  "rawupstreampayload",
+  "achievementid",
+  "achievementids",
+  "achievements",
+  "achievementtimestamp",
+  "completiontimestamp",
+  "timestamps",
+  "accesstoken",
+  "refreshtoken",
+  "token",
+  "fingerprint",
+  "fingerprintscore",
+  "matchscore",
+  "identicalpercent",
+  "score"
 ]);
 
 function sanitize(value: unknown, visited = new WeakSet<object>()): unknown {

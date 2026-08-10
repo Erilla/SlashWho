@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigserial,
+  boolean,
   check,
   index,
   integer,
@@ -39,7 +40,8 @@ export const discoverySource = pgEnum("discovery_source", [
   "input",
   "claimed",
   "declared_main",
-  "profile_guess"
+  "profile_guess",
+  "fingerprint"
 ]);
 
 export const characters = pgTable(
@@ -212,5 +214,125 @@ export const negativeCharacterCache = pgTable(
       columns: [table.region, table.realmSlug, table.normalizedName]
     }),
     index("negative_character_cache_expiry_idx").on(table.expiresAt)
+  ]
+);
+
+export const fingerprintSweepStates = pgTable(
+  "fingerprint_sweep_states",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    lastPublishedAt: timestamp("last_published_at", {
+      withTimezone: true
+    })
+  },
+  (table) => [
+    primaryKey({
+      name: "fingerprint_sweep_states_pkey",
+      columns: [table.region, table.realmSlug, table.normalizedName]
+    })
+  ]
+);
+
+export const fingerprintSweepAdmissions = pgTable(
+  "fingerprint_sweep_admissions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    queueOrder: bigserial("queue_order", { mode: "number" }).notNull(),
+    discoveryRunId: uuid("discovery_run_id")
+      .notNull()
+      .references(() => discoveryRuns.id, { onDelete: "cascade" }),
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    requestCap: integer("request_cap").notNull(),
+    hourlyBudget: integer("hourly_budget").notNull(),
+    cadenceCutoff: timestamp("cadence_cutoff", {
+      withTimezone: true
+    }).notNull(),
+    status: text("status").default("waiting").notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    index("fingerprint_sweep_admissions_waiting_idx").on(
+      table.status,
+      table.requestedAt,
+      table.queueOrder
+    ),
+    index("fingerprint_sweep_admissions_root_idx").on(
+      table.region,
+      table.realmSlug,
+      table.normalizedName
+    ),
+    index("fingerprint_sweep_admissions_dispatch_idx").on(
+      table.status,
+      table.dispatchedAt,
+      table.requestedAt,
+      table.queueOrder
+    ),
+    check(
+      "fingerprint_sweep_admissions_request_cap_check",
+      sql`${table.requestCap} > 0`
+    ),
+    check(
+      "fingerprint_sweep_admissions_hourly_budget_check",
+      sql`${table.hourlyBudget} > 0`
+    )
+  ]
+);
+
+export const fingerprintSweepReservations = pgTable(
+  "fingerprint_sweep_reservations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    admissionId: uuid("admission_id")
+      .notNull()
+      .references(() => fingerprintSweepAdmissions.id, { onDelete: "cascade" }),
+    requestCap: integer("request_cap").notNull(),
+    usedCount: integer("used_count").default(0).notNull(),
+    admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    published: boolean("published"),
+    limitationCode: text("limitation_code")
+  },
+  (table) => [
+    uniqueIndex("fingerprint_sweep_reservations_admission_idx").on(
+      table.admissionId
+    ),
+    index("fingerprint_sweep_reservations_expiry_idx").on(table.expiresAt),
+    check(
+      "fingerprint_sweep_reservations_request_cap_check",
+      sql`${table.requestCap} > 0`
+    ),
+    check(
+      "fingerprint_sweep_reservations_used_count_check",
+      sql`${table.usedCount} >= 0 AND ${table.usedCount} <= ${table.requestCap}`
+    ),
+    check(
+      "fingerprint_sweep_reservations_expiry_check",
+      sql`${table.expiresAt} > ${table.admittedAt}`
+    )
+  ]
+);
+
+export const fingerprintSweepRequestEvents = pgTable(
+  "fingerprint_sweep_request_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    reservationId: uuid("reservation_id")
+      .notNull()
+      .references(() => fingerprintSweepReservations.id, {
+        onDelete: "cascade"
+      }),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    index("fingerprint_sweep_request_events_window_idx").on(table.requestedAt)
   ]
 );

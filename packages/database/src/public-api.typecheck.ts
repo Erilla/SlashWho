@@ -1,6 +1,8 @@
 import {
   createPostgresRepositories,
   runMigrations,
+  type FingerprintAdmission,
+  type FingerprintSweepRepository,
   type Repositories
 } from ".";
 
@@ -12,5 +14,7 @@ import { schema } from ".";
 void createPostgresRepositories;
 void runMigrations;
 void (undefined as Repositories | undefined);
+void (undefined as FingerprintAdmission | undefined);
+void (undefined as FingerprintSweepRepository | undefined);
 void createDatabase;
 void schema;

@@ -5,6 +5,7 @@ import {
 import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 
+import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 
 type ManagedProcess = Readonly<{
@@ -89,6 +90,7 @@ async function stopProcess(processHandle: ManagedProcess): Promise<void> {
 export default async function globalSetup(): Promise<() => Promise<void>> {
   let postgres: StartedPostgreSqlContainer | undefined;
   let fixture: Awaited<ReturnType<typeof startFakeRaiderIo>> | undefined;
+  let blizzard: Awaited<ReturnType<typeof startFakeBlizzard>> | undefined;
   const processes: ManagedProcess[] = [];
 
   try {
@@ -98,6 +100,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       .withPassword("slashwho")
       .start();
     fixture = await startFakeRaiderIo();
+    blizzard = await startFakeBlizzard();
     const databaseUrl = postgres.getConnectionUri();
     process.env.E2E_DATABASE_URL = databaseUrl;
     process.env.E2E_RAIDER_IO_BASE_URL = fixture.baseUrl;
@@ -117,7 +120,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       RAIDER_IO_BASE_URL: fixture.baseUrl,
       RAIDER_IO_TIMEOUT_MS: "30000",
       DATABASE_STARTUP_ATTEMPTS: "10",
-      DATABASE_STARTUP_RETRY_MS: "250"
+      DATABASE_STARTUP_RETRY_MS: "250",
+      // These are deliberately inert, non-secret fixtures. The worker validates
+      // its Blizzard sweep credentials before it can expose readiness.
+      BLIZZARD_CLIENT_ID: "e2e-blizzard-client-id",
+      BLIZZARD_CLIENT_SECRET: "e2e-blizzard-client-secret",
+      BLIZZARD_SWEEP_REQUEST_CAP: "12",
+      BLIZZARD_BASE_URL: blizzard.baseUrl
     };
 
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
@@ -145,12 +154,17 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
     return async () => {
       await Promise.allSettled(processes.map(stopProcess));
-      await Promise.allSettled([fixture!.close(), postgres!.stop()]);
+      await Promise.allSettled([
+        fixture!.close(),
+        blizzard!.close(),
+        postgres!.stop()
+      ]);
     };
   } catch (error) {
     await Promise.allSettled(processes.map(stopProcess));
     await Promise.allSettled([
       ...(fixture ? [fixture.close()] : []),
+      ...(blizzard ? [blizzard.close()] : []),
       ...(postgres ? [postgres.stop()] : [])
     ]);
     throw error;

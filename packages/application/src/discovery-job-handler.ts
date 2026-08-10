@@ -1,13 +1,44 @@
 import type { DiscoveryWorkContext, Repositories } from "@slashwho/database";
-import { discoverCharacter, type RaiderIoGateway } from "@slashwho/domain";
+import type { BlizzardGateway } from "@slashwho/blizzard";
+import {
+  deduplicateCharacters,
+  discoverCharacter,
+  discoverFingerprintMatches,
+  type DiscoveryOutcome,
+  type RaiderIoGateway
+} from "@slashwho/domain";
+
+import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 
 export type DiscoveryLogger = {
   info(value: Record<string, unknown>): void;
 };
 
+/** Delivery seam for a maintainer-owned alert integration (PagerDuty, email, etc.). */
+export type FingerprintAlertNotifier = {
+  notify(alert: {
+    event:
+      | "fingerprint_admission_blocked"
+      | "fingerprint_reservation_pressure"
+      | "fingerprint_blizzard_rate_limited";
+    details: Record<string, number>;
+  }): Promise<void> | void;
+};
+
 export type DiscoveryJobHandlerOptions = {
   repositories: Repositories;
   gateway: RaiderIoGateway;
+  /** Optional only until worker credential composition lands in Task 6. */
+  blizzardGateway?: BlizzardGateway;
+  /** Optional only until worker credential composition lands in Task 6. */
+  fingerprint?: {
+    requestCap: number;
+    hourlyBudget: number;
+    cadenceMs: number;
+    minimumCommon: number;
+    minimumIdenticalPercent: number;
+  };
+  enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
   requestCap: number;
   now?: () => Date;
   random?: () => number;
@@ -17,6 +48,7 @@ export type DiscoveryJobHandlerOptions = {
   maxAttempts?: number;
   negativeCacheTtlMs?: number;
   logger?: DiscoveryLogger;
+  fingerprintAlertNotifier?: FingerprintAlertNotifier;
   monotonic?: () => number;
 };
 
@@ -37,11 +69,19 @@ type DiscoveryRunRecord = {
   limitationCode: string | null;
   characterCount: number;
   durationMs: number;
+  fingerprintQueueWaitMs: number | null;
+  fingerprintReservedRequests: number;
+  fingerprintUsedRequests: number;
+  fingerprintDurationMs: number;
 };
 
 export type RetryableDiscoveryError = Error & {
   retryable: true;
   retryAfterMs: number;
+};
+
+type FingerprintReleaseRetryableError = Error & {
+  fingerprintReleaseRetryable: true;
 };
 
 function retryableError(retryAfterMs: number): RetryableDiscoveryError {
@@ -60,6 +100,24 @@ function isRetryableDiscoveryError(
     error.retryable === true &&
     "retryAfterMs" in error &&
     typeof error.retryAfterMs === "number"
+  );
+}
+
+function fingerprintReleaseRetryableError(
+  cause: unknown
+): FingerprintReleaseRetryableError {
+  return Object.assign(new Error("fingerprint_release_failed", { cause }), {
+    fingerprintReleaseRetryable: true as const
+  });
+}
+
+function isFingerprintReleaseRetryableError(
+  error: unknown
+): error is FingerprintReleaseRetryableError {
+  return (
+    error instanceof Error &&
+    "fingerprintReleaseRetryable" in error &&
+    error.fingerprintReleaseRetryable === true
   );
 }
 
@@ -136,7 +194,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         state: null,
         limitationCode: null,
         characterCount: 0,
-        durationMs: 0
+        durationMs: 0,
+        fingerprintQueueWaitMs: null,
+        fingerprintReservedRequests: 0,
+        fingerprintUsedRequests: 0,
+        fingerprintDurationMs: 0
       };
 
       try {
@@ -151,12 +213,16 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           return;
         }
 
-        const outcome = await discoverCharacter(run.rootKey, options.gateway, {
-          requestCap: options.requestCap,
-          isSuppressed: (key) =>
-            options.repositories.suppressions.isActive(key),
-          signal: context.signal
-        });
+        let outcome: DiscoveryOutcome = await discoverCharacter(
+          run.rootKey,
+          options.gateway,
+          {
+            requestCap: options.requestCap,
+            isSuppressed: (key) =>
+              options.repositories.suppressions.isActive(key),
+            signal: context.signal
+          }
+        );
         context.signal.throwIfAborted();
         const persistenceTime = now();
         if (
@@ -169,25 +235,220 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         }
 
         if (outcome.kind === "snapshot") {
-          context.signal.throwIfAborted();
-          record.outcome = "snapshot";
-          record.state = outcome.state;
-          record.limitationCode =
-            outcome.state === "partial" ? outcome.limitationCode : null;
-          record.characterCount = outcome.characters.length;
-          await options.repositories.snapshots.create(
-            {
-              runId,
-              rootKey: run.rootKey,
-              state: outcome.state,
-              limitationCode:
-                outcome.state === "partial" ? outcome.limitationCode : null,
-              refreshedAt: persistenceTime,
-              characters: [...outcome.characters]
-            },
-            { signal: context.signal }
-          );
-          return;
+          let fingerprintFailure:
+            Extract<DiscoveryOutcome, { kind: "failure" }> | undefined;
+          const fingerprint = options.fingerprint;
+          const blizzardGateway = options.blizzardGateway;
+          const privacyHiddenRoot =
+            outcome.state === "partial" &&
+            (outcome.limitationCode === "privacy_hidden" ||
+              outcome.privacyHiddenObserved === true);
+          if (fingerprint && blizzardGateway && !privacyHiddenRoot) {
+            const admissionTime = now();
+            const admission =
+              await options.repositories.fingerprintSweeps.requestAdmission({
+                runId,
+                key: run.rootKey,
+                requestCap: fingerprint.requestCap,
+                hourlyBudget: fingerprint.hourlyBudget,
+                cadenceCutoff: new Date(
+                  admissionTime.getTime() - fingerprint.cadenceMs
+                ),
+                at: admissionTime
+              });
+
+            if (admission.kind === "waiting") {
+              if (!options.enqueueFingerprintAdmission) {
+                throw new Error("fingerprint_admission_queue_unavailable");
+              }
+              await options.enqueueFingerprintAdmission(runId);
+              record.outcome = "fingerprint_admission_waiting";
+              record.fingerprintQueueWaitMs = Math.max(
+                0,
+                admission.retryAt.getTime() - admissionTime.getTime()
+              );
+              const blockedForMs = admission.blockedSince
+                ? Math.max(
+                    0,
+                    admissionTime.getTime() - admission.blockedSince.getTime()
+                  )
+                : 0;
+              if (blockedForMs >= 15 * 60_000) {
+                options.logger?.info({
+                  event: "fingerprint_admission_blocked",
+                  blockedForMs
+                });
+                await options.fingerprintAlertNotifier?.notify({
+                  event: "fingerprint_admission_blocked",
+                  details: { blockedForMs }
+                });
+              }
+              return;
+            }
+
+            if (admission.kind === "admitted") {
+              const fingerprintStartedAt = monotonic();
+              let reservationActive = true;
+              record.fingerprintReservedRequests = admission.requestCap;
+              if (
+                admission.committedRequests !== undefined &&
+                admission.hourlyBudget !== undefined &&
+                admission.committedRequests > admission.hourlyBudget * 0.9
+              ) {
+                options.logger?.info({
+                  event: "fingerprint_reservation_pressure",
+                  committedRequests: admission.committedRequests,
+                  hourlyBudget: admission.hourlyBudget
+                });
+                await options.fingerprintAlertNotifier?.notify({
+                  event: "fingerprint_reservation_pressure",
+                  details: {
+                    committedRequests: admission.committedRequests,
+                    hourlyBudget: admission.hourlyBudget
+                  }
+                });
+              }
+              const releaseReservation = async () => {
+                if (!reservationActive) return;
+                await options.repositories.fingerprintSweeps.release(
+                  admission.reservationId,
+                  now()
+                );
+                reservationActive = false;
+              };
+              try {
+                const adaptedGateway = createBlizzardFingerprintAdapter(
+                  blizzardGateway,
+                  {
+                    requestCap: admission.requestCap,
+                    recordRequest: async () => {
+                      await options.repositories.fingerprintSweeps.recordRequest(
+                        admission.reservationId,
+                        1,
+                        now()
+                      );
+                      record.fingerprintUsedRequests += 1;
+                    },
+                    onRateLimited: async () => {
+                      options.logger?.info({
+                        event: "fingerprint_blizzard_rate_limited"
+                      });
+                      await options.fingerprintAlertNotifier?.notify({
+                        event: "fingerprint_blizzard_rate_limited",
+                        details: {}
+                      });
+                    }
+                  }
+                );
+                const sweep = await discoverFingerprintMatches(
+                  run.rootKey,
+                  adaptedGateway,
+                  {
+                    requestCap: Number.MAX_SAFE_INTEGER,
+                    minimumCommon: fingerprint.minimumCommon,
+                    minimumIdenticalPercent:
+                      fingerprint.minimumIdenticalPercent,
+                    isSuppressed: (key) =>
+                      options.repositories.suppressions.isActive(key),
+                    isPrivacyHidden: async (key) =>
+                      (await options.gateway.getCharacter(key, context.signal))
+                        .ownerId === null,
+                    signal: context.signal
+                  }
+                );
+
+                if (sweep.kind === "failure") {
+                  await releaseReservation();
+                  fingerprintFailure = sweep;
+                } else {
+                  context.signal.throwIfAborted();
+                  const fingerprintPersistenceTime = now();
+                  if (
+                    fingerprintPersistenceTime.getTime() -
+                      run.createdAt.getTime() >=
+                    maxJobLifetimeMs
+                  ) {
+                    record.outcome = "lifetime_exceeded";
+                    await releaseReservation();
+                    await options.repositories.runs.fail(
+                      runId,
+                      "upstream_unavailable"
+                    );
+                    return;
+                  }
+                  const limitationCode =
+                    sweep.kind === "capped"
+                      ? "fingerprint_sweep_capped"
+                      : outcome.state === "partial"
+                        ? outcome.limitationCode
+                        : null;
+                  const characters = deduplicateCharacters([
+                    ...outcome.characters,
+                    ...sweep.characters
+                  ]);
+                  record.outcome = "snapshot";
+                  record.state =
+                    limitationCode === null ? "complete" : "partial";
+                  record.limitationCode = limitationCode;
+                  record.characterCount = characters.length;
+                  await options.repositories.snapshots.createAndFinishFingerprintSweep(
+                    {
+                      runId,
+                      rootKey: run.rootKey,
+                      state: limitationCode === null ? "complete" : "partial",
+                      limitationCode,
+                      refreshedAt: fingerprintPersistenceTime,
+                      characters
+                    },
+                    {
+                      reservationId: admission.reservationId,
+                      finishedAt: now(),
+                      limitationCode
+                    },
+                    { signal: context.signal }
+                  );
+                  reservationActive = false;
+                  return;
+                }
+              } catch (error) {
+                try {
+                  await releaseReservation();
+                } catch (releaseError) {
+                  throw fingerprintReleaseRetryableError(releaseError);
+                }
+                throw error;
+              } finally {
+                record.fingerprintDurationMs = Math.max(
+                  0,
+                  monotonic() - fingerprintStartedAt
+                );
+              }
+            }
+          }
+
+          if (fingerprintFailure) {
+            outcome = fingerprintFailure;
+          } else {
+            context.signal.throwIfAborted();
+            record.outcome = "snapshot";
+            record.state = outcome.state;
+            record.limitationCode =
+              outcome.state === "partial" ? outcome.limitationCode : null;
+            record.characterCount = outcome.characters.length;
+            await options.repositories.snapshots.create(
+              {
+                runId,
+                rootKey: run.rootKey,
+                state: outcome.state,
+                limitationCode:
+                  outcome.state === "partial" ? outcome.limitationCode : null,
+                refreshedAt: persistenceTime,
+                characters: [...outcome.characters]
+              },
+              { signal: context.signal }
+            );
+            return;
+          }
         }
 
         if (!outcome.retryable) {
@@ -232,7 +493,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
         throw retryableError(schedule.retryAfterMs);
       } catch (error) {
-        if (context.signal.aborted) {
+        if (
+          context.signal.aborted &&
+          !isFingerprintReleaseRetryableError(error)
+        ) {
           record.outcome = "cancelled";
           throw context.signal.reason;
         }

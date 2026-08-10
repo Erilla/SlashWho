@@ -240,6 +240,26 @@ describe("discoverCharacter", () => {
     ).toEqual([altKey]);
   });
 
+  it("retains a hidden-ownership signal when the request cap wins the limitation", async () => {
+    // Break caught: a cap-first outcome could erase the sole privacy signal
+    // needed to prevent later fingerprint-derived links for this root.
+    const outcome = await discoverCharacter(
+      altKey,
+      scriptedGateway({
+        characters: [[altKey, character(altKey, { profileGuess: "alias" })]],
+        profiles: { alias: null, alt: null }
+      }),
+      { ...options, requestCap: 1 }
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "snapshot",
+      state: "partial",
+      limitationCode: "request_cap",
+      privacyHiddenObserved: true
+    });
+  });
+
   it("treats a non-finite request cap as an exhausted budget", async () => {
     // Break caught: an invalid cap could silently permit an unbounded crawl, or
     // publish a rootless snapshot that no read can ever anchor.

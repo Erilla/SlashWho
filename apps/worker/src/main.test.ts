@@ -15,7 +15,14 @@ const config: WorkerConfig = {
   discoveryRequestCap: 12,
   negativeCacheTtlMs: 300_000,
   raiderIoBaseUrl: "https://raider.io",
-  raiderIoTimeoutMs: 1_000
+  raiderIoTimeoutMs: 1_000,
+  blizzardClientId: "worker-client-id",
+  blizzardClientSecret: "worker-client-secret",
+  blizzardSweepRequestCap: 300,
+  blizzardHourlyRequestBudget: 28_800,
+  fingerprintMinimumCommon: 200,
+  fingerprintMinimumIdenticalPercent: 20,
+  fingerprintSweepCadenceHours: 168
 };
 
 describe("worker main", () => {

@@ -85,27 +85,28 @@ export interface SearchService {
     key: CharacterKey,
     snapshotId: string
   ): Promise<HistoricalSnapshot | null>;
-  cleanupExpired(now?: Date): Promise<{
-    rateLimits: number;
-    negativeCache: number;
-    suppressions: number;
-  }>;
+  cleanupExpired(now?: Date): Promise<CleanupCounts>;
 }
+
+export type CleanupCounts = {
+  rateLimits: number;
+  negativeCache: number;
+  suppressions: number;
+  fingerprintRequests: number;
+};
 
 export async function cleanupExpired(
   repositories: Repositories,
   at: Date = new Date()
-): Promise<{
-  rateLimits: number;
-  negativeCache: number;
-  suppressions: number;
-}> {
-  const [rateLimits, negativeCache, suppressions] = await Promise.all([
-    repositories.rateLimits.cleanupExpired(at),
-    repositories.negativeCache.cleanupExpired(at),
-    repositories.suppressions.cleanupExpired(at)
-  ]);
-  return { rateLimits, negativeCache, suppressions };
+): Promise<CleanupCounts> {
+  const [rateLimits, negativeCache, suppressions, fingerprintRequests] =
+    await Promise.all([
+      repositories.rateLimits.cleanupExpired(at),
+      repositories.negativeCache.cleanupExpired(at),
+      repositories.suppressions.cleanupExpired(at),
+      repositories.fingerprintSweeps.cleanupExpired(at)
+    ]);
+  return { rateLimits, negativeCache, suppressions, fingerprintRequests };
 }
 
 export async function recoverPendingSearches(

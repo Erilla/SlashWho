@@ -1,8 +1,10 @@
 export { createDiscoveryJobHandler } from "./discovery-job-handler";
+export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export type {
   DiscoveryJobHandler,
   DiscoveryJobHandlerOptions,
   DiscoveryLogger,
+  FingerprintAlertNotifier,
   RetryableDiscoveryError
 } from "./discovery-job-handler";
 export {

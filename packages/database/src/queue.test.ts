@@ -1,6 +1,46 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { updateActiveRetryDelay } from "./queue";
+const queueFakes = vi.hoisted(() => {
+  const workers: Array<{
+    name: string;
+    handler: (jobs: Array<{ data: { runId: string } }>) => Promise<void>;
+  }> = [];
+  const db = {
+    executeSql: vi.fn(async () => ({ rows: [] }))
+  };
+  return {
+    createQueue: vi.fn(async () => {}),
+    updateQueue: vi.fn(async () => {}),
+    send: vi.fn(async () => "job-id"),
+    start: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    work: vi.fn(async (name, _options, handler) => {
+      workers.push({ name, handler });
+    }),
+    getDb: vi.fn(() => db),
+    db,
+    workers
+  };
+});
+
+vi.mock("pg-boss", () => ({
+  PgBoss: class {
+    start = queueFakes.start;
+    stop = queueFakes.stop;
+    createQueue = queueFakes.createQueue;
+    updateQueue = queueFakes.updateQueue;
+    send = queueFakes.send;
+    work = queueFakes.work;
+    getDb = queueFakes.getDb;
+  }
+}));
+
+import {
+  createDiscoveryQueue,
+  discoverCharacterQueueName,
+  fingerprintAdmissionQueueName,
+  updateActiveRetryDelay
+} from "./queue";
 
 describe("pg-boss retry delay update", () => {
   it("fails safely when the active pg-boss row is not updated", async () => {
@@ -14,5 +54,51 @@ describe("pg-boss retry delay update", () => {
     await expect(
       updateActiveRetryDelay(db, "00000000-0000-4000-8000-000000000001", 5)
     ).rejects.toThrow("retry_delay_update_failed");
+  });
+});
+
+describe("fingerprint admission queue", () => {
+  it("uses separate generated job ids while retaining a per-run singleton key", async () => {
+    // Break caught: admission work could be duplicated or leak a discovery payload into the private queue.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    const runId = "00000000-0000-4000-8000-000000000004";
+    const delivered: string[] = [];
+
+    await queue.start();
+    await queue.enqueue({
+      runId,
+      key: { region: "eu", realm: "silvermoon", name: "root" }
+    });
+    await queue.enqueueFingerprintAdmission(runId);
+    await queue.workFingerprintAdmissions(async (deliveredRunId) => {
+      delivered.push(deliveredRunId);
+    });
+
+    const worker = queueFakes.workers.find(
+      ({ name }) => name === fingerprintAdmissionQueueName
+    );
+    await worker?.handler([{ data: { runId } }]);
+
+    expect(queueFakes.createQueue).toHaveBeenCalledWith(
+      fingerprintAdmissionQueueName,
+      expect.any(Object)
+    );
+    expect(queueFakes.send).toHaveBeenCalledWith(
+      fingerprintAdmissionQueueName,
+      { runId },
+      { singletonKey: runId }
+    );
+    expect(queueFakes.send).toHaveBeenCalledWith(
+      discoverCharacterQueueName,
+      expect.objectContaining({ runId }),
+      { singletonKey: runId }
+    );
+    expect(delivered).toEqual([runId]);
+
+    await queue.stop({ graceful: true, timeoutMs: 1 });
+    await worker?.handler([{ data: { runId } }]);
+    expect(delivered).toEqual([runId]);
   });
 });

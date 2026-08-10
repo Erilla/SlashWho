@@ -7,7 +7,7 @@ import type { CharacterKey } from "@slashwho/domain";
 
 export type CallerClass = "anonymous" | "bot";
 export type DiscoverySource =
-  "input" | "claimed" | "declared_main" | "profile_guess";
+  "input" | "claimed" | "declared_main" | "profile_guess" | "fingerprint";
 
 export interface DiscoveryRun {
   id: string;
@@ -76,6 +76,15 @@ export interface SnapshotRepository {
     input: CreateSnapshotInput,
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
+  createAndFinishFingerprintSweep(
+    input: CreateSnapshotInput,
+    fingerprint: {
+      reservationId: string;
+      finishedAt: Date;
+      limitationCode: string | null;
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
   find(id: string): Promise<StoredSnapshot | null>;
   listHistory(
@@ -123,6 +132,45 @@ export interface NegativeCacheRepository {
   cleanupExpired(at?: Date): Promise<number>;
 }
 
+export type FingerprintAdmission =
+  | { kind: "not_due" }
+  | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
+  | {
+      kind: "admitted";
+      reservationId: string;
+      requestCap: number;
+      committedRequests?: number;
+      hourlyBudget?: number;
+    };
+
+export type FingerprintAdmissionDispatch =
+  | { kind: "admitted" }
+  | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
+  | { kind: "not_due" }
+  | { kind: "settled" };
+
+export interface FingerprintSweepRepository {
+  requestAdmission(input: {
+    runId: string;
+    key: CharacterKey;
+    requestCap: number;
+    hourlyBudget: number;
+    cadenceCutoff: Date;
+    at: Date;
+  }): Promise<FingerprintAdmission>;
+  recordRequest(reservationId: string, count: number, at: Date): Promise<void>;
+  finish(
+    reservationId: string,
+    input: { published: boolean; at: Date; limitationCode: string | null }
+  ): Promise<void>;
+  release(reservationId: string, at: Date): Promise<void>;
+  listWaiting(limit: number, offset?: number): Promise<readonly string[]>;
+  listAdmittedUndispatched(limit: number): Promise<readonly string[]>;
+  markDispatched(runId: string, at: Date): Promise<void>;
+  admitWaiting(runId: string, at: Date): Promise<FingerprintAdmissionDispatch>;
+  cleanupExpired(at?: Date): Promise<number>;
+}
+
 export type SearchReservationResult =
   | { kind: "active"; run: DiscoveryRun }
   | { kind: "reserved"; run: DiscoveryRun }
@@ -167,4 +215,5 @@ export interface Repositories {
   suppressions: SuppressionRepository;
   rateLimits: RateLimitRepository;
   negativeCache: NegativeCacheRepository;
+  fingerprintSweeps: FingerprintSweepRepository;
 }

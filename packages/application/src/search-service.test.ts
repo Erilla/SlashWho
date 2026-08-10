@@ -142,6 +142,9 @@ function policyFixture(
       async create() {
         throw new Error("not used");
       },
+      async createAndFinishFingerprintSweep() {
+        throw new Error("not used");
+      },
       async getCurrent() {
         return options.current ?? null;
       },
@@ -180,6 +183,27 @@ function policyFixture(
         return options.negative
           ? { key, expiresAt: new Date("2026-08-04T12:15:00.000Z") }
           : null;
+      },
+      async cleanupExpired() {
+        return 0;
+      }
+    },
+    fingerprintSweeps: {
+      async requestAdmission() {
+        return { kind: "not_due" };
+      },
+      async recordRequest() {},
+      async finish() {},
+      async release() {},
+      async listWaiting() {
+        return [];
+      },
+      async listAdmittedUndispatched() {
+        return [];
+      },
+      async markDispatched() {},
+      async admitWaiting() {
+        return { kind: "settled" };
       },
       async cleanupExpired() {
         return 0;

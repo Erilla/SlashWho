@@ -13,7 +13,11 @@ import type { RaiderIoGateway } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
-import { createWorkerRuntime } from "./runtime";
+import {
+  createFingerprintAlertNotifier,
+  createFingerprintIntegration,
+  createWorkerRuntime
+} from "./runtime";
 
 const config: WorkerConfig = {
   databaseUrl: "postgres://worker:secret@database/slashwho",
@@ -25,7 +29,14 @@ const config: WorkerConfig = {
   discoveryRequestCap: 12,
   negativeCacheTtlMs: 300_000,
   raiderIoBaseUrl: "https://raider.io",
-  raiderIoTimeoutMs: 5_000
+  raiderIoTimeoutMs: 5_000,
+  blizzardClientId: "worker-client-id",
+  blizzardClientSecret: "worker-client-secret",
+  blizzardSweepRequestCap: 300,
+  blizzardHourlyRequestBudget: 28_800,
+  fingerprintMinimumCommon: 200,
+  fingerprintMinimumIdenticalPercent: 20,
+  fingerprintSweepCadenceHours: 168
 };
 
 function runtimeFakes() {
@@ -39,9 +50,15 @@ function runtimeFakes() {
       ) => Promise<void>)
     | undefined;
   let maintenanceHandler: (() => Promise<void>) | undefined;
+  let admissionHandler: ((runId: string) => Promise<void>) | undefined;
   const pendingDispatches: DiscoverCharacterJob[] = [];
   const recoveredDispatches: string[] = [];
   const enqueued: DiscoverCharacterJob[] = [];
+  const fingerprintAdmissions: string[] = [];
+  const waitingFingerprintRuns: string[] = [];
+  const admittedFingerprintRuns = new Set<string>();
+  const admittedUndispatchedFingerprintRuns: string[] = [];
+  const dispatchedFingerprintRuns: string[] = [];
   const queue: DiscoveryQueue = {
     async start() {
       queueReady = true;
@@ -50,11 +67,18 @@ function runtimeFakes() {
       enqueued.push(payload);
       return payload.runId;
     },
+    async enqueueFingerprintAdmission(runId) {
+      fingerprintAdmissions.push(runId);
+      return runId;
+    },
     async work(handler) {
       workHandler = handler;
     },
     async scheduleMaintenanceCleanup(handler) {
       maintenanceHandler = handler;
+    },
+    async workFingerprintAdmissions(handler) {
+      admissionHandler = handler;
     },
     async stop() {
       queueReady = false;
@@ -78,7 +102,8 @@ function runtimeFakes() {
   const cleanup = {
     rateLimits: vi.fn(async () => 2),
     negativeCache: vi.fn(async () => 3),
-    suppressions: vi.fn(async () => 4)
+    suppressions: vi.fn(async () => 4),
+    fingerprintRequests: vi.fn(async () => 5)
   };
   const repositories = {
     searchReservations: {
@@ -91,7 +116,26 @@ function runtimeFakes() {
     },
     rateLimits: { cleanupExpired: cleanup.rateLimits },
     negativeCache: { cleanupExpired: cleanup.negativeCache },
-    suppressions: { cleanupExpired: cleanup.suppressions }
+    suppressions: { cleanupExpired: cleanup.suppressions },
+    fingerprintSweeps: {
+      async admitWaiting(runId: string) {
+        return admittedFingerprintRuns.has(runId)
+          ? { kind: "admitted" as const }
+          : { kind: "waiting" as const, retryAt: new Date() };
+      },
+      async listWaiting(limit: number, offset = 0) {
+        return waitingFingerprintRuns.slice(offset, offset + limit);
+      },
+      async listAdmittedUndispatched() {
+        return [...admittedUndispatchedFingerprintRuns];
+      },
+      async markDispatched(runId: string) {
+        dispatchedFingerprintRuns.push(runId);
+        const index = admittedUndispatchedFingerprintRuns.indexOf(runId);
+        if (index >= 0) admittedUndispatchedFingerprintRuns.splice(index, 1);
+      },
+      cleanupExpired: cleanup.fingerprintRequests
+    }
   } as unknown as Repositories;
   const sleeps: number[] = [];
 
@@ -113,9 +157,15 @@ function runtimeFakes() {
     handler,
     migrations,
     cleanup,
+    repositories,
     pendingDispatches,
     recoveredDispatches,
     enqueued,
+    fingerprintAdmissions,
+    waitingFingerprintRuns,
+    admittedFingerprintRuns,
+    admittedUndispatchedFingerprintRuns,
+    dispatchedFingerprintRuns,
     queue,
     get connectionAttempts() {
       return connectionAttempts;
@@ -129,11 +179,103 @@ function runtimeFakes() {
     get maintenanceHandler() {
       return maintenanceHandler;
     },
+    get admissionHandler() {
+      return admissionHandler;
+    },
     sleeps
   };
 }
 
 describe("worker runtime", () => {
+  it("composes the worker-only Blizzard gateway and fingerprint limits", () => {
+    // Break caught: worker configuration could be loaded but never reach the
+    // fingerprint handler, leaving the private sweep feature dormant.
+    const integration = createFingerprintIntegration(config);
+
+    expect(integration.blizzardGateway).toMatchObject({
+      getGuildRoster: expect.any(Function),
+      getAchievementFingerprint: expect.any(Function)
+    });
+    expect(integration.fingerprint).toEqual({
+      requestCap: 300,
+      hourlyBudget: 28_800,
+      cadenceMs: 604_800_000,
+      minimumCommon: 200,
+      minimumIdenticalPercent: 20
+    });
+  });
+
+  it("swallows and logs a non-successful maintainer webhook response", async () => {
+    // Break caught: a provider outage could reject discovery work and cause the
+    // durable job to retry after its sweep had already changed state.
+    const logger = { info: vi.fn() };
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://hooks.example.test/services/T000/B000/token?wait=true"
+      },
+      { logger, fetch }
+    );
+
+    await expect(
+      notifier.notify({
+        event: "fingerprint_reservation_pressure",
+        details: { committedRequests: 95, hourlyBudget: 100 }
+      })
+    ).resolves.toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "maintainer_alert_delivery_failed",
+      alertEvent: "fingerprint_reservation_pressure",
+      failure: "http_status",
+      status: 503
+    });
+  });
+
+  it("times out and swallows a stalled maintainer webhook request", async () => {
+    // Break caught: an unresponsive webhook could strand a sweep indefinitely
+    // even though alert delivery is only an operational side effect.
+    const logger = { info: vi.fn() };
+    let requestSignal: AbortSignal | null | undefined;
+    const fetch = vi.fn(
+      async (
+        _input: string | URL | Request,
+        init?: RequestInit
+      ): Promise<Response> => {
+        requestSignal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true }
+          );
+        });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://hooks.example.test/services/T000/B000/token?wait=true"
+      },
+      { logger, fetch, timeoutMs: 5 }
+    );
+
+    await expect(
+      notifier.notify({
+        event: "fingerprint_admission_blocked",
+        details: { blockedForMs: 900_000 }
+      })
+    ).resolves.toBeUndefined();
+    expect(requestSignal?.aborted).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "maintainer_alert_delivery_failed",
+      alertEvent: "fingerprint_admission_blocked",
+      failure: "network_or_timeout"
+    });
+  });
+
   it("retries database startup before becoming ready and registering work", async () => {
     // Break caught: an independently-started worker could exit before PostgreSQL is ready.
     const fakes = runtimeFakes();
@@ -172,6 +314,46 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("passes an injected fingerprint integration to the discovery handler", async () => {
+    // Break caught: Task 6 composition could construct Blizzard dependencies
+    // that the runtime silently drops before handler orchestration.
+    const fakes = runtimeFakes();
+    const blizzardGateway = {} as NonNullable<
+      DiscoveryJobHandlerOptions["blizzardGateway"]
+    >;
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    Object.assign(fakes.dependencies, {
+      createFingerprintIntegration: () => ({
+        blizzardGateway,
+        fingerprint: {
+          requestCap: 300,
+          hourlyBudget: 28_800,
+          cadenceMs: 604_800_000,
+          minimumCommon: 200,
+          minimumIdenticalPercent: 20
+        }
+      }),
+      createHandler(options: DiscoveryJobHandlerOptions) {
+        handlerOptions = options;
+        return fakes.handler;
+      }
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(handlerOptions).toMatchObject({
+      blizzardGateway,
+      fingerprint: {
+        requestCap: 300,
+        hourlyBudget: 28_800,
+        cadenceMs: 604_800_000,
+        minimumCommon: 200,
+        minimumIdenticalPercent: 20
+      }
+    });
+    await runtime.stop();
+  });
+
   it("routes only run ids to the handler", async () => {
     // Break caught: private character lookup values could be forwarded into logs or handlers.
     const fakes = runtimeFakes();
@@ -207,6 +389,7 @@ describe("worker runtime", () => {
     expect(fakes.cleanup.rateLimits).toHaveBeenCalledOnce();
     expect(fakes.cleanup.negativeCache).toHaveBeenCalledOnce();
     expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
+    expect(fakes.cleanup.fingerprintRequests).toHaveBeenCalledOnce();
     await runtime.stop();
   });
 
@@ -224,6 +407,116 @@ describe("worker runtime", () => {
     expect(fakes.recoveredDispatches).toEqual([
       "00000000-0000-4000-8000-000000000011"
     ]);
+    await runtime.stop();
+  });
+
+  it("registers the private admission worker and re-enqueues only admitted discovery runs", async () => {
+    // Break caught: waiting fingerprint sweeps could consume discovery delivery attempts before budget admission.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000012";
+    const key = { region: "eu" as const, realm: "silvermoon", name: "waiting" };
+    fakes.waitingFingerprintRuns.push(waitingRunId);
+    fakes.admittedFingerprintRuns.add(waitingRunId);
+    const existingRun = {
+      id: waitingRunId,
+      rootKey: key,
+      rootCharacterId: null,
+      queueJobId: null,
+      status: "queued" as const,
+      callerClass: "anonymous" as const,
+      attempt: 0,
+      nextRetryAt: null,
+      errorCode: null,
+      createdAt: new Date(),
+      startedAt: null,
+      completedAt: null,
+      snapshotId: null
+    };
+    fakes.repositories.runs = {
+      async find(runId: string) {
+        return runId === waitingRunId ? existingRun : null;
+      }
+    } as Repositories["runs"];
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual([waitingRunId]);
+    expect(fakes.admissionHandler).toBeTypeOf("function");
+    await fakes.admissionHandler?.(waitingRunId);
+    expect(fakes.enqueued).toEqual([{ runId: waitingRunId, key }]);
+    expect(fakes.handler.execute).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
+  it("keeps a budget-blocked fingerprint run out of discovery work", async () => {
+    // Break caught: a waiting admission could be redispatched into a discovery worker before capacity exists.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000013";
+    fakes.waitingFingerprintRuns.push(waitingRunId);
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await expect(fakes.admissionHandler?.(waitingRunId)).rejects.toMatchObject({
+      retryable: true
+    });
+    expect(fakes.enqueued).toEqual([]);
+    expect(fakes.handler.execute).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
+  it("recovers an admitted fingerprint run that was not durably dispatched", async () => {
+    // Break caught: a process failure between admission and enqueue could strand a reserved sweep forever.
+    const fakes = runtimeFakes();
+    const runId = "00000000-0000-4000-8000-000000000014";
+    const key = {
+      region: "eu" as const,
+      realm: "silvermoon",
+      name: "admitted"
+    };
+    fakes.admittedUndispatchedFingerprintRuns.push(runId);
+    fakes.repositories.runs = {
+      async find(id: string) {
+        return id === runId
+          ? {
+              id: runId,
+              rootKey: key,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "anonymous" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          : null;
+      }
+    } as Repositories["runs"];
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.enqueued).toEqual([{ runId, key }]);
+    expect(fakes.dispatchedFingerprintRuns).toEqual([runId]);
+    await runtime.stop();
+  });
+
+  it("recovers every waiting fingerprint admission before readiness", async () => {
+    // Break caught: a fixed recovery batch could strand the 101st durable admission after a restart.
+    const fakes = runtimeFakes();
+    fakes.waitingFingerprintRuns.push(
+      ...Array.from(
+        { length: 101 },
+        (_unused, index) =>
+          `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`
+      )
+    );
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual(fakes.waitingFingerprintRuns);
     await runtime.stop();
   });
 

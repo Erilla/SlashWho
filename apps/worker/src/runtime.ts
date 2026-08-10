@@ -4,8 +4,10 @@ import {
   recoverPendingSearches,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
-  type DiscoveryLogger
+  type DiscoveryLogger,
+  type FingerprintAlertNotifier
 } from "@slashwho/application";
+import { createBlizzardClient } from "@slashwho/blizzard";
 import {
   createDiscoveryQueue,
   createPostgresRepositories,
@@ -32,6 +34,13 @@ export type WorkerRuntimeDependencies = {
   createRepositories: (pool: RuntimePool) => Repositories;
   createQueue: (connectionString: string) => DiscoveryQueue;
   createGateway: (config: WorkerConfig) => RaiderIoGateway;
+  createFingerprintIntegration?: (
+    config: WorkerConfig
+  ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
+  createFingerprintAlertNotifier?: (
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
+  ) => FingerprintAlertNotifier;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
 };
@@ -40,6 +49,65 @@ export type WorkerRuntime = {
   health(): Promise<WorkerHealth>;
   stop(): Promise<void>;
 };
+
+export function createFingerprintIntegration(
+  config: WorkerConfig
+): Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint"> {
+  return {
+    blizzardGateway: createBlizzardClient({
+      fetch: globalThis.fetch,
+      clientId: config.blizzardClientId,
+      clientSecret: config.blizzardClientSecret,
+      baseUrl: config.blizzardBaseUrl
+    }),
+    fingerprint: {
+      requestCap: config.blizzardSweepRequestCap,
+      hourlyBudget: config.blizzardHourlyRequestBudget,
+      cadenceMs: config.fingerprintSweepCadenceHours * 60 * 60 * 1_000,
+      minimumCommon: config.fingerprintMinimumCommon,
+      minimumIdenticalPercent: config.fingerprintMinimumIdenticalPercent
+    }
+  };
+}
+
+export function createFingerprintAlertNotifier(
+  config: WorkerConfig,
+  options: {
+    fetch?: typeof globalThis.fetch;
+    logger?: DiscoveryLogger;
+    timeoutMs?: number;
+  } = {}
+): FingerprintAlertNotifier {
+  const fetch = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  return {
+    async notify(alert) {
+      if (!config.maintainerAlertWebhookUrl) return;
+      try {
+        const response = await fetch(config.maintainerAlertWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(alert),
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+        if (!response.ok) {
+          options.logger?.info({
+            event: "maintainer_alert_delivery_failed",
+            alertEvent: alert.event,
+            failure: "http_status",
+            status: response.status
+          });
+        }
+      } catch {
+        options.logger?.info({
+          event: "maintainer_alert_delivery_failed",
+          alertEvent: alert.event,
+          failure: "network_or_timeout"
+        });
+      }
+    }
+  };
+}
 
 const defaultDependencies: WorkerRuntimeDependencies = {
   createPool: (connectionString) => new Pool({ connectionString }),
@@ -52,10 +120,23 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       baseUrl: config.raiderIoBaseUrl,
       timeoutMs: config.raiderIoTimeoutMs
     }),
+  createFingerprintIntegration,
+  createFingerprintAlertNotifier: (config, logger) =>
+    createFingerprintAlertNotifier(config, { logger }),
   createHandler: createDiscoveryJobHandler,
   sleep: (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds))
 };
+
+function fingerprintAdmissionRetry(retryAt: Date): Error & {
+  retryable: true;
+  retryAfterMs: number;
+} {
+  return Object.assign(new Error("fingerprint_admission_waiting"), {
+    retryable: true as const,
+    retryAfterMs: Math.max(1_000, retryAt.getTime() - Date.now())
+  });
+}
 
 export async function createWorkerRuntime(
   config: WorkerConfig,
@@ -85,15 +166,66 @@ export async function createWorkerRuntime(
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
     const gateway = dependencies.createGateway(config);
+    const fingerprintIntegration =
+      dependencies.createFingerprintIntegration?.(config);
+    const fingerprintAlertNotifier =
+      dependencies.createFingerprintAlertNotifier?.(config, logger);
     const handler = dependencies.createHandler({
       repositories,
       gateway,
+      ...fingerprintIntegration,
+      ...(fingerprintAlertNotifier ? { fingerprintAlertNotifier } : {}),
+      enqueueFingerprintAdmission: (runId) =>
+        initializedQueue.enqueueFingerprintAdmission(runId),
       requestCap: config.discoveryRequestCap,
       negativeCacheTtlMs: config.negativeCacheTtlMs,
       ...(logger ? { logger } : {})
     });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);
+    const dispatchAdmittedFingerprintRun = async (runId: string) => {
+      const run = await repositories.runs.find(runId);
+      if (!run) return;
+      await initializedQueue.enqueue({ runId, key: run.rootKey });
+      await repositories.fingerprintSweeps.markDispatched(runId, new Date());
+    };
+    for (let offset = 0; ;) {
+      const waitingFingerprintRuns =
+        await repositories.fingerprintSweeps.listWaiting(100, offset);
+      for (const runId of waitingFingerprintRuns) {
+        await initializedQueue.enqueueFingerprintAdmission(runId);
+      }
+      if (waitingFingerprintRuns.length < 100) break;
+      offset += waitingFingerprintRuns.length;
+    }
+    for (;;) {
+      const admittedFingerprintRuns =
+        await repositories.fingerprintSweeps.listAdmittedUndispatched(100);
+      if (admittedFingerprintRuns.length === 0) break;
+      for (const runId of admittedFingerprintRuns) {
+        await dispatchAdmittedFingerprintRun(runId);
+      }
+    }
+    await initializedQueue.workFingerprintAdmissions(async (runId) => {
+      const admission = await repositories.fingerprintSweeps.admitWaiting(
+        runId,
+        new Date()
+      );
+      if (admission.kind === "waiting") {
+        const blockedForMs = admission.blockedSince
+          ? Math.max(0, Date.now() - admission.blockedSince.getTime())
+          : 0;
+        if (blockedForMs >= 15 * 60_000) {
+          logger?.info({
+            event: "fingerprint_admission_blocked",
+            blockedForMs
+          });
+        }
+        throw fingerprintAdmissionRetry(admission.retryAt);
+      }
+      if (admission.kind !== "admitted") return;
+      await dispatchAdmittedFingerprintRun(runId);
+    });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
       await recoverPendingSearches(repositories, initializedQueue);
