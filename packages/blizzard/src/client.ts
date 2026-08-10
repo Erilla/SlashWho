@@ -79,7 +79,8 @@ function finiteNumber(value: unknown): number | null {
 
 function normalizedRosterCharacter(
   value: unknown,
-  region: CharacterKey["region"]
+  region: CharacterKey["region"],
+  classNames: ReadonlyMap<number, string>
 ): BlizzardRosterCharacter | null {
   const member = valueRecord(value);
   const character = member && valueRecord(member.character);
@@ -87,7 +88,12 @@ function normalizedRosterCharacter(
   const playableClass = character && valueRecord(character.playable_class);
   const displayName = character && nonEmptyString(character.name);
   const realmSlug = realm && nonEmptyString(realm.slug);
-  const className = playableClass && nonEmptyString(playableClass.name);
+  // A roster member carries only its class id; Blizzard sends the name from the
+  // static playable-class index, not from the roster itself.
+  const classId = playableClass && finiteNumber(playableClass.id);
+  const className =
+    (playableClass && nonEmptyString(playableClass.name)) ??
+    (classId === null ? null : (classNames.get(classId) ?? null));
   const level = character && finiteNumber(character.level);
   if (
     !displayName ||
@@ -138,6 +144,7 @@ export function createBlizzardClient(
   options: CreateBlizzardClientOptions
 ): BlizzardGateway {
   let cachedToken: AccessToken | undefined;
+  let cachedClassNames: ReadonlyMap<number, string> | undefined;
 
   async function accessToken(signal?: AbortSignal): Promise<string> {
     if (cachedToken && cachedToken.expiresAt > Date.now()) {
@@ -243,6 +250,43 @@ export function createBlizzardClient(
     return url;
   }
 
+  function playableClassIndexUrl(region: CharacterKey["region"]): URL {
+    const url = new URL(
+      "/data/wow/playable-class/index",
+      options.baseUrl ?? `https://${region}.api.blizzard.com`
+    );
+    url.searchParams.set("namespace", `static-${region}`);
+    url.searchParams.set("locale", "en_GB");
+    return url;
+  }
+
+  async function playableClassNames(
+    region: CharacterKey["region"],
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
+  ): Promise<ReadonlyMap<number, string>> {
+    // The class list changes at most once per expansion, so one lookup per
+    // process serves every sweep. It is still accounted as a request.
+    cachedClassNames ??= await request(
+      playableClassIndexUrl(region),
+      (value) => {
+        const body = valueRecord(value);
+        if (!body || !Array.isArray(body.classes)) return null;
+        const names = new Map<number, string>();
+        for (const entry of body.classes) {
+          const playableClass = valueRecord(entry);
+          const id = playableClass && finiteNumber(playableClass.id);
+          const name = playableClass && nonEmptyString(playableClass.name);
+          if (id !== null && name) names.set(id, name);
+        }
+        return names.size > 0 ? names : null;
+      },
+      signal,
+      onProfileRequest
+    );
+    return cachedClassNames;
+  }
+
   function rosterUrl(
     region: CharacterKey["region"],
     realm: string,
@@ -278,17 +322,27 @@ export function createBlizzardClient(
     if (!name || !realmSlug)
       throw createBlizzardError({ kind: "schema_drift" });
 
+    const classNames = await playableClassNames(
+      key.region,
+      signal,
+      onProfileRequest
+    );
+
     return request(
       rosterUrl(key.region, realmSlug, name),
       (value) => {
         const roster = valueRecord(value);
         if (!roster || !Array.isArray(roster.members)) return null;
-        const members = roster.members.map((member) =>
-          normalizedRosterCharacter(member, key.region)
-        );
-        return members.every((member) => member !== null)
-          ? (members as BlizzardRosterCharacter[])
-          : null;
+        // A member the key space cannot represent is skipped, not fatal: one
+        // such member would otherwise abandon the entire sweep. Only a missing
+        // members array is structural change.
+        return roster.members
+          .map((member) =>
+            normalizedRosterCharacter(member, key.region, classNames)
+          )
+          .filter(
+            (member): member is BlizzardRosterCharacter => member !== null
+          );
       },
       signal,
       onProfileRequest
