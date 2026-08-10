@@ -38,6 +38,10 @@
 | `apps/worker/src/config.ts` / `runtime.ts`                                  | Validated Blizzard and sweep settings; creates the Blizzard client and registers admission workers/maintenance.                 |
 | Existing unit, integration, and runtime tests                               | Demonstrate privacy, budget, snapshot, retry, and public-contract invariants.                                                   |
 
+### Dependency seam
+
+`@slashwho/blizzard` depends on `@slashwho/domain` for the existing canonical character key. To avoid a reverse workspace dependency, the domain module owns the small `FingerprintGateway` interface it needs. The application layer supplies an adapter around `BlizzardGateway`; domain tests use a fake. The domain module never imports `@slashwho/blizzard`.
+
 ## Task 1: Create the Blizzard boundary and pure matcher
 
 **Files:**
@@ -157,10 +161,28 @@ git commit -m "feat(blizzard): add ephemeral fingerprint client"
 
 **Interfaces:**
 
-- Consumes: `BlizzardGateway`, `BlizzardRosterCharacter`, and `compareFingerprints` from `@slashwho/blizzard`; `CharacterKey`, `DiscoveredCharacter`, and `toRaiderIoUrl` from existing domain modules.
+- Consumes: `CharacterKey`, `DiscoveredCharacter`, and `toRaiderIoUrl` from existing domain modules. The caller supplies a domain-owned adapter; the domain package does not import `@slashwho/blizzard`.
 - Produces:
 
 ```ts
+export type FingerprintCandidate = Readonly<{
+  key: CharacterKey;
+  displayName: string;
+  className: string;
+  level: number;
+}>;
+
+export interface FingerprintGateway {
+  getGuildRoster(
+    root: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<readonly FingerprintCandidate[]>;
+  getAchievementFingerprint(
+    key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<ReadonlyMap<number, number>>;
+}
+
 export type FingerprintSweepOutcome =
   | {
       kind: "matched";
@@ -181,7 +203,7 @@ export type FingerprintSweepOutcome =
 
 export function discoverFingerprintMatches(
   root: CharacterKey,
-  gateway: BlizzardGateway,
+  gateway: FingerprintGateway,
   options: {
     requestCap: number;
     minimumCommon: number;
@@ -422,7 +444,7 @@ git commit -m "feat(worker): dispatch fingerprint admissions"
 
 **Interfaces:**
 
-- Consumes: existing `discoverCharacter`, `discoverFingerprintMatches`, `FingerprintSweepRepository`, `BlizzardGateway`, and `DiscoveryWorkContext`.
+- Consumes: existing `discoverCharacter`, `discoverFingerprintMatches`, `FingerprintSweepRepository`, `BlizzardGateway`, and `DiscoveryWorkContext`. `packages/application/src/blizzard-fingerprint-adapter.ts` adapts `BlizzardGateway` to the domain-owned `FingerprintGateway`; it does not duplicate matching or upstream logic.
 - Produces an extended handler option:
 
 ```ts
