@@ -1,5 +1,8 @@
 import type { AchievementFingerprint } from "./types";
 
+const mandatoryMinimumCommon = 200;
+const mandatoryMinimumIdenticalPercent = 20;
+
 export function compareFingerprints(
   root: AchievementFingerprint,
   candidate: AchievementFingerprint,
@@ -17,11 +20,15 @@ export function compareFingerprints(
   }
 
   const identicalPercent = common === 0 ? 0 : (identical / common) * 100;
+  const minimumCommon = Math.max(mandatoryMinimumCommon, policy.minimumCommon);
+  const minimumIdenticalPercent = Math.max(
+    mandatoryMinimumIdenticalPercent,
+    policy.minimumIdenticalPercent
+  );
   return {
     common,
     identical,
     isMatch:
-      common >= policy.minimumCommon &&
-      identicalPercent >= policy.minimumIdenticalPercent
+      common >= minimumCommon && identicalPercent >= minimumIdenticalPercent
   };
 }

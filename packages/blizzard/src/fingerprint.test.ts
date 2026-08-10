@@ -28,4 +28,27 @@ describe("compareFingerprints", () => {
       isMatch: true
     });
   });
+
+  it("does not allow caller policy to lower the mandatory match floors", () => {
+    // Break caught: worker configuration could turn a weak coincidence into a
+    // fingerprint-derived relationship by supplying lower thresholds.
+    const weakPolicy = { minimumCommon: 1, minimumIdenticalPercent: 0 };
+    const fewerThanMandatoryCommon = fingerprint(199, 199);
+    const belowMandatoryIdenticalPercent = fingerprint(200, 0);
+
+    expect(
+      compareFingerprints(
+        fewerThanMandatoryCommon,
+        fewerThanMandatoryCommon,
+        weakPolicy
+      ).isMatch
+    ).toBe(false);
+    expect(
+      compareFingerprints(
+        fingerprint(200, 200),
+        belowMandatoryIdenticalPercent,
+        weakPolicy
+      ).isMatch
+    ).toBe(false);
+  });
 });
