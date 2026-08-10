@@ -5,8 +5,8 @@ SlashWho publishes World of Warcraft character-relationship information derived 
 ## Language
 
 **Privacy-hidden ownership**:
-The Raider.IO state indicating that a character's ownership link is intentionally not public. It is SlashWho's sole privacy signal for inferred relationships.
-_Avoid_: Hidden alt, upstream opt-out
+The Raider.IO state in which a character carries no public ownership link. SlashWho records it as a snapshot limitation reason; it does **not** exclude the character from inferred relationships, because the state cannot be told apart from a character never claimed on Raider.IO. A manual removal request is the only exclusion route.
+_Avoid_: Hidden alt, upstream opt-out, privacy signal
 
 **Fingerprint-derived link**:
 A relationship between characters inferred from Blizzard achievement-completion data, rather than declared by Raider.IO.

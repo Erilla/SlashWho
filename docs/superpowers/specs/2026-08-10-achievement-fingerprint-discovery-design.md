@@ -2,7 +2,27 @@
 
 **Date:** 2026-08-10
 
-**Status:** Approved for implementation planning
+**Status:** Approved for implementation planning; privacy boundary amended
+2026-08-10 (see below)
+
+## Amendment: the privacy-hidden exclusion was removed
+
+Everything below describing privacy-hidden Raider.IO ownership as a reason to
+exclude a root or a candidate from fingerprint discovery **no longer describes
+the system**. The maintainer removed both exclusions after implementation: the
+condition available in code (`ownerId === null`) cannot distinguish a player who
+withheld the link from a character never claimed on Raider.IO at all, and it was
+skipping the latter — the majority of characters, and the population the sweep
+exists to reach.
+
+The consequences accepted with that decision: a fingerprint-derived link may now
+connect characters whose Raider.IO ownership is not public, reversing
+[Privacy stance on defeating hidden ownership](https://github.com/Erilla/SlashWho/issues/8)
+and the mitigation
+[Data-protection exposure for publishing derived account linkage](https://github.com/Erilla/SlashWho/issues/16)
+identified as the one that materially moves the UK GDPR balancing and necessity
+tests. Manual removal requests are the only remaining exclusion route. The
+`/privacy` page was rewritten to state this rather than the old promise.
 
 ## Summary
 
