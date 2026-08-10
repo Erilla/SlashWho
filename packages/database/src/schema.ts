@@ -252,6 +252,7 @@ export const fingerprintSweepAdmissions = pgTable(
       withTimezone: true
     }).notNull(),
     status: text("status").default("waiting").notNull(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
     requestedAt: timestamp("requested_at", { withTimezone: true })
       .defaultNow()
       .notNull()

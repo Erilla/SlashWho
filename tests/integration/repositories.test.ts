@@ -594,6 +594,35 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
   });
 
+  it("keeps an admitted sweep dispatch-pending until its discovery job is durably enqueued", async () => {
+    // Break caught: a crash after budget reservation could lose a run before discovery is re-enqueued.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: run.id,
+        key: rootKey,
+        requestCap: 3,
+        hourlyBudget: 5,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at
+      })
+    ).resolves.toMatchObject({ kind: "admitted" });
+
+    await expect(
+      repositories.fingerprintSweeps.listAdmittedUndispatched(10)
+    ).resolves.toEqual([run.id]);
+    await repositories.fingerprintSweeps.markDispatched(run.id, at);
+    await expect(
+      repositories.fingerprintSweeps.listAdmittedUndispatched(10)
+    ).resolves.toEqual([]);
+  });
+
   it("does not advance cadence or retain unused capacity after an aborted sweep", async () => {
     // Break caught: aborts could consume future cadence or the entire unused reservation.
     await pool.query(`TRUNCATE TABLE

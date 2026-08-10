@@ -163,7 +163,7 @@ async function admitFingerprintWaitingRun(
   );
   await client.query(
     `UPDATE fingerprint_sweep_admissions
-     SET status = 'admitted'
+     SET status = 'admitted', dispatched_at = NULL
      WHERE id = $1`,
     [admissionId]
   );
@@ -1231,8 +1231,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
-      async listWaiting(limit) {
-        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+      async listWaiting(limit, offset = 0) {
+        if (
+          !Number.isInteger(limit) ||
+          limit < 1 ||
+          limit > 1_000 ||
+          !Number.isInteger(offset) ||
+          offset < 0
+        ) {
           throw new RangeError("fingerprint_waiting_limit_out_of_range");
         }
         const result = await pool.query<{ discovery_run_id: string }>(
@@ -1240,10 +1246,41 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            FROM fingerprint_sweep_admissions
            WHERE status = 'waiting'
            ORDER BY requested_at, queue_order
+           LIMIT $1 OFFSET $2`,
+          [limit, offset]
+        );
+        return result.rows.map((row) => row.discovery_run_id);
+      },
+
+      async listAdmittedUndispatched(limit) {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+          throw new RangeError(
+            "fingerprint_admission_dispatch_limit_out_of_range"
+          );
+        }
+        const result = await pool.query<{ discovery_run_id: string }>(
+          `SELECT discovery_run_id
+           FROM fingerprint_sweep_admissions
+           WHERE status = 'admitted' AND dispatched_at IS NULL
+           ORDER BY requested_at, queue_order
            LIMIT $1`,
           [limit]
         );
         return result.rows.map((row) => row.discovery_run_id);
+      },
+
+      async markDispatched(runId, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("fingerprint_admission_time_invalid");
+        }
+        await pool.query(
+          `UPDATE fingerprint_sweep_admissions
+           SET dispatched_at = $2
+           WHERE discovery_run_id = $1
+             AND status = 'admitted'
+             AND dispatched_at IS NULL`,
+          [runId, at]
+        );
       },
 
       async admitWaiting(runId, at) {

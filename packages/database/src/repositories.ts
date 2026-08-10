@@ -149,7 +149,9 @@ export interface FingerprintSweepRepository {
     input: { published: boolean; at: Date; limitationCode: string | null }
   ): Promise<void>;
   release(reservationId: string, at: Date): Promise<void>;
-  listWaiting(limit: number): Promise<readonly string[]>;
+  listWaiting(limit: number, offset?: number): Promise<readonly string[]>;
+  listAdmittedUndispatched(limit: number): Promise<readonly string[]>;
+  markDispatched(runId: string, at: Date): Promise<void>;
   admitWaiting(runId: string, at: Date): Promise<FingerprintAdmissionDispatch>;
 }
 

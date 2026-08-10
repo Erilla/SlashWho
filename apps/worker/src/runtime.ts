@@ -104,6 +104,29 @@ export async function createWorkerRuntime(
     });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);
+    const dispatchAdmittedFingerprintRun = async (runId: string) => {
+      const run = await repositories.runs.find(runId);
+      if (!run) return;
+      await initializedQueue.enqueue({ runId, key: run.rootKey });
+      await repositories.fingerprintSweeps.markDispatched(runId, new Date());
+    };
+    for (let offset = 0; ;) {
+      const waitingFingerprintRuns =
+        await repositories.fingerprintSweeps.listWaiting(100, offset);
+      for (const runId of waitingFingerprintRuns) {
+        await initializedQueue.enqueueFingerprintAdmission(runId);
+      }
+      if (waitingFingerprintRuns.length < 100) break;
+      offset += waitingFingerprintRuns.length;
+    }
+    for (;;) {
+      const admittedFingerprintRuns =
+        await repositories.fingerprintSweeps.listAdmittedUndispatched(100);
+      if (admittedFingerprintRuns.length === 0) break;
+      for (const runId of admittedFingerprintRuns) {
+        await dispatchAdmittedFingerprintRun(runId);
+      }
+    }
     await initializedQueue.workFingerprintAdmissions(async (runId) => {
       const admission = await repositories.fingerprintSweeps.admitWaiting(
         runId,
@@ -113,16 +136,8 @@ export async function createWorkerRuntime(
         throw fingerprintAdmissionRetry(admission.retryAt);
       }
       if (admission.kind !== "admitted") return;
-
-      const run = await repositories.runs.find(runId);
-      if (!run) return;
-      await initializedQueue.enqueue({ runId, key: run.rootKey });
+      await dispatchAdmittedFingerprintRun(runId);
     });
-    const waitingFingerprintRuns =
-      await repositories.fingerprintSweeps.listWaiting(100);
-    for (const runId of waitingFingerprintRuns) {
-      await initializedQueue.enqueueFingerprintAdmission(runId);
-    }
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
       await recoverPendingSearches(repositories, initializedQueue);

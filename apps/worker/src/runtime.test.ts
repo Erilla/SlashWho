@@ -46,6 +46,8 @@ function runtimeFakes() {
   const fingerprintAdmissions: string[] = [];
   const waitingFingerprintRuns: string[] = [];
   const admittedFingerprintRuns = new Set<string>();
+  const admittedUndispatchedFingerprintRuns: string[] = [];
+  const dispatchedFingerprintRuns: string[] = [];
   const queue: DiscoveryQueue = {
     async start() {
       queueReady = true;
@@ -109,8 +111,16 @@ function runtimeFakes() {
           ? { kind: "admitted" as const }
           : { kind: "waiting" as const, retryAt: new Date() };
       },
-      async listWaiting() {
-        return [...waitingFingerprintRuns];
+      async listWaiting(limit: number, offset = 0) {
+        return waitingFingerprintRuns.slice(offset, offset + limit);
+      },
+      async listAdmittedUndispatched() {
+        return [...admittedUndispatchedFingerprintRuns];
+      },
+      async markDispatched(runId: string) {
+        dispatchedFingerprintRuns.push(runId);
+        const index = admittedUndispatchedFingerprintRuns.indexOf(runId);
+        if (index >= 0) admittedUndispatchedFingerprintRuns.splice(index, 1);
       }
     }
   } as unknown as Repositories;
@@ -141,6 +151,8 @@ function runtimeFakes() {
     fingerprintAdmissions,
     waitingFingerprintRuns,
     admittedFingerprintRuns,
+    admittedUndispatchedFingerprintRuns,
+    dispatchedFingerprintRuns,
     queue,
     get connectionAttempts() {
       return connectionAttempts;
@@ -306,6 +318,62 @@ describe("worker runtime", () => {
     });
     expect(fakes.enqueued).toEqual([]);
     expect(fakes.handler.execute).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
+  it("recovers an admitted fingerprint run that was not durably dispatched", async () => {
+    // Break caught: a process failure between admission and enqueue could strand a reserved sweep forever.
+    const fakes = runtimeFakes();
+    const runId = "00000000-0000-4000-8000-000000000014";
+    const key = {
+      region: "eu" as const,
+      realm: "silvermoon",
+      name: "admitted"
+    };
+    fakes.admittedUndispatchedFingerprintRuns.push(runId);
+    fakes.repositories.runs = {
+      async find(id: string) {
+        return id === runId
+          ? {
+              id: runId,
+              rootKey: key,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "anonymous" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          : null;
+      }
+    } as Repositories["runs"];
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.enqueued).toEqual([{ runId, key }]);
+    expect(fakes.dispatchedFingerprintRuns).toEqual([runId]);
+    await runtime.stop();
+  });
+
+  it("recovers every waiting fingerprint admission before readiness", async () => {
+    // Break caught: a fixed recovery batch could strand the 101st durable admission after a restart.
+    const fakes = runtimeFakes();
+    fakes.waitingFingerprintRuns.push(
+      ...Array.from(
+        { length: 101 },
+        (_unused, index) =>
+          `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`
+      )
+    );
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual(fakes.waitingFingerprintRuns);
     await runtime.stop();
   });
 
