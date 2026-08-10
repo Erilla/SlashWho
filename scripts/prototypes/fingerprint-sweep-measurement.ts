@@ -108,6 +108,10 @@ function normalizedGuildKey(value: Pick<Guild, "realm" | "name">): string {
   return `${value.realm.toLocaleLowerCase("en-US")}/${value.name.toLocaleLowerCase("en-US")}`;
 }
 
+function blizzardSlug(value: string): string {
+  return value.trim().toLocaleLowerCase("en-US").replace(/\s+/g, "-");
+}
+
 function distribution(values: readonly number[]): Distribution {
   if (values.length === 0) {
     return { count: 0, min: null, median: null, max: null };
@@ -235,7 +239,7 @@ function achievementsUrl(character: CharacterKey): URL {
 
 function rosterUrl(guild: Guild): URL {
   return new URL(
-    `https://eu.api.blizzard.com/data/wow/guild/${encodeURIComponent(guild.realm)}/${encodeURIComponent(guild.name)}/roster?namespace=profile-eu&locale=en_GB`
+    `https://eu.api.blizzard.com/data/wow/guild/${encodeURIComponent(blizzardSlug(guild.realm))}/${encodeURIComponent(blizzardSlug(guild.name))}/roster?namespace=profile-eu&locale=en_GB`
   );
 }
 

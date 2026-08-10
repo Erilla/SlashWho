@@ -29,4 +29,10 @@ The prototype performs no database writes and creates no snapshots. It does not 
 
 ## Verification
 
-The prototype is validated by one successful bounded run against the Railway `test` environment and by inspecting its redacted summary. It intentionally has no automated tests because it is a throwaway measurement tool.
+Run the bounded measurement once through the Railway `test` worker environment:
+
+```powershell
+railway run --service worker --environment test -- pnpm prototype:fingerprint-sweep
+```
+
+Stdout is one redacted `MeasurementSummary`, which is the artifact to attach to the issue; no output file is created. The prototype is also checked with formatting, linting, type checking, and the unit suite. It intentionally has no automated tests of its own because it is a throwaway measurement tool.
