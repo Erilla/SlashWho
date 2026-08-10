@@ -158,6 +158,12 @@ importers:
         specifier: ^4.3.5
         version: 4.4.3
 
+  packages/blizzard:
+    dependencies:
+      '@slashwho/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/contracts:
     dependencies:
       zod:
