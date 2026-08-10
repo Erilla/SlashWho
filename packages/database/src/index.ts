@@ -17,6 +17,8 @@ export type {
   CreateSnapshotInput,
   DiscoveryRun,
   DiscoverySource,
+  FingerprintAdmission,
+  FingerprintSweepRepository,
   NegativeCacheEntry,
   NegativeCacheRepository,
   RateLimitRepository,

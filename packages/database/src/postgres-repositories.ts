@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
   DiscoveryRun,
+  FingerprintAdmission,
   Repositories,
   SnapshotHistoryItem,
   SnapshotHistoryPage,
@@ -62,6 +63,46 @@ async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
     `root:${key.region}:${key.realm}:${key.name}`
   ]);
+}
+
+async function lockFingerprintSweeps(client: Queryable): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    "fingerprint-sweeps"
+  ]);
+}
+
+function assertFingerprintAdmissionInput(input: {
+  requestCap: number;
+  hourlyBudget: number;
+  cadenceCutoff: Date;
+  at: Date;
+}): void {
+  if (!Number.isInteger(input.requestCap) || input.requestCap < 1) {
+    throw new RangeError("fingerprint_request_cap_out_of_range");
+  }
+  if (!Number.isInteger(input.hourlyBudget) || input.hourlyBudget < 1) {
+    throw new RangeError("fingerprint_hourly_budget_out_of_range");
+  }
+  if (input.requestCap > input.hourlyBudget) {
+    throw new RangeError("fingerprint_request_cap_exceeds_hourly_budget");
+  }
+  if (
+    Number.isNaN(input.cadenceCutoff.valueOf()) ||
+    Number.isNaN(input.at.valueOf())
+  ) {
+    throw new RangeError("fingerprint_admission_time_invalid");
+  }
+}
+
+async function fingerprintRetryAt(client: Queryable, at: Date): Promise<Date> {
+  const result = await client.query<{ retry_at: Date | null }>(
+    `SELECT min(expires_at) AS retry_at
+     FROM fingerprint_sweep_reservations
+     WHERE expires_at > $1
+       AND (released_at IS NULL OR used_count > 0)`,
+    [at]
+  );
+  return result.rows[0]?.retry_at ?? at;
 }
 
 function mapRun(row: RunRow): DiscoveryRun {
@@ -884,6 +925,289 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [at]
         );
         return result.rowCount ?? 0;
+      }
+    },
+
+    fingerprintSweeps: {
+      async requestAdmission(input): Promise<FingerprintAdmission> {
+        assertFingerprintAdmissionInput(input);
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockFingerprintSweeps(client);
+
+          const state = await client.query<{ last_published_at: Date | null }>(
+            `SELECT last_published_at
+             FROM fingerprint_sweep_states
+             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+            [input.key.region, input.key.realm, input.key.name]
+          );
+          if (
+            state.rows[0]?.last_published_at &&
+            state.rows[0].last_published_at > input.cadenceCutoff
+          ) {
+            await client.query(
+              `UPDATE fingerprint_sweep_admissions
+               SET status = 'not_due'
+               WHERE discovery_run_id = $1 AND status = 'waiting'`,
+              [input.runId]
+            );
+            await client.query("COMMIT");
+            return { kind: "not_due" };
+          }
+
+          const waiting = await client.query<{ id: string }>(
+            `SELECT id
+             FROM fingerprint_sweep_admissions
+             WHERE discovery_run_id = $1 AND status = 'waiting'
+             ORDER BY requested_at, queue_order
+             LIMIT 1
+             FOR UPDATE`,
+            [input.runId]
+          );
+          let admissionId = waiting.rows[0]?.id;
+          if (admissionId) {
+            await client.query(
+              `UPDATE fingerprint_sweep_admissions
+               SET request_cap = $2, hourly_budget = $3, cadence_cutoff = $4
+               WHERE id = $1`,
+              [
+                admissionId,
+                input.requestCap,
+                input.hourlyBudget,
+                input.cadenceCutoff
+              ]
+            );
+          } else {
+            const admission = await client.query<{ id: string }>(
+              `INSERT INTO fingerprint_sweep_admissions
+                (discovery_run_id, region, realm_slug, normalized_name, request_cap,
+                 hourly_budget, cadence_cutoff, requested_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               RETURNING id`,
+              [
+                input.runId,
+                input.key.region,
+                input.key.realm,
+                input.key.name,
+                input.requestCap,
+                input.hourlyBudget,
+                input.cadenceCutoff,
+                input.at
+              ]
+            );
+            admissionId = admission.rows[0]!.id;
+          }
+
+          const head = await client.query<{
+            id: string;
+            request_cap: number;
+            hourly_budget: number;
+          }>(
+            `SELECT admission.id, admission.request_cap, admission.hourly_budget
+             FROM fingerprint_sweep_admissions admission
+             LEFT JOIN fingerprint_sweep_states state
+               ON state.region = admission.region
+              AND state.realm_slug = admission.realm_slug
+              AND state.normalized_name = admission.normalized_name
+             WHERE admission.status = 'waiting'
+               AND (
+                 state.last_published_at IS NULL
+                 OR state.last_published_at <= admission.cadence_cutoff
+               )
+             ORDER BY admission.requested_at, admission.queue_order
+             LIMIT 1
+             FOR UPDATE OF admission`
+          );
+          const candidate = head.rows[0];
+          if (!candidate || candidate.id !== admissionId) {
+            const retryAt = await fingerprintRetryAt(client, input.at);
+            await client.query("COMMIT");
+            return { kind: "waiting", retryAt };
+          }
+
+          const usage = await client.query<{ commitment: string }>(
+            `SELECT coalesce(sum(
+               used_count + CASE
+                 WHEN released_at IS NULL THEN request_cap - used_count
+                 ELSE 0
+               END
+             ), 0)::text AS commitment
+             FROM fingerprint_sweep_reservations
+             WHERE expires_at > $1`,
+            [input.at]
+          );
+          if (
+            Number(usage.rows[0]!.commitment) + candidate.request_cap >
+            candidate.hourly_budget
+          ) {
+            const retryAt = await fingerprintRetryAt(client, input.at);
+            await client.query("COMMIT");
+            return { kind: "waiting", retryAt };
+          }
+
+          const reservation = await client.query<{ id: string }>(
+            `INSERT INTO fingerprint_sweep_reservations
+             (admission_id, request_cap, admitted_at, expires_at)
+             VALUES ($1, $2, $3::timestamptz, $3::timestamptz + interval '1 hour')
+             RETURNING id`,
+            [admissionId, candidate.request_cap, input.at]
+          );
+          await client.query(
+            `UPDATE fingerprint_sweep_admissions
+             SET status = 'admitted'
+             WHERE id = $1`,
+            [admissionId]
+          );
+          await client.query("COMMIT");
+          return {
+            kind: "admitted",
+            reservationId: reservation.rows[0]!.id,
+            requestCap: candidate.request_cap
+          };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async recordRequest(reservationId, count, at) {
+        if (!Number.isInteger(count) || count < 1) {
+          throw new RangeError("fingerprint_request_count_out_of_range");
+        }
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("fingerprint_request_time_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockFingerprintSweeps(client);
+          const result = await client.query(
+            `UPDATE fingerprint_sweep_reservations
+             SET used_count = used_count + $2
+             WHERE id = $1
+               AND released_at IS NULL
+               AND expires_at > $3
+               AND used_count + $2 <= request_cap
+             RETURNING id`,
+            [reservationId, count, at]
+          );
+          if (result.rowCount !== 1) {
+            throw new Error("fingerprint_reservation_not_active");
+          }
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async finish(reservationId, input) {
+        if (Number.isNaN(input.at.valueOf())) {
+          throw new RangeError("fingerprint_finish_time_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockFingerprintSweeps(client);
+          const reservation = await client.query<{
+            admission_id: string;
+            region: CharacterKey["region"];
+            realm_slug: string;
+            normalized_name: string;
+          }>(
+            `UPDATE fingerprint_sweep_reservations reservation
+             SET released_at = $2,
+                 finished_at = $2,
+                 published = $3,
+                 limitation_code = $4
+             FROM fingerprint_sweep_admissions admission
+             WHERE reservation.id = $1
+               AND reservation.admission_id = admission.id
+               AND reservation.released_at IS NULL
+             RETURNING reservation.admission_id, admission.region,
+                       admission.realm_slug, admission.normalized_name`,
+            [reservationId, input.at, input.published, input.limitationCode]
+          );
+          const row = reservation.rows[0];
+          if (!row) throw new Error("fingerprint_reservation_not_active");
+          await client.query(
+            `UPDATE fingerprint_sweep_admissions
+             SET status = 'finished'
+             WHERE id = $1`,
+            [row.admission_id]
+          );
+          if (input.published) {
+            await client.query(
+              `INSERT INTO fingerprint_sweep_states
+                (region, realm_slug, normalized_name, last_published_at)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (region, realm_slug, normalized_name)
+               DO UPDATE SET last_published_at = greatest(
+                 fingerprint_sweep_states.last_published_at,
+                 EXCLUDED.last_published_at
+               )`,
+              [row.region, row.realm_slug, row.normalized_name, input.at]
+            );
+          }
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async release(reservationId, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("fingerprint_release_time_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockFingerprintSweeps(client);
+          const result = await client.query<{ admission_id: string }>(
+            `UPDATE fingerprint_sweep_reservations
+             SET released_at = $2
+             WHERE id = $1 AND released_at IS NULL
+             RETURNING admission_id`,
+            [reservationId, at]
+          );
+          const row = result.rows[0];
+          if (!row) throw new Error("fingerprint_reservation_not_active");
+          await client.query(
+            `UPDATE fingerprint_sweep_admissions
+             SET status = 'released'
+             WHERE id = $1`,
+            [row.admission_id]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async listWaiting(limit) {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+          throw new RangeError("fingerprint_waiting_limit_out_of_range");
+        }
+        const result = await pool.query<{ discovery_run_id: string }>(
+          `SELECT discovery_run_id
+           FROM fingerprint_sweep_admissions
+           WHERE status = 'waiting'
+           ORDER BY requested_at, queue_order
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map((row) => row.discovery_run_id);
       }
     },
 

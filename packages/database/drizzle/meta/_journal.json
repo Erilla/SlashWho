@@ -15,6 +15,13 @@
       "when": 1785927934514,
       "tag": "0001_search_reservations",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786365831105,
+      "tag": "0002_fingerprint_sweeps",
+      "breakpoints": true
     }
   ]
 }

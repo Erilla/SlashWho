@@ -7,7 +7,7 @@ import type { CharacterKey } from "@slashwho/domain";
 
 export type CallerClass = "anonymous" | "bot";
 export type DiscoverySource =
-  "input" | "claimed" | "declared_main" | "profile_guess";
+  "input" | "claimed" | "declared_main" | "profile_guess" | "fingerprint";
 
 export interface DiscoveryRun {
   id: string;
@@ -123,6 +123,29 @@ export interface NegativeCacheRepository {
   cleanupExpired(at?: Date): Promise<number>;
 }
 
+export type FingerprintAdmission =
+  | { kind: "not_due" }
+  | { kind: "waiting"; retryAt: Date }
+  | { kind: "admitted"; reservationId: string; requestCap: number };
+
+export interface FingerprintSweepRepository {
+  requestAdmission(input: {
+    runId: string;
+    key: CharacterKey;
+    requestCap: number;
+    hourlyBudget: number;
+    cadenceCutoff: Date;
+    at: Date;
+  }): Promise<FingerprintAdmission>;
+  recordRequest(reservationId: string, count: number, at: Date): Promise<void>;
+  finish(
+    reservationId: string,
+    input: { published: boolean; at: Date; limitationCode: string | null }
+  ): Promise<void>;
+  release(reservationId: string, at: Date): Promise<void>;
+  listWaiting(limit: number): Promise<readonly string[]>;
+}
+
 export type SearchReservationResult =
   | { kind: "active"; run: DiscoveryRun }
   | { kind: "reserved"; run: DiscoveryRun }
@@ -167,4 +190,5 @@ export interface Repositories {
   suppressions: SuppressionRepository;
   rateLimits: RateLimitRepository;
   negativeCache: NegativeCacheRepository;
+  fingerprintSweeps: FingerprintSweepRepository;
 }
