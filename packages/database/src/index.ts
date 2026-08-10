@@ -4,6 +4,7 @@ export {
   createDiscoveryQueue,
   DiscoveryQueueStopTimeoutError,
   discoverCharacterQueueName,
+  fingerprintAdmissionQueueName,
   maintenanceCleanupQueueName
 } from "./queue";
 export type {
@@ -18,6 +19,7 @@ export type {
   DiscoveryRun,
   DiscoverySource,
   FingerprintAdmission,
+  FingerprintAdmissionDispatch,
   FingerprintSweepRepository,
   NegativeCacheEntry,
   NegativeCacheRepository,

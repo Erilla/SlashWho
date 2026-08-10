@@ -57,6 +57,16 @@ const defaultDependencies: WorkerRuntimeDependencies = {
     new Promise((resolve) => setTimeout(resolve, milliseconds))
 };
 
+function fingerprintAdmissionRetry(retryAt: Date): Error & {
+  retryable: true;
+  retryAfterMs: number;
+} {
+  return Object.assign(new Error("fingerprint_admission_waiting"), {
+    retryable: true as const,
+    retryAfterMs: Math.max(1_000, retryAt.getTime() - Date.now())
+  });
+}
+
 export async function createWorkerRuntime(
   config: WorkerConfig,
   dependencies: WorkerRuntimeDependencies = defaultDependencies,
@@ -94,6 +104,25 @@ export async function createWorkerRuntime(
     });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);
+    await initializedQueue.workFingerprintAdmissions(async (runId) => {
+      const admission = await repositories.fingerprintSweeps.admitWaiting(
+        runId,
+        new Date()
+      );
+      if (admission.kind === "waiting") {
+        throw fingerprintAdmissionRetry(admission.retryAt);
+      }
+      if (admission.kind !== "admitted") return;
+
+      const run = await repositories.runs.find(runId);
+      if (!run) return;
+      await initializedQueue.enqueue({ runId, key: run.rootKey });
+    });
+    const waitingFingerprintRuns =
+      await repositories.fingerprintSweeps.listWaiting(100);
+    for (const runId of waitingFingerprintRuns) {
+      await initializedQueue.enqueueFingerprintAdmission(runId);
+    }
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
       await recoverPendingSearches(repositories, initializedQueue);

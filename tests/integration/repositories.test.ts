@@ -545,6 +545,55 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
   });
 
+  it("admits a durable waiting run through private admission dispatch after budget frees", async () => {
+    // Break caught: waiting sweeps could need another discovery delivery instead of being admitted privately.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const firstRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const waitingRun = await repositories.runs.createOrReuse(
+      altKey,
+      "anonymous"
+    );
+    const first = {
+      runId: firstRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 5,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    };
+    const waiting = { ...first, runId: waitingRun.id, key: altKey };
+    const admitted =
+      await repositories.fingerprintSweeps.requestAdmission(first);
+    if (admitted.kind !== "admitted")
+      throw new Error("first_sweep_not_admitted");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission(waiting)
+    ).resolves.toMatchObject({ kind: "waiting" });
+
+    await repositories.fingerprintSweeps.release(admitted.reservationId, at);
+
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(
+        waitingRun.id,
+        new Date("2026-08-10T12:01:00.000Z")
+      )
+    ).resolves.toEqual({ kind: "admitted" });
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        ...waiting,
+        at: new Date("2026-08-10T12:01:00.000Z")
+      })
+    ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
+  });
+
   it("does not advance cadence or retain unused capacity after an aborted sweep", async () => {
     // Break caught: aborts could consume future cadence or the entire unused reservation.
     await pool.query(`TRUNCATE TABLE

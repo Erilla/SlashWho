@@ -39,9 +39,13 @@ function runtimeFakes() {
       ) => Promise<void>)
     | undefined;
   let maintenanceHandler: (() => Promise<void>) | undefined;
+  let admissionHandler: ((runId: string) => Promise<void>) | undefined;
   const pendingDispatches: DiscoverCharacterJob[] = [];
   const recoveredDispatches: string[] = [];
   const enqueued: DiscoverCharacterJob[] = [];
+  const fingerprintAdmissions: string[] = [];
+  const waitingFingerprintRuns: string[] = [];
+  const admittedFingerprintRuns = new Set<string>();
   const queue: DiscoveryQueue = {
     async start() {
       queueReady = true;
@@ -50,11 +54,18 @@ function runtimeFakes() {
       enqueued.push(payload);
       return payload.runId;
     },
+    async enqueueFingerprintAdmission(runId) {
+      fingerprintAdmissions.push(runId);
+      return runId;
+    },
     async work(handler) {
       workHandler = handler;
     },
     async scheduleMaintenanceCleanup(handler) {
       maintenanceHandler = handler;
+    },
+    async workFingerprintAdmissions(handler) {
+      admissionHandler = handler;
     },
     async stop() {
       queueReady = false;
@@ -91,7 +102,17 @@ function runtimeFakes() {
     },
     rateLimits: { cleanupExpired: cleanup.rateLimits },
     negativeCache: { cleanupExpired: cleanup.negativeCache },
-    suppressions: { cleanupExpired: cleanup.suppressions }
+    suppressions: { cleanupExpired: cleanup.suppressions },
+    fingerprintSweeps: {
+      async admitWaiting(runId: string) {
+        return admittedFingerprintRuns.has(runId)
+          ? { kind: "admitted" as const }
+          : { kind: "waiting" as const, retryAt: new Date() };
+      },
+      async listWaiting() {
+        return [...waitingFingerprintRuns];
+      }
+    }
   } as unknown as Repositories;
   const sleeps: number[] = [];
 
@@ -113,9 +134,13 @@ function runtimeFakes() {
     handler,
     migrations,
     cleanup,
+    repositories,
     pendingDispatches,
     recoveredDispatches,
     enqueued,
+    fingerprintAdmissions,
+    waitingFingerprintRuns,
+    admittedFingerprintRuns,
     queue,
     get connectionAttempts() {
       return connectionAttempts;
@@ -128,6 +153,9 @@ function runtimeFakes() {
     },
     get maintenanceHandler() {
       return maintenanceHandler;
+    },
+    get admissionHandler() {
+      return admissionHandler;
     },
     sleeps
   };
@@ -224,6 +252,60 @@ describe("worker runtime", () => {
     expect(fakes.recoveredDispatches).toEqual([
       "00000000-0000-4000-8000-000000000011"
     ]);
+    await runtime.stop();
+  });
+
+  it("registers the private admission worker and re-enqueues only admitted discovery runs", async () => {
+    // Break caught: waiting fingerprint sweeps could consume discovery delivery attempts before budget admission.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000012";
+    const key = { region: "eu" as const, realm: "silvermoon", name: "waiting" };
+    fakes.waitingFingerprintRuns.push(waitingRunId);
+    fakes.admittedFingerprintRuns.add(waitingRunId);
+    const existingRun = {
+      id: waitingRunId,
+      rootKey: key,
+      rootCharacterId: null,
+      queueJobId: null,
+      status: "queued" as const,
+      callerClass: "anonymous" as const,
+      attempt: 0,
+      nextRetryAt: null,
+      errorCode: null,
+      createdAt: new Date(),
+      startedAt: null,
+      completedAt: null,
+      snapshotId: null
+    };
+    fakes.repositories.runs = {
+      async find(runId: string) {
+        return runId === waitingRunId ? existingRun : null;
+      }
+    } as Repositories["runs"];
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual([waitingRunId]);
+    expect(fakes.admissionHandler).toBeTypeOf("function");
+    await fakes.admissionHandler?.(waitingRunId);
+    expect(fakes.enqueued).toEqual([{ runId: waitingRunId, key }]);
+    expect(fakes.handler.execute).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
+  it("keeps a budget-blocked fingerprint run out of discovery work", async () => {
+    // Break caught: a waiting admission could be redispatched into a discovery worker before capacity exists.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000013";
+    fakes.waitingFingerprintRuns.push(waitingRunId);
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await expect(fakes.admissionHandler?.(waitingRunId)).rejects.toMatchObject({
+      retryable: true
+    });
+    expect(fakes.enqueued).toEqual([]);
+    expect(fakes.handler.execute).not.toHaveBeenCalled();
     await runtime.stop();
   });
 

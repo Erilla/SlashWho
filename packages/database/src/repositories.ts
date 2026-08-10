@@ -128,6 +128,12 @@ export type FingerprintAdmission =
   | { kind: "waiting"; retryAt: Date }
   | { kind: "admitted"; reservationId: string; requestCap: number };
 
+export type FingerprintAdmissionDispatch =
+  | { kind: "admitted" }
+  | { kind: "waiting"; retryAt: Date }
+  | { kind: "not_due" }
+  | { kind: "settled" };
+
 export interface FingerprintSweepRepository {
   requestAdmission(input: {
     runId: string;
@@ -144,6 +150,7 @@ export interface FingerprintSweepRepository {
   ): Promise<void>;
   release(reservationId: string, at: Date): Promise<void>;
   listWaiting(limit: number): Promise<readonly string[]>;
+  admitWaiting(runId: string, at: Date): Promise<FingerprintAdmissionDispatch>;
 }
 
 export type SearchReservationResult =
