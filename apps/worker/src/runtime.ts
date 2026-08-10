@@ -6,6 +6,7 @@ import {
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger
 } from "@slashwho/application";
+import { createBlizzardClient } from "@slashwho/blizzard";
 import {
   createDiscoveryQueue,
   createPostgresRepositories,
@@ -44,6 +45,25 @@ export type WorkerRuntime = {
   stop(): Promise<void>;
 };
 
+export function createFingerprintIntegration(
+  config: WorkerConfig
+): Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint"> {
+  return {
+    blizzardGateway: createBlizzardClient({
+      fetch: globalThis.fetch,
+      clientId: config.blizzardClientId,
+      clientSecret: config.blizzardClientSecret
+    }),
+    fingerprint: {
+      requestCap: config.blizzardSweepRequestCap,
+      hourlyBudget: config.blizzardHourlyRequestBudget,
+      cadenceMs: config.fingerprintSweepCadenceHours * 60 * 60 * 1_000,
+      minimumCommon: config.fingerprintMinimumCommon,
+      minimumIdenticalPercent: config.fingerprintMinimumIdenticalPercent
+    }
+  };
+}
+
 const defaultDependencies: WorkerRuntimeDependencies = {
   createPool: (connectionString) => new Pool({ connectionString }),
   runMigrations: (pool) => runMigrations(pool as Pool),
@@ -55,6 +75,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       baseUrl: config.raiderIoBaseUrl,
       timeoutMs: config.raiderIoTimeoutMs
     }),
+  createFingerprintIntegration,
   createHandler: createDiscoveryJobHandler,
   sleep: (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds))

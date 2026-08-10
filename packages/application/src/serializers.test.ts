@@ -77,6 +77,25 @@ describe("public serializers", () => {
     );
   });
 
+  it("never exposes fingerprint source, score, queue, or reservation fields", () => {
+    // Break caught: private sweep evidence could turn a public alt list into a
+    // disclosure of how its links were discovered.
+    const fingerprintSnapshot = {
+      ...snapshot,
+      characters: snapshot.characters.map((character, index) => ({
+        ...character,
+        source: index === 0 ? "input" : "fingerprint"
+      }))
+    } as StoredSnapshot;
+
+    const resource = serializeCharacterResource(fingerprintSnapshot, run);
+
+    expect(resource).not.toHaveProperty("discoverySource");
+    expect(JSON.stringify(resource)).not.toMatch(
+      /fingerprint|score|reservation|queue/i
+    );
+  });
+
   it("returns only safe lifecycle fields for job status", () => {
     // Break caught: caller class, attempts, queue IDs, or root persistence fields could leak.
     const resource = serializeJobStatus({

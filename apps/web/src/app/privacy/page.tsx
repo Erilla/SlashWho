@@ -26,6 +26,13 @@ export default function PrivacyPage() {
         responses, and internal validation guesses are never stored or shown.
       </p>
 
+      <h2>Fingerprint-derived links</h2>
+      <p>
+        Privacy-hidden Raider.IO ownership is excluded from fingerprint-derived
+        links. Public alt lists do not disclose the discovery method for any
+        character relationship.
+      </p>
+
       <h2>Removal requests</h2>
       <p>
         Removal requests are manually verified. Submit a request using the{" "}

@@ -21,7 +21,11 @@ it("migrates and initializes the durable queue before serving searches", async (
     async enqueue() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async enqueueFingerprintAdmission() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
     async work() {},
+    async workFingerprintAdmissions() {},
     async scheduleMaintenanceCleanup() {},
     async stop() {},
     isReady() {

@@ -9,6 +9,13 @@ export type WorkerConfig = {
   negativeCacheTtlMs: number;
   raiderIoBaseUrl: string;
   raiderIoTimeoutMs: number;
+  blizzardClientId: string;
+  blizzardClientSecret: string;
+  blizzardSweepRequestCap: number;
+  blizzardHourlyRequestBudget: number;
+  fingerprintMinimumCommon: number;
+  fingerprintMinimumIdenticalPercent: number;
+  fingerprintSweepCadenceHours: number;
 };
 
 function positiveInteger(
@@ -21,6 +28,11 @@ function positiveInteger(
   return parsed;
 }
 
+function requiredString(value: string | undefined, code: string): string {
+  if (!value?.trim()) throw new Error(code);
+  return value;
+}
+
 export function loadWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): WorkerConfig {
@@ -28,6 +40,27 @@ export function loadWorkerConfig(
   const healthHost = environment.WORKER_HEALTH_HOST ?? "127.0.0.1";
   if (healthHost !== "127.0.0.1" && healthHost !== "0.0.0.0") {
     throw new Error("invalid_worker_health_host");
+  }
+  const blizzardClientId = requiredString(
+    environment.BLIZZARD_CLIENT_ID,
+    "blizzard_client_id_required"
+  );
+  const blizzardClientSecret = requiredString(
+    environment.BLIZZARD_CLIENT_SECRET,
+    "blizzard_client_secret_required"
+  );
+  const blizzardSweepRequestCap = positiveInteger(
+    environment.BLIZZARD_SWEEP_REQUEST_CAP,
+    0,
+    "invalid_blizzard_sweep_request_cap"
+  );
+  const blizzardHourlyRequestBudget = positiveInteger(
+    environment.BLIZZARD_HOURLY_REQUEST_BUDGET,
+    28_800,
+    "invalid_blizzard_hourly_request_budget"
+  );
+  if (blizzardSweepRequestCap > blizzardHourlyRequestBudget) {
+    throw new Error("invalid_blizzard_sweep_request_cap");
   }
 
   return {
@@ -65,6 +98,25 @@ export function loadWorkerConfig(
       environment.RAIDER_IO_TIMEOUT_MS,
       10_000,
       "invalid_raiderio_timeout"
+    ),
+    blizzardClientId,
+    blizzardClientSecret,
+    blizzardSweepRequestCap,
+    blizzardHourlyRequestBudget,
+    fingerprintMinimumCommon: positiveInteger(
+      environment.FINGERPRINT_MINIMUM_COMMON,
+      200,
+      "invalid_fingerprint_minimum_common"
+    ),
+    fingerprintMinimumIdenticalPercent: positiveInteger(
+      environment.FINGERPRINT_MINIMUM_IDENTICAL_PERCENT,
+      20,
+      "invalid_fingerprint_minimum_identical_percent"
+    ),
+    fingerprintSweepCadenceHours: positiveInteger(
+      environment.FINGERPRINT_SWEEP_CADENCE_HOURS,
+      168,
+      "invalid_fingerprint_sweep_cadence_hours"
     )
   };
 }

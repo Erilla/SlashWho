@@ -13,7 +13,7 @@ import type { RaiderIoGateway } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
-import { createWorkerRuntime } from "./runtime";
+import { createFingerprintIntegration, createWorkerRuntime } from "./runtime";
 
 const config: WorkerConfig = {
   databaseUrl: "postgres://worker:secret@database/slashwho",
@@ -25,7 +25,14 @@ const config: WorkerConfig = {
   discoveryRequestCap: 12,
   negativeCacheTtlMs: 300_000,
   raiderIoBaseUrl: "https://raider.io",
-  raiderIoTimeoutMs: 5_000
+  raiderIoTimeoutMs: 5_000,
+  blizzardClientId: "worker-client-id",
+  blizzardClientSecret: "worker-client-secret",
+  blizzardSweepRequestCap: 300,
+  blizzardHourlyRequestBudget: 28_800,
+  fingerprintMinimumCommon: 200,
+  fingerprintMinimumIdenticalPercent: 20,
+  fingerprintSweepCadenceHours: 168
 };
 
 function runtimeFakes() {
@@ -174,6 +181,24 @@ function runtimeFakes() {
 }
 
 describe("worker runtime", () => {
+  it("composes the worker-only Blizzard gateway and fingerprint limits", () => {
+    // Break caught: worker configuration could be loaded but never reach the
+    // fingerprint handler, leaving the private sweep feature dormant.
+    const integration = createFingerprintIntegration(config);
+
+    expect(integration.blizzardGateway).toMatchObject({
+      getGuildRoster: expect.any(Function),
+      getAchievementFingerprint: expect.any(Function)
+    });
+    expect(integration.fingerprint).toEqual({
+      requestCap: 300,
+      hourlyBudget: 28_800,
+      cadenceMs: 604_800_000,
+      minimumCommon: 200,
+      minimumIdenticalPercent: 20
+    });
+  });
+
   it("retries database startup before becoming ready and registering work", async () => {
     // Break caught: an independently-started worker could exit before PostgreSQL is ready.
     const fakes = runtimeFakes();
