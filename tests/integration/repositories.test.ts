@@ -792,6 +792,75 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({ kind: "admitted", requestCap: 5 });
   });
 
+  it("prunes fingerprint request events only once they leave the rolling hour", async () => {
+    // Break caught: one row per Blizzard request accumulates without limit, and
+    // a prune keyed on the reservation would delete events the rolling-hour
+    // budget still has to count.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_request_events,
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const sweptRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const admitted = await repositories.fingerprintSweeps.requestAdmission({
+      runId: sweptRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at: new Date("2026-08-10T12:00:00.000Z")
+    });
+    if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      1,
+      new Date("2026-08-10T12:10:00.000Z")
+    );
+    const lastRequestedAt = new Date("2026-08-10T12:55:00.000Z");
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      2,
+      lastRequestedAt
+    );
+    await repositories.fingerprintSweeps.release(
+      admitted.reservationId,
+      lastRequestedAt
+    );
+    await repositories.runs.fail(sweptRun.id, "upstream_unavailable");
+
+    const at = new Date("2026-08-10T13:20:00.000Z");
+    await expect(
+      repositories.fingerprintSweeps.cleanupExpired(at)
+    ).resolves.toBe(1);
+    const retained = await pool.query<{ requested_at: Date }>(
+      `SELECT requested_at FROM fingerprint_sweep_request_events
+       ORDER BY requested_at`
+    );
+    expect(retained.rows.map((row) => row.requested_at)).toEqual([
+      lastRequestedAt,
+      lastRequestedAt
+    ]);
+
+    const nextRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: nextRun.id,
+        key: rootKey,
+        requestCap: 2,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at
+      })
+    ).resolves.toMatchObject({
+      kind: "waiting",
+      retryAt: new Date("2026-08-10T13:55:00.000Z")
+    });
+  });
+
   it("retains each physical fingerprint request for its own rolling hour", async () => {
     // Break caught: extending a reservation expiry from its admission time can
     // undercount late Profile API requests and admit a budget-overlapping sweep.

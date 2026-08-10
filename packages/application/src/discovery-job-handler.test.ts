@@ -323,6 +323,9 @@ function createMemoryRepositories(): Repositories {
       async markDispatched() {},
       async admitWaiting() {
         return { kind: "settled" };
+      },
+      async cleanupExpired() {
+        return 0;
       }
     }
   };

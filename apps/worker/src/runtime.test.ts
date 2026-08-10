@@ -102,7 +102,8 @@ function runtimeFakes() {
   const cleanup = {
     rateLimits: vi.fn(async () => 2),
     negativeCache: vi.fn(async () => 3),
-    suppressions: vi.fn(async () => 4)
+    suppressions: vi.fn(async () => 4),
+    fingerprintRequests: vi.fn(async () => 5)
   };
   const repositories = {
     searchReservations: {
@@ -132,7 +133,8 @@ function runtimeFakes() {
         dispatchedFingerprintRuns.push(runId);
         const index = admittedUndispatchedFingerprintRuns.indexOf(runId);
         if (index >= 0) admittedUndispatchedFingerprintRuns.splice(index, 1);
-      }
+      },
+      cleanupExpired: cleanup.fingerprintRequests
     }
   } as unknown as Repositories;
   const sleeps: number[] = [];
@@ -387,6 +389,7 @@ describe("worker runtime", () => {
     expect(fakes.cleanup.rateLimits).toHaveBeenCalledOnce();
     expect(fakes.cleanup.negativeCache).toHaveBeenCalledOnce();
     expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
+    expect(fakes.cleanup.fingerprintRequests).toHaveBeenCalledOnce();
     await runtime.stop();
   });
 

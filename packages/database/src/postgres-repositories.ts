@@ -1539,6 +1539,23 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         } finally {
           client.release();
         }
+      },
+
+      async cleanupExpired(at = new Date()) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("fingerprint_cleanup_time_invalid");
+        }
+        // Each physical Blizzard request leaves one row, so the table would
+        // grow by the whole hourly budget every hour. A request stops counting
+        // towards the rolling hour once its own timestamp leaves the window, so
+        // prune on requested_at: deleting by reservation would drop events the
+        // admission accounting still has to see.
+        const result = await pool.query(
+          `DELETE FROM fingerprint_sweep_request_events
+           WHERE requested_at <= $1::timestamptz - interval '1 hour'`,
+          [at]
+        );
+        return result.rowCount ?? 0;
       }
     },
 

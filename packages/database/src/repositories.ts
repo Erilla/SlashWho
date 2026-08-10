@@ -168,6 +168,7 @@ export interface FingerprintSweepRepository {
   listAdmittedUndispatched(limit: number): Promise<readonly string[]>;
   markDispatched(runId: string, at: Date): Promise<void>;
   admitWaiting(runId: string, at: Date): Promise<FingerprintAdmissionDispatch>;
+  cleanupExpired(at?: Date): Promise<number>;
 }
 
 export type SearchReservationResult =
