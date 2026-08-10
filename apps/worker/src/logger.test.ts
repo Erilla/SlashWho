@@ -67,4 +67,42 @@ describe("worker logger", () => {
     expect(captured).toContain("[Circular]");
     expect(captured).not.toContain(marker);
   });
+
+  it("redacts every ephemeral fingerprint and credential marker", async () => {
+    // Break caught: diagnostic objects could serialize achievement material,
+    // access tokens, or comparison scores outside the handler allowlist.
+    const marker = "UNIQUE_FINGERPRINT_MARKER_414f8b";
+    const output = new PassThrough();
+    let captured = "";
+    output.on("data", (chunk) => {
+      captured += chunk.toString();
+    });
+    const logger = createWorkerLogger(output);
+
+    logger.info(
+      {
+        achievementId: marker,
+        achievementIds: marker,
+        achievementTimestamp: marker,
+        completionTimestamp: marker,
+        accessToken: marker,
+        refreshToken: marker,
+        fingerprint: marker,
+        fingerprintScore: marker,
+        matchScore: marker,
+        identicalPercent: marker,
+        nested: {
+          achievements: marker,
+          timestamps: marker,
+          token: marker,
+          score: marker
+        }
+      },
+      "fingerprint_event"
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(captured).toContain("fingerprint_event");
+    expect(captured).not.toContain(marker);
+  });
 });

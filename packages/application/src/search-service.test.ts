@@ -184,6 +184,24 @@ function policyFixture(
       async cleanupExpired() {
         return 0;
       }
+    },
+    fingerprintSweeps: {
+      async requestAdmission() {
+        return { kind: "not_due" };
+      },
+      async recordRequest() {},
+      async finish() {},
+      async release() {},
+      async listWaiting() {
+        return [];
+      },
+      async listAdmittedUndispatched() {
+        return [];
+      },
+      async markDispatched() {},
+      async admitWaiting() {
+        return { kind: "settled" };
+      }
     }
   } satisfies Repositories;
 

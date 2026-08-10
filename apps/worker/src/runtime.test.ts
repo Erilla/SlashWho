@@ -212,6 +212,46 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("passes an injected fingerprint integration to the discovery handler", async () => {
+    // Break caught: Task 6 composition could construct Blizzard dependencies
+    // that the runtime silently drops before handler orchestration.
+    const fakes = runtimeFakes();
+    const blizzardGateway = {} as NonNullable<
+      DiscoveryJobHandlerOptions["blizzardGateway"]
+    >;
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    Object.assign(fakes.dependencies, {
+      createFingerprintIntegration: () => ({
+        blizzardGateway,
+        fingerprint: {
+          requestCap: 300,
+          hourlyBudget: 28_800,
+          cadenceMs: 604_800_000,
+          minimumCommon: 200,
+          minimumIdenticalPercent: 20
+        }
+      }),
+      createHandler(options: DiscoveryJobHandlerOptions) {
+        handlerOptions = options;
+        return fakes.handler;
+      }
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(handlerOptions).toMatchObject({
+      blizzardGateway,
+      fingerprint: {
+        requestCap: 300,
+        hourlyBudget: 28_800,
+        cadenceMs: 604_800_000,
+        minimumCommon: 200,
+        minimumIdenticalPercent: 20
+      }
+    });
+    await runtime.stop();
+  });
+
   it("routes only run ids to the handler", async () => {
     // Break caught: private character lookup values could be forwarded into logs or handlers.
     const fakes = runtimeFakes();

@@ -5,7 +5,6 @@ import type {
   CallerClass,
   DiscoveryRun,
   FingerprintAdmission,
-  FingerprintAdmissionDispatch,
   Repositories,
   SnapshotHistoryItem,
   SnapshotHistoryPage,
@@ -1099,6 +1098,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             admissionId,
             input.at
           );
+          if (result.kind === "waiting") {
+            const deferred = await client.query(
+              `UPDATE discovery_runs
+               SET status = 'queued', attempt = greatest(attempt - 1, 0),
+                   next_retry_at = NULL
+               WHERE id = $1 AND status IN ('running', 'queued')`,
+              [input.runId]
+            );
+            if (deferred.rowCount !== 1) {
+              throw new Error("fingerprint_waiting_run_not_running");
+            }
+          }
           await client.query("COMMIT");
           return result;
         } catch (error) {

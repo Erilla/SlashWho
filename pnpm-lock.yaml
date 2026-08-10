@@ -145,6 +145,9 @@ importers:
 
   packages/application:
     dependencies:
+      '@slashwho/blizzard':
+        specifier: workspace:*
+        version: link:../blizzard
       '@slashwho/contracts':
         specifier: workspace:*
         version: link:../contracts

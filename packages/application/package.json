@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@slashwho/blizzard": "workspace:*",
     "@slashwho/contracts": "workspace:*",
     "@slashwho/database": "workspace:*",
     "@slashwho/domain": "workspace:*",

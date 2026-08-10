@@ -5,11 +5,13 @@ import type {
 } from "@slashwho/database";
 import type {
   CharacterKey,
+  FingerprintCandidate,
   RaiderIoCharacter,
   RaiderIoGateway,
   RaiderIoProfile
 } from "@slashwho/domain";
-import { describe, expect, it } from "vitest";
+import type { BlizzardGateway } from "@slashwho/blizzard";
+import { describe, expect, it, vi } from "vitest";
 
 import { createDiscoveryJobHandler } from "./discovery-job-handler";
 
@@ -28,6 +30,20 @@ const thirdKey: CharacterKey = {
   realm: "area-52",
   name: "third"
 };
+const fingerprintKey: CharacterKey = {
+  region: "eu",
+  realm: "silvermoon",
+  name: "fingerprint-match"
+};
+
+function achievementFingerprint(count = 200): ReadonlyMap<number, number> {
+  return new Map(
+    Array.from({ length: count }, (_unused, index) => [
+      index + 1,
+      1_700_000_000 + index
+    ])
+  );
+}
 
 function character(key: CharacterKey): RaiderIoCharacter {
   return {
@@ -72,6 +88,21 @@ class MutableGateway implements RaiderIoGateway {
     void _signal;
     if (this.failure) throw this.failure;
     return null;
+  }
+}
+
+class MutableBlizzardGateway implements BlizzardGateway {
+  roster: readonly FingerprintCandidate[] = [];
+  fingerprints = new Map<string, ReadonlyMap<number, number>>();
+
+  async getGuildRoster(): Promise<readonly FingerprintCandidate[]> {
+    return this.roster;
+  }
+
+  async getAchievementFingerprint(
+    key: CharacterKey
+  ): Promise<ReadonlyMap<number, number>> {
+    return this.fingerprints.get(keyId(key)) ?? new Map();
   }
 }
 
@@ -263,6 +294,24 @@ function createMemoryRepositories(): Repositories {
       async cleanupExpired() {
         return 0;
       }
+    },
+    fingerprintSweeps: {
+      async requestAdmission() {
+        return { kind: "not_due" };
+      },
+      async recordRequest() {},
+      async finish() {},
+      async release() {},
+      async listWaiting() {
+        return [];
+      },
+      async listAdmittedUndispatched() {
+        return [];
+      },
+      async markDispatched() {},
+      async admitWaiting() {
+        return { kind: "settled" };
+      }
     }
   };
 
@@ -283,6 +332,14 @@ function handlerFor(
   return createDiscoveryJobHandler({
     repositories,
     gateway,
+    blizzardGateway: new MutableBlizzardGateway(),
+    fingerprint: {
+      requestCap: 300,
+      hourlyBudget: 28_800,
+      cadenceMs: 7 * 24 * 60 * 60 * 1_000,
+      minimumCommon: 200,
+      minimumIdenticalPercent: 20
+    },
     requestCap: 12,
     now: () => new Date("2026-08-05T08:00:00.000Z"),
     random: () => 0,
@@ -303,6 +360,258 @@ function delivery(attempt = 1, maxAttempts = 5) {
 }
 
 describe("discovery job handler", () => {
+  it("defers an eligible run to private FIFO admission without consuming a delivery retry", async () => {
+    // Break caught: budget waiting could consume a discovery retry or publish
+    // the Raider.IO-only intermediate result before the atomic sweep resumes.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const retryAt = new Date("2026-08-05T08:15:00.000Z");
+    repositories.fingerprintSweeps.requestAdmission = async () => {
+      const claimed = await repositories.runs.find(run.id);
+      if (!claimed) throw new Error("discovery_run_not_found");
+      claimed.status = "queued";
+      claimed.attempt -= 1;
+      return { kind: "waiting", retryAt };
+    };
+    const gateway = new MutableGateway();
+    gateway.getCharacter = vi.fn(gateway.getCharacter.bind(gateway));
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.getGuildRoster = vi.fn(
+      blizzardGateway.getGuildRoster.bind(blizzardGateway)
+    );
+
+    await handlerFor(repositories, gateway, { blizzardGateway }).execute(
+      run.id,
+      delivery()
+    );
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "queued",
+      attempt: 0
+    });
+    expect(gateway.getCharacter).toHaveBeenCalled();
+    expect(blizzardGateway.getGuildRoster).not.toHaveBeenCalled();
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toBeNull();
+  });
+
+  it("accounts for an admitted sweep and publishes one deduplicated merged snapshot", async () => {
+    // Break caught: fingerprint observations could be published separately,
+    // duplicated, or consume Blizzard capacity without durable accounting.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = vi.fn(async () => ({
+      kind: "admitted" as const,
+      reservationId: "reservation-1",
+      requestCap: 300
+    }));
+    repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {});
+    repositories.fingerprintSweeps.finish = vi.fn(async () => {});
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [
+      {
+        key: secondKey,
+        displayName: "Second from Blizzard",
+        className: "Mage",
+        level: 80
+      },
+      {
+        key: fingerprintKey,
+        displayName: "Fingerprint Match",
+        className: "Priest",
+        level: 80
+      }
+    ];
+    const fingerprint = achievementFingerprint();
+    blizzardGateway.fingerprints.set(keyId(rootKey), fingerprint);
+    blizzardGateway.fingerprints.set(keyId(secondKey), fingerprint);
+    blizzardGateway.fingerprints.set(keyId(fingerprintKey), fingerprint);
+    const snapshotCreate = vi.spyOn(repositories.snapshots, "create");
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway
+    }).execute(run.id, delivery());
+
+    expect(snapshotCreate).toHaveBeenCalledOnce();
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({
+      state: "complete",
+      limitationCode: null,
+      characterCount: 4,
+      characters: expect.arrayContaining([
+        expect.objectContaining({ key: fingerprintKey, source: "fingerprint" }),
+        expect.objectContaining({ key: secondKey, source: "claimed" })
+      ])
+    });
+    expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledTimes(
+      4
+    );
+    expect(repositories.fingerprintSweeps.finish).toHaveBeenCalledWith(
+      "reservation-1",
+      expect.objectContaining({ published: true, limitationCode: null })
+    );
+  });
+
+  it("publishes a cap-bounded partial result", async () => {
+    // Break caught: exhausting the reserved cap could publish a complete result
+    // or retry and discard the permitted partial snapshot.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation-capped",
+      requestCap: 2
+    });
+    repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {});
+    repositories.fingerprintSweeps.finish = vi.fn(async () => {});
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [
+      {
+        key: fingerprintKey,
+        displayName: "Fingerprint Match",
+        className: "Priest",
+        level: 80
+      }
+    ];
+    blizzardGateway.fingerprints.set(rootKey.name, achievementFingerprint());
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway
+    }).execute(run.id, delivery());
+
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({
+      state: "partial",
+      limitationCode: "fingerprint_sweep_capped",
+      characterCount: 3
+    });
+    expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledTimes(
+      2
+    );
+    expect(repositories.fingerprintSweeps.finish).toHaveBeenCalledWith(
+      "reservation-capped",
+      expect.objectContaining({
+        published: true,
+        limitationCode: "fingerprint_sweep_capped"
+      })
+    );
+  });
+
+  it("releases a failed fingerprint reservation and retries without publication", async () => {
+    // Break caught: a Blizzard failure could expose a half-merged snapshot or
+    // retain unused reserved capacity across the retry.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation-failed",
+      requestCap: 300
+    });
+    repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {});
+    repositories.fingerprintSweeps.release = vi.fn(async () => {});
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.getGuildRoster = async () => {
+      throw Object.assign(new Error("private-upstream-marker"), {
+        kind: "transient",
+        retryAfterMs: 30_000
+      });
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        blizzardGateway
+      }).execute(run.id, delivery())
+    ).rejects.toMatchObject({ retryable: true, retryAfterMs: 30_000 });
+
+    expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledOnce();
+    expect(repositories.fingerprintSweeps.release).toHaveBeenCalledWith(
+      "reservation-failed",
+      expect.any(Date)
+    );
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toBeNull();
+  });
+
+  it("releases an aborted fingerprint reservation without publishing or reconciling", async () => {
+    // Break caught: worker shutdown could leak a reservation or persist the
+    // transient Raider.IO half of an abandoned atomic sweep.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation-aborted",
+      requestCap: 300
+    });
+    repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {});
+    repositories.fingerprintSweeps.release = vi.fn(async () => {});
+    const controller = new AbortController();
+    const abortReason = new DOMException("drain timeout", "AbortError");
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.getGuildRoster = async () => {
+      controller.abort(abortReason);
+      return [];
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        blizzardGateway
+      }).execute(run.id, { ...delivery(), signal: controller.signal })
+    ).rejects.toBe(abortReason);
+
+    expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledOnce();
+    expect(repositories.fingerprintSweeps.release).toHaveBeenCalledWith(
+      "reservation-aborted",
+      expect.any(Date)
+    );
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "running",
+      snapshotId: null,
+      errorCode: null
+    });
+  });
+
+  it("never starts a fingerprint sweep from privacy-hidden root ownership", async () => {
+    // Break caught: a root whose Raider.IO ownership is intentionally hidden
+    // could seed inferred links despite the project's sole privacy signal.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = vi.fn(async () => ({
+      kind: "admitted" as const,
+      reservationId: "privacy-reservation",
+      requestCap: 300
+    }));
+    const gateway = new MutableGateway();
+    gateway.getCharacter = async () => ({
+      ...character(rootKey),
+      ownerId: null
+    });
+    gateway.resolveProfileGuess = async () => null;
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.getGuildRoster = vi.fn(
+      blizzardGateway.getGuildRoster.bind(blizzardGateway)
+    );
+
+    await handlerFor(repositories, gateway, { blizzardGateway }).execute(
+      run.id,
+      delivery()
+    );
+
+    expect(
+      repositories.fingerprintSweeps.requestAdmission
+    ).not.toHaveBeenCalled();
+    expect(blizzardGateway.getGuildRoster).not.toHaveBeenCalled();
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({
+      state: "partial",
+      limitationCode: "privacy_hidden"
+    });
+  });
+
   it("emits one allowlisted operational record per completed discovery", async () => {
     // Break caught: a production discovery could succeed or fail with nothing
     // operable in the logs, or could log private lookup values while becoming visible.
@@ -331,7 +640,11 @@ describe("discovery job handler", () => {
         state: "complete",
         limitationCode: null,
         characterCount: 3,
-        durationMs: 0
+        durationMs: 0,
+        fingerprintQueueWaitMs: null,
+        fingerprintReservedRequests: 0,
+        fingerprintUsedRequests: 0,
+        fingerprintDurationMs: 0
       }
     ]);
   });
@@ -367,7 +680,11 @@ describe("discovery job handler", () => {
         state: null,
         limitationCode: null,
         characterCount: 0,
-        durationMs: 0
+        durationMs: 0,
+        fingerprintQueueWaitMs: null,
+        fingerprintReservedRequests: 0,
+        fingerprintUsedRequests: 0,
+        fingerprintDurationMs: 0
       }
     ]);
     expect(JSON.stringify(events)).not.toContain(marker);

@@ -545,6 +545,51 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
   });
 
+  it("atomically returns a budget-waiting discovery run to its unconsumed delivery", async () => {
+    // Break caught: a crash after persisting private admission could leave the
+    // run running, or its redispatch could start past the original retry count.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const blockerRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    const waitingRun = await repositories.runs.createOrReuse(
+      altKey,
+      "anonymous"
+    );
+    await repositories.runs.claim(waitingRun.id, 1);
+    const blocker = await repositories.fingerprintSweeps.requestAdmission({
+      runId: blockerRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    });
+    expect(blocker.kind).toBe("admitted");
+
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: waitingRun.id,
+        key: altKey,
+        requestCap: 1,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at
+      })
+    ).resolves.toMatchObject({ kind: "waiting" });
+
+    await expect(repositories.runs.find(waitingRun.id)).resolves.toMatchObject({
+      status: "queued",
+      attempt: 0
+    });
+  });
+
   it("admits a durable waiting run through private admission dispatch after budget frees", async () => {
     // Break caught: waiting sweeps could need another discovery delivery instead of being admitted privately.
     await pool.query(`TRUNCATE TABLE

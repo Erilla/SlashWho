@@ -32,6 +32,9 @@ export type WorkerRuntimeDependencies = {
   createRepositories: (pool: RuntimePool) => Repositories;
   createQueue: (connectionString: string) => DiscoveryQueue;
   createGateway: (config: WorkerConfig) => RaiderIoGateway;
+  createFingerprintIntegration?: (
+    config: WorkerConfig
+  ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
 };
@@ -95,9 +98,12 @@ export async function createWorkerRuntime(
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
     const gateway = dependencies.createGateway(config);
+    const fingerprintIntegration =
+      dependencies.createFingerprintIntegration?.(config);
     const handler = dependencies.createHandler({
       repositories,
       gateway,
+      ...fingerprintIntegration,
       requestCap: config.discoveryRequestCap,
       negativeCacheTtlMs: config.negativeCacheTtlMs,
       ...(logger ? { logger } : {})
