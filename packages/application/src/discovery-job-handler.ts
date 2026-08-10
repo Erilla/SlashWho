@@ -239,11 +239,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             Extract<DiscoveryOutcome, { kind: "failure" }> | undefined;
           const fingerprint = options.fingerprint;
           const blizzardGateway = options.blizzardGateway;
-          const privacyHiddenRoot =
-            outcome.state === "partial" &&
-            (outcome.limitationCode === "privacy_hidden" ||
-              outcome.privacyHiddenObserved === true);
-          if (fingerprint && blizzardGateway && !privacyHiddenRoot) {
+          if (fingerprint && blizzardGateway) {
             const admissionTime = now();
             const admission =
               await options.repositories.fingerprintSweeps.requestAdmission({
@@ -350,9 +346,6 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       fingerprint.minimumIdenticalPercent,
                     isSuppressed: (key) =>
                       options.repositories.suppressions.isActive(key),
-                    isPrivacyHidden: async (key) =>
-                      (await options.gateway.getCharacter(key, context.signal))
-                        .ownerId === null,
                     signal: context.signal
                   }
                 );
