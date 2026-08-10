@@ -10,6 +10,7 @@ import { createRaiderIoClient } from "./index";
 type FixtureName =
   | "character-visible-owner"
   | "character-private-owner"
+  | "character-empty-discord"
   | "character-declared-main"
   | "character-declared-main-out-of-scope"
   | "character-renamed-root"
@@ -164,6 +165,17 @@ describe("Raider.IO gateway", () => {
 
     expect(character.ownerId).toBeNull();
     expect(character.profileGuess).toBe("profile-candidate");
+  });
+
+  it("treats an empty customization field as absent, not as schema drift", async () => {
+    // Break caught: Raider.IO sends "" for a customization a player never set.
+    // Rejecting it raised non-retryable schema_drift, so every character with an
+    // empty Discord field failed its search permanently.
+    const character = await clientFor("character-empty-discord").getCharacter(
+      sentinel
+    );
+
+    expect(character.profileGuess).toBeNull();
   });
 
   it("extracts and normalizes a declared-main character key", async () => {
