@@ -50,6 +50,15 @@ export type DiscoverFingerprintMatchesOptions = {
   signal?: AbortSignal;
 };
 
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "kind" in error &&
+    error.kind === "not_found"
+  );
+}
+
 function isCharacterKey(value: unknown): value is CharacterKey {
   if (typeof value !== "object" || value === null) return false;
 
@@ -211,17 +220,37 @@ export async function discoverFingerprintMatches(
   }
 
   try {
-    const roster = await request(() =>
-      gateway.getGuildRoster(root, options.signal)
-    );
+    // Blizzard holds no current profile for plenty of characters Raider.IO
+    // knows, and answers 404. That makes this root unsweepable rather than the
+    // upstream broken, so report an empty sweep and let its Raider.IO snapshot
+    // publish instead of stranding the run on a retry that cannot succeed.
+    let roster: readonly FingerprintCandidate[] | typeof budgetExhausted;
+    try {
+      roster = await request(() =>
+        gateway.getGuildRoster(root, options.signal)
+      );
+    } catch (error) {
+      if (isNotFound(error)) {
+        return { kind: "matched", characters: [], requestsUsed };
+      }
+      throw error;
+    }
     if (roster === budgetExhausted) {
       return { kind: "capped", characters: [], requestsUsed };
     }
     if (!isCandidateList(roster)) throw { kind: "schema_drift" };
 
-    const rootFingerprint = await request(() =>
-      gateway.getAchievementFingerprint(root, options.signal)
-    );
+    let rootFingerprint: ReadonlyMap<number, number> | typeof budgetExhausted;
+    try {
+      rootFingerprint = await request(() =>
+        gateway.getAchievementFingerprint(root, options.signal)
+      );
+    } catch (error) {
+      if (isNotFound(error)) {
+        return { kind: "matched", characters: [], requestsUsed };
+      }
+      throw error;
+    }
     if (rootFingerprint === budgetExhausted) {
       return { kind: "capped", characters: [], requestsUsed };
     }
@@ -249,9 +278,19 @@ export async function discoverFingerprintMatches(
       throwIfAborted();
       if (isPrivacyHidden) continue;
 
-      const candidateFingerprint = await request(() =>
-        gateway.getAchievementFingerprint(candidate.key, options.signal)
-      );
+      // A roster member with no readable achievement profile is ordinary, not an
+      // upstream fault: the measured live sweep saw 23 of 393 candidates return
+      // one. Skip the candidate and keep the request it already consumed.
+      let candidateFingerprint:
+        ReadonlyMap<number, number> | typeof budgetExhausted;
+      try {
+        candidateFingerprint = await request(() =>
+          gateway.getAchievementFingerprint(candidate.key, options.signal)
+        );
+      } catch (error) {
+        if (isNotFound(error)) continue;
+        throw error;
+      }
       if (candidateFingerprint === budgetExhausted) break;
       if (!isFingerprint(candidateFingerprint)) throw { kind: "schema_drift" };
 
