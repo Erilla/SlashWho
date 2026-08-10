@@ -8,6 +8,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "ops:removals": "tsx scripts/removals.mts",
+    "prototype:fingerprint-sweep": "tsx scripts/prototypes/fingerprint-sweep-measurement.ts",
     "typecheck": "tsc -p tsconfig.tools.json && pnpm -r typecheck",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
