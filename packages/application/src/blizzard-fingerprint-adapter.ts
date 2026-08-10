@@ -6,7 +6,7 @@ export function createBlizzardFingerprintAdapter(
   options: {
     requestCap: number;
     recordRequest: () => Promise<void>;
-    onRateLimited?: () => void;
+    onRateLimited?: () => Promise<void> | void;
   }
 ): FingerprintGateway {
   let requestsUsed = 0;
@@ -32,7 +32,7 @@ export function createBlizzardFingerprintAdapter(
         (error as { kind?: unknown }).kind === "transient" &&
         (error as { status?: unknown }).status === 429
       ) {
-        options.onRateLimited?.();
+        await options.onRateLimited?.();
       }
       throw error;
     }

@@ -792,6 +792,47 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({ kind: "admitted", requestCap: 5 });
   });
 
+  it("retains each physical fingerprint request for its own rolling hour", async () => {
+    // Break caught: extending a reservation expiry from its admission time can
+    // undercount late Profile API requests and admit a budget-overlapping sweep.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_request_events,
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const admittedAt = new Date("2026-08-10T12:00:00.000Z");
+    const firstRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const admitted = await repositories.fingerprintSweeps.requestAdmission({
+      runId: firstRun.id,
+      key: rootKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at: admittedAt
+    });
+    if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
+    const usedAt = new Date("2026-08-10T12:55:00.000Z");
+    await repositories.fingerprintSweeps.recordRequest(admitted.reservationId, 3, usedAt);
+    await repositories.fingerprintSweeps.release(admitted.reservationId, usedAt);
+    await repositories.runs.fail(firstRun.id, "upstream_unavailable");
+
+    const secondRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: secondRun.id,
+        key: rootKey,
+        requestCap: 1,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at: new Date("2026-08-10T13:10:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      kind: "waiting",
+      retryAt: new Date("2026-08-10T13:55:00.000Z")
+    });
+  });
+
   it("returns not due only after a published sweep within its cadence", async () => {
     // Break caught: a partial, unpublished, or aborted sweep could suppress a later sweep.
     await pool.query(`TRUNCATE TABLE

@@ -379,12 +379,13 @@ describe("discovery job handler", () => {
     const repositories = createMemoryRepositories();
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
     const retryAt = new Date("2026-08-05T08:15:00.000Z");
+    const blockedSince = new Date("2026-08-05T07:44:00.000Z");
     repositories.fingerprintSweeps.requestAdmission = async () => {
       const claimed = await repositories.runs.find(run.id);
       if (!claimed) throw new Error("discovery_run_not_found");
       claimed.status = "queued";
       claimed.attempt -= 1;
-      return { kind: "waiting", retryAt };
+      return { kind: "waiting", retryAt, blockedSince };
     };
     const gateway = new MutableGateway();
     gateway.getCharacter = vi.fn(gateway.getCharacter.bind(gateway));
@@ -394,9 +395,15 @@ describe("discovery job handler", () => {
     );
 
     const enqueueFingerprintAdmission = vi.fn(async () => {});
+    const alerts: unknown[] = [];
     await handlerFor(repositories, gateway, {
       blizzardGateway,
-      enqueueFingerprintAdmission
+      enqueueFingerprintAdmission,
+      fingerprintAlertNotifier: {
+        notify: async (alert) => {
+          alerts.push(alert);
+        }
+      }
     }).execute(
       run.id,
       delivery()
@@ -409,6 +416,12 @@ describe("discovery job handler", () => {
     expect(gateway.getCharacter).toHaveBeenCalled();
     expect(blizzardGateway.getGuildRoster).not.toHaveBeenCalled();
     expect(enqueueFingerprintAdmission).toHaveBeenCalledWith(run.id);
+    expect(alerts).toEqual([
+      {
+        event: "fingerprint_admission_blocked",
+        details: { blockedForMs: 16 * 60_000 }
+      }
+    ]);
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toBeNull();

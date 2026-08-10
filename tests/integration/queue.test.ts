@@ -13,6 +13,7 @@ import { startPostgres } from "./postgres";
 
 const queueName = "discover-character";
 const maintenanceQueueName = "maintenance-cleanup";
+const fingerprintAdmissionQueueName = "fingerprint-admission";
 const key: CharacterKey = {
   region: "eu",
   realm: "silvermoon",
@@ -46,8 +47,8 @@ describe("durable discovery queue", () => {
 
   afterEach(async () => {
     await Promise.allSettled(cleanup.splice(0).map((stop) => stop()));
-    await applicationPool.query("DELETE FROM pgboss.job WHERE name = $1", [
-      queueName
+    await applicationPool.query("DELETE FROM pgboss.job WHERE name = ANY($1)", [
+      [queueName, fingerprintAdmissionQueueName]
     ]);
   });
 
@@ -115,6 +116,37 @@ describe("durable discovery queue", () => {
     await expect(
       inspector.findJobs(queueName, { id: first })
     ).resolves.toHaveLength(1);
+  });
+
+  it("keeps one private admission job across concurrent restarted queues", async () => {
+    // Break caught: startup recovery could create an extra private admission
+    // delivery after another worker already persisted the same singleton key.
+    const runId = "00000000-0000-4000-8000-000000000010";
+    const first = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => first.stop({ graceful: false, timeoutMs: 1_000 }));
+    await first.start();
+    await first.enqueueFingerprintAdmission(runId);
+    await first.stop({ graceful: false, timeoutMs: 1_000 });
+
+    const restarted = createDiscoveryQueue({ connectionString });
+    const replica = createDiscoveryQueue({ connectionString });
+    cleanup.push(
+      () => restarted.stop({ graceful: false, timeoutMs: 1_000 }),
+      () => replica.stop({ graceful: false, timeoutMs: 1_000 })
+    );
+    await Promise.all([restarted.start(), replica.start()]);
+    await Promise.all([
+      restarted.enqueueFingerprintAdmission(runId),
+      replica.enqueueFingerprintAdmission(runId)
+    ]);
+
+    const rows = await applicationPool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM pgboss.job
+       WHERE name = $1 AND singleton_key = $2 AND state IN ('created', 'active')`,
+      [fingerprintAdmissionQueueName, runId]
+    );
+    expect(rows.rows[0]?.count).toBe("1");
   });
 
   it("keeps repeated maintenance scheduling idempotent", async () => {

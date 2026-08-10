@@ -4,6 +4,7 @@ export type {
   DiscoveryJobHandler,
   DiscoveryJobHandlerOptions,
   DiscoveryLogger,
+  FingerprintAlertNotifier,
   RetryableDiscoveryError
 } from "./discovery-job-handler";
 export {

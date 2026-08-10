@@ -97,10 +97,15 @@ function assertFingerprintAdmissionInput(input: {
 
 async function fingerprintRetryAt(client: Queryable, at: Date): Promise<Date> {
   const result = await client.query<{ retry_at: Date | null }>(
-    `SELECT min(expires_at) AS retry_at
-     FROM fingerprint_sweep_reservations
-     WHERE expires_at > $1
-       AND (released_at IS NULL OR used_count > 0)`,
+    `SELECT min(retry_at) AS retry_at FROM (
+       SELECT expires_at AS retry_at
+       FROM fingerprint_sweep_reservations
+       WHERE expires_at > $1 AND released_at IS NULL
+       UNION ALL
+       SELECT requested_at + interval '1 hour' AS retry_at
+       FROM fingerprint_sweep_request_events
+       WHERE requested_at + interval '1 hour' > $1
+     ) retained`,
     [at]
   );
   return result.rows[0]?.retry_at ?? at;
@@ -115,8 +120,9 @@ async function admitFingerprintWaitingRun(
     id: string;
     request_cap: number;
     hourly_budget: number;
+    requested_at: Date;
   }>(
-    `SELECT admission.id, admission.request_cap, admission.hourly_budget
+    `SELECT admission.id, admission.request_cap, admission.hourly_budget, admission.requested_at
      FROM fingerprint_sweep_admissions admission
      LEFT JOIN fingerprint_sweep_states state
        ON state.region = admission.region
@@ -133,25 +139,36 @@ async function admitFingerprintWaitingRun(
   );
   const candidate = head.rows[0];
   if (!candidate || candidate.id !== admissionId) {
-    return { kind: "waiting", retryAt: await fingerprintRetryAt(client, at) };
+    const requested = await client.query<{ requested_at: Date }>(
+      `SELECT requested_at FROM fingerprint_sweep_admissions WHERE id = $1`,
+      [admissionId]
+    );
+    return {
+      kind: "waiting",
+      retryAt: await fingerprintRetryAt(client, at),
+      blockedSince: requested.rows[0]?.requested_at
+    };
   }
 
   const usage = await client.query<{ commitment: string }>(
-    `SELECT coalesce(sum(
-       used_count + CASE
-         WHEN released_at IS NULL THEN request_cap - used_count
-         ELSE 0
-       END
-     ), 0)::text AS commitment
-     FROM fingerprint_sweep_reservations
-     WHERE expires_at > $1`,
+    `SELECT (
+       SELECT count(*) FROM fingerprint_sweep_request_events
+       WHERE requested_at > $1::timestamptz - interval '1 hour'
+     ) + coalesce(sum(request_cap - used_count) FILTER (
+       WHERE released_at IS NULL AND expires_at > $1
+     ), 0)::bigint AS commitment
+     FROM fingerprint_sweep_reservations`,
     [at]
   );
   if (
     Number(usage.rows[0]!.commitment) + candidate.request_cap >
     candidate.hourly_budget
   ) {
-    return { kind: "waiting", retryAt: await fingerprintRetryAt(client, at) };
+    return {
+      kind: "waiting",
+      retryAt: await fingerprintRetryAt(client, at),
+      blockedSince: candidate.requested_at
+    };
   }
 
   const reservation = await client.query<{ id: string }>(
@@ -1332,8 +1349,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await lockFingerprintSweeps(client);
           const result = await client.query(
             `UPDATE fingerprint_sweep_reservations
-             SET used_count = used_count + $2,
-                 expires_at = greatest(expires_at, $3::timestamptz + interval '1 hour')
+             SET used_count = used_count + $2
              WHERE id = $1
                AND released_at IS NULL
                AND expires_at > $3
@@ -1344,6 +1360,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           if (result.rowCount !== 1) {
             throw new Error("fingerprint_reservation_not_active");
           }
+          await client.query(
+            `INSERT INTO fingerprint_sweep_request_events (reservation_id, requested_at)
+             SELECT $1, $3::timestamptz FROM generate_series(1, $2)`,
+            [reservationId, count, at]
+          );
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);

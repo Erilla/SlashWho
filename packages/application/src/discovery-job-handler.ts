@@ -14,6 +14,14 @@ export type DiscoveryLogger = {
   info(value: Record<string, unknown>): void;
 };
 
+/** Delivery seam for a maintainer-owned alert integration (PagerDuty, email, etc.). */
+export type FingerprintAlertNotifier = {
+  notify(alert: {
+    event: "fingerprint_admission_blocked" | "fingerprint_reservation_pressure" | "fingerprint_blizzard_rate_limited";
+    details: Record<string, number>;
+  }): Promise<void> | void;
+};
+
 export type DiscoveryJobHandlerOptions = {
   repositories: Repositories;
   gateway: RaiderIoGateway;
@@ -37,6 +45,7 @@ export type DiscoveryJobHandlerOptions = {
   maxAttempts?: number;
   negativeCacheTtlMs?: number;
   logger?: DiscoveryLogger;
+  fingerprintAlertNotifier?: FingerprintAlertNotifier;
   monotonic?: () => number;
 };
 
@@ -255,10 +264,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 0,
                 admission.retryAt.getTime() - admissionTime.getTime()
               );
-              if (record.fingerprintQueueWaitMs >= 15 * 60_000) {
+              const blockedForMs = admission.blockedSince
+                ? Math.max(0, admissionTime.getTime() - admission.blockedSince.getTime())
+                : 0;
+              if (blockedForMs >= 15 * 60_000) {
                 options.logger?.info({
                   event: "fingerprint_admission_blocked",
-                  queueWaitMs: record.fingerprintQueueWaitMs
+                  blockedForMs
+                });
+                await options.fingerprintAlertNotifier?.notify({
+                  event: "fingerprint_admission_blocked",
+                  details: { blockedForMs }
                 });
               }
               return;
@@ -277,6 +293,13 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   event: "fingerprint_reservation_pressure",
                   committedRequests: admission.committedRequests,
                   hourlyBudget: admission.hourlyBudget
+                });
+                await options.fingerprintAlertNotifier?.notify({
+                  event: "fingerprint_reservation_pressure",
+                  details: {
+                    committedRequests: admission.committedRequests,
+                    hourlyBudget: admission.hourlyBudget
+                  }
                 });
               }
               const releaseReservation = async () => {
@@ -300,10 +323,13 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       );
                       record.fingerprintUsedRequests += 1;
                     },
-                    onRateLimited: () =>
-                      options.logger?.info({
-                        event: "fingerprint_blizzard_rate_limited"
-                      })
+                    onRateLimited: async () => {
+                      options.logger?.info({ event: "fingerprint_blizzard_rate_limited" });
+                      await options.fingerprintAlertNotifier?.notify({
+                        event: "fingerprint_blizzard_rate_limited",
+                        details: {}
+                      });
+                    }
                   }
                 );
                 const sweep = await discoverFingerprintMatches(

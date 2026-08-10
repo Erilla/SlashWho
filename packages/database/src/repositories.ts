@@ -134,7 +134,7 @@ export interface NegativeCacheRepository {
 
 export type FingerprintAdmission =
   | { kind: "not_due" }
-  | { kind: "waiting"; retryAt: Date }
+  | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
   | {
       kind: "admitted";
       reservationId: string;
@@ -145,7 +145,7 @@ export type FingerprintAdmission =
 
 export type FingerprintAdmissionDispatch =
   | { kind: "admitted" }
-  | { kind: "waiting"; retryAt: Date }
+  | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
   | { kind: "not_due" }
   | { kind: "settled" };
 

@@ -140,9 +140,15 @@ export function createDiscoveryQueue(
   return {
     async start() {
       await boss.start();
-      await boss.createQueue(discoverCharacterQueueName, queueOptions);
+      await boss.createQueue(discoverCharacterQueueName, {
+        ...queueOptions,
+        // pg-boss persists this policy and its singleton-key index, so duplicate
+        // recovery sends from a restarted worker remain one durable delivery.
+        policy: "stately"
+      });
       await boss.updateQueue(discoverCharacterQueueName, queueOptions);
       await boss.createQueue(fingerprintAdmissionQueueName, {
+        policy: "stately",
         retryLimit: 2_147_483_647,
         retryDelay: 60,
         expireInSeconds: 300

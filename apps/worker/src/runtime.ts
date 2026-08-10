@@ -163,9 +163,11 @@ export async function createWorkerRuntime(
         new Date()
       );
       if (admission.kind === "waiting") {
-        const queueWaitMs = Math.max(0, admission.retryAt.getTime() - Date.now());
-        if (queueWaitMs >= 15 * 60_000) {
-          logger?.info({ event: "fingerprint_admission_blocked", queueWaitMs });
+        const blockedForMs = admission.blockedSince
+          ? Math.max(0, Date.now() - admission.blockedSince.getTime())
+          : 0;
+        if (blockedForMs >= 15 * 60_000) {
+          logger?.info({ event: "fingerprint_admission_blocked", blockedForMs });
         }
         throw fingerprintAdmissionRetry(admission.retryAt);
       }
