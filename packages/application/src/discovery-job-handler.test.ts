@@ -404,10 +404,7 @@ describe("discovery job handler", () => {
           alerts.push(alert);
         }
       }
-    }).execute(
-      run.id,
-      delivery()
-    );
+    }).execute(run.id, delivery());
 
     await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
       status: "queued",
@@ -558,7 +555,11 @@ describe("discovery job handler", () => {
     });
     repositories.fingerprintSweeps.release = vi.fn(async () => {});
     const blizzardGateway = new MutableBlizzardGateway();
-    blizzardGateway.getGuildRoster = async (_key, _signal, onProfileRequest) => {
+    blizzardGateway.getGuildRoster = async (
+      _key,
+      _signal,
+      onProfileRequest
+    ) => {
       await onProfileRequest?.();
       events.push("upstream");
       throw Object.assign(new Error("private-upstream-marker"), {
@@ -632,7 +633,11 @@ describe("discovery job handler", () => {
     const controller = new AbortController();
     const abortReason = new DOMException("drain timeout", "AbortError");
     const blizzardGateway = new MutableBlizzardGateway();
-    blizzardGateway.getGuildRoster = async (_key, _signal, onProfileRequest) => {
+    blizzardGateway.getGuildRoster = async (
+      _key,
+      _signal,
+      onProfileRequest
+    ) => {
       await onProfileRequest?.();
       controller.abort(abortReason);
       return [];

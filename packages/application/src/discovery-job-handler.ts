@@ -17,7 +17,10 @@ export type DiscoveryLogger = {
 /** Delivery seam for a maintainer-owned alert integration (PagerDuty, email, etc.). */
 export type FingerprintAlertNotifier = {
   notify(alert: {
-    event: "fingerprint_admission_blocked" | "fingerprint_reservation_pressure" | "fingerprint_blizzard_rate_limited";
+    event:
+      | "fingerprint_admission_blocked"
+      | "fingerprint_reservation_pressure"
+      | "fingerprint_blizzard_rate_limited";
     details: Record<string, number>;
   }): Promise<void> | void;
 };
@@ -265,7 +268,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 admission.retryAt.getTime() - admissionTime.getTime()
               );
               const blockedForMs = admission.blockedSince
-                ? Math.max(0, admissionTime.getTime() - admission.blockedSince.getTime())
+                ? Math.max(
+                    0,
+                    admissionTime.getTime() - admission.blockedSince.getTime()
+                  )
                 : 0;
               if (blockedForMs >= 15 * 60_000) {
                 options.logger?.info({
@@ -324,7 +330,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       record.fingerprintUsedRequests += 1;
                     },
                     onRateLimited: async () => {
-                      options.logger?.info({ event: "fingerprint_blizzard_rate_limited" });
+                      options.logger?.info({
+                        event: "fingerprint_blizzard_rate_limited"
+                      });
                       await options.fingerprintAlertNotifier?.notify({
                         event: "fingerprint_blizzard_rate_limited",
                         details: {}

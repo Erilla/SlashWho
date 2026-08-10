@@ -802,7 +802,10 @@ describe("PostgreSQL repositories", () => {
       fingerprint_sweep_states
       CASCADE`);
     const admittedAt = new Date("2026-08-10T12:00:00.000Z");
-    const firstRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const firstRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
     const admitted = await repositories.fingerprintSweeps.requestAdmission({
       runId: firstRun.id,
       key: rootKey,
@@ -813,11 +816,21 @@ describe("PostgreSQL repositories", () => {
     });
     if (admitted.kind !== "admitted") throw new Error("sweep_not_admitted");
     const usedAt = new Date("2026-08-10T12:55:00.000Z");
-    await repositories.fingerprintSweeps.recordRequest(admitted.reservationId, 3, usedAt);
-    await repositories.fingerprintSweeps.release(admitted.reservationId, usedAt);
+    await repositories.fingerprintSweeps.recordRequest(
+      admitted.reservationId,
+      3,
+      usedAt
+    );
+    await repositories.fingerprintSweeps.release(
+      admitted.reservationId,
+      usedAt
+    );
     await repositories.runs.fail(firstRun.id, "upstream_unavailable");
 
-    const secondRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const secondRun = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
     await expect(
       repositories.fingerprintSweeps.requestAdmission({
         runId: secondRun.id,

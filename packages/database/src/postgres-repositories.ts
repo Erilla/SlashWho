@@ -188,7 +188,8 @@ async function admitFingerprintWaitingRun(
     kind: "admitted",
     reservationId: reservation.rows[0]!.id,
     requestCap: candidate.request_cap,
-    committedRequests: Number(usage.rows[0]!.commitment) + candidate.request_cap,
+    committedRequests:
+      Number(usage.rows[0]!.commitment) + candidate.request_cap,
     hourlyBudget: candidate.hourly_budget
   };
 }

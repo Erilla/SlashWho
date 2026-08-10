@@ -93,7 +93,9 @@ describe("Blizzard gateway", () => {
     });
 
     const onProfileRequest = vi.fn();
-    await expect(gateway.getGuildRoster(key, undefined, onProfileRequest)).resolves.toEqual([
+    await expect(
+      gateway.getGuildRoster(key, undefined, onProfileRequest)
+    ).resolves.toEqual([
       {
         key: { region: "eu", realm: "silvermoon", name: "alt" },
         displayName: "Alt",

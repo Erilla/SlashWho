@@ -327,12 +327,12 @@ export const fingerprintSweepRequestEvents = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     reservationId: uuid("reservation_id")
       .notNull()
-      .references(() => fingerprintSweepReservations.id, { onDelete: "cascade" }),
+      .references(() => fingerprintSweepReservations.id, {
+        onDelete: "cascade"
+      }),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull()
   },
   (table) => [
-    index("fingerprint_sweep_request_events_window_idx").on(
-      table.requestedAt
-    )
+    index("fingerprint_sweep_request_events_window_idx").on(table.requestedAt)
   ]
 );
