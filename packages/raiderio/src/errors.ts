@@ -1,5 +1,6 @@
 export type RaiderIoFailure =
   | { kind: "not_found" }
+  | { kind: "forbidden" }
   | {
       kind: "transient";
       status?: number;
@@ -14,6 +15,7 @@ export function isRaiderIoFailure(value: unknown): value is RaiderIoError {
 
   return (
     value.kind === "not_found" ||
+    value.kind === "forbidden" ||
     value.kind === "transient" ||
     value.kind === "schema_drift"
   );

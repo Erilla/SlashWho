@@ -35,6 +35,10 @@ function retryAfterMs(response: Response): number | undefined {
 
 function responseFailure(response: Response): RaiderIoFailure {
   if (response.status === 404) return { kind: "not_found" };
+  // Raider.IO answers 403 for a user profile its owner has made private. That
+  // is a permanent answer about visibility, not an outage, so it must never be
+  // retried as one.
+  if (response.status === 403) return { kind: "forbidden" };
 
   const retryAfter = retryAfterMs(response);
   return {
@@ -172,7 +176,12 @@ export function createRaiderIoClient(
         ...(profile.omittedMembers ? { omittedMembers: true } : {})
       };
     } catch (error) {
-      if (isRaiderIoFailure(error) && error.kind === "not_found") return null;
+      if (
+        isRaiderIoFailure(error) &&
+        (error.kind === "not_found" || error.kind === "forbidden")
+      ) {
+        return null;
+      }
       throw error;
     }
   }
