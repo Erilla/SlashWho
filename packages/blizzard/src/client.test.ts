@@ -75,6 +75,14 @@ describe("Blizzard gateway", () => {
           guild: { name: "A Guild", realm: { slug: "silvermoon" } }
         });
       }
+      if (url.pathname === "/data/wow/playable-class/index") {
+        return Response.json({
+          classes: [
+            { id: 8, name: "Mage" },
+            { id: 2, name: "Paladin" }
+          ]
+        });
+      }
       if (url.pathname.endsWith("/guild/silvermoon/a-guild/roster")) {
         return Response.json({
           members: [
@@ -82,7 +90,7 @@ describe("Blizzard gateway", () => {
               character: {
                 name: "Alt",
                 realm: { slug: "Silvermoon" },
-                playable_class: { name: "Mage" },
+                playable_class: { id: 8 },
                 level: 80
               }
             }
@@ -103,7 +111,50 @@ describe("Blizzard gateway", () => {
         level: 80
       }
     ]);
-    expect(onProfileRequest).toHaveBeenCalledTimes(2);
+    expect(onProfileRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it("skips an unusable roster member instead of failing the sweep", async () => {
+    // Break caught: one member the key space cannot represent made every member
+    // null, which raised schema_drift and abandoned the whole sweep.
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      if (url.pathname === "/data/wow/playable-class/index") {
+        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
+      }
+      if (url.pathname.endsWith("/character/silvermoon/sentinel")) {
+        return Response.json({
+          guild: { name: "A Guild", realm: { slug: "silvermoon" } }
+        });
+      }
+      if (url.pathname.endsWith("/guild/silvermoon/a-guild/roster")) {
+        return Response.json({
+          members: [
+            {
+              character: { name: "", realm: { slug: "silvermoon" }, level: 80 }
+            },
+            {
+              character: {
+                name: "Keeper",
+                realm: { slug: "Silvermoon" },
+                playable_class: { id: 8 },
+                level: 70
+              }
+            }
+          ]
+        });
+      }
+      throw new Error(`unexpected endpoint: ${url.pathname}`);
+    });
+
+    await expect(gateway.getGuildRoster(key)).resolves.toEqual([
+      {
+        key: { region: "eu", realm: "silvermoon", name: "keeper" },
+        displayName: "Keeper",
+        className: "Mage",
+        level: 70
+      }
+    ]);
   });
 
   it("returns an empty roster when the root has no guild", async () => {
