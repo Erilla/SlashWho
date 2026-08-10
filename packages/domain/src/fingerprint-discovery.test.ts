@@ -62,12 +62,11 @@ const options = {
   requestCap: 3,
   minimumCommon: 200,
   minimumIdenticalPercent: 20,
-  isSuppressed: async (key: CharacterKey) => key.name === "a-suppressed",
-  isPrivacyHidden: async (key: CharacterKey) => key.name === "b-hidden"
+  isSuppressed: async (key: CharacterKey) => key.name === "a-suppressed"
 };
 
 describe("discoverFingerprintMatches", () => {
-  it("fetches the root once, skips suppressed, privacy-hidden, and cross-region candidates, and stops at its cap", async () => {
+  it("fetches the root once, skips suppressed and cross-region candidates, and stops at its cap", async () => {
     // Break caught: roster order or excluded candidates could consume the sweep
     // budget, preventing an otherwise matching same-region character from being
     // admitted before the cap.
@@ -77,7 +76,6 @@ describe("discoverFingerprintMatches", () => {
         [
           candidate({ region: "eu", realm: "silvermoon", name: "z-last" }),
           candidate(matchingKey),
-          candidate({ region: "eu", realm: "silvermoon", name: "b-hidden" }),
           candidate({
             region: "eu",
             realm: "silvermoon",
@@ -125,8 +123,7 @@ describe("discoverFingerprintMatches", () => {
         requestCap: 3,
         minimumCommon: 1,
         minimumIdenticalPercent: 0,
-        isSuppressed: async () => false,
-        isPrivacyHidden: async () => false
+        isSuppressed: async () => false
       }
     );
 
@@ -223,33 +220,6 @@ describe("discoverFingerprintMatches", () => {
     });
   });
 
-  it("rechecks privacy immediately before admitting a matched candidate", async () => {
-    // Break caught: a privacy-hidden designation that lands while the candidate
-    // fingerprint is being fetched could still be retained in the result.
-    let privacyChecks = 0;
-    const outcome = await discoverFingerprintMatches(
-      root,
-      gatewayFor([candidate(matchingKey)], {
-        [keyId(root)]: fingerprint(200),
-        [keyId(matchingKey)]: fingerprint(200)
-      }),
-      {
-        ...options,
-        isSuppressed: async () => false,
-        isPrivacyHidden: async () => {
-          privacyChecks += 1;
-          return privacyChecks > 1;
-        }
-      }
-    );
-
-    expect(outcome).toEqual({
-      kind: "matched",
-      requestsUsed: 3,
-      characters: []
-    });
-  });
-
   it("rechecks suppression immediately before admitting a matched candidate", async () => {
     // Break caught: a removal that lands while the candidate fingerprint is
     // being fetched could still be retained in the result.
@@ -265,8 +235,7 @@ describe("discoverFingerprintMatches", () => {
         isSuppressed: async () => {
           suppressionChecks += 1;
           return suppressionChecks > 1;
-        },
-        isPrivacyHidden: async () => false
+        }
       }
     );
 
@@ -297,7 +266,6 @@ describe("discoverFingerprintMatches", () => {
           }
           return false;
         },
-        isPrivacyHidden: async () => false,
         signal: aborted.signal
       }
     );

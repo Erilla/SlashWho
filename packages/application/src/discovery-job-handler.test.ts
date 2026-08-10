@@ -696,14 +696,15 @@ describe("discovery job handler", () => {
     });
   });
 
-  it("never starts a fingerprint sweep from privacy-hidden root ownership", async () => {
-    // Break caught: a root whose Raider.IO ownership is intentionally hidden
-    // could seed inferred links despite the project's sole privacy signal.
+  it("sweeps a root whose Raider.IO ownership is not public", async () => {
+    // Break caught: gating the sweep on absent Raider.IO ownership excluded
+    // every character never claimed upstream, which is most of them, leaving
+    // the sweep unable to reach the alts it exists to find.
     const repositories = createMemoryRepositories();
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
     repositories.fingerprintSweeps.requestAdmission = vi.fn(async () => ({
       kind: "admitted" as const,
-      reservationId: "privacy-reservation",
+      reservationId: "unclaimed-reservation",
       requestCap: 300
     }));
     const gateway = new MutableGateway();
@@ -722,10 +723,8 @@ describe("discovery job handler", () => {
       delivery()
     );
 
-    expect(
-      repositories.fingerprintSweeps.requestAdmission
-    ).not.toHaveBeenCalled();
-    expect(blizzardGateway.getGuildRoster).not.toHaveBeenCalled();
+    expect(repositories.fingerprintSweeps.requestAdmission).toHaveBeenCalled();
+    expect(blizzardGateway.getGuildRoster).toHaveBeenCalled();
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toMatchObject({
@@ -734,35 +733,42 @@ describe("discovery job handler", () => {
     });
   });
 
-  it("never starts a fingerprint sweep when request capping masks hidden root ownership", async () => {
-    // Break caught: request_cap can take precedence over privacy_hidden while
-    // preserving the same privacy fact that must bar fingerprint inference.
+  it("spends no Raider.IO request per swept candidate", async () => {
+    // Break caught: checking each candidate's upstream ownership cost one
+    // unbudgeted Raider.IO request per roster member — hundreds per sweep,
+    // counted against neither the discovery cap nor the Blizzard budget.
     const repositories = createMemoryRepositories();
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
     repositories.fingerprintSweeps.requestAdmission = vi.fn(async () => ({
       kind: "admitted" as const,
-      reservationId: "capped-privacy-reservation",
+      reservationId: "roster-reservation",
       requestCap: 300
     }));
     const gateway = new MutableGateway();
-    gateway.getCharacter = async () => ({
-      ...character(rootKey),
-      ownerId: null,
-      profileGuess: "private-alias"
-    });
-    gateway.resolveProfileGuess = async () => null;
+    const getCharacter = vi.fn(gateway.getCharacter.bind(gateway));
+    gateway.getCharacter = getCharacter;
+    const blizzardGateway = new MutableBlizzardGateway();
+    const roster = Array.from({ length: 5 }, (_, index) => ({
+      key: {
+        region: "eu" as const,
+        realm: "silvermoon",
+        name: `member${index}`
+      },
+      displayName: `Member${index}`,
+      className: "Mage",
+      level: 80
+    }));
+    blizzardGateway.getGuildRoster = async () => roster;
 
-    await handlerFor(repositories, gateway, { requestCap: 1 }).execute(
+    await handlerFor(repositories, gateway, { blizzardGateway }).execute(
       run.id,
       delivery()
     );
 
-    expect(
-      repositories.fingerprintSweeps.requestAdmission
-    ).not.toHaveBeenCalled();
-    await expect(
-      repositories.snapshots.getCurrent(rootKey)
-    ).resolves.toMatchObject({ limitationCode: "request_cap" });
+    const sweptKeys = getCharacter.mock.calls
+      .map(([key]) => key?.name ?? "")
+      .filter((name) => name.startsWith("member"));
+    expect(sweptKeys).toEqual([]);
   });
 
   it("emits one allowlisted operational record per completed discovery", async () => {

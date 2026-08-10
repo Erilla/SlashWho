@@ -28,9 +28,15 @@ export default function PrivacyPage() {
 
       <h2>Fingerprint-derived links</h2>
       <p>
-        Privacy-hidden Raider.IO ownership is excluded from fingerprint-derived
-        links. Public alt lists do not disclose the discovery method for any
-        character relationship.
+        Character relationships are also inferred from public Blizzard
+        achievement-completion data. Such a link can connect characters that are
+        not publicly connected on Raider.IO, including characters whose
+        ownership is not shown there. Public alt lists do not disclose the
+        discovery method for any character relationship.
+      </p>
+      <p>
+        To have a character excluded, use the removal request below. It is the
+        only way to remove a character from these results.
       </p>
 
       <h2>Removal requests</h2>

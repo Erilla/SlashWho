@@ -46,7 +46,6 @@ export type DiscoverFingerprintMatchesOptions = {
   minimumCommon: number;
   minimumIdenticalPercent: number;
   isSuppressed(key: CharacterKey): Promise<boolean>;
-  isPrivacyHidden(key: CharacterKey): Promise<boolean>;
   signal?: AbortSignal;
 };
 
@@ -274,9 +273,6 @@ export async function discoverFingerprintMatches(
       const isSuppressed = await options.isSuppressed(candidate.key);
       throwIfAborted();
       if (isSuppressed) continue;
-      const isPrivacyHidden = await options.isPrivacyHidden(candidate.key);
-      throwIfAborted();
-      if (isPrivacyHidden) continue;
 
       // A roster member with no readable achievement profile is ordinary, not an
       // upstream fault: the measured live sweep saw 23 of 393 candidates return
@@ -302,11 +298,6 @@ export async function discoverFingerprintMatches(
       );
       throwIfAborted();
       if (isSuppressedBeforeAdmission) continue;
-      const isPrivacyHiddenBeforeAdmission = await options.isPrivacyHidden(
-        candidate.key
-      );
-      throwIfAborted();
-      if (isPrivacyHiddenBeforeAdmission) continue;
 
       matches.push(discoveredCharacter(candidate));
     }
