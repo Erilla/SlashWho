@@ -1,0 +1,9 @@
+{
+  "status": 403,
+  "body": {
+    "statusCode": 403,
+    "error": "Forbidden",
+    "message": "The requested user's profile is private and cannot be viewed.",
+    "errorCode": "profile_is_private"
+  }
+}

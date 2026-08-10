@@ -16,6 +16,7 @@ type FixtureName =
   | "character-renamed-root"
   | "profile-valid"
   | "profile-invalid"
+  | "profile-forbidden"
   | "claimed-characters"
   | "claimed-characters-out-of-scope"
   | "missing-character"
@@ -45,6 +46,7 @@ function fixtureFetch(name: FixtureName): typeof globalThis.fetch {
     const expectsProfile =
       name === "profile-valid" ||
       name === "profile-invalid" ||
+      name === "profile-forbidden" ||
       name === "claimed-characters" ||
       name === "claimed-characters-out-of-scope";
     const expectedPath = expectsProfile
@@ -286,6 +288,15 @@ describe("Raider.IO gateway", () => {
   it("rejects characters returned for a different profile", async () => {
     await expect(
       clientFor("profile-invalid").resolveProfileGuess("sensitive-value")
+    ).resolves.toBeNull();
+  });
+
+  it("treats a private user profile as no profile, not an outage", async () => {
+    // Break caught: Raider.IO answers 403 profile_is_private for a guessed user
+    // name. Classifying that as transient retried a permanent answer and failed
+    // the whole run as upstream_unavailable.
+    await expect(
+      clientFor("profile-forbidden").resolveProfileGuess("private-user")
     ).resolves.toBeNull();
   });
 
