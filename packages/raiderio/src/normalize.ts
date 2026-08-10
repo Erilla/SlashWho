@@ -33,7 +33,10 @@ const characterResponseSchema = z.object({
       .optional(),
     characterCustomizations: z
       .object({
-        discord_profile: z.string().min(1).nullable().optional(),
+        // Raider.IO sends "" for a customization the player never set. That is
+        // an absent value, not structural change: rejecting it would raise
+        // non-retryable schema drift and permanently fail the search.
+        discord_profile: z.string().nullable().optional(),
         main_character: declaredMainSchema.nullable().optional()
       })
       .optional()
@@ -147,7 +150,7 @@ export function normalizeCharacterResponse(
   return {
     ...character,
     ownerId: details.user?.name ?? null,
-    profileGuess: customizations?.discord_profile ?? null,
+    profileGuess: customizations?.discord_profile?.trim() || null,
     declaredMain,
     ...(omittedMembers ? { omittedMembers: true } : {})
   };

@@ -1,0 +1,21 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Sentinel",
+        "level": 90,
+        "class": { "name": "Paladin" },
+        "realm": { "slug": "Silvermoon" },
+        "region": { "slug": "EU" }
+      },
+      "user": null,
+      "characterCustomizations": {
+        "isClaimed": false,
+        "biography": "",
+        "discord_profile": "",
+        "main_character": null
+      }
+    }
+  }
+}
