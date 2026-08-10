@@ -1,7 +1,7 @@
 import type { CharacterKey } from "./character-key";
 
 export type DiscoverySource =
-  "input" | "claimed" | "declared_main" | "profile_guess";
+  "input" | "claimed" | "declared_main" | "profile_guess" | "fingerprint";
 
 export interface DiscoveredCharacter {
   readonly key: CharacterKey;

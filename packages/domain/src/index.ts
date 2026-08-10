@@ -15,3 +15,10 @@ export type {
   RaiderIoGateway,
   RaiderIoProfile
 } from "./discovery";
+export { discoverFingerprintMatches } from "./fingerprint-discovery";
+export type {
+  DiscoverFingerprintMatchesOptions,
+  FingerprintCandidate,
+  FingerprintGateway,
+  FingerprintSweepOutcome
+} from "./fingerprint-discovery";
