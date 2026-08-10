@@ -76,6 +76,15 @@ export interface SnapshotRepository {
     input: CreateSnapshotInput,
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
+  createAndFinishFingerprintSweep(
+    input: CreateSnapshotInput,
+    fingerprint: {
+      reservationId: string;
+      finishedAt: Date;
+      limitationCode: string | null;
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
   find(id: string): Promise<StoredSnapshot | null>;
   listHistory(

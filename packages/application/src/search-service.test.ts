@@ -142,6 +142,9 @@ function policyFixture(
       async create() {
         throw new Error("not used");
       },
+      async createAndFinishFingerprintSweep() {
+        throw new Error("not used");
+      },
       async getCurrent() {
         return options.current ?? null;
       },

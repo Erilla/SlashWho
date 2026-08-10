@@ -6,11 +6,8 @@ export function createBlizzardFingerprintAdapter(
   recordRequest: () => Promise<void>
 ): FingerprintGateway {
   async function request<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation();
-    } finally {
-      await recordRequest();
-    }
+    await recordRequest();
+    return operation();
   }
 
   return {

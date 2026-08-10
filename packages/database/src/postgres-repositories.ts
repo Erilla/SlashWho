@@ -3,6 +3,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
+  CreateSnapshotInput,
   DiscoveryRun,
   FingerprintAdmission,
   Repositories,
@@ -313,6 +314,175 @@ async function loadSnapshot(
     characterCount: characters.length,
     characters
   };
+}
+
+async function createSnapshot(
+  client: PoolClient,
+  input: CreateSnapshotInput,
+  options?: { signal?: AbortSignal }
+): Promise<StoredSnapshot> {
+  const runResult = await client.query(
+    `SELECT 1 FROM discovery_runs
+     WHERE id = $1
+       AND root_region = $2
+       AND root_realm_slug = $3
+       AND root_normalized_name = $4
+       AND status IN ${activeRunSql}
+     FOR UPDATE`,
+    [input.runId, input.rootKey.region, input.rootKey.realm, input.rootKey.name]
+  );
+  if (runResult.rowCount !== 1) {
+    throw new Error("discovery_run_root_mismatch");
+  }
+
+  const characterIds = new Map<string, string>();
+  const charactersByCanonicalKey = [...input.characters].sort((left, right) => {
+    const leftKey = `${left.key.region}\0${left.key.realm}\0${left.key.name}`;
+    const rightKey = `${right.key.region}\0${right.key.realm}\0${right.key.name}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+  for (const character of charactersByCanonicalKey) {
+    const result = await client.query<{ id: string }>(
+      `INSERT INTO characters
+        (region, realm_slug, normalized_name, display_name, class_name,
+         level, raider_io_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (region, realm_slug, normalized_name)
+       DO UPDATE SET
+         display_name = EXCLUDED.display_name,
+         class_name = EXCLUDED.class_name,
+         level = EXCLUDED.level,
+         raider_io_url = EXCLUDED.raider_io_url,
+         updated_at = now()
+       RETURNING id`,
+      [
+        character.key.region,
+        character.key.realm,
+        character.key.name,
+        character.displayName,
+        character.className,
+        character.level,
+        character.raiderIoUrl
+      ]
+    );
+    characterIds.set(
+      `${character.key.region}/${character.key.realm}/${character.key.name}`,
+      result.rows[0]!.id
+    );
+  }
+
+  const rootId = characterIds.get(
+    `${input.rootKey.region}/${input.rootKey.realm}/${input.rootKey.name}`
+  );
+  if (!rootId) throw new Error("snapshot_root_missing");
+
+  const snapshotResult = await client.query<{ id: string }>(
+    `INSERT INTO snapshots
+      (root_character_id, discovery_run_id, state, limitation_code,
+       refreshed_at, character_count)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
+    [
+      rootId,
+      input.runId,
+      input.state,
+      input.limitationCode,
+      input.refreshedAt,
+      input.characters.length
+    ]
+  );
+  const snapshotId = snapshotResult.rows[0]!.id;
+
+  await client.query(
+    `UPDATE discovery_runs SET root_character_id = $2 WHERE id = $1`,
+    [input.runId, rootId]
+  );
+
+  for (const [displayOrder, character] of input.characters.entries()) {
+    const characterId = characterIds.get(
+      `${character.key.region}/${character.key.realm}/${character.key.name}`
+    )!;
+    await client.query(
+      `INSERT INTO snapshot_characters
+        (snapshot_id, character_id, display_order, discovery_source,
+         display_name, class_name, level, raider_io_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        snapshotId,
+        characterId,
+        displayOrder,
+        character.source,
+        character.displayName,
+        character.className,
+        character.level,
+        character.raiderIoUrl
+      ]
+    );
+  }
+
+  const publication = await client.query(
+    `UPDATE discovery_runs
+     SET status = 'complete', snapshot_id = $2,
+         completed_at = COALESCE(completed_at, now()),
+         next_retry_at = NULL, error_code = NULL
+     WHERE id = $1 AND status IN ${activeRunSql}`,
+    [input.runId, snapshotId]
+  );
+  if (publication.rowCount !== 1) {
+    throw new Error("discovery_run_not_active");
+  }
+
+  const snapshot = await loadSnapshot(client, snapshotId);
+  if (!snapshot) throw new Error("snapshot_not_found");
+  options?.signal?.throwIfAborted();
+  return snapshot;
+}
+
+async function finishFingerprintSweep(
+  client: PoolClient,
+  reservationId: string,
+  input: { published: boolean; at: Date; limitationCode: string | null }
+): Promise<void> {
+  const reservation = await client.query<{
+    admission_id: string;
+    region: CharacterKey["region"];
+    realm_slug: string;
+    normalized_name: string;
+  }>(
+    `UPDATE fingerprint_sweep_reservations reservation
+     SET released_at = $2,
+         finished_at = $2,
+         published = $3,
+         limitation_code = $4
+     FROM fingerprint_sweep_admissions admission
+     WHERE reservation.id = $1
+       AND reservation.admission_id = admission.id
+       AND reservation.released_at IS NULL
+     RETURNING reservation.admission_id, admission.region,
+               admission.realm_slug, admission.normalized_name`,
+    [reservationId, input.at, input.published, input.limitationCode]
+  );
+  const row = reservation.rows[0];
+  if (!row) throw new Error("fingerprint_reservation_not_active");
+  await client.query(
+    `UPDATE fingerprint_sweep_admissions
+     SET status = 'finished'
+     WHERE id = $1`,
+    [row.admission_id]
+  );
+  if (input.published) {
+    await client.query(
+      `INSERT INTO fingerprint_sweep_states
+        (region, realm_slug, normalized_name, last_published_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (region, realm_slug, normalized_name)
+       DO UPDATE SET last_published_at = greatest(
+         fingerprint_sweep_states.last_published_at,
+         EXCLUDED.last_published_at
+       )`,
+      [row.region, row.realm_slug, row.normalized_name, input.at]
+    );
+  }
 }
 
 async function requireUpdated(
@@ -773,6 +943,32 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
+      async createAndFinishFingerprintSweep(input, fingerprint, options) {
+        if (Number.isNaN(fingerprint.finishedAt.valueOf())) {
+          throw new RangeError("fingerprint_finish_time_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          options?.signal?.throwIfAborted();
+          await client.query("BEGIN");
+          await lockRoot(client, input.rootKey);
+          await lockFingerprintSweeps(client);
+          const snapshot = await createSnapshot(client, input, options);
+          await finishFingerprintSweep(client, fingerprint.reservationId, {
+            published: true,
+            at: fingerprint.finishedAt,
+            limitationCode: fingerprint.limitationCode
+          });
+          await client.query("COMMIT");
+          return snapshot;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
       async getCurrent(key) {
         const result = await pool.query<{ id: string }>(
           `SELECT snapshot.id
@@ -1161,46 +1357,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           await lockFingerprintSweeps(client);
-          const reservation = await client.query<{
-            admission_id: string;
-            region: CharacterKey["region"];
-            realm_slug: string;
-            normalized_name: string;
-          }>(
-            `UPDATE fingerprint_sweep_reservations reservation
-             SET released_at = $2,
-                 finished_at = $2,
-                 published = $3,
-                 limitation_code = $4
-             FROM fingerprint_sweep_admissions admission
-             WHERE reservation.id = $1
-               AND reservation.admission_id = admission.id
-               AND reservation.released_at IS NULL
-             RETURNING reservation.admission_id, admission.region,
-                       admission.realm_slug, admission.normalized_name`,
-            [reservationId, input.at, input.published, input.limitationCode]
-          );
-          const row = reservation.rows[0];
-          if (!row) throw new Error("fingerprint_reservation_not_active");
-          await client.query(
-            `UPDATE fingerprint_sweep_admissions
-             SET status = 'finished'
-             WHERE id = $1`,
-            [row.admission_id]
-          );
-          if (input.published) {
-            await client.query(
-              `INSERT INTO fingerprint_sweep_states
-                (region, realm_slug, normalized_name, last_published_at)
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT (region, realm_slug, normalized_name)
-               DO UPDATE SET last_published_at = greatest(
-                 fingerprint_sweep_states.last_published_at,
-                 EXCLUDED.last_published_at
-               )`,
-              [row.region, row.realm_slug, row.normalized_name, input.at]
-            );
-          }
+          await finishFingerprintSweep(client, reservationId, input);
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);

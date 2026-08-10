@@ -67,6 +67,10 @@ export type RetryableDiscoveryError = Error & {
   retryAfterMs: number;
 };
 
+type FingerprintReleaseRetryableError = Error & {
+  fingerprintReleaseRetryable: true;
+};
+
 function retryableError(retryAfterMs: number): RetryableDiscoveryError {
   return Object.assign(new Error("discovery_retryable"), {
     retryable: true as const,
@@ -83,6 +87,24 @@ function isRetryableDiscoveryError(
     error.retryable === true &&
     "retryAfterMs" in error &&
     typeof error.retryAfterMs === "number"
+  );
+}
+
+function fingerprintReleaseRetryableError(
+  cause: unknown
+): FingerprintReleaseRetryableError {
+  return Object.assign(new Error("fingerprint_release_failed", { cause }), {
+    fingerprintReleaseRetryable: true as const
+  });
+}
+
+function isFingerprintReleaseRetryableError(
+  error: unknown
+): error is FingerprintReleaseRetryableError {
+  return (
+    error instanceof Error &&
+    "fingerprintReleaseRetryable" in error &&
+    error.fingerprintReleaseRetryable === true
   );
 }
 
@@ -206,7 +228,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           const blizzardGateway = options.blizzardGateway;
           const privacyHiddenRoot =
             outcome.state === "partial" &&
-            outcome.limitationCode === "privacy_hidden";
+            (outcome.limitationCode === "privacy_hidden" ||
+              outcome.privacyHiddenObserved === true);
           if (fingerprint && blizzardGateway && !privacyHiddenRoot) {
             const admissionTime = now();
             const admission =
@@ -236,11 +259,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               record.fingerprintReservedRequests = admission.requestCap;
               const releaseReservation = async () => {
                 if (!reservationActive) return;
-                reservationActive = false;
                 await options.repositories.fingerprintSweeps.release(
                   admission.reservationId,
                   now()
                 );
+                reservationActive = false;
               };
               try {
                 const adaptedGateway = createBlizzardFingerprintAdapter(
@@ -305,7 +328,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
                   record.characterCount = characters.length;
-                  await options.repositories.snapshots.create(
+                  await options.repositories.snapshots.createAndFinishFingerprintSweep(
                     {
                       runId,
                       rootKey: run.rootKey,
@@ -314,21 +337,22 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       refreshedAt: fingerprintPersistenceTime,
                       characters
                     },
-                    { signal: context.signal }
-                  );
-                  await options.repositories.fingerprintSweeps.finish(
-                    admission.reservationId,
                     {
-                      published: true,
-                      at: now(),
+                      reservationId: admission.reservationId,
+                      finishedAt: now(),
                       limitationCode
-                    }
+                    },
+                    { signal: context.signal }
                   );
                   reservationActive = false;
                   return;
                 }
               } catch (error) {
-                await releaseReservation();
+                try {
+                  await releaseReservation();
+                } catch (releaseError) {
+                  throw fingerprintReleaseRetryableError(releaseError);
+                }
                 throw error;
               } finally {
                 record.fingerprintDurationMs = Math.max(
@@ -406,7 +430,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
         throw retryableError(schedule.retryAfterMs);
       } catch (error) {
-        if (context.signal.aborted) {
+        if (
+          context.signal.aborted &&
+          !isFingerprintReleaseRetryableError(error)
+        ) {
           record.outcome = "cancelled";
           throw context.signal.reason;
         }

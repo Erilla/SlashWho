@@ -235,6 +235,9 @@ function createMemoryRepositories(): Repositories {
         await thisRunComplete(input.runId, id);
         return snapshot;
       },
+      async createAndFinishFingerprintSweep(input) {
+        return this.create(input);
+      },
       async getCurrent(key) {
         return (
           [...snapshots.values()]
@@ -427,13 +430,16 @@ describe("discovery job handler", () => {
     blizzardGateway.fingerprints.set(keyId(rootKey), fingerprint);
     blizzardGateway.fingerprints.set(keyId(secondKey), fingerprint);
     blizzardGateway.fingerprints.set(keyId(fingerprintKey), fingerprint);
-    const snapshotCreate = vi.spyOn(repositories.snapshots, "create");
+    const publish = vi.spyOn(
+      repositories.snapshots,
+      "createAndFinishFingerprintSweep"
+    );
 
     await handlerFor(repositories, new MutableGateway(), {
       blizzardGateway
     }).execute(run.id, delivery());
 
-    expect(snapshotCreate).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toMatchObject({
@@ -448,9 +454,13 @@ describe("discovery job handler", () => {
     expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledTimes(
       4
     );
-    expect(repositories.fingerprintSweeps.finish).toHaveBeenCalledWith(
-      "reservation-1",
-      expect.objectContaining({ published: true, limitationCode: null })
+    expect(publish).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        reservationId: "reservation-1",
+        limitationCode: null
+      }),
+      expect.any(Object)
     );
   });
 
@@ -465,7 +475,10 @@ describe("discovery job handler", () => {
       requestCap: 2
     });
     repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {});
-    repositories.fingerprintSweeps.finish = vi.fn(async () => {});
+    const publish = vi.spyOn(
+      repositories.snapshots,
+      "createAndFinishFingerprintSweep"
+    );
     const blizzardGateway = new MutableBlizzardGateway();
     blizzardGateway.roster = [
       {
@@ -491,12 +504,13 @@ describe("discovery job handler", () => {
     expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledTimes(
       2
     );
-    expect(repositories.fingerprintSweeps.finish).toHaveBeenCalledWith(
-      "reservation-capped",
+    expect(publish).toHaveBeenCalledWith(
+      expect.any(Object),
       expect.objectContaining({
-        published: true,
+        reservationId: "reservation-capped",
         limitationCode: "fingerprint_sweep_capped"
-      })
+      }),
+      expect.any(Object)
     );
   });
 
@@ -510,10 +524,14 @@ describe("discovery job handler", () => {
       reservationId: "reservation-failed",
       requestCap: 300
     });
-    repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {});
+    const events: string[] = [];
+    repositories.fingerprintSweeps.recordRequest = vi.fn(async () => {
+      events.push("accounted");
+    });
     repositories.fingerprintSweeps.release = vi.fn(async () => {});
     const blizzardGateway = new MutableBlizzardGateway();
     blizzardGateway.getGuildRoster = async () => {
+      events.push("upstream");
       throw Object.assign(new Error("private-upstream-marker"), {
         kind: "transient",
         retryAfterMs: 30_000
@@ -527,6 +545,7 @@ describe("discovery job handler", () => {
     ).rejects.toMatchObject({ retryable: true, retryAfterMs: 30_000 });
 
     expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledOnce();
+    expect(events).toEqual(["accounted", "upstream"]);
     expect(repositories.fingerprintSweeps.release).toHaveBeenCalledWith(
       "reservation-failed",
       expect.any(Date)
@@ -534,6 +553,39 @@ describe("discovery job handler", () => {
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toBeNull();
+  });
+
+  it("keeps release retryable when the first release write fails", async () => {
+    // Break caught: a transient release failure could be treated as settled and
+    // strand the reservation for its whole accounting window.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation-release-retry",
+      requestCap: 300
+    });
+    repositories.fingerprintSweeps.recordRequest = async () => {};
+    let releases = 0;
+    repositories.fingerprintSweeps.release = async () => {
+      releases += 1;
+      if (releases === 1) throw new Error("release_write_failed");
+    };
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.getGuildRoster = async () => {
+      throw Object.assign(new Error("transient"), { kind: "transient" });
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        blizzardGateway
+      }).execute(run.id, delivery())
+    ).rejects.toMatchObject({ retryable: true });
+
+    expect(releases).toBe(2);
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "retrying"
+    });
   });
 
   it("releases an aborted fingerprint reservation without publishing or reconciling", async () => {
@@ -574,6 +626,38 @@ describe("discovery job handler", () => {
     });
   });
 
+  it("retries an aborted delivery when reservation release cannot be persisted", async () => {
+    // Break caught: cancellation could hide a failed release and retain a full
+    // reservation until expiry with no durable path to retry the cleanup.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation-abort-release-failure",
+      requestCap: 300
+    });
+    repositories.fingerprintSweeps.recordRequest = async () => {};
+    repositories.fingerprintSweeps.release = async () => {
+      throw new Error("release_write_failed");
+    };
+    const controller = new AbortController();
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.getGuildRoster = async () => {
+      controller.abort(new DOMException("drain timeout", "AbortError"));
+      return [];
+    };
+
+    await expect(
+      handlerFor(repositories, new MutableGateway(), {
+        blizzardGateway
+      }).execute(run.id, { ...delivery(), signal: controller.signal })
+    ).rejects.toMatchObject({ retryable: true });
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "retrying"
+    });
+  });
+
   it("never starts a fingerprint sweep from privacy-hidden root ownership", async () => {
     // Break caught: a root whose Raider.IO ownership is intentionally hidden
     // could seed inferred links despite the project's sole privacy signal.
@@ -610,6 +694,37 @@ describe("discovery job handler", () => {
       state: "partial",
       limitationCode: "privacy_hidden"
     });
+  });
+
+  it("never starts a fingerprint sweep when request capping masks hidden root ownership", async () => {
+    // Break caught: request_cap can take precedence over privacy_hidden while
+    // preserving the same privacy fact that must bar fingerprint inference.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = vi.fn(async () => ({
+      kind: "admitted" as const,
+      reservationId: "capped-privacy-reservation",
+      requestCap: 300
+    }));
+    const gateway = new MutableGateway();
+    gateway.getCharacter = async () => ({
+      ...character(rootKey),
+      ownerId: null,
+      profileGuess: "private-alias"
+    });
+    gateway.resolveProfileGuess = async () => null;
+
+    await handlerFor(repositories, gateway, { requestCap: 1 }).execute(
+      run.id,
+      delivery()
+    );
+
+    expect(
+      repositories.fingerprintSweeps.requestAdmission
+    ).not.toHaveBeenCalled();
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({ limitationCode: "request_cap" });
   });
 
   it("emits one allowlisted operational record per completed discovery", async () => {
