@@ -32,6 +32,7 @@
 | `packages/blizzard/src/types.ts`                                            | Blizzard gateway and roster/fingerprint value types; no persistent representations.                                             |
 | `packages/domain/src/fingerprint-discovery.ts`                              | Cap-aware root-guild sweep over a `BlizzardGateway`, producing candidate character observations and partial/failure outcomes.   |
 | `packages/database/src/schema.ts` and `drizzle/0002_fingerprint_sweeps.sql` | Internal source enum extension, per-root sweep state, FIFO admission rows, and rolling reservation ledger.                      |
+| `packages/database/drizzle/0004_simple_venom.sql` | Individual timestamped fingerprint request events for rolling-hour admission accounting. |
 | `packages/database/src/repositories.ts` / `postgres-repositories.ts`        | Transactional sweep eligibility, FIFO admission, budget reservation/use/release, and snapshot completion bookkeeping.           |
 | `packages/database/src/queue.ts`                                            | Private `fingerprint-admission` pg-boss queue and dispatch contract.                                                            |
 | `packages/application/src/discovery-job-handler.ts`                         | Coordinates Raider.IO discovery, deferred admission, fingerprint sweep, merged atomic snapshot, and safe retry/abort behaviour. |

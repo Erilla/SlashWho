@@ -137,6 +137,21 @@ export function createDiscoveryQueue(
     }
   }
 
+  async function existingSingletonJobId(
+    queueName: string,
+    singletonKey: string
+  ): Promise<string | null> {
+    const result = await boss.getDb().executeSql(
+      `SELECT id::text AS id FROM pgboss.job
+       WHERE name = $1 AND singleton_key = $2
+         AND state IN ('created', 'retry', 'active')
+       ORDER BY created_on DESC LIMIT 1`,
+      [queueName, singletonKey]
+    );
+    const id = result.rows[0]?.id;
+    return typeof id === "string" ? id : null;
+  }
+
   return {
     async start() {
       await boss.start();
@@ -144,11 +159,11 @@ export function createDiscoveryQueue(
         ...queueOptions,
         // pg-boss persists this policy and its singleton-key index, so duplicate
         // recovery sends from a restarted worker remain one durable delivery.
-        policy: "stately"
+        policy: "exclusive"
       });
       await boss.updateQueue(discoverCharacterQueueName, queueOptions);
       await boss.createQueue(fingerprintAdmissionQueueName, {
-        policy: "stately",
+        policy: "exclusive",
         retryLimit: 2_147_483_647,
         retryDelay: 60,
         expireInSeconds: 300
@@ -167,8 +182,11 @@ export function createDiscoveryQueue(
       const id = await boss.send(discoverCharacterQueueName, payload, {
         singletonKey: payload.runId
       });
-      if (!id) throw new Error("discovery_queue_enqueue_not_created");
-      return id;
+      return id ??
+        (await existingSingletonJobId(discoverCharacterQueueName, payload.runId)) ??
+        (() => {
+          throw new Error("discovery_queue_enqueue_not_created");
+        })();
     },
 
     async enqueueFingerprintAdmission(runId) {
@@ -180,7 +198,11 @@ export function createDiscoveryQueue(
           singletonKey: runId
         }
       );
-      return id ?? runId;
+      return id ??
+        (await existingSingletonJobId(fingerprintAdmissionQueueName, runId)) ??
+        (() => {
+          throw new Error("fingerprint_admission_enqueue_not_created");
+        })();
     },
 
     async work(handler) {

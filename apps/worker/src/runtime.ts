@@ -4,7 +4,8 @@ import {
   recoverPendingSearches,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
-  type DiscoveryLogger
+  type DiscoveryLogger,
+  type FingerprintAlertNotifier
 } from "@slashwho/application";
 import { createBlizzardClient } from "@slashwho/blizzard";
 import {
@@ -36,6 +37,9 @@ export type WorkerRuntimeDependencies = {
   createFingerprintIntegration?: (
     config: WorkerConfig
   ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
+  createFingerprintAlertNotifier?: (
+    config: WorkerConfig
+  ) => FingerprintAlertNotifier;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
 };
@@ -65,6 +69,22 @@ export function createFingerprintIntegration(
   };
 }
 
+export function createFingerprintAlertNotifier(
+  config: WorkerConfig
+): FingerprintAlertNotifier {
+  return {
+    async notify(alert) {
+      if (!config.maintainerAlertWebhookUrl) return;
+      const response = await globalThis.fetch(config.maintainerAlertWebhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(alert)
+      });
+      if (!response.ok) throw new Error("maintainer_alert_delivery_failed");
+    }
+  };
+}
+
 const defaultDependencies: WorkerRuntimeDependencies = {
   createPool: (connectionString) => new Pool({ connectionString }),
   runMigrations: (pool) => runMigrations(pool as Pool),
@@ -77,6 +97,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       timeoutMs: config.raiderIoTimeoutMs
     }),
   createFingerprintIntegration,
+  createFingerprintAlertNotifier,
   createHandler: createDiscoveryJobHandler,
   sleep: (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -122,10 +143,13 @@ export async function createWorkerRuntime(
     const gateway = dependencies.createGateway(config);
     const fingerprintIntegration =
       dependencies.createFingerprintIntegration?.(config);
+    const fingerprintAlertNotifier =
+      dependencies.createFingerprintAlertNotifier?.(config);
     const handler = dependencies.createHandler({
       repositories,
       gateway,
       ...fingerprintIntegration,
+      ...(fingerprintAlertNotifier ? { fingerprintAlertNotifier } : {}),
       enqueueFingerprintAdmission: (runId) =>
         initializedQueue.enqueueFingerprintAdmission(runId),
       requestCap: config.discoveryRequestCap,

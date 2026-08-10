@@ -17,6 +17,7 @@ export type WorkerConfig = {
   fingerprintMinimumCommon: number;
   fingerprintMinimumIdenticalPercent: number;
   fingerprintSweepCadenceHours: number;
+  maintainerAlertWebhookUrl?: string;
 };
 
 function positiveInteger(
@@ -153,6 +154,10 @@ export function loadWorkerConfig(
       environment.FINGERPRINT_SWEEP_CADENCE_HOURS,
       168,
       "invalid_fingerprint_sweep_cadence_hours"
+    ),
+    maintainerAlertWebhookUrl: optionalHttpUrl(
+      environment.MAINTAINER_ALERT_WEBHOOK_URL,
+      "invalid_maintainer_alert_webhook_url"
     )
   };
 }
