@@ -29,6 +29,7 @@ describe("database migrations", () => {
       "characters",
       "discovery_runs",
       "fingerprint_sweep_admissions",
+      "fingerprint_sweep_request_events",
       "fingerprint_sweep_reservations",
       "fingerprint_sweep_states",
       "negative_character_cache",

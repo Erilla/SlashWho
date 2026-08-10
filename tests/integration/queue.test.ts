@@ -56,6 +56,86 @@ describe("durable discovery queue", () => {
     await stopPostgres();
   });
 
+  it("upgrades deployed standard and stately queues to exclusive without losing work", async () => {
+    // Break caught: createQueue is a no-op for deployed queues and updateQueue
+    // cannot change policy, leaving singleton-key enqueue retries duplicated.
+    const runId = "00000000-0000-4000-8000-000000000020";
+    const admissionRunId = "00000000-0000-4000-8000-000000000021";
+    const legacy = new PgBoss(connectionString);
+    cleanup.push(() => legacy.stop({ graceful: false, timeout: 1_000 }));
+    await legacy.start();
+    await legacy.createQueue(queueName, { policy: "standard" });
+    await legacy.createQueue(fingerprintAdmissionQueueName, {
+      policy: "stately"
+    });
+    const legacyJobIds = await Promise.all([
+      legacy.send(queueName, { runId, key }, { singletonKey: runId }),
+      legacy.send(queueName, { runId, key }, { singletonKey: runId })
+    ]);
+    expect(new Set(legacyJobIds).size).toBe(2);
+    const legacyAdmissionId = await legacy.send(
+      fingerprintAdmissionQueueName,
+      { runId: admissionRunId },
+      { singletonKey: admissionRunId }
+    );
+    await legacy.stop({ graceful: false, timeout: 1_000 });
+
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+
+    const deployedQueues = await applicationPool.query<{
+      name: string;
+      policy: string;
+    }>(
+      `SELECT name, policy
+       FROM pgboss.queue
+       WHERE name = ANY($1)
+       ORDER BY name`,
+      [[queueName, fingerprintAdmissionQueueName]]
+    );
+    expect(deployedQueues.rows).toEqual([
+      { name: queueName, policy: "exclusive" },
+      { name: fingerprintAdmissionQueueName, policy: "exclusive" }
+    ]);
+
+    const runnableJobs = await applicationPool.query<{
+      id: string;
+      name: string;
+      policy: string;
+    }>(
+      `SELECT id::text, name, policy
+       FROM pgboss.job
+       WHERE name = ANY($1)
+         AND state IN ('created', 'retry', 'active')
+       ORDER BY name`,
+      [[queueName, fingerprintAdmissionQueueName]]
+    );
+    expect(runnableJobs.rows).toEqual([
+      {
+        id: expect.any(String),
+        name: queueName,
+        policy: "exclusive"
+      },
+      {
+        id: legacyAdmissionId,
+        name: fingerprintAdmissionQueueName,
+        policy: "exclusive"
+      }
+    ]);
+
+    const recoveredId = await queue.enqueue({ runId, key });
+    expect(legacyJobIds).toContain(recoveredId);
+    const duplicateCount = await applicationPool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM pgboss.job
+       WHERE name = $1 AND singleton_key = $2
+         AND state IN ('created', 'retry', 'active')`,
+      [queueName, runId]
+    );
+    expect(duplicateCount.rows[0]?.count).toBe("1");
+  });
+
   it("delivers one job once across two concurrent worker processes", async () => {
     // Break caught: separate workers could both execute the same durable job.
     const first = createDiscoveryQueue({ connectionString });

@@ -38,7 +38,8 @@ export type WorkerRuntimeDependencies = {
     config: WorkerConfig
   ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
   createFingerprintAlertNotifier?: (
-    config: WorkerConfig
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
   ) => FingerprintAlertNotifier;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
@@ -70,17 +71,40 @@ export function createFingerprintIntegration(
 }
 
 export function createFingerprintAlertNotifier(
-  config: WorkerConfig
+  config: WorkerConfig,
+  options: {
+    fetch?: typeof globalThis.fetch;
+    logger?: DiscoveryLogger;
+    timeoutMs?: number;
+  } = {}
 ): FingerprintAlertNotifier {
+  const fetch = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? 5_000;
   return {
     async notify(alert) {
       if (!config.maintainerAlertWebhookUrl) return;
-      const response = await globalThis.fetch(config.maintainerAlertWebhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(alert)
-      });
-      if (!response.ok) throw new Error("maintainer_alert_delivery_failed");
+      try {
+        const response = await fetch(config.maintainerAlertWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(alert),
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+        if (!response.ok) {
+          options.logger?.info({
+            event: "maintainer_alert_delivery_failed",
+            alertEvent: alert.event,
+            failure: "http_status",
+            status: response.status
+          });
+        }
+      } catch {
+        options.logger?.info({
+          event: "maintainer_alert_delivery_failed",
+          alertEvent: alert.event,
+          failure: "network_or_timeout"
+        });
+      }
     }
   };
 }
@@ -97,7 +121,8 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       timeoutMs: config.raiderIoTimeoutMs
     }),
   createFingerprintIntegration,
-  createFingerprintAlertNotifier,
+  createFingerprintAlertNotifier: (config, logger) =>
+    createFingerprintAlertNotifier(config, { logger }),
   createHandler: createDiscoveryJobHandler,
   sleep: (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -144,7 +169,7 @@ export async function createWorkerRuntime(
     const fingerprintIntegration =
       dependencies.createFingerprintIntegration?.(config);
     const fingerprintAlertNotifier =
-      dependencies.createFingerprintAlertNotifier?.(config);
+      dependencies.createFingerprintAlertNotifier?.(config, logger);
     const handler = dependencies.createHandler({
       repositories,
       gateway,
@@ -191,7 +216,10 @@ export async function createWorkerRuntime(
           ? Math.max(0, Date.now() - admission.blockedSince.getTime())
           : 0;
         if (blockedForMs >= 15 * 60_000) {
-          logger?.info({ event: "fingerprint_admission_blocked", blockedForMs });
+          logger?.info({
+            event: "fingerprint_admission_blocked",
+            blockedForMs
+          });
         }
         throw fingerprintAdmissionRetry(admission.retryAt);
       }

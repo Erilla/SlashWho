@@ -5,6 +5,9 @@ const queueFakes = vi.hoisted(() => {
     name: string;
     handler: (jobs: Array<{ data: { runId: string } }>) => Promise<void>;
   }> = [];
+  const db = {
+    executeSql: vi.fn(async () => ({ rows: [] }))
+  };
   return {
     createQueue: vi.fn(async () => {}),
     updateQueue: vi.fn(async () => {}),
@@ -14,7 +17,8 @@ const queueFakes = vi.hoisted(() => {
     work: vi.fn(async (name, _options, handler) => {
       workers.push({ name, handler });
     }),
-    getDb: vi.fn(),
+    getDb: vi.fn(() => db),
+    db,
     workers
   };
 });

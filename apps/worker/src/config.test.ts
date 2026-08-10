@@ -58,6 +58,20 @@ it("accepts a local Blizzard endpoint only when explicitly configured", () => {
   ).toBe("http://127.0.0.1:43101");
 });
 
+it("preserves a maintainer webhook path and query string", () => {
+  // Break caught: URL validation could reduce a provider webhook to its origin,
+  // posting alerts to the provider homepage instead of the secret endpoint.
+  const webhookUrl =
+    "https://hooks.example.test/services/T000/B000/token?wait=true";
+
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      MAINTAINER_ALERT_WEBHOOK_URL: webhookUrl
+    }).maintainerAlertWebhookUrl
+  ).toBe(webhookUrl);
+});
+
 it("accepts only explicit loopback or container health hosts", () => {
   // Break caught: a deploy could silently bind to an unusable or arbitrary
   // interface instead of the intended local/container health boundary.

@@ -55,10 +55,11 @@ function optionalHttpUrl(
 ): string | undefined {
   if (value === undefined) return undefined;
   try {
-    const url = new URL(value);
+    const normalized = value.trim();
+    const url = new URL(normalized);
     if (url.protocol !== "http:" && url.protocol !== "https:")
       throw new Error();
-    return url.origin;
+    return normalized;
   } catch {
     throw new Error(code);
   }

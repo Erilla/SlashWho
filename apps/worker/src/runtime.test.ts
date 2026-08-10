@@ -13,7 +13,11 @@ import type { RaiderIoGateway } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
-import { createFingerprintIntegration, createWorkerRuntime } from "./runtime";
+import {
+  createFingerprintAlertNotifier,
+  createFingerprintIntegration,
+  createWorkerRuntime
+} from "./runtime";
 
 const config: WorkerConfig = {
   databaseUrl: "postgres://worker:secret@database/slashwho",
@@ -196,6 +200,77 @@ describe("worker runtime", () => {
       cadenceMs: 604_800_000,
       minimumCommon: 200,
       minimumIdenticalPercent: 20
+    });
+  });
+
+  it("swallows and logs a non-successful maintainer webhook response", async () => {
+    // Break caught: a provider outage could reject discovery work and cause the
+    // durable job to retry after its sweep had already changed state.
+    const logger = { info: vi.fn() };
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://hooks.example.test/services/T000/B000/token?wait=true"
+      },
+      { logger, fetch }
+    );
+
+    await expect(
+      notifier.notify({
+        event: "fingerprint_reservation_pressure",
+        details: { committedRequests: 95, hourlyBudget: 100 }
+      })
+    ).resolves.toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "maintainer_alert_delivery_failed",
+      alertEvent: "fingerprint_reservation_pressure",
+      failure: "http_status",
+      status: 503
+    });
+  });
+
+  it("times out and swallows a stalled maintainer webhook request", async () => {
+    // Break caught: an unresponsive webhook could strand a sweep indefinitely
+    // even though alert delivery is only an operational side effect.
+    const logger = { info: vi.fn() };
+    let requestSignal: AbortSignal | null | undefined;
+    const fetch = vi.fn(
+      async (
+        _input: string | URL | Request,
+        init?: RequestInit
+      ): Promise<Response> => {
+        requestSignal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true }
+          );
+        });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://hooks.example.test/services/T000/B000/token?wait=true"
+      },
+      { logger, fetch, timeoutMs: 5 }
+    );
+
+    await expect(
+      notifier.notify({
+        event: "fingerprint_admission_blocked",
+        details: { blockedForMs: 900_000 }
+      })
+    ).resolves.toBeUndefined();
+    expect(requestSignal?.aborted).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "maintainer_alert_delivery_failed",
+      alertEvent: "fingerprint_admission_blocked",
+      failure: "network_or_timeout"
     });
   });
 

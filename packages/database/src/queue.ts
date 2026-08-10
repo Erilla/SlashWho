@@ -59,6 +59,43 @@ const queueOptions = {
   expireInSeconds: 1_800
 } as const;
 
+const exclusiveQueuePolicyMigration = `
+DO $slashwho_queue_upgrade$
+BEGIN
+  LOCK TABLE pgboss.queue IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE pgboss.job IN SHARE ROW EXCLUSIVE MODE;
+
+  WITH ranked AS (
+    SELECT name, id,
+      row_number() OVER (
+        PARTITION BY name, COALESCE(singleton_key, '')
+        ORDER BY (state = 'active') DESC, created_on, id
+      ) AS position
+    FROM pgboss.job
+    WHERE name IN ('discover-character', 'fingerprint-admission')
+      AND state < 'completed'
+  )
+  UPDATE pgboss.job AS job
+  SET state = 'cancelled', completed_on = now()
+  FROM ranked
+  WHERE job.name = ranked.name
+    AND job.id = ranked.id
+    AND ranked.position > 1;
+
+  UPDATE pgboss.job
+  SET policy = 'exclusive'
+  WHERE name IN ('discover-character', 'fingerprint-admission')
+    AND state < 'completed'
+    AND policy <> 'exclusive';
+
+  UPDATE pgboss.queue
+  SET policy = 'exclusive', updated_on = now()
+  WHERE name IN ('discover-character', 'fingerprint-admission')
+    AND policy <> 'exclusive';
+END
+$slashwho_queue_upgrade$;
+`;
+
 function requestedRetryDelaySeconds(
   error: unknown,
   maximumDelaySeconds: number = queueOptions.retryDelayMax
@@ -168,6 +205,10 @@ export function createDiscoveryQueue(
         retryDelay: 60,
         expireInSeconds: 300
       });
+      // pg-boss deliberately makes createQueue idempotent and forbids changing
+      // policy through updateQueue. Migrate deployed queues and their runnable
+      // jobs atomically before this worker accepts sends or registers work.
+      await boss.getDb().executeSql(exclusiveQueuePolicyMigration);
       await boss.updateQueue(fingerprintAdmissionQueueName, {
         retryLimit: 2_147_483_647,
         retryDelay: 60,
@@ -182,11 +223,16 @@ export function createDiscoveryQueue(
       const id = await boss.send(discoverCharacterQueueName, payload, {
         singletonKey: payload.runId
       });
-      return id ??
-        (await existingSingletonJobId(discoverCharacterQueueName, payload.runId)) ??
+      return (
+        id ??
+        (await existingSingletonJobId(
+          discoverCharacterQueueName,
+          payload.runId
+        )) ??
         (() => {
           throw new Error("discovery_queue_enqueue_not_created");
-        })();
+        })()
+      );
     },
 
     async enqueueFingerprintAdmission(runId) {
@@ -198,11 +244,13 @@ export function createDiscoveryQueue(
           singletonKey: runId
         }
       );
-      return id ??
+      return (
+        id ??
         (await existingSingletonJobId(fingerprintAdmissionQueueName, runId)) ??
         (() => {
           throw new Error("fingerprint_admission_enqueue_not_created");
-        })();
+        })()
+      );
     },
 
     async work(handler) {
