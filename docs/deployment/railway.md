@@ -68,6 +68,14 @@ FINGERPRINT_MINIMUM_IDENTICAL_PERCENT=20
 FINGERPRINT_SWEEP_CADENCE_HOURS=168
 ```
 
+`MAINTAINER_ALERT_WEBHOOK_URL` is optional and worker-only. Set it as a secret
+variable to receive the internal budget and admission-pressure alerts; leave it
+unset to keep those alerts in the logs alone. Its path and query string carry
+the shared secret for most providers, so configure the complete URL — it is
+used exactly as given. Delivery is best effort: a rejected or unresponsive
+webhook is logged as `maintainer_alert_delivery_failed` and never fails the
+sweep that raised it.
+
 Railway currently documents `X-Real-IP` as the single remote-client header supplied by its public proxy. SlashWho intentionally accepts only that header for anonymous rate-limit identity and fails closed when it is absent or invalid; it does not trust an arbitrary forwarded chain or a runtime-selectable header name. Verify this exact contract against Railway's public-networking documentation before first launch and after any proxy change.
 
 ## Health, readiness, and restarts
