@@ -156,6 +156,73 @@ describe("discoverFingerprintMatches", () => {
     });
   });
 
+  it("finds nothing rather than failing when the root has no readable roster", async () => {
+    // Break caught: Blizzard 404s a character it holds no current profile for,
+    // which would discard an otherwise good Raider.IO snapshot and retry a root
+    // that can never be swept.
+    await expect(
+      discoverFingerprintMatches(
+        root,
+        {
+          async getGuildRoster() {
+            throw Object.assign(new Error("missing"), { kind: "not_found" });
+          },
+          async getAchievementFingerprint() {
+            throw new Error("unreachable");
+          }
+        },
+        options
+      )
+    ).resolves.toEqual({ kind: "matched", requestsUsed: 1, characters: [] });
+  });
+
+  it("finds nothing rather than failing when the root has no readable profile", async () => {
+    // Break caught: the same 404 on the root's own achievements would strand the
+    // run instead of publishing its Raider.IO result.
+    await expect(
+      discoverFingerprintMatches(
+        root,
+        gatewayFor([candidate(matchingKey)], {}),
+        options
+      )
+    ).resolves.toEqual({ kind: "matched", requestsUsed: 2, characters: [] });
+  });
+
+  it("skips a candidate with no readable profile and keeps sweeping", async () => {
+    // Break caught: a roster member whose achievements are unreadable is
+    // ordinary — the measured live sweep saw 23 of 393 — so treating one as an
+    // upstream failure would abandon every real sweep and publish nothing.
+    const outcome = await discoverFingerprintMatches(
+      root,
+      gatewayFor(
+        [
+          candidate({ region: "eu", realm: "silvermoon", name: "a-missing" }),
+          candidate(matchingKey)
+        ],
+        {
+          [keyId(root)]: fingerprint(200),
+          [keyId(matchingKey)]: fingerprint(200)
+        }
+      ),
+      { ...options, requestCap: 4, isSuppressed: async () => false }
+    );
+
+    expect(outcome).toEqual({
+      kind: "matched",
+      requestsUsed: 4,
+      characters: [
+        {
+          key: matchingKey,
+          displayName: "matching",
+          className: "Mage",
+          level: 80,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/matching",
+          source: "fingerprint"
+        }
+      ]
+    });
+  });
+
   it("rechecks privacy immediately before admitting a matched candidate", async () => {
     // Break caught: a privacy-hidden designation that lands while the candidate
     // fingerprint is being fetched could still be retained in the result.
