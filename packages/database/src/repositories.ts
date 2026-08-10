@@ -135,7 +135,13 @@ export interface NegativeCacheRepository {
 export type FingerprintAdmission =
   | { kind: "not_due" }
   | { kind: "waiting"; retryAt: Date }
-  | { kind: "admitted"; reservationId: string; requestCap: number };
+  | {
+      kind: "admitted";
+      reservationId: string;
+      requestCap: number;
+      committedRequests?: number;
+      hourlyBudget?: number;
+    };
 
 export type FingerprintAdmissionDispatch =
   | { kind: "admitted" }

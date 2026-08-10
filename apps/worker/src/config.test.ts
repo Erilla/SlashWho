@@ -21,6 +21,12 @@ it("rejects missing Blizzard credentials and invalid sweep bounds", () => {
   expect(() =>
     loadWorkerConfig({
       ...environment,
+      FINGERPRINT_MINIMUM_IDENTICAL_PERCENT: "101"
+    })
+  ).toThrow("invalid_fingerprint_minimum_identical_percent");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
       BLIZZARD_SWEEP_REQUEST_CAP: "301",
       BLIZZARD_HOURLY_REQUEST_BUDGET: "300"
     })

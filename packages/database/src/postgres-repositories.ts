@@ -170,7 +170,9 @@ async function admitFingerprintWaitingRun(
   return {
     kind: "admitted",
     reservationId: reservation.rows[0]!.id,
-    requestCap: candidate.request_cap
+    requestCap: candidate.request_cap,
+    committedRequests: Number(usage.rows[0]!.commitment) + candidate.request_cap,
+    hourlyBudget: candidate.hourly_budget
   };
 }
 
@@ -959,6 +961,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode
           });
+          options?.signal?.throwIfAborted();
           await client.query("COMMIT");
           return snapshot;
         } catch (error) {
@@ -1329,7 +1332,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await lockFingerprintSweeps(client);
           const result = await client.query(
             `UPDATE fingerprint_sweep_reservations
-             SET used_count = used_count + $2
+             SET used_count = used_count + $2,
+                 expires_at = greatest(expires_at, $3::timestamptz + interval '1 hour')
              WHERE id = $1
                AND released_at IS NULL
                AND expires_at > $3

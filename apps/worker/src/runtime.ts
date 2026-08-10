@@ -126,6 +126,8 @@ export async function createWorkerRuntime(
       repositories,
       gateway,
       ...fingerprintIntegration,
+      enqueueFingerprintAdmission: (runId) =>
+        initializedQueue.enqueueFingerprintAdmission(runId),
       requestCap: config.discoveryRequestCap,
       negativeCacheTtlMs: config.negativeCacheTtlMs,
       ...(logger ? { logger } : {})
@@ -161,6 +163,10 @@ export async function createWorkerRuntime(
         new Date()
       );
       if (admission.kind === "waiting") {
+        const queueWaitMs = Math.max(0, admission.retryAt.getTime() - Date.now());
+        if (queueWaitMs >= 15 * 60_000) {
+          logger?.info({ event: "fingerprint_admission_blocked", queueWaitMs });
+        }
         throw fingerprintAdmissionRetry(admission.retryAt);
       }
       if (admission.kind !== "admitted") return;

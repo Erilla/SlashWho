@@ -159,10 +159,10 @@ export function createDiscoveryQueue(
     async enqueue(payload) {
       if (!ready) throw new Error("discovery_queue_not_ready");
       const id = await boss.send(discoverCharacterQueueName, payload, {
-        id: payload.runId,
         singletonKey: payload.runId
       });
-      return id ?? payload.runId;
+      if (!id) throw new Error("discovery_queue_enqueue_not_created");
+      return id;
     },
 
     async enqueueFingerprintAdmission(runId) {
@@ -171,7 +171,6 @@ export function createDiscoveryQueue(
         fingerprintAdmissionQueueName,
         { runId },
         {
-          id: runId,
           singletonKey: runId
         }
       );

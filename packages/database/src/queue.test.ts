@@ -33,6 +33,7 @@ vi.mock("pg-boss", () => ({
 
 import {
   createDiscoveryQueue,
+  discoverCharacterQueueName,
   fingerprintAdmissionQueueName,
   updateActiveRetryDelay
 } from "./queue";
@@ -53,7 +54,7 @@ describe("pg-boss retry delay update", () => {
 });
 
 describe("fingerprint admission queue", () => {
-  it("uses a per-run singleton job and delivers only its run id", async () => {
+  it("uses separate generated job ids while retaining a per-run singleton key", async () => {
     // Break caught: admission work could be duplicated or leak a discovery payload into the private queue.
     const queue = createDiscoveryQueue({
       connectionString: "postgres://worker:secret@database/slashwho"
@@ -62,6 +63,10 @@ describe("fingerprint admission queue", () => {
     const delivered: string[] = [];
 
     await queue.start();
+    await queue.enqueue({
+      runId,
+      key: { region: "eu", realm: "silvermoon", name: "root" }
+    });
     await queue.enqueueFingerprintAdmission(runId);
     await queue.workFingerprintAdmissions(async (deliveredRunId) => {
       delivered.push(deliveredRunId);
@@ -79,7 +84,12 @@ describe("fingerprint admission queue", () => {
     expect(queueFakes.send).toHaveBeenCalledWith(
       fingerprintAdmissionQueueName,
       { runId },
-      { id: runId, singletonKey: runId }
+      { singletonKey: runId }
+    );
+    expect(queueFakes.send).toHaveBeenCalledWith(
+      discoverCharacterQueueName,
+      expect.objectContaining({ runId }),
+      { singletonKey: runId }
     );
     expect(delivered).toEqual([runId]);
 

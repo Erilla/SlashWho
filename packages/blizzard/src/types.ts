@@ -9,14 +9,19 @@ export type BlizzardRosterCharacter = Readonly<{
   level: number;
 }>;
 
+/** Called immediately before a request to the Blizzard profile API. */
+export type BlizzardProfileRequestObserver = () => Promise<void> | void;
+
 export interface BlizzardGateway {
   getGuildRoster(
     root: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<readonly BlizzardRosterCharacter[]>;
   getAchievementFingerprint(
     key: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<AchievementFingerprint>;
 }
 

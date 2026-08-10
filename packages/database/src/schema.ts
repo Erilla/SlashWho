@@ -268,6 +268,12 @@ export const fingerprintSweepAdmissions = pgTable(
       table.realmSlug,
       table.normalizedName
     ),
+    index("fingerprint_sweep_admissions_dispatch_idx").on(
+      table.status,
+      table.dispatchedAt,
+      table.requestedAt,
+      table.queueOrder
+    ),
     check(
       "fingerprint_sweep_admissions_request_cap_check",
       sql`${table.requestCap} > 0`

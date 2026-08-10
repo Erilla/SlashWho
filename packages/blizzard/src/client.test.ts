@@ -92,7 +92,8 @@ describe("Blizzard gateway", () => {
       throw new Error(`unexpected endpoint: ${url.pathname}`);
     });
 
-    await expect(gateway.getGuildRoster(key)).resolves.toEqual([
+    const onProfileRequest = vi.fn();
+    await expect(gateway.getGuildRoster(key, undefined, onProfileRequest)).resolves.toEqual([
       {
         key: { region: "eu", realm: "silvermoon", name: "alt" },
         displayName: "Alt",
@@ -100,6 +101,7 @@ describe("Blizzard gateway", () => {
         level: 80
       }
     ]);
+    expect(onProfileRequest).toHaveBeenCalledTimes(2);
   });
 
   it("returns an empty roster when the root has no guild", async () => {

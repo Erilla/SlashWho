@@ -5,6 +5,7 @@ import type {
   BlizzardError,
   BlizzardFailure,
   BlizzardGateway,
+  BlizzardProfileRequestObserver,
   BlizzardRosterCharacter
 } from "./types";
 
@@ -192,9 +193,12 @@ export function createBlizzardClient(
   async function request<T>(
     url: URL,
     normalize: (value: unknown) => T | null,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<T> {
     const token = await accessToken(signal);
+    await onProfileRequest?.();
+    signal?.throwIfAborted();
     let response: Response;
     try {
       response = await options.fetch(url.toString(), {
@@ -255,13 +259,15 @@ export function createBlizzardClient(
 
   async function getGuildRoster(
     root: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<readonly BlizzardRosterCharacter[]> {
     const key = validCharacterKey(root);
     const profile = await request(
       profileUrl(key),
       (value) => valueRecord(value),
-      signal
+      signal,
+      onProfileRequest
     );
     if (!("guild" in profile) || profile.guild === null) return [];
 
@@ -284,16 +290,23 @@ export function createBlizzardClient(
           ? (members as BlizzardRosterCharacter[])
           : null;
       },
-      signal
+      signal,
+      onProfileRequest
     );
   }
 
   async function getAchievementFingerprint(
     key: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<AchievementFingerprint> {
     const validKey = validCharacterKey(key);
-    return request(achievementsUrl(validKey), fingerprintFromResponse, signal);
+    return request(
+      achievementsUrl(validKey),
+      fingerprintFromResponse,
+      signal,
+      onProfileRequest
+    );
   }
 
   return { getGuildRoster, getAchievementFingerprint };

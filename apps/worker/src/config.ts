@@ -29,6 +29,20 @@ function positiveInteger(
   return parsed;
 }
 
+function integerInRange(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  code: string
+): number {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(code);
+  }
+  return parsed;
+}
+
 function requiredString(value: string | undefined, code: string): string {
   if (!value?.trim()) throw new Error(code);
   return value;
@@ -128,9 +142,11 @@ export function loadWorkerConfig(
       200,
       "invalid_fingerprint_minimum_common"
     ),
-    fingerprintMinimumIdenticalPercent: positiveInteger(
+    fingerprintMinimumIdenticalPercent: integerInRange(
       environment.FINGERPRINT_MINIMUM_IDENTICAL_PERCENT,
       20,
+      1,
+      100,
       "invalid_fingerprint_minimum_identical_percent"
     ),
     fingerprintSweepCadenceHours: positiveInteger(

@@ -273,6 +273,14 @@ export async function discoverFingerprintMatches(
     }
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "kind" in error &&
+      error.kind === "fingerprint_cap_reached"
+    ) {
+      return { kind: "capped", characters: matches, requestsUsed };
+    }
     return failureOutcome(error);
   }
 

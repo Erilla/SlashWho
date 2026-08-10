@@ -6,5 +6,6 @@ export type {
   BlizzardError,
   BlizzardFailure,
   BlizzardGateway,
+  BlizzardProfileRequestObserver,
   BlizzardRosterCharacter
 } from "./types";

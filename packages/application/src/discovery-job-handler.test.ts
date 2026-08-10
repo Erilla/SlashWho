@@ -95,13 +95,22 @@ class MutableBlizzardGateway implements BlizzardGateway {
   roster: readonly FingerprintCandidate[] = [];
   fingerprints = new Map<string, ReadonlyMap<number, number>>();
 
-  async getGuildRoster(): Promise<readonly FingerprintCandidate[]> {
+  async getGuildRoster(
+    _key?: CharacterKey,
+    _signal?: AbortSignal,
+    onProfileRequest?: () => Promise<void> | void
+  ): Promise<readonly FingerprintCandidate[]> {
+    await onProfileRequest?.();
+    if (this.roster.length > 0) await onProfileRequest?.();
     return this.roster;
   }
 
   async getAchievementFingerprint(
-    key: CharacterKey
+    key: CharacterKey,
+    _signal?: AbortSignal,
+    onProfileRequest?: () => Promise<void> | void
   ): Promise<ReadonlyMap<number, number>> {
+    await onProfileRequest?.();
     return this.fingerprints.get(keyId(key)) ?? new Map();
   }
 }
@@ -343,6 +352,7 @@ function handlerFor(
       minimumCommon: 200,
       minimumIdenticalPercent: 20
     },
+    enqueueFingerprintAdmission: async () => {},
     requestCap: 12,
     now: () => new Date("2026-08-05T08:00:00.000Z"),
     random: () => 0,
@@ -383,7 +393,11 @@ describe("discovery job handler", () => {
       blizzardGateway.getGuildRoster.bind(blizzardGateway)
     );
 
-    await handlerFor(repositories, gateway, { blizzardGateway }).execute(
+    const enqueueFingerprintAdmission = vi.fn(async () => {});
+    await handlerFor(repositories, gateway, {
+      blizzardGateway,
+      enqueueFingerprintAdmission
+    }).execute(
       run.id,
       delivery()
     );
@@ -394,6 +408,7 @@ describe("discovery job handler", () => {
     });
     expect(gateway.getCharacter).toHaveBeenCalled();
     expect(blizzardGateway.getGuildRoster).not.toHaveBeenCalled();
+    expect(enqueueFingerprintAdmission).toHaveBeenCalledWith(run.id);
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toBeNull();
@@ -452,7 +467,7 @@ describe("discovery job handler", () => {
       ])
     });
     expect(repositories.fingerprintSweeps.recordRequest).toHaveBeenCalledTimes(
-      4
+      5
     );
     expect(publish).toHaveBeenCalledWith(
       expect.any(Object),
@@ -530,7 +545,8 @@ describe("discovery job handler", () => {
     });
     repositories.fingerprintSweeps.release = vi.fn(async () => {});
     const blizzardGateway = new MutableBlizzardGateway();
-    blizzardGateway.getGuildRoster = async () => {
+    blizzardGateway.getGuildRoster = async (_key, _signal, onProfileRequest) => {
+      await onProfileRequest?.();
       events.push("upstream");
       throw Object.assign(new Error("private-upstream-marker"), {
         kind: "transient",
@@ -603,7 +619,8 @@ describe("discovery job handler", () => {
     const controller = new AbortController();
     const abortReason = new DOMException("drain timeout", "AbortError");
     const blizzardGateway = new MutableBlizzardGateway();
-    blizzardGateway.getGuildRoster = async () => {
+    blizzardGateway.getGuildRoster = async (_key, _signal, onProfileRequest) => {
+      await onProfileRequest?.();
       controller.abort(abortReason);
       return [];
     };

@@ -27,6 +27,7 @@ export type DiscoveryJobHandlerOptions = {
     minimumCommon: number;
     minimumIdenticalPercent: number;
   };
+  enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
   requestCap: number;
   now?: () => Date;
   random?: () => number;
@@ -245,11 +246,21 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               });
 
             if (admission.kind === "waiting") {
+              if (!options.enqueueFingerprintAdmission) {
+                throw new Error("fingerprint_admission_queue_unavailable");
+              }
+              await options.enqueueFingerprintAdmission(runId);
               record.outcome = "fingerprint_admission_waiting";
               record.fingerprintQueueWaitMs = Math.max(
                 0,
                 admission.retryAt.getTime() - admissionTime.getTime()
               );
+              if (record.fingerprintQueueWaitMs >= 15 * 60_000) {
+                options.logger?.info({
+                  event: "fingerprint_admission_blocked",
+                  queueWaitMs: record.fingerprintQueueWaitMs
+                });
+              }
               return;
             }
 
@@ -257,6 +268,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               const fingerprintStartedAt = monotonic();
               let reservationActive = true;
               record.fingerprintReservedRequests = admission.requestCap;
+              if (
+                admission.committedRequests !== undefined &&
+                admission.hourlyBudget !== undefined &&
+                admission.committedRequests > admission.hourlyBudget * 0.9
+              ) {
+                options.logger?.info({
+                  event: "fingerprint_reservation_pressure",
+                  committedRequests: admission.committedRequests,
+                  hourlyBudget: admission.hourlyBudget
+                });
+              }
               const releaseReservation = async () => {
                 if (!reservationActive) return;
                 await options.repositories.fingerprintSweeps.release(
@@ -268,20 +290,27 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               try {
                 const adaptedGateway = createBlizzardFingerprintAdapter(
                   blizzardGateway,
-                  async () => {
-                    await options.repositories.fingerprintSweeps.recordRequest(
-                      admission.reservationId,
-                      1,
-                      now()
-                    );
-                    record.fingerprintUsedRequests += 1;
+                  {
+                    requestCap: admission.requestCap,
+                    recordRequest: async () => {
+                      await options.repositories.fingerprintSweeps.recordRequest(
+                        admission.reservationId,
+                        1,
+                        now()
+                      );
+                      record.fingerprintUsedRequests += 1;
+                    },
+                    onRateLimited: () =>
+                      options.logger?.info({
+                        event: "fingerprint_blizzard_rate_limited"
+                      })
                   }
                 );
                 const sweep = await discoverFingerprintMatches(
                   run.rootKey,
                   adaptedGateway,
                   {
-                    requestCap: admission.requestCap,
+                    requestCap: Number.MAX_SAFE_INTEGER,
                     minimumCommon: fingerprint.minimumCommon,
                     minimumIdenticalPercent:
                       fingerprint.minimumIdenticalPercent,
