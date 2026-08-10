@@ -41,6 +41,17 @@ it("loads private Blizzard sweep defaults only for the worker", () => {
   });
 });
 
+it("accepts a local Blizzard endpoint only when explicitly configured", () => {
+  // Break caught: e2e could not direct its fake credentials and sweep requests
+  // to its deterministic local fixture.
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      BLIZZARD_BASE_URL: "http://127.0.0.1:43101"
+    }).blizzardBaseUrl
+  ).toBe("http://127.0.0.1:43101");
+});
+
 it("accepts only explicit loopback or container health hosts", () => {
   // Break caught: a deploy could silently bind to an unusable or arbitrary
   // interface instead of the intended local/container health boundary.

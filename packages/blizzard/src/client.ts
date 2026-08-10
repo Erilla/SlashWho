@@ -12,6 +12,8 @@ export type CreateBlizzardClientOptions = Readonly<{
   fetch: typeof globalThis.fetch;
   clientId: string;
   clientSecret: string;
+  /** Overrides both Blizzard hosts for deterministic local integration tests. */
+  baseUrl?: string;
 }>;
 
 type AccessToken = Readonly<{
@@ -143,17 +145,23 @@ export function createBlizzardClient(
 
     let response: Response;
     try {
-      response = await options.fetch("https://oauth.battle.net/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${Buffer.from(
-            `${options.clientId}:${options.clientSecret}`
-          ).toString("base64")}`
-        },
-        body: "grant_type=client_credentials",
-        signal
-      });
+      response = await options.fetch(
+        new URL(
+          "/token",
+          options.baseUrl ?? "https://oauth.battle.net"
+        ).toString(),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Basic ${Buffer.from(
+              `${options.clientId}:${options.clientSecret}`
+            ).toString("base64")}`
+          },
+          body: "grant_type=client_credentials",
+          signal
+        }
+      );
     } catch {
       if (signal?.aborted) throw signal.reason;
       throw createBlizzardError({ kind: "transient" });
@@ -217,7 +225,8 @@ export function createBlizzardClient(
 
   function profileUrl(key: CharacterKey): URL {
     const url = new URL(
-      `https://${key.region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(key.realm)}/${encodeURIComponent(key.name)}`
+      `/profile/wow/character/${encodeURIComponent(key.realm)}/${encodeURIComponent(key.name)}`,
+      options.baseUrl ?? `https://${key.region}.api.blizzard.com`
     );
     url.searchParams.set("namespace", `profile-${key.region}`);
     url.searchParams.set("locale", "en_GB");
@@ -236,7 +245,8 @@ export function createBlizzardClient(
     guildName: string
   ): URL {
     const url = new URL(
-      `https://${region}.api.blizzard.com/data/wow/guild/${encodeURIComponent(blizzardSlug(realm))}/${encodeURIComponent(blizzardSlug(guildName))}/roster`
+      `/data/wow/guild/${encodeURIComponent(blizzardSlug(realm))}/${encodeURIComponent(blizzardSlug(guildName))}/roster`,
+      options.baseUrl ?? `https://${region}.api.blizzard.com`
     );
     url.searchParams.set("namespace", `profile-${region}`);
     url.searchParams.set("locale", "en_GB");

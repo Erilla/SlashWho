@@ -39,6 +39,32 @@ function tokenResponse(): Response {
 }
 
 describe("Blizzard gateway", () => {
+  it("uses an explicitly configured endpoint for local integration fixtures", async () => {
+    // Break caught: e2e sweeps could send test credentials to the public
+    // Blizzard endpoints even when the test suite provides a local fixture.
+    const endpoints: string[] = [];
+    const gateway = createBlizzardClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        endpoints.push(url.toString());
+        return url.pathname === "/token"
+          ? tokenResponse()
+          : Response.json({ achievements: [] });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      baseUrl: "http://127.0.0.1:43101"
+    });
+
+    await expect(gateway.getAchievementFingerprint(key)).resolves.toEqual(
+      new Map()
+    );
+    expect(endpoints).toEqual([
+      "http://127.0.0.1:43101/token",
+      "http://127.0.0.1:43101/profile/wow/character/silvermoon/sentinel/achievements?namespace=profile-eu&locale=en_GB"
+    ]);
+  });
+
   it("uses the root region profile API and normalizes the current guild roster", async () => {
     // Break caught: roster requests could cross regions or leak upstream member
     // shapes into discovery snapshots.

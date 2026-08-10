@@ -52,7 +52,8 @@ export function createFingerprintIntegration(
     blizzardGateway: createBlizzardClient({
       fetch: globalThis.fetch,
       clientId: config.blizzardClientId,
-      clientSecret: config.blizzardClientSecret
+      clientSecret: config.blizzardClientSecret,
+      baseUrl: config.blizzardBaseUrl
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,

@@ -11,6 +11,7 @@ export type WorkerConfig = {
   raiderIoTimeoutMs: number;
   blizzardClientId: string;
   blizzardClientSecret: string;
+  blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
   fingerprintMinimumCommon: number;
@@ -31,6 +32,21 @@ function positiveInteger(
 function requiredString(value: string | undefined, code: string): string {
   if (!value?.trim()) throw new Error(code);
   return value;
+}
+
+function optionalHttpUrl(
+  value: string | undefined,
+  code: string
+): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:")
+      throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error(code);
+  }
 }
 
 export function loadWorkerConfig(
@@ -101,6 +117,10 @@ export function loadWorkerConfig(
     ),
     blizzardClientId,
     blizzardClientSecret,
+    blizzardBaseUrl: optionalHttpUrl(
+      environment.BLIZZARD_BASE_URL,
+      "invalid_blizzard_base_url"
+    ),
     blizzardSweepRequestCap,
     blizzardHourlyRequestBudget,
     fingerprintMinimumCommon: positiveInteger(
