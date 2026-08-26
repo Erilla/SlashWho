@@ -29,7 +29,7 @@ The gated view of SlashWho's findings intended for someone assessing an applican
 _Avoid_: Officer mode, admin view, Applicant Intel API
 
 **Applicant dossier**:
-The reviewer-surface report about a searched character and every character linked to it, carrying evidence attributed per character. It is assembled on request and never stored, so it is always a view of the moment rather than a citable record.
+The reviewer-surface report about a searched character and every character linked to it, carrying evidence attributed per character. It is never stored, so it is always a view of the moment rather than a citable record.
 _Avoid_: Intel report, applicant snapshot, saved dossier
 
 **Source label**:
