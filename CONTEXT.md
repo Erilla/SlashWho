@@ -23,3 +23,15 @@ _Avoid_: Failed snapshot, incomplete refresh
 **Ephemeral fingerprint**:
 Achievement-completion data held only while a single discovery sweep is running. It is discarded before snapshot publication and never becomes a stored signature.
 _Avoid_: Fingerprint cache, stored signature
+
+**Reviewer surface**:
+The gated view of SlashWho's findings intended for someone assessing an applicant. It may expose material the public view withholds, but it takes the same input as a public search: a single character.
+_Avoid_: Officer mode, admin view, Applicant Intel API
+
+**Applicant dossier**:
+The reviewer-surface report about a searched character and every character linked to it, carrying evidence attributed per character. It is assembled on request and never stored, so it is always a view of the moment rather than a citable record.
+_Avoid_: Intel report, applicant snapshot, saved dossier
+
+**Source label**:
+The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown only on the reviewer surface; the public alt list still shows one undifferentiated list, and no confidence value is retained alongside it.
+_Avoid_: Confidence, provenance score, match strength
