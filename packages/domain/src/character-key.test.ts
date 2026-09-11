@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseApplicantCharacterUrl,
   parseRaiderIoCharacterUrl,
   toCharacterPath,
   toRaiderIoUrl
@@ -26,6 +27,28 @@ describe("Raider.IO character identity", () => {
     "https://raider.io/characters/eu/silvermoon/ryii?source=search"
   ])("rejects unsupported input: %s", (value) => {
     expect(() => parseRaiderIoCharacterUrl(value)).toThrow(
+      "invalid_character_url"
+    );
+  });
+});
+
+describe("applicant character identity", () => {
+  it("canonicalizes a Warcraft Logs character URL", () => {
+    expect(
+      parseApplicantCharacterUrl(
+        "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
+      )
+    ).toEqual({ region: "eu", realm: "silvermoon", name: "ryii" });
+  });
+
+  it.each([
+    "https://raider.io.evil/characters/eu/silvermoon/Ryii",
+    "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii/extra",
+    "https://user@www.warcraftlogs.com/character/eu/silvermoon/Ryii",
+    "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii?view=profile",
+    "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii#summary"
+  ])("rejects unsupported applicant input: %s", (value) => {
+    expect(() => parseApplicantCharacterUrl(value)).toThrow(
       "invalid_character_url"
     );
   });

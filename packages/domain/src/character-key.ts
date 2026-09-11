@@ -8,34 +8,41 @@ export type CharacterKey = Readonly<{
   name: string;
 }>;
 
-export function parseRaiderIoCharacterUrl(input: string): CharacterKey {
+function invalidCharacterUrl(): never {
+  throw new Error("invalid_character_url");
+}
+
+function parseAbsoluteHttpsUrl(input: string): URL {
   let url: URL;
   try {
     url = new URL(input);
   } catch {
-    throw new Error("invalid_character_url");
+    return invalidCharacterUrl();
   }
 
   if (
     url.protocol !== "https:" ||
-    url.hostname !== "raider.io" ||
     url.username ||
     url.password ||
     url.search ||
     url.hash
   ) {
-    throw new Error("invalid_character_url");
+    return invalidCharacterUrl();
   }
 
+  return url;
+}
+
+function parseCharacterPath(url: URL, expectedPrefix: string): CharacterKey {
   let parts: string[];
   try {
     parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   } catch {
-    throw new Error("invalid_character_url");
+    return invalidCharacterUrl();
   }
 
-  if (parts.length !== 4 || parts[0].toLowerCase() !== "characters") {
-    throw new Error("invalid_character_url");
+  if (parts.length !== 4 || parts[0].toLowerCase() !== expectedPrefix) {
+    return invalidCharacterUrl();
   }
 
   const [region, realm, name] = parts
@@ -47,10 +54,35 @@ export function parseRaiderIoCharacterUrl(input: string): CharacterKey {
     !/^[a-z0-9-]+$/.test(realm) ||
     !/^[\p{L}\p{M}'-]+$/u.test(name)
   ) {
-    throw new Error("invalid_character_url");
+    return invalidCharacterUrl();
   }
 
   return { region: region as Region, realm, name };
+}
+
+export function parseRaiderIoCharacterUrl(input: string): CharacterKey {
+  const url = parseAbsoluteHttpsUrl(input);
+  if (url.hostname !== "raider.io") {
+    return invalidCharacterUrl();
+  }
+
+  return parseCharacterPath(url, "characters");
+}
+
+function parseWarcraftLogsCharacterUrl(url: URL): CharacterKey {
+  return parseCharacterPath(url, "character");
+}
+
+export function parseApplicantCharacterUrl(input: string): CharacterKey {
+  const url = parseAbsoluteHttpsUrl(input);
+  if (url.hostname === "raider.io") {
+    return parseRaiderIoCharacterUrl(input);
+  }
+  if (url.hostname === "www.warcraftlogs.com") {
+    return parseWarcraftLogsCharacterUrl(url);
+  }
+
+  return invalidCharacterUrl();
 }
 
 export function toCharacterPath(key: CharacterKey): string {
