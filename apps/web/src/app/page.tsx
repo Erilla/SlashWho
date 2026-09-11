@@ -9,6 +9,10 @@ export default function Home() {
           <Logo className="wordmark-mark" />
           <span>Who</span>
         </h1>
+        <p className="home-introduction">
+          Research a World of Warcraft applicant from a Raider.IO or Warcraft
+          Logs character URL.
+        </p>
         <SearchForm />
       </section>
     </main>
