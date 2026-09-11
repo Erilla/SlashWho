@@ -160,6 +160,12 @@ importers:
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../domain
+      '@slashwho/raiderio':
+        specifier: workspace:*
+        version: link:../raiderio
+      '@slashwho/warcraftlogs':
+        specifier: workspace:*
+        version: link:../warcraftlogs
       zod:
         specifier: ^4.3.5
         version: 4.4.3
