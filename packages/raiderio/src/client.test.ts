@@ -22,7 +22,10 @@ type FixtureName =
   | "missing-character"
   | "rate-limited"
   | "server-error"
-  | "schema-drift";
+  | "schema-drift"
+  | "raid-progress-valid"
+  | "raid-progress-rate-limited"
+  | "raid-progress-schema-drift";
 
 type Fixture = {
   status: number;
@@ -49,9 +52,12 @@ function fixtureFetch(name: FixtureName): typeof globalThis.fetch {
       name === "profile-forbidden" ||
       name === "claimed-characters" ||
       name === "claimed-characters-out-of-scope";
+    const expectsRaidProgress = name.startsWith("raid-progress-");
     const expectedPath = expectsProfile
       ? "/api/user/view-characters"
-      : "/api/characters/eu/silvermoon/sentinel";
+      : expectsRaidProgress
+        ? "/api/characters/eu/silvermoon/sentinel/raid-progress"
+        : "/api/characters/eu/silvermoon/sentinel";
 
     if (url.pathname !== expectedPath) {
       throw new Error(`unexpected fixture path: ${url.pathname}`);
@@ -63,6 +69,31 @@ function fixtureFetch(name: FixtureName): typeof globalThis.fetch {
         "Content-Type": "application/json",
         ...fixture.headers
       }
+    });
+  };
+}
+
+function raidProgressFixtureFetch(): typeof globalThis.fetch {
+  const fixture = JSON.parse(
+    readFileSync(resolve(fixtureDirectory, "raid-progress-valid.json"), "utf8")
+  ) as Fixture & { duplicateTierBody: unknown };
+
+  return async (input) => {
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? input : input.url
+    );
+    if (
+      url.pathname !== "/api/characters/eu/silvermoon/sentinel/raid-progress"
+    ) {
+      throw new Error(`unexpected fixture path: ${url.pathname}`);
+    }
+    const body =
+      url.searchParams.get("tier") === "31"
+        ? fixture.duplicateTierBody
+        : fixture.body;
+    return new Response(JSON.stringify(body), {
+      status: fixture.status,
+      headers: { "Content-Type": "application/json", ...fixture.headers }
     });
   };
 }
@@ -390,5 +421,148 @@ describe("Raider.IO gateway", () => {
     await expect(
       client.resolveProfileGuess("private-timeout-value")
     ).rejects.not.toThrow(/private-timeout-value/);
+  });
+
+  it("normalizes historic Mythic kills without retaining an upstream payload", async () => {
+    // Break caught: a changed normalizer could turn dated, attributed Mythic
+    // kills into anonymous raid-progress data or leak an upstream envelope.
+    const client = createRaiderIoClient({
+      fetch: fixtureFetch("raid-progress-valid"),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await expect(
+      client.getHistoricMythicKills(sentinel, { tierOrdinals: [30] })
+    ).resolves.toEqual({
+      kind: "evidence",
+      kills: [
+        {
+          raidId: "nerub-ar-palace",
+          raidName: "Nerub-ar Palace",
+          bossId: "queen-ansurek",
+          bossName: "Queen Ansurek",
+          bossOrder: 8,
+          isFinalBoss: true,
+          firstDefeated: "2025-02-04T17:59:00.000Z",
+          guild: { name: "Example Guild", realm: "silvermoon" },
+          historicWorldRank: 147
+        },
+        {
+          raidId: "nerub-ar-palace",
+          raidName: "Nerub-ar Palace",
+          bossId: "the-silken-court",
+          bossName: "The Silken Court",
+          bossOrder: 7,
+          isFinalBoss: false,
+          firstDefeated: "2025-01-29T20:00:00.000Z",
+          guild: null,
+          historicWorldRank: null
+        }
+      ]
+    });
+  });
+
+  it("keeps the earliest duplicate Mythic kill returned by overlapping tiers", async () => {
+    // Break caught: overlapping tier responses could duplicate Queen Ansurek or
+    // replace the first public kill with a later kill.
+    const client = createRaiderIoClient({
+      fetch: raidProgressFixtureFetch(),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    const result = await client.getHistoricMythicKills(sentinel, {
+      tierOrdinals: [30, 31]
+    });
+
+    expect(result).toEqual({
+      kind: "evidence",
+      kills: [
+        expect.objectContaining({
+          bossId: "queen-ansurek",
+          firstDefeated: "2025-02-04T17:59:00.000Z"
+        }),
+        expect.objectContaining({ bossId: "the-silken-court" })
+      ]
+    });
+  });
+
+  it("returns a rate-limit limitation with Retry-After timing", async () => {
+    await expect(
+      clientFor("raid-progress-rate-limited").getHistoricMythicKills(sentinel, {
+        tierOrdinals: [30]
+      })
+    ).resolves.toEqual({
+      kind: "limitation",
+      code: "rate_limited",
+      retryAfterMs: 30_000
+    });
+  });
+
+  it("stops at the historic-kill request cap before making another request", async () => {
+    // Break caught: an exhausted evidence budget could still make an upstream
+    // request, defeating the cap that protects the undocumented endpoint.
+    let calls = 0;
+    const fetch: typeof globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({}), { status: 200 });
+    };
+    const client = createRaiderIoClient({
+      fetch,
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await expect(
+      client.getHistoricMythicKills(sentinel, {
+        tierOrdinals: [30, 31],
+        requestCap: 1
+      })
+    ).resolves.toEqual({ kind: "limitation", code: "request_cap" });
+    expect(calls).toBe(0);
+  });
+
+  it("returns schema_drift for a malformed historic-kill payload", async () => {
+    await expect(
+      clientFor("raid-progress-schema-drift").getHistoricMythicKills(sentinel, {
+        tierOrdinals: [30]
+      })
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+  });
+
+  it("preserves delivery cancellation while gathering historic Mythic kills", async () => {
+    // Break caught: caller cancellation could be converted into a claim that
+    // Raider.IO evidence was merely unavailable.
+    const controller = new AbortController();
+    let started!: () => void;
+    const waitingForFetch = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fetch: typeof globalThis.fetch = async (_input, init) =>
+      new Promise((_resolve, reject) => {
+        started();
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason),
+          {
+            once: true
+          }
+        );
+      });
+    const client = createRaiderIoClient({
+      fetch,
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 1_000
+    });
+
+    const request = client.getHistoricMythicKills(sentinel, {
+      tierOrdinals: [30],
+      signal: controller.signal
+    });
+    await waitingForFetch;
+    controller.abort(new DOMException("drain timeout", "AbortError"));
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
 });

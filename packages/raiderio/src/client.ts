@@ -1,5 +1,6 @@
 import type { CharacterKey } from "@slashwho/domain";
 import { supportedRegions } from "@slashwho/domain";
+import { z } from "zod";
 
 import {
   createRaiderIoError,
@@ -12,9 +13,51 @@ import {
 } from "./normalize";
 import type {
   RaiderIoCharacter,
+  HistoricMythicKill,
+  HistoricMythicKillOptions,
+  HistoricMythicKillResult,
   RaiderIoGateway,
   RaiderIoProfile
 } from "./types";
+
+const MAX_HISTORIC_MYTHIC_KILL_TIERS = 8;
+
+const historicRaidProgressResponseSchema = z.object({
+  characterRaidProgress: z.object({
+    raidProgress: z.array(
+      z.object({
+        raid: z.object({
+          id: z.string().min(1),
+          name: z.string().min(1)
+        }),
+        encountersDefeated: z.object({
+          mythic: z.array(
+            z.object({
+              slug: z.string().min(1),
+              name: z.string().min(1),
+              ordinal: z.number().int().nonnegative(),
+              isFinalBoss: z.boolean(),
+              firstDefeated: z.string().datetime(),
+              guild: z
+                .object({
+                  name: z.string().min(1),
+                  realm: z.object({ slug: z.string().min(1) })
+                })
+                .nullable()
+                .optional(),
+              historicWorldRank: z
+                .number()
+                .int()
+                .positive()
+                .nullable()
+                .optional()
+            })
+          )
+        })
+      })
+    )
+  })
+});
 
 export type CreateRaiderIoClientOptions = {
   fetch: typeof globalThis.fetch;
@@ -58,6 +101,72 @@ function validatedCharacterKey(key: CharacterKey): CharacterKey {
 
   if (!valid) throw new Error("invalid_character_key");
   return key;
+}
+
+function normalizeHistoricRaidProgress(
+  value: unknown
+): readonly HistoricMythicKill[] {
+  const parsed = historicRaidProgressResponseSchema.parse(value);
+  const kills: HistoricMythicKill[] = [];
+
+  for (const raidProgress of parsed.characterRaidProgress.raidProgress) {
+    for (const encounter of raidProgress.encountersDefeated.mythic) {
+      kills.push({
+        raidId: raidProgress.raid.id,
+        raidName: raidProgress.raid.name,
+        bossId: encounter.slug,
+        bossName: encounter.name,
+        bossOrder: encounter.ordinal,
+        isFinalBoss: encounter.isFinalBoss,
+        firstDefeated: encounter.firstDefeated,
+        guild: encounter.guild
+          ? {
+              name: encounter.guild.name,
+              realm: encounter.guild.realm.slug
+            }
+          : null,
+        historicWorldRank: encounter.historicWorldRank ?? null
+      });
+    }
+  }
+
+  return kills;
+}
+
+function historicKillLimitation(error: unknown): HistoricMythicKillResult {
+  if (!isRaiderIoFailure(error)) {
+    return { kind: "limitation", code: "unavailable" };
+  }
+
+  switch (error.kind) {
+    case "not_found":
+      return { kind: "limitation", code: "not_found" };
+    case "forbidden":
+      return { kind: "limitation", code: "private" };
+    case "schema_drift":
+      return { kind: "limitation", code: "schema_drift" };
+    case "transient":
+      return {
+        kind: "limitation",
+        code: error.status === 429 ? "rate_limited" : "unavailable",
+        ...(error.retryAfterMs === undefined
+          ? {}
+          : { retryAfterMs: error.retryAfterMs })
+      };
+  }
+}
+
+function boundedTierOrdinals(
+  options: HistoricMythicKillOptions
+): readonly number[] | null {
+  const tiers = [...new Set(options.tierOrdinals)];
+  if (
+    tiers.length > MAX_HISTORIC_MYTHIC_KILL_TIERS ||
+    tiers.some((tier) => !Number.isSafeInteger(tier) || tier < 0)
+  ) {
+    return null;
+  }
+  return tiers;
 }
 
 export function createRaiderIoClient(
@@ -186,5 +295,65 @@ export function createRaiderIoClient(
     }
   }
 
-  return { getCharacter, getClaimedCharacters, resolveProfileGuess };
+  async function getHistoricMythicKills(
+    key: CharacterKey,
+    options: HistoricMythicKillOptions
+  ): Promise<HistoricMythicKillResult> {
+    const validKey = validatedCharacterKey(key);
+    const tiers = boundedTierOrdinals(options);
+    const requestCap = options.requestCap ?? MAX_HISTORIC_MYTHIC_KILL_TIERS;
+    if (
+      !tiers ||
+      !Number.isSafeInteger(requestCap) ||
+      requestCap < 0 ||
+      tiers.length > requestCap
+    ) {
+      return { kind: "limitation", code: "request_cap" };
+    }
+
+    const path = [
+      "api",
+      "characters",
+      validKey.region,
+      validKey.realm,
+      validKey.name,
+      "raid-progress"
+    ]
+      .map(encodeURIComponent)
+      .join("/");
+    const earliestKills = new Map<string, HistoricMythicKill>();
+
+    for (const tier of tiers) {
+      const url = new URL(`/${path}`, baseUrl);
+      url.searchParams.set("tier", String(tier));
+      let kills: readonly HistoricMythicKill[];
+      try {
+        kills = await request(
+          url,
+          normalizeHistoricRaidProgress,
+          options.signal
+        );
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason;
+        return historicKillLimitation(error);
+      }
+
+      for (const kill of kills) {
+        const identifier = `${kill.raidId}\u0000${kill.bossId}`;
+        const existing = earliestKills.get(identifier);
+        if (!existing || kill.firstDefeated < existing.firstDefeated) {
+          earliestKills.set(identifier, kill);
+        }
+      }
+    }
+
+    return { kind: "evidence", kills: [...earliestKills.values()] };
+  }
+
+  return {
+    getCharacter,
+    getClaimedCharacters,
+    resolveProfileGuess,
+    getHistoricMythicKills
+  };
 }

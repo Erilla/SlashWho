@@ -1,0 +1,9 @@
+{
+  "status": 429,
+  "headers": {
+    "Retry-After": "30"
+  },
+  "body": {
+    "error": "rate limited"
+  }
+}
