@@ -20,7 +20,7 @@ it("validates all web runtime secrets and operational limits", () => {
   });
 });
 
-it("requires Warcraft Logs credentials and applies the dossier request cap", () => {
+it("requires Warcraft Logs credentials without duplicating dossier request configuration", () => {
   // Break caught: the dossier route could begin third-party work without its
   // server-only credentials or a bounded Warcraft Logs request budget.
   const environment = {
@@ -36,5 +36,7 @@ it("requires Warcraft Logs credentials and applies the dossier request cap", () 
   expect(() => loadWebConfig(withoutClientId)).toThrow(
     "warcraft_logs_client_id_required"
   );
-  expect(loadWebConfig(environment).dossier.warcraftLogsRequestCap).toBe(80);
+  const config = loadWebConfig(environment);
+  expect(config.application.DOSSIER_WARCRAFT_LOGS_REQUEST_CAP).toBe(80);
+  expect("warcraftLogsRequestCap" in config.dossier).toBe(false);
 });

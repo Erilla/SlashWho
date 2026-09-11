@@ -10,18 +10,6 @@ import {
 
 type CharacterParams = { region: string; realm: string; name: string };
 
-function discoveryNotReadyResponse(): Response {
-  return Response.json(
-    {
-      error: {
-        code: "discovery_not_ready",
-        message: "Discovery is still in progress."
-      }
-    },
-    { status: 409, headers: { "cache-control": "no-store" } }
-  );
-}
-
 export async function GET(
   request: Request,
   context: { params: Promise<CharacterParams> }
@@ -48,7 +36,7 @@ export async function GET(
     );
     if (denied) return denied;
     const result = await dossiers.read(parsed.key, request.signal);
-    if (result.kind === "not_ready") return discoveryNotReadyResponse();
+    if (result.kind === "not_ready") return apiError("discovery_not_ready");
     return Response.json(applicantDossierSchema.parse(result.dossier), {
       headers: { "cache-control": "no-store" }
     });

@@ -20,7 +20,7 @@ import type {
   RaiderIoProfile
 } from "./types";
 
-const MAX_HISTORIC_MYTHIC_KILL_TIERS = 8;
+export const maximumHistoricMythicKillTiers = 8;
 
 const historicRaidProgressResponseSchema = z.object({
   characterRaidProgress: z.object({
@@ -161,7 +161,7 @@ function boundedTierOrdinals(
 ): readonly number[] | null {
   const tiers = [...new Set(options.tierOrdinals)];
   if (
-    tiers.length > MAX_HISTORIC_MYTHIC_KILL_TIERS ||
+    tiers.length > maximumHistoricMythicKillTiers ||
     tiers.some((tier) => !Number.isSafeInteger(tier) || tier < 0)
   ) {
     return null;
@@ -301,7 +301,7 @@ export function createRaiderIoClient(
   ): Promise<HistoricMythicKillResult> {
     const validKey = validatedCharacterKey(key);
     const tiers = boundedTierOrdinals(options);
-    const requestCap = options.requestCap ?? MAX_HISTORIC_MYTHIC_KILL_TIERS;
+    const requestCap = options.requestCap ?? maximumHistoricMythicKillTiers;
     if (
       !tiers ||
       !Number.isSafeInteger(requestCap) ||

@@ -146,11 +146,8 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
       characterContext
     );
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: "discovery_not_ready",
-        message: "Discovery is still in progress."
-      }
-    });
+    expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+      "discovery_not_ready"
+    );
   });
 });

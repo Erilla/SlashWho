@@ -11,7 +11,6 @@ export type WebConfig = Readonly<{
     raiderIoTimeoutMs: number;
     warcraftLogsClientId: string;
     warcraftLogsClientSecret: string;
-    warcraftLogsRequestCap: number;
   }>;
 }>;
 
@@ -68,8 +67,7 @@ export function loadWebConfig(
       warcraftLogsClientSecret: requiredSecret(
         environment.WARCRAFT_LOGS_CLIENT_SECRET,
         "warcraft_logs_client_secret_required"
-      ),
-      warcraftLogsRequestCap: application.DOSSIER_WARCRAFT_LOGS_REQUEST_CAP
+      )
     }
   };
 }

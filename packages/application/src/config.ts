@@ -1,3 +1,4 @@
+import { maximumHistoricMythicKillTiers } from "@slashwho/raiderio";
 import { z } from "zod";
 
 /**
@@ -12,7 +13,12 @@ export const applicationConfigSchema = z.object({
   BOT_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(60),
   PUBLIC_READS_PER_MINUTE: z.coerce.number().int().positive().default(300),
   FRESHNESS_HOURS: z.coerce.number().positive().default(24),
-  DOSSIER_RAIDERIO_TIER_CAP: z.coerce.number().int().min(1).max(40).default(32),
+  DOSSIER_RAIDERIO_TIER_CAP: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(maximumHistoricMythicKillTiers)
+    .default(maximumHistoricMythicKillTiers),
   DOSSIER_CHARACTER_CAP: z.coerce.number().int().min(1).max(30).default(12),
   DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: z.coerce
     .number()

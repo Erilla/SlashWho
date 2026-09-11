@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { SearchService } from "./search-service";
 import type { Repositories, StoredSnapshot } from "@slashwho/database";
-import type { RaiderIoGateway } from "@slashwho/raiderio";
+import { createRaiderIoClient, type RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,6 +16,15 @@ const alt = { region: "eu", realm: "silvermoon", name: "ryalts" } as const;
 const third = { region: "eu", realm: "silvermoon", name: "third" } as const;
 const headers = new Headers({ "x-real-ip": "203.0.113.8" });
 const raiderUrl = "https://raider.io/characters/eu/silvermoon/ryii";
+const raiderIoFixtureDirectory = fileURLToPath(
+  new URL("../../../tests/fixtures/raiderio/", import.meta.url)
+);
+const validRaidProgress = JSON.parse(
+  readFileSync(
+    resolve(raiderIoFixtureDirectory, "raid-progress-valid.json"),
+    "utf8"
+  )
+) as { body: unknown };
 
 function storedSnapshot(
   characters: StoredSnapshot["characters"] = [
@@ -192,6 +205,44 @@ describe("applicant dossier service", () => {
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the default tier evidence request within the real Raider.IO gateway cap", async () => {
+    // Break caught: a valid default dossier configuration could be rejected by
+    // the real gateway before it made any evidence request.
+    let requests = 0;
+    const raiderIo = createRaiderIoClient({
+      fetch: async (input) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        expect(url.pathname).toBe(
+          "/api/characters/eu/silvermoon/ryii/raid-progress"
+        );
+        requests += 1;
+        return Response.json(validRaidProgress.body);
+      },
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+    const snapshot = storedSnapshot([storedSnapshot().characters[0]!]);
+    const { repositories, search, warcraftLogs } = fixture({ snapshot });
+    const dossiers = createApplicantDossierService({
+      repositories,
+      search,
+      raiderIo,
+      warcraftLogs,
+      config: applicationConfigSchema.parse({
+        BOT_API_KEY: "b".repeat(32),
+        RATE_LIMIT_HASH_SECRET: "r".repeat(32)
+      })
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: { raids: [{ raidId: "nerub-ar-palace" }] }
+    });
+    expect(requests).toBe(8);
   });
 
   it("returns not_ready without contacting evidence sources when no snapshot exists", async () => {

@@ -134,6 +134,23 @@ it("publishes one public message per error code", () => {
   }
 });
 
+it("defines a strict safe response while dossier discovery is pending", () => {
+  // Break caught: the dossier route could hand-write a 409 response that its
+  // advertised safe-error schema cannot validate.
+  expect(
+    safeApiErrorSchema.parse({
+      error: {
+        code: "discovery_not_ready",
+        message: "Discovery is still in progress."
+      }
+    }).error.code
+  ).toBe("discovery_not_ready");
+  expect(publicErrorHttpStatus.discovery_not_ready).toBe(409);
+  expect(publicErrorMessages.discovery_not_ready).toBe(
+    "Discovery is still in progress."
+  );
+});
+
 it("accepts queued and cached search outcomes", () => {
   const queued = {
     kind: "job",

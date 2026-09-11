@@ -11,7 +11,7 @@ describe("dossier application configuration", () => {
   it("applies bounded dossier defaults", () => {
     // Break caught: omitted deployment configuration could permit unbounded evidence gathering.
     expect(applicationConfigSchema.parse(required)).toMatchObject({
-      DOSSIER_RAIDERIO_TIER_CAP: 32,
+      DOSSIER_RAIDERIO_TIER_CAP: 8,
       DOSSIER_CHARACTER_CAP: 12,
       DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80
     });
@@ -19,7 +19,7 @@ describe("dossier application configuration", () => {
 
   it.each([
     ["DOSSIER_RAIDERIO_TIER_CAP", 0],
-    ["DOSSIER_RAIDERIO_TIER_CAP", 41],
+    ["DOSSIER_RAIDERIO_TIER_CAP", 9],
     ["DOSSIER_CHARACTER_CAP", 0],
     ["DOSSIER_CHARACTER_CAP", 31],
     ["DOSSIER_WARCRAFT_LOGS_REQUEST_CAP", 0],

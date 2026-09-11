@@ -44,7 +44,7 @@ it("migrates and initializes the durable queue before serving searches", async (
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
-        DOSSIER_RAIDERIO_TIER_CAP: 32,
+        DOSSIER_RAIDERIO_TIER_CAP: 8,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80
       },
@@ -52,8 +52,7 @@ it("migrates and initializes the durable queue before serving searches", async (
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         warcraftLogsClientId: "warcraft-logs-client-id",
-        warcraftLogsClientSecret: "warcraft-logs-client-secret",
-        warcraftLogsRequestCap: 80
+        warcraftLogsClientSecret: "warcraft-logs-client-secret"
       }
     },
     {
@@ -133,7 +132,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
-        DOSSIER_RAIDERIO_TIER_CAP: 32,
+        DOSSIER_RAIDERIO_TIER_CAP: 8,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80
       },
@@ -141,8 +140,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         warcraftLogsClientId: "warcraft-logs-client-id",
-        warcraftLogsClientSecret: "warcraft-logs-client-secret",
-        warcraftLogsRequestCap: 80
+        warcraftLogsClientSecret: "warcraft-logs-client-secret"
       }
     },
     {
