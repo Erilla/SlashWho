@@ -1,5 +1,7 @@
 import {
+  createApplicantDossierService,
   createSearchService,
+  type ApplicantDossierService,
   type ApplicationConfig,
   type SearchService
 } from "@slashwho/application";
@@ -10,6 +12,11 @@ import {
   type DiscoveryQueue,
   type Repositories
 } from "@slashwho/database";
+import { createRaiderIoClient, type RaiderIoGateway } from "@slashwho/raiderio";
+import {
+  createWarcraftLogsClient,
+  type WarcraftLogsGateway
+} from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
 
 import { loadWebConfig, type WebConfig } from "./config";
@@ -21,6 +28,7 @@ type WebPool = {
 
 export type WebContainer = Readonly<{
   searches: SearchService;
+  dossiers: ApplicantDossierService;
   ready(): Promise<boolean>;
   close(): Promise<void>;
 }>;
@@ -35,6 +43,23 @@ export type WebContainerDependencies = Readonly<{
     queue: Pick<DiscoveryQueue, "enqueue">;
     config: ApplicationConfig;
   }): SearchService;
+  createRaiderIoGateway(options: {
+    fetch: typeof globalThis.fetch;
+    baseUrl: string;
+    timeoutMs: number;
+  }): RaiderIoGateway;
+  createWarcraftLogsGateway(options: {
+    fetch: typeof globalThis.fetch;
+    clientId: string;
+    clientSecret: string;
+  }): WarcraftLogsGateway;
+  createApplicantDossierService(options: {
+    repositories: Pick<Repositories, "snapshots">;
+    search: Pick<SearchService, "create">;
+    raiderIo: Pick<RaiderIoGateway, "getHistoricMythicKills">;
+    warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+    config: ApplicationConfig;
+  }): ApplicantDossierService;
 }>;
 
 const defaultDependencies: WebContainerDependencies = {
@@ -42,7 +67,10 @@ const defaultDependencies: WebContainerDependencies = {
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
-  createSearchService
+  createSearchService,
+  createRaiderIoGateway: createRaiderIoClient,
+  createWarcraftLogsGateway: createWarcraftLogsClient,
+  createApplicantDossierService
 };
 
 export async function createWebContainer(
@@ -62,8 +90,24 @@ export async function createWebContainer(
       queue: initializedQueue,
       config: config.application
     });
+    const dossiers = dependencies.createApplicantDossierService({
+      repositories,
+      search: searches,
+      raiderIo: dependencies.createRaiderIoGateway({
+        fetch: globalThis.fetch,
+        baseUrl: config.dossier.raiderIoBaseUrl,
+        timeoutMs: config.dossier.raiderIoTimeoutMs
+      }),
+      warcraftLogs: dependencies.createWarcraftLogsGateway({
+        fetch: globalThis.fetch,
+        clientId: config.dossier.warcraftLogsClientId,
+        clientSecret: config.dossier.warcraftLogsClientSecret
+      }),
+      config: config.application
+    });
     return {
       searches,
+      dossiers,
       async ready() {
         try {
           await pool.query("SELECT 1");
