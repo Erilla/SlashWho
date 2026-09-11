@@ -3,6 +3,8 @@ import {
   dossierResearchStatusSchema,
   dossierStartResponseSchema
 } from "@slashwho/contracts";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -79,7 +81,11 @@ async function main(): Promise<void> {
   });
 }
 
-if (import.meta.main) {
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
   void main()
     .then(() => process.stdout.write("SlashWho live smoke passed.\n"))
     .catch((error: unknown) => {
