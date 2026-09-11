@@ -62,8 +62,12 @@ function compareEvidence(
   a: DossierKillEvidence,
   b: DossierKillEvidence
 ): number {
+  // Every normalized field participates so equal timestamps never depend on input order.
   return (
     text(a.killedAt, b.killedAt) ||
+    text(a.raidName, b.raidName) ||
+    text(a.bossName, b.bossName) ||
+    a.bossOrder - b.bossOrder ||
     text(a.reportUrl ?? "", b.reportUrl ?? "") ||
     text(a.guild?.name ?? "", b.guild?.name ?? "") ||
     text(a.guild?.realm ?? "", b.guild?.realm ?? "") ||

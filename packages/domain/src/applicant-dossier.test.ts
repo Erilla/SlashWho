@@ -73,6 +73,35 @@ describe("applicant dossier", () => {
     expect(make(forward).raids[0].cuttingEdge).toBe(true);
   });
 
+  it("uses deterministic descriptive metadata when tied evidence is reversed", () => {
+    const forward = [
+      kill(root, {
+        raidName: "Zeta Raid",
+        bossName: "Zeta Boss",
+        bossOrder: 9
+      }),
+      kill(root, {
+        raidName: "Alpha Raid",
+        bossName: "Alpha Boss",
+        bossOrder: 1
+      })
+    ];
+    const make = (kills: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter],
+        kills,
+        limitations: []
+      });
+
+    expect(make([...forward].reverse())).toEqual(make(forward));
+    expect(make(forward).raids[0]).toMatchObject({ raidName: "Alpha Raid" });
+    expect(make(forward).raids[0].bosses[0]).toMatchObject({
+      bossName: "Alpha Boss",
+      bossOrder: 1
+    });
+  });
+
   it("keeps unavailable historic ranks unknown", () => {
     const dossier = buildApplicantDossier({
       root,
