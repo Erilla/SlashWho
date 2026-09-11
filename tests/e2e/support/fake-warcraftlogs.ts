@@ -28,10 +28,47 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/v2/client") {
-      // A deterministic source limitation proves the dossier presents partial
-      // evidence rather than hiding unavailable third-party data.
-      response.statusCode = 503;
-      response.end(JSON.stringify({ error: "fixture_unavailable" }));
+      response.end(
+        JSON.stringify({
+          data: {
+            characterData: {
+              character: {
+                recentReports: {
+                  data: [
+                    {
+                      code: "e2eReport",
+                      startTime: 1_736_800_000_000,
+                      zone: { id: 42, name: "Nerub-ar Palace" },
+                      masterData: {
+                        actors: [
+                          {
+                            id: 7,
+                            name: "Ryii",
+                            server: "Silvermoon",
+                            type: "Mage"
+                          }
+                        ]
+                      },
+                      fights: [
+                        {
+                          id: 9,
+                          encounterID: 1234,
+                          name: "Queen Ansurek",
+                          startTime: 3_600_000,
+                          kill: true,
+                          difficulty: 5,
+                          friendlyPlayers: [7]
+                        }
+                      ]
+                    }
+                  ],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        })
+      );
       return;
     }
     response.statusCode = 404;

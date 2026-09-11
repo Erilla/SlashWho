@@ -121,22 +121,127 @@ describe("Warcraft Logs gateway", () => {
       client.getFirstKillReports(key, { requestCap: 10 })
     ).resolves.toEqual({
       kind: "evidence",
-      reports: [
+      kills: [
         {
-          encounterId: 1234,
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1234",
+          bossName: "Queen Ansurek",
+          bossOrder: 1234,
+          isFinalBoss: false,
           killedAt: "2024-02-03T01:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/earlyReport",
-          fightUrl: "https://www.warcraftlogs.com/reports/earlyReport#fight=7"
+          fightUrl: "https://www.warcraftlogs.com/reports/earlyReport#fight=7",
+          guild: null,
+          historicWorldRank: null
         },
         {
-          encounterId: 4321,
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "4321",
+          bossName: "The Silken Court",
+          bossOrder: 4321,
+          isFinalBoss: false,
           killedAt: "2024-02-04T02:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/secondBoss",
-          fightUrl: "https://www.warcraftlogs.com/reports/secondBoss#fight=2"
+          fightUrl: "https://www.warcraftlogs.com/reports/secondBoss#fight=2",
+          guild: null,
+          historicWorldRank: null
         }
       ]
     });
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("emits only participant-attributed boss kills and ignores trash fights", async () => {
+    // Break caught: report-list membership alone does not prove that the
+    // character participated in every fight, and encounterID 0 is trash rather
+    // than a boss.  The dossier must keep the report, fight, boss, and actor
+    // identities together rather than joining unrelated source facts later.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  recentReports: {
+                    data: [
+                      {
+                        code: "participantReport",
+                        startTime: 1_706_918_400_000,
+                        zone: { id: 42, name: "Nerub-ar Palace" },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Mage"
+                            },
+                            {
+                              id: 8,
+                              name: "Someoneelse",
+                              server: "Silvermoon",
+                              type: "Priest"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 3,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 3_600_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          },
+                          {
+                            id: 4,
+                            encounterID: 0,
+                            name: "Trash",
+                            startTime: 7_200_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          },
+                          {
+                            id: 5,
+                            encounterID: 4321,
+                            name: "The Silken Court",
+                            startTime: 10_800_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [8]
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    const result = await client.getFirstKillReports(key, { requestCap: 1 });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1234",
+          bossName: "Queen Ansurek",
+          reportUrl: "https://www.warcraftlogs.com/reports/participantReport",
+          fightUrl:
+            "https://www.warcraftlogs.com/reports/participantReport#fight=3"
+        }
+      ]
+    });
   });
 
   it("reuses one OAuth token across separate first-kill report calls", async () => {

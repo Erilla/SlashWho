@@ -12,7 +12,6 @@ import {
   type DossierKillEvidence,
   type DossierLimitation
 } from "@slashwho/domain";
-import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 
 import type { ApplicationConfig } from "./config";
@@ -83,97 +82,53 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
   );
 }
 
-function reportUrlFor(
-  character: CharacterKey,
-  bossId: string,
-  killedAt: string,
-  reports: readonly Readonly<{
-    encounterId: number;
-    killedAt: string;
-    reportUrl: string;
-  }>[]
-): string | null {
-  const report = reports.find(
-    (candidate) =>
-      candidate.encounterId.toString() === bossId &&
-      candidate.killedAt === killedAt
-  );
-  return report?.reportUrl ?? null;
-}
-
-function tierOrdinals(cap: number): readonly number[] {
-  return Array.from({ length: cap }, (_, ordinal) => ordinal);
-}
-
 async function gatherCharacterEvidence(
   character: StoredSnapshotCharacter,
   options: {
-    raiderIo: Pick<RaiderIoGateway, "getHistoricMythicKills">;
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
-    config: ApplicationConfig;
+    requestCap: number;
     signal?: AbortSignal;
   }
 ): Promise<EvidenceResult> {
-  const [raiderIo, warcraftLogs] = await Promise.all([
-    options.raiderIo
-      .getHistoricMythicKills(character.key, {
-        tierOrdinals: tierOrdinals(options.config.DOSSIER_RAIDERIO_TIER_CAP),
-        requestCap: options.config.DOSSIER_RAIDERIO_TIER_CAP,
-        signal: options.signal
-      })
-      .catch((error: unknown) => {
-        if (isAbort(error, options.signal)) throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      }),
-    options.warcraftLogs
-      .getFirstKillReports(character.key, {
-        requestCap: options.config.DOSSIER_WARCRAFT_LOGS_REQUEST_CAP,
-        signal: options.signal
-      })
-      .catch((error: unknown) => {
-        if (isAbort(error, options.signal)) throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      })
-  ]);
+  const warcraftLogs = await options.warcraftLogs
+    .getFirstKillReports(character.key, {
+      requestCap: options.requestCap,
+      signal: options.signal
+    })
+    .catch((error: unknown) => {
+      if (isAbort(error, options.signal)) throw error;
+      return { kind: "limitation" as const, code: "unavailable" as const };
+    });
   const limitations: DossierLimitation[] = [];
-  if (raiderIo.kind === "limitation") {
-    limitations.push(limitation("raiderio", character.key, raiderIo.code));
-  }
   if (warcraftLogs.kind === "limitation") {
     limitations.push(
       limitation("warcraft_logs", character.key, warcraftLogs.code)
     );
   }
-  if (raiderIo.kind !== "evidence") return { kills: [], limitations };
-
-  const reports = warcraftLogs.kind === "evidence" ? warcraftLogs.reports : [];
   return {
     limitations,
-    kills: raiderIo.kills.map((kill) => ({
-      raidId: kill.raidId,
-      raidName: kill.raidName,
-      bossId: kill.bossId,
-      bossName: kill.bossName,
-      bossOrder: kill.bossOrder,
-      isFinalBoss: kill.isFinalBoss,
-      character: character.key,
-      killedAt: kill.firstDefeated,
-      guild: kill.guild,
-      historicWorldRank: kill.historicWorldRank,
-      reportUrl: reportUrlFor(
-        character.key,
-        kill.bossId,
-        kill.firstDefeated,
-        reports
-      )
-    }))
+    kills:
+      warcraftLogs.kind === "evidence"
+        ? warcraftLogs.kills.map((kill) => ({
+            raidId: kill.raidId,
+            raidName: kill.raidName,
+            bossId: kill.bossId,
+            bossName: kill.bossName,
+            bossOrder: kill.bossOrder,
+            isFinalBoss: kill.isFinalBoss,
+            character: character.key,
+            killedAt: kill.killedAt,
+            guild: kill.guild,
+            historicWorldRank: kill.historicWorldRank,
+            reportUrl: kill.fightUrl
+          }))
+        : []
   };
 }
 
 export function createApplicantDossierService(options: {
   repositories: Pick<Repositories, "snapshots">;
   search: Pick<SearchService, "create">;
-  raiderIo: Pick<RaiderIoGateway, "getHistoricMythicKills">;
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
   config: ApplicationConfig;
 }): ApplicantDossierService {
@@ -200,22 +155,39 @@ export function createApplicantDossierService(options: {
         options.config.DOSSIER_CHARACTER_CAP
       );
       const skipped = snapshot.characters.slice(selected.length);
+      const timeout = AbortSignal.timeout(
+        options.config.DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS
+      );
+      const requestSignal = signal
+        ? AbortSignal.any([signal, timeout])
+        : timeout;
+      // Split one dossier-wide cap across every selected character. The bound
+      // is shared (rather than per character) and the timeout covers the whole
+      // request, so a large alt list cannot multiply WCL traffic or hang a read.
+      const requestCap = Math.floor(
+        options.config.DOSSIER_WARCRAFT_LOGS_REQUEST_CAP / selected.length
+      );
       const evidence = await Promise.all(
         selected.map((character) =>
-          gatherCharacterEvidence(character, {
-            raiderIo: options.raiderIo,
-            warcraftLogs: options.warcraftLogs,
-            config: options.config,
-            signal
-          })
+          requestCap === 0
+            ? Promise.resolve({
+                kills: [],
+                limitations: [
+                  limitation("warcraft_logs", character.key, "request_cap")
+                ]
+              })
+            : gatherCharacterEvidence(character, {
+                warcraftLogs: options.warcraftLogs,
+                requestCap,
+                signal: requestSignal
+              })
         )
       );
       const limitations = [
         ...evidence.flatMap((item) => item.limitations),
-        ...skipped.flatMap((character) => [
-          limitation("raiderio", character.key, "request_cap"),
+        ...skipped.map((character) =>
           limitation("warcraft_logs", character.key, "request_cap")
-        ])
+        )
       ];
       const dossier = buildApplicantDossier({
         root: snapshot.rootKey,

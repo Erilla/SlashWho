@@ -11,22 +11,25 @@ function displayGuild(
 }
 
 export function DossierRaidList({ raids }: DossierRaidListProps) {
-  const cuttingEdgeRaids = raids.filter((raid) => raid.cuttingEdge === true);
-
   return (
     <section aria-labelledby="historic-cutting-edge-heading">
       <h2 className="section-heading" id="historic-cutting-edge-heading">
         Historic Cutting Edge
       </h2>
-      {cuttingEdgeRaids.length === 0 ? (
+      {raids.length === 0 ? (
         <p className="empty-state">
-          No historic Cutting Edge evidence was found.
+          No public historic Mythic evidence was found.
         </p>
       ) : (
         <div className="dossier-raid-list">
-          {cuttingEdgeRaids.map((raid) => (
+          {raids.map((raid) => (
             <section className="dossier-raid" key={raid.raidId}>
               <h3>{raid.raidName}</h3>
+              <p className="dossier-raid-status">
+                {raid.cuttingEdge
+                  ? "Final-boss evidence found"
+                  : "Final-boss status is unknown from public report evidence."}
+              </p>
               <div className="dossier-boss-list">
                 {raid.bosses.map((boss) => (
                   <article

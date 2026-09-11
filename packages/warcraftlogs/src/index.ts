@@ -1,7 +1,7 @@
 export { createWarcraftLogsClient } from "./client";
 export type { CreateWarcraftLogsClientOptions } from "./client";
 export type {
-  WarcraftLogsFirstKillReport,
+  WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
   WarcraftLogsIdentity,
   WarcraftLogsIdentityResult,

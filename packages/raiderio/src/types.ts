@@ -21,6 +21,7 @@ export interface RaiderIoProfile {
   readonly omittedMembers?: boolean;
 }
 
+/** @deprecated Raider.IO does not publish per-character historic kills. */
 export type RaiderIoEvidenceLimitation =
   | "not_found"
   | "private"
@@ -29,6 +30,7 @@ export type RaiderIoEvidenceLimitation =
   | "unavailable"
   | "schema_drift";
 
+/** @deprecated Never use as dossier evidence; retained temporarily for API compatibility. */
 export type HistoricMythicKill = Readonly<{
   raidId: string;
   raidName: string;
@@ -68,6 +70,7 @@ export interface RaiderIoGateway {
     value: string,
     signal?: AbortSignal
   ): Promise<RaiderIoProfile | null>;
+  /** @deprecated Dossier evidence must come from Warcraft Logs. */
   getHistoricMythicKills(
     key: CharacterKey,
     options: HistoricMythicKillOptions

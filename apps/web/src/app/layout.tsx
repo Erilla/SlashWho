@@ -14,7 +14,8 @@ export const metadata: Metadata = {
     template: "%s · Who"
   },
   description:
-    "Research World of Warcraft applicants from Raider.IO or Warcraft Logs character URLs."
+    "Research World of Warcraft applicants from Raider.IO or Warcraft Logs character URLs.",
+  robots: { index: false, follow: false }
 };
 
 export default function RootLayout({ children }: RootLayoutProps) {

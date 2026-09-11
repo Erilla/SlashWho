@@ -1,7 +1,7 @@
 import { supportedRegions, type CharacterKey } from "@slashwho/domain";
 
 import type {
-  WarcraftLogsFirstKillReport,
+  WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
@@ -34,12 +34,16 @@ const recentReportsQuery = `
           data {
             code
             startTime
+            zone { id name }
+            masterData { actors { id name server type } }
             fights {
               id
               encounterID
+              name
               startTime
               kill
               difficulty
+              friendlyPlayers
             }
           }
           has_more_pages
@@ -77,6 +81,12 @@ function nonEmptyString(value: unknown): string | null {
 
 function positiveInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
 }
@@ -190,7 +200,10 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   return { kind: "identity", key, displayName };
 }
 
-function firstKillReports(value: unknown): WarcraftLogsReportResult {
+function firstKillReports(
+  value: unknown,
+  requestedKey: CharacterKey
+): WarcraftLogsReportResult {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
   const characterData = data && record(data.characterData);
@@ -205,35 +218,79 @@ function firstKillReports(value: unknown): WarcraftLogsReportResult {
     return { kind: "limitation", code: "schema_drift" };
   }
 
-  const earliest = new Map<number, WarcraftLogsFirstKillReport>();
+  const earliest = new Map<number, WarcraftLogsFirstKillEvidence>();
   for (const reportValue of reports) {
     const report = record(reportValue);
     const code = report && nonEmptyString(report.code);
     const reportStartTime =
       report && validTimestampMilliseconds(report.startTime);
     const fights = report && report.fights;
-    if (!code || reportStartTime === null || !Array.isArray(fights)) {
+    const zone = report && record(report.zone);
+    const raidId = zone && positiveInteger(zone.id);
+    const raidName = zone && nonEmptyString(zone.name);
+    const masterData = report && record(report.masterData);
+    const actors = masterData && masterData.actors;
+    if (
+      !code ||
+      reportStartTime === null ||
+      !raidId ||
+      !raidName ||
+      !Array.isArray(actors) ||
+      !Array.isArray(fights)
+    ) {
       return { kind: "limitation", code: "schema_drift" };
+    }
+
+    const participantIds = new Set<number>();
+    for (const actorValue of actors) {
+      const actor = record(actorValue);
+      const actorId = actor && positiveInteger(actor.id);
+      const name = actor && nonEmptyString(actor.name);
+      const server = actor && nonEmptyString(actor.server);
+      if (!actorId || !name || !server) {
+        return { kind: "limitation", code: "schema_drift" };
+      }
+      if (
+        name.toLocaleLowerCase("en-US") === requestedKey.name &&
+        server.toLocaleLowerCase("en-US") === requestedKey.realm
+      ) {
+        participantIds.add(actorId);
+      }
     }
 
     for (const fightValue of fights) {
       const fight = record(fightValue);
       const id = fight && positiveInteger(fight.id);
-      const encounterId = fight && positiveInteger(fight.encounterID);
+      const encounterId = fight && nonNegativeInteger(fight.encounterID);
+      const bossName = fight && nonEmptyString(fight.name);
       const fightStartTime =
         fight && validTimestampMilliseconds(fight.startTime);
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
+      const friendlyPlayers = fight && fight.friendlyPlayers;
       if (
         !id ||
-        !encounterId ||
+        encounterId === null ||
         fightStartTime === null ||
         typeof killed !== "boolean" ||
-        !Number.isSafeInteger(difficulty)
+        !Number.isSafeInteger(difficulty) ||
+        !Array.isArray(friendlyPlayers) ||
+        friendlyPlayers.some((player) => !positiveInteger(player))
       ) {
         return { kind: "limitation", code: "schema_drift" };
       }
-      if (!killed || difficulty !== MYTHIC_DIFFICULTY) continue;
+      // Warcraft Logs represents trash pulls with encounterID 0. They have no
+      // boss identity and must not turn an otherwise valid report into schema
+      // drift or dossier evidence.
+      if (encounterId === 0) continue;
+      if (!bossName) return { kind: "limitation", code: "schema_drift" };
+      if (
+        !killed ||
+        difficulty !== MYTHIC_DIFFICULTY ||
+        !friendlyPlayers.some((player) => participantIds.has(player))
+      ) {
+        continue;
+      }
 
       const killedAtMilliseconds = reportStartTime + fightStartTime;
       if (
@@ -243,11 +300,18 @@ function firstKillReports(value: unknown): WarcraftLogsReportResult {
         return { kind: "limitation", code: "schema_drift" };
       }
       const killedAt = new Date(killedAtMilliseconds).toISOString();
-      const candidate: WarcraftLogsFirstKillReport = {
-        encounterId,
+      const candidate: WarcraftLogsFirstKillEvidence = {
+        raidId: String(raidId),
+        raidName,
+        bossId: String(encounterId),
+        bossName,
+        bossOrder: encounterId,
+        isFinalBoss: false,
         killedAt,
         reportUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`,
-        fightUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}#fight=${id}`
+        fightUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}#fight=${id}`,
+        guild: null,
+        historicWorldRank: null
       };
       const current = earliest.get(encounterId);
       if (
@@ -263,9 +327,9 @@ function firstKillReports(value: unknown): WarcraftLogsReportResult {
 
   return {
     kind: "evidence",
-    reports: [...earliest.values()].sort(
+    kills: [...earliest.values()].sort(
       (a, b) =>
-        a.encounterId - b.encounterId ||
+        a.bossOrder - b.bossOrder ||
         a.killedAt.localeCompare(b.killedAt) ||
         a.fightUrl.localeCompare(b.fightUrl)
     )
@@ -409,7 +473,7 @@ export function createWarcraftLogsClient(
       return { kind: "limitation", code: "request_cap" };
     }
 
-    const earliest = new Map<number, WarcraftLogsFirstKillReport>();
+    const earliest = new Map<string, WarcraftLogsFirstKillEvidence>();
     for (let page = 1; page <= options.requestCap; page++) {
       const result = await graphql(
         recentReportsQuery,
@@ -418,17 +482,18 @@ export function createWarcraftLogsClient(
       );
       if (result.kind !== "success") return result;
 
-      const normalized = firstKillReports(result.value);
+      const normalized = firstKillReports(result.value, key);
       if (normalized.kind === "limitation") return normalized;
-      for (const report of normalized.reports) {
-        const current = earliest.get(report.encounterId);
+      for (const kill of normalized.kills) {
+        const identifier = `${kill.raidId}\u0000${kill.bossId}`;
+        const current = earliest.get(identifier);
         if (
           !current ||
-          report.killedAt < current.killedAt ||
-          (report.killedAt === current.killedAt &&
-            report.fightUrl < current.fightUrl)
+          kill.killedAt < current.killedAt ||
+          (kill.killedAt === current.killedAt &&
+            kill.fightUrl < current.fightUrl)
         ) {
-          earliest.set(report.encounterId, report);
+          earliest.set(identifier, kill);
         }
       }
 
@@ -439,9 +504,10 @@ export function createWarcraftLogsClient(
       if (!hasMorePages) {
         return {
           kind: "evidence",
-          reports: [...earliest.values()].sort(
+          kills: [...earliest.values()].sort(
             (a, b) =>
-              a.encounterId - b.encounterId ||
+              a.raidId.localeCompare(b.raidId) ||
+              a.bossOrder - b.bossOrder ||
               a.killedAt.localeCompare(b.killedAt) ||
               a.fightUrl.localeCompare(b.fightUrl)
           )

@@ -23,17 +23,26 @@ export type WarcraftLogsIdentity = Readonly<{
 export type WarcraftLogsIdentityResult =
   WarcraftLogsIdentity | WarcraftLogsLimitation;
 
-export type WarcraftLogsFirstKillReport = Readonly<{
-  encounterId: number;
+export type WarcraftLogsFirstKillEvidence = Readonly<{
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  /** Warcraft Logs does not expose encounter ordering in report lists. */
+  bossOrder: number;
+  /** The public report schema does not declare final-boss status. */
+  isFinalBoss: false;
   killedAt: string;
   reportUrl: string;
   fightUrl: string;
+  guild: null;
+  historicWorldRank: null;
 }>;
 
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
-      reports: readonly WarcraftLogsFirstKillReport[];
+      kills: readonly WarcraftLogsFirstKillEvidence[];
     }>
   | WarcraftLogsLimitation;
 

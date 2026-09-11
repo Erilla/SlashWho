@@ -1,10 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import type { SearchService } from "./search-service";
 import type { Repositories, StoredSnapshot } from "@slashwho/database";
-import { createRaiderIoClient, type RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,15 +11,6 @@ const alt = { region: "eu", realm: "silvermoon", name: "ryalts" } as const;
 const third = { region: "eu", realm: "silvermoon", name: "third" } as const;
 const headers = new Headers({ "x-real-ip": "203.0.113.8" });
 const raiderUrl = "https://raider.io/characters/eu/silvermoon/ryii";
-const raiderIoFixtureDirectory = fileURLToPath(
-  new URL("../../../tests/fixtures/raiderio/", import.meta.url)
-);
-const validRaidProgress = JSON.parse(
-  readFileSync(
-    resolve(raiderIoFixtureDirectory, "raid-progress-valid.json"),
-    "utf8"
-  )
-) as { body: unknown };
 
 function storedSnapshot(
   characters: StoredSnapshot["characters"] = [
@@ -63,7 +49,11 @@ function storedSnapshot(
 }
 
 function fixture(
-  options: { snapshot?: StoredSnapshot | null; characterCap?: number } = {}
+  options: {
+    snapshot?: StoredSnapshot | null;
+    characterCap?: number;
+    warcraftLogsRequestCap?: number;
+  } = {}
 ) {
   const runsCreate = vi.fn();
   const repositories = {
@@ -86,33 +76,22 @@ function fixture(
       character: { character: { name: "Ryii" } }
     })
   } as unknown as Pick<SearchService, "create">;
-  const raiderIo = {
-    getHistoricMythicKills: vi.fn().mockResolvedValue({
-      kind: "evidence",
-      kills: [
-        {
-          raidId: "nerubar-palace",
-          raidName: "Nerubar Palace",
-          bossId: "1234",
-          bossName: "Queen Ansurek",
-          bossOrder: 8,
-          isFinalBoss: true,
-          firstDefeated: "2024-10-01T20:00:00.000Z",
-          guild: { name: "Guild", realm: "silvermoon" },
-          historicWorldRank: 17
-        }
-      ]
-    })
-  } as unknown as Pick<RaiderIoGateway, "getHistoricMythicKills">;
   const warcraftLogs = {
     getFirstKillReports: vi.fn().mockResolvedValue({
       kind: "evidence",
-      reports: [
+      kills: [
         {
-          encounterId: 1234,
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1234",
+          bossName: "Queen Ansurek",
+          bossOrder: 8,
+          isFinalBoss: false,
           killedAt: "2024-10-01T20:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/example",
-          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
+          guild: null,
+          historicWorldRank: null
         }
       ]
     })
@@ -122,16 +101,18 @@ function fixture(
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
     ...(options.characterCap === undefined
       ? {}
-      : { DOSSIER_CHARACTER_CAP: options.characterCap })
+      : { DOSSIER_CHARACTER_CAP: options.characterCap }),
+    ...(options.warcraftLogsRequestCap === undefined
+      ? {}
+      : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap })
   });
   const dossiers = createApplicantDossierService({
     repositories,
     search,
-    raiderIo,
     warcraftLogs,
     config
   });
-  return { dossiers, repositories, runsCreate, search, raiderIo, warcraftLogs };
+  return { dossiers, repositories, runsCreate, search, warcraftLogs };
 }
 
 describe("applicant dossier service", () => {
@@ -191,11 +172,12 @@ describe("applicant dossier service", () => {
         ],
         raids: [
           {
-            raidId: "nerubar-palace",
+            raidId: "42",
             bosses: [
               {
                 firstKill: {
-                  reportUrl: "https://www.warcraftlogs.com/reports/example"
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/example#fight=9"
                 }
               }
             ]
@@ -207,89 +189,46 @@ describe("applicant dossier service", () => {
     expect(runsCreate).not.toHaveBeenCalled();
   });
 
-  it("keeps the default tier evidence request within the real Raider.IO gateway cap", async () => {
-    // Break caught: a valid default dossier configuration could be rejected by
-    // the real gateway before it made any evidence request.
-    let requests = 0;
-    const raiderIo = createRaiderIoClient({
-      fetch: async (input) => {
-        const url = new URL(
-          typeof input === "string" || input instanceof URL ? input : input.url
-        );
-        expect(url.pathname).toBe(
-          "/api/characters/eu/silvermoon/ryii/raid-progress"
-        );
-        requests += 1;
-        return Response.json(validRaidProgress.body);
-      },
-      baseUrl: "https://fixtures.invalid",
-      timeoutMs: 50
-    });
-    const snapshot = storedSnapshot([storedSnapshot().characters[0]!]);
-    const { repositories, search, warcraftLogs } = fixture({ snapshot });
-    const dossiers = createApplicantDossierService({
-      repositories,
-      search,
-      raiderIo,
-      warcraftLogs,
-      config: applicationConfigSchema.parse({
-        BOT_API_KEY: "b".repeat(32),
-        RATE_LIMIT_HASH_SECRET: "r".repeat(32)
-      })
-    });
-
-    await expect(dossiers.read(root)).resolves.toMatchObject({
-      kind: "ready",
-      dossier: { raids: [{ raidId: "nerub-ar-palace" }] }
-    });
-    expect(requests).toBe(8);
-  });
-
   it("returns not_ready without contacting evidence sources when no snapshot exists", async () => {
     // Break caught: a missing discovery result could trigger unbounded third-party requests.
-    const { dossiers, raiderIo, warcraftLogs } = fixture({ snapshot: null });
+    const { dossiers, warcraftLogs } = fixture({ snapshot: null });
 
     await expect(dossiers.read(root)).resolves.toEqual({ kind: "not_ready" });
-    expect(raiderIo.getHistoricMythicKills).not.toHaveBeenCalled();
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
-  it("keeps evidence from other characters when one source is unavailable", async () => {
-    // Break caught: one private or unavailable source could discard a usable linked-character dossier.
-    const { dossiers, raiderIo } = fixture();
-    vi.mocked(raiderIo.getHistoricMythicKills)
-      .mockResolvedValueOnce({ kind: "limitation", code: "private" })
-      .mockResolvedValueOnce({
-        kind: "evidence",
-        kills: [
-          {
-            raidId: "nerubar-palace",
-            raidName: "Nerubar Palace",
-            bossId: "1234",
-            bossName: "Queen Ansurek",
-            bossOrder: 8,
-            isFinalBoss: true,
-            firstDefeated: "2024-10-01T20:00:00.000Z",
-            guild: null,
-            historicWorldRank: null
-          }
-        ]
-      });
+  it("keeps participant-attributed Warcraft Logs evidence when Raider.IO is limited", async () => {
+    // Break caught: Raider.IO does not publish historical per-character kill
+    // records. A temporary Raider.IO limitation must not discard a public,
+    // participant-attributed Warcraft Logs kill.
+    const { dossiers } = fixture();
 
     const result = await dossiers.read(root);
 
     expect(result).toMatchObject({
       kind: "ready",
       dossier: {
-        raids: [{ raidId: "nerubar-palace" }],
-        limitations: [{ source: "raiderio", character: root, code: "private" }]
+        raids: [
+          {
+            raidId: "42",
+            bosses: [
+              {
+                firstKill: {
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/example#fight=9"
+                }
+              }
+            ]
+          }
+        ],
+        limitations: []
       }
     });
   });
 
   it("uses stored snapshot order for the character cap and reports every skipped evidence stream", async () => {
     // Break caught: a cap could depend on incidental identity ordering or silently omit evidence.
-    const { dossiers, raiderIo, warcraftLogs } = fixture({
+    const { dossiers, warcraftLogs } = fixture({
       characterCap: 1,
       snapshot: storedSnapshot([
         {
@@ -317,18 +256,12 @@ describe("applicant dossier service", () => {
 
     const result = await dossiers.read(root);
 
-    expect(raiderIo.getHistoricMythicKills).toHaveBeenCalledTimes(1);
     expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledTimes(1);
-    expect(raiderIo.getHistoricMythicKills).toHaveBeenCalledWith(
-      alt,
-      expect.any(Object)
-    );
     expect(result).toMatchObject({
       kind: "ready",
       dossier: {
         characters: [{ displayName: "Ryalts" }],
         limitations: [
-          { source: "raiderio", character: third, code: "request_cap" },
           {
             source: "warcraft_logs",
             character: third,
@@ -337,5 +270,24 @@ describe("applicant dossier service", () => {
         ]
       }
     });
+  });
+
+  it("shares one Warcraft Logs request cap across selected characters", async () => {
+    // Break caught: treating the configured cap as per-character multiplied
+    // upstream traffic for every linked character in the snapshot.
+    const { dossiers, warcraftLogs } = fixture({ warcraftLogsRequestCap: 6 });
+
+    await dossiers.read(root);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenNthCalledWith(
+      1,
+      root,
+      expect.objectContaining({ requestCap: 3 })
+    );
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenNthCalledWith(
+      2,
+      alt,
+      expect.objectContaining({ requestCap: 3 })
+    );
   });
 });

@@ -26,7 +26,9 @@ for (const applicantUrl of applicantUrls) {
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
-    await expect(page.getByText("World #147")).toBeVisible();
-    await expect(page.getByText(/evidence is incomplete/i)).toBeVisible();
+    await expect(page.getByText("Queen Ansurek")).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "View Warcraft Logs report" })
+    ).toBeVisible();
   });
 }

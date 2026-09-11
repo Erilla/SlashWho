@@ -14,6 +14,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/raiderio/package.json packages/raiderio/package.json
+COPY packages/warcraftlogs/package.json packages/warcraftlogs/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY . .

@@ -57,7 +57,6 @@ export type WebContainerDependencies = Readonly<{
   createApplicantDossierService(options: {
     repositories: Pick<Repositories, "snapshots">;
     search: Pick<SearchService, "create">;
-    raiderIo: Pick<RaiderIoGateway, "getHistoricMythicKills">;
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
     config: ApplicationConfig;
   }): ApplicantDossierService;
@@ -94,11 +93,6 @@ export async function createWebContainer(
     const dossiers = dependencies.createApplicantDossierService({
       repositories,
       search: searches,
-      raiderIo: dependencies.createRaiderIoGateway({
-        fetch: globalThis.fetch,
-        baseUrl: config.dossier.raiderIoBaseUrl,
-        timeoutMs: config.dossier.raiderIoTimeoutMs
-      }),
       warcraftLogs: dependencies.createWarcraftLogsGateway({
         fetch: globalThis.fetch,
         clientId: config.dossier.warcraftLogsClientId,
