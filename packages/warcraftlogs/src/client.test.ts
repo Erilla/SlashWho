@@ -139,6 +139,107 @@ describe("Warcraft Logs gateway", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
+  it("reuses one OAuth token across separate first-kill report calls", async () => {
+    // Break caught: fetching a token per dossier character would exhaust the
+    // public OAuth quota even though the prior token remains valid.
+    const reportPage = (
+      fixture("character-report-valid") as { pages: unknown[] }
+    ).pages[1];
+    const { client, fetch } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(reportPage)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 10 })
+    ).resolves.toMatchObject({ kind: "evidence" });
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 10 })
+    ).resolves.toMatchObject({ kind: "evidence" });
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes the OAuth token sixty seconds before its reported expiry", async () => {
+    // Break caught: a token used at its provider expiry can fail an otherwise
+    // valid GraphQL request, so the cache must refresh it one minute early.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-02-01T00:00:00.000Z"));
+    try {
+      const reportPage = (
+        fixture("character-report-valid") as { pages: unknown[] }
+      ).pages[1];
+      let issuedTokens = 0;
+      const authorizations: string[] = [];
+      const { client, fetch } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") {
+          issuedTokens++;
+          return jsonResponse({
+            access_token: `token-${issuedTokens}`,
+            expires_in: 120
+          });
+        }
+        authorizations.push(
+          (init?.headers as Record<string, string>).Authorization
+        );
+        return jsonResponse(reportPage);
+      });
+
+      await client.getFirstKillReports(key, { requestCap: 10 });
+      await vi.advanceTimersByTimeAsync(59_000);
+      await client.getFirstKillReports(key, { requestCap: 10 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await client.getFirstKillReports(key, { requestCap: 10 });
+
+      expect(fetch).toHaveBeenCalledTimes(5);
+      expect(authorizations).toEqual([
+        "Bearer token-1",
+        "Bearer token-1",
+        "Bearer token-2"
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns schema drift for a timestamp outside JavaScript's date range", async () => {
+    // Break caught: an unbounded upstream timestamp made toISOString throw and
+    // turned a source limitation into an application exception.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  recentReports: {
+                    data: [
+                      {
+                        code: "malformedTimestamp",
+                        startTime: Number.MAX_VALUE,
+                        fights: [
+                          {
+                            id: 1,
+                            encounterID: 1234,
+                            startTime: 0,
+                            kill: true,
+                            difficulty: 5
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+  });
+
   it("represents a private GraphQL profile without exposing its envelope", async () => {
     const { client } = clientFor((url) =>
       url.pathname === "/oauth/token"

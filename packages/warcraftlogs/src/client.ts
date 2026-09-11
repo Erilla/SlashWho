@@ -10,6 +10,7 @@ import type {
 
 const MYTHIC_DIFFICULTY = 5;
 const REPORTS_PER_PAGE = 100;
+const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 
 const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
@@ -82,6 +83,15 @@ function positiveInteger(value: unknown): number | null {
 
 function nonNegativeFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function validTimestampMilliseconds(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_DATE_MILLISECONDS
     ? value
     : null;
 }
@@ -199,7 +209,8 @@ function firstKillReports(value: unknown): WarcraftLogsReportResult {
   for (const reportValue of reports) {
     const report = record(reportValue);
     const code = report && nonEmptyString(report.code);
-    const reportStartTime = report && nonNegativeFiniteNumber(report.startTime);
+    const reportStartTime =
+      report && validTimestampMilliseconds(report.startTime);
     const fights = report && report.fights;
     if (!code || reportStartTime === null || !Array.isArray(fights)) {
       return { kind: "limitation", code: "schema_drift" };
@@ -209,7 +220,8 @@ function firstKillReports(value: unknown): WarcraftLogsReportResult {
       const fight = record(fightValue);
       const id = fight && positiveInteger(fight.id);
       const encounterId = fight && positiveInteger(fight.encounterID);
-      const fightStartTime = fight && nonNegativeFiniteNumber(fight.startTime);
+      const fightStartTime =
+        fight && validTimestampMilliseconds(fight.startTime);
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       if (
@@ -223,7 +235,14 @@ function firstKillReports(value: unknown): WarcraftLogsReportResult {
       }
       if (!killed || difficulty !== MYTHIC_DIFFICULTY) continue;
 
-      const killedAt = new Date(reportStartTime + fightStartTime).toISOString();
+      const killedAtMilliseconds = reportStartTime + fightStartTime;
+      if (
+        !Number.isSafeInteger(killedAtMilliseconds) ||
+        killedAtMilliseconds > MAX_DATE_MILLISECONDS
+      ) {
+        return { kind: "limitation", code: "schema_drift" };
+      }
+      const killedAt = new Date(killedAtMilliseconds).toISOString();
       const candidate: WarcraftLogsFirstKillReport = {
         encounterId,
         killedAt,
