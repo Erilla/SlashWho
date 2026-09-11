@@ -31,67 +31,75 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                   : "Final-boss status is unknown from public report evidence."}
               </p>
               <div className="dossier-boss-list">
-                {raid.bosses.map((boss) => (
-                  <article
-                    className="dossier-boss"
-                    key={boss.bossId}
-                    role="group"
-                    aria-label={`${boss.bossName} evidence`}
-                  >
-                    <h4>{boss.bossName}</h4>
-                    <p className="dossier-boss-rank">
-                      {boss.firstKill.historicWorldRank === null
-                        ? "World rank: —"
-                        : `World #${boss.firstKill.historicWorldRank}`}
-                    </p>
-                    <details>
-                      <summary>View first-kill evidence</summary>
-                      <dl className="dossier-evidence">
-                        <div>
-                          <dt>First kill</dt>
-                          <dd>
-                            <time dateTime={boss.firstKill.killedAt}>
-                              {new Intl.DateTimeFormat("en-GB", {
-                                dateStyle: "medium",
-                                timeZone: "UTC"
-                              }).format(new Date(boss.firstKill.killedAt))}
-                            </time>
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Guild</dt>
-                          <dd>Guild: {displayGuild(boss.firstKill.guild)}</dd>
-                        </div>
-                        <div>
-                          <dt>World rank</dt>
-                          <dd>
-                            World rank:{" "}
-                            {boss.firstKill.historicWorldRank ?? "—"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Report</dt>
-                          <dd>
-                            {boss.firstKill.reportUrl ? (
-                              <a
-                                className="external-link"
-                                href={boss.firstKill.reportUrl}
-                              >
-                                View Warcraft Logs report
-                              </a>
-                            ) : (
-                              "Report: —"
-                            )}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Characters present</dt>
-                          <dd>{boss.firstKill.characters.join(", ") || "—"}</dd>
-                        </div>
-                      </dl>
-                    </details>
-                  </article>
-                ))}
+                {raid.bosses.map((boss) => {
+                  const firstKills = boss.firstKills ?? [boss.firstKill];
+                  const firstKill = firstKills[0]!;
+                  return (
+                    <article
+                      className="dossier-boss"
+                      key={boss.bossId}
+                      role="group"
+                      aria-label={`${boss.bossName} evidence`}
+                    >
+                      <h4>{boss.bossName}</h4>
+                      <p className="dossier-boss-rank">
+                        {firstKill.historicWorldRank === null
+                          ? "World rank: —"
+                          : `World #${firstKill.historicWorldRank}`}
+                      </p>
+                      <details>
+                        <summary>View first-kill evidence</summary>
+                        {firstKills.map((evidence, index) => (
+                          <dl
+                            className="dossier-evidence"
+                            key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
+                          >
+                            <div>
+                              <dt>First kill</dt>
+                              <dd>
+                                <time dateTime={evidence.killedAt}>
+                                  {new Intl.DateTimeFormat("en-GB", {
+                                    dateStyle: "medium",
+                                    timeZone: "UTC"
+                                  }).format(new Date(evidence.killedAt))}
+                                </time>
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>Guild</dt>
+                              <dd>Guild: {displayGuild(evidence.guild)}</dd>
+                            </div>
+                            <div>
+                              <dt>World rank</dt>
+                              <dd>
+                                World rank: {evidence.historicWorldRank ?? "—"}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>Report</dt>
+                              <dd>
+                                {evidence.reportUrl ? (
+                                  <a
+                                    className="external-link"
+                                    href={evidence.reportUrl}
+                                  >
+                                    View Warcraft Logs report
+                                  </a>
+                                ) : (
+                                  "Report: —"
+                                )}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>Characters present</dt>
+                              <dd>{evidence.characters.join(", ") || "—"}</dd>
+                            </div>
+                          </dl>
+                        ))}
+                      </details>
+                    </article>
+                  );
+                })}
               </div>
             </section>
           ))}

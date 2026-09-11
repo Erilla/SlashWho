@@ -41,6 +41,7 @@ export type ApplicantDossierBoss = Readonly<{
   bossName: string;
   bossOrder: number;
   firstKill: ApplicantDossierFirstKill;
+  firstKills: readonly ApplicantDossierFirstKill[];
 }>;
 export type ApplicantDossierRaid = Readonly<{
   raidId: string;
@@ -94,7 +95,12 @@ function characterBossKey(k: DossierKillEvidence): string {
   return [canonicalCharacterId(k.character), k.raidId, k.bossId].join("\0");
 }
 function sharedEvidenceKey(k: DossierKillEvidence): string {
-  return [k.raidId, k.bossId, k.reportUrl ?? k.killedAt].join("\0");
+  // A participant can only share evidence when the source identifies the same
+  // fight. Timestamp-only evidence cannot prove that two character kills were
+  // the same event, so it remains distinct per character.
+  return k.reportUrl === null
+    ? `character\0${canonicalCharacterId(k.character)}`
+    : `report\0${k.reportUrl}`;
 }
 
 export function buildApplicantDossier(
@@ -116,16 +122,32 @@ export function buildApplicantDossier(
     { raidName: string; bosses: ApplicantDossierBoss[]; final: boolean }
   >();
   for (const kills of byBoss.values()) {
-    const selected = [...kills].sort(compareEvidence)[0];
-    const shared = kills.filter(
-      (kill) => sharedEvidenceKey(kill) === sharedEvidenceKey(selected)
-    );
-    const ids = new Set(
-      shared.map((kill) => canonicalCharacterId(kill.character))
-    );
-    const characters = input.characters
-      .filter((c) => ids.has(canonicalCharacterId(c.key)))
-      .map((c) => c.displayName);
+    const byEvidence = new Map<string, DossierKillEvidence[]>();
+    for (const kill of kills) {
+      const key = sharedEvidenceKey(kill);
+      byEvidence.set(key, [...(byEvidence.get(key) ?? []), kill]);
+    }
+    const firstKills = [...byEvidence.values()]
+      .map((shared) => {
+        const selected = [...shared].sort(compareEvidence)[0]!;
+        const ids = new Set(
+          shared.map((kill) => canonicalCharacterId(kill.character))
+        );
+        return {
+          selected,
+          firstKill: {
+            killedAt: selected.killedAt,
+            guild: selected.guild,
+            historicWorldRank: selected.historicWorldRank,
+            reportUrl: selected.reportUrl,
+            characters: input.characters
+              .filter((c) => ids.has(canonicalCharacterId(c.key)))
+              .map((c) => c.displayName)
+          }
+        };
+      })
+      .sort((a, b) => compareEvidence(a.selected, b.selected));
+    const selected = firstKills[0]!.selected;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
       bosses: [],
@@ -135,13 +157,8 @@ export function buildApplicantDossier(
       bossId: selected.bossId,
       bossName: selected.bossName,
       bossOrder: selected.bossOrder,
-      firstKill: {
-        killedAt: selected.killedAt,
-        guild: selected.guild,
-        historicWorldRank: selected.historicWorldRank,
-        reportUrl: selected.reportUrl,
-        characters
-      }
+      firstKill: firstKills[0]!.firstKill,
+      firstKills: firstKills.map((entry) => entry.firstKill)
     });
     raid.final ||= kills.some((kill) => kill.isFinalBoss);
     raids.set(selected.raidId, raid);

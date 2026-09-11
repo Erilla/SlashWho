@@ -7,10 +7,10 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
 }) => {
   // Break caught: narrow screens could retain the retired character/history
   // layout or hide the applicant-research controls outside the viewport.
-  const key = { region: "eu", realm: "silvermoon", name: "mobile" } as const;
+  const key = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
   await seedSnapshot({
     key,
-    displayName: "Mobile",
+    displayName: "Ryii",
     refreshedAt: new Date("2025-04-05T06:07:00.000Z")
   });
 
@@ -39,13 +39,16 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
 
   await page
     .getByLabel("Applicant URL")
-    .fill("https://raider.io/characters/eu/silvermoon/mobile");
+    .fill("https://raider.io/characters/eu/silvermoon/ryii");
   await page.getByRole("button", { name: "Research applicant" }).click();
   await expect(
     page.getByRole("heading", { name: "Historic Cutting Edge" })
   ).toBeVisible();
-  await expect(page.getByText("World #147")).toBeVisible();
-  await expect(page.getByText(/evidence is incomplete/i)).toBeVisible();
+  const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
+  await evidence.getByText("View first-kill evidence").click();
+  await expect(
+    evidence.getByRole("link", { name: "View Warcraft Logs report" })
+  ).toHaveAttribute("href", /e2eReport#fight=9$/);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth

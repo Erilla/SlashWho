@@ -30,6 +30,7 @@ const recentReportsQuery = `
   query RecentReports($name: String!, $realm: String!, $region: String!, $page: Int!) {
     characterData {
       character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        server { normalizedName }
         recentReports(limit: ${REPORTS_PER_PAGE}, page: $page) {
           data {
             code
@@ -211,10 +212,17 @@ function firstKillReports(
   if (character === null) return { kind: "limitation", code: "not_found" };
 
   const entry = record(character);
+  const characterServer = entry && record(entry.server);
+  const normalizedRealm =
+    characterServer && nonEmptyString(characterServer.normalizedName);
   const recentReports = entry && record(entry.recentReports);
   const reports = recentReports && recentReports.data;
   const hasMorePages = recentReports && recentReports.has_more_pages;
-  if (!Array.isArray(reports) || typeof hasMorePages !== "boolean") {
+  if (
+    !normalizedRealm ||
+    !Array.isArray(reports) ||
+    typeof hasMorePages !== "boolean"
+  ) {
     return { kind: "limitation", code: "schema_drift" };
   }
 
@@ -244,6 +252,7 @@ function firstKillReports(
     const participantIds = new Set<number>();
     for (const actorValue of actors) {
       const actor = record(actorValue);
+      if (actor?.type !== "Player") continue;
       const actorId = actor && positiveInteger(actor.id);
       const name = actor && nonEmptyString(actor.name);
       const server = actor && nonEmptyString(actor.server);
@@ -252,7 +261,8 @@ function firstKillReports(
       }
       if (
         name.toLocaleLowerCase("en-US") === requestedKey.name &&
-        server.toLocaleLowerCase("en-US") === requestedKey.realm
+        server.toLocaleLowerCase("en-US") ===
+          normalizedRealm.toLocaleLowerCase("en-US")
       ) {
         participantIds.add(actorId);
       }
@@ -268,10 +278,14 @@ function firstKillReports(
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
+      if (!id || encounterId === null || fightStartTime === null) {
+        return { kind: "limitation", code: "schema_drift" };
+      }
+      // Warcraft Logs represents trash pulls with encounterID 0. They have no
+      // boss identity and must not turn an otherwise valid report into schema
+      // drift or dossier evidence.
+      if (encounterId === 0) continue;
       if (
-        !id ||
-        encounterId === null ||
-        fightStartTime === null ||
         typeof killed !== "boolean" ||
         !Number.isSafeInteger(difficulty) ||
         !Array.isArray(friendlyPlayers) ||
@@ -279,10 +293,6 @@ function firstKillReports(
       ) {
         return { kind: "limitation", code: "schema_drift" };
       }
-      // Warcraft Logs represents trash pulls with encounterID 0. They have no
-      // boss identity and must not turn an otherwise valid report into schema
-      // drift or dossier evidence.
-      if (encounterId === 0) continue;
       if (!bossName) return { kind: "limitation", code: "schema_drift" };
       if (
         !killed ||

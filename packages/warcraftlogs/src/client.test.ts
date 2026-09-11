@@ -165,6 +165,7 @@ describe("Warcraft Logs gateway", () => {
             data: {
               characterData: {
                 character: {
+                  server: { normalizedName: "Silvermoon" },
                   recentReports: {
                     data: [
                       {
@@ -177,13 +178,13 @@ describe("Warcraft Logs gateway", () => {
                               id: 7,
                               name: "Sentinel",
                               server: "Silvermoon",
-                              type: "Mage"
+                              type: "Player"
                             },
                             {
                               id: 8,
                               name: "Someoneelse",
                               server: "Silvermoon",
-                              type: "Priest"
+                              type: "Player"
                             }
                           ]
                         },
@@ -239,6 +240,87 @@ describe("Warcraft Logs gateway", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/participantReport",
           fightUrl:
             "https://www.warcraftlogs.com/reports/participantReport#fight=3"
+        }
+      ]
+    });
+  });
+
+  it("ignores non-player actors and nullable trash while matching the resolved WCL realm", async () => {
+    // Break caught: NPC actors have no player realm, trash fields are nullable,
+    // and WCL's compact realm name differs from Blizzard's canonical slug.
+    const aeriePeakKey: CharacterKey = {
+      region: "us",
+      realm: "aerie-peak",
+      name: "sentinel"
+    };
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "AeriePeak" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "realmReport",
+                        startTime: 1_706_918_400_000,
+                        zone: { id: 42, name: "Nerub-ar Palace" },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 99,
+                              name: "Queen Ansurek",
+                              server: null,
+                              type: "NPC"
+                            },
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "AeriePeak",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 1,
+                            encounterID: 0,
+                            name: null,
+                            startTime: 0,
+                            kill: null,
+                            difficulty: null,
+                            friendlyPlayers: null
+                          },
+                          {
+                            id: 2,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 3_600_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(
+      client.getFirstKillReports(aeriePeakKey, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          bossId: "1234",
+          reportUrl: "https://www.warcraftlogs.com/reports/realmReport"
         }
       ]
     });

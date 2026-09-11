@@ -29,7 +29,15 @@ const ownerCharacters = [
   }
 ] as const;
 
-function upstreamCharacter(character: (typeof ownerCharacters)[number]) {
+function upstreamCharacter(
+  character: Readonly<{
+    name: string;
+    level: number;
+    className: string;
+    realm: string;
+    region: string;
+  }>
+) {
   return {
     name: character.name,
     level: character.level,
@@ -86,11 +94,25 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       return;
     }
 
-    if (url.pathname === "/api/characters/eu/silvermoon/ryii") {
+    if (url.pathname === "/__control/hold") {
+      released = false;
+      json(response, 200, { released: false });
+      return;
+    }
+
+    if (
+      url.pathname === "/api/characters/eu/silvermoon/ryii" ||
+      url.pathname === "/api/characters/eu/silvermoon/queued"
+    ) {
+      const queued = url.pathname.endsWith("/queued");
       const send = () =>
         json(response, 200, {
           characterDetails: {
-            character: upstreamCharacter(ownerCharacters[0]),
+            character: upstreamCharacter(
+              queued
+                ? { ...ownerCharacters[0], name: "Queued" }
+                : ownerCharacters[0]
+            ),
             user: { name: "fixture-owner" },
             characterCustomizations: {
               discord_profile: null,

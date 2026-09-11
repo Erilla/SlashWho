@@ -18,7 +18,7 @@ async function listen(server: Server): Promise<number> {
 }
 
 export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
-  const server = createServer((request, response) => {
+  const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     response.setHeader("content-type", "application/json");
     if (request.method === "POST" && url.pathname === "/oauth/token") {
@@ -28,11 +28,19 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/v2/client") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        variables?: { name?: string; realm?: string };
+      };
+      const name = body.variables?.name ?? "fixture";
+      const serverName = body.variables?.realm ?? "fixture-realm";
       response.end(
         JSON.stringify({
           data: {
             characterData: {
               character: {
+                server: { normalizedName: serverName },
                 recentReports: {
                   data: [
                     {
@@ -43,9 +51,9 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
                         actors: [
                           {
                             id: 7,
-                            name: "Ryii",
-                            server: "Silvermoon",
-                            type: "Mage"
+                            name,
+                            server: serverName,
+                            type: "Player"
                           }
                         ]
                       },

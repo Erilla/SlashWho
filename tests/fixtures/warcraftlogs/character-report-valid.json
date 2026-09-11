@@ -4,6 +4,7 @@
       "data": {
         "characterData": {
           "character": {
+            "server": { "normalizedName": "Silvermoon" },
             "recentReports": {
               "data": [
                 {
@@ -16,7 +17,7 @@
                         "id": 7,
                         "name": "Sentinel",
                         "server": "Silvermoon",
-                        "type": "Mage"
+                        "type": "Player"
                       }
                     ]
                   },
@@ -61,6 +62,7 @@
       "data": {
         "characterData": {
           "character": {
+            "server": { "normalizedName": "Silvermoon" },
             "recentReports": {
               "data": [
                 {
@@ -73,7 +75,7 @@
                         "id": 7,
                         "name": "Sentinel",
                         "server": "Silvermoon",
-                        "type": "Mage"
+                        "type": "Player"
                       }
                     ]
                   },
@@ -99,7 +101,7 @@
                         "id": 7,
                         "name": "Sentinel",
                         "server": "Silvermoon",
-                        "type": "Mage"
+                        "type": "Player"
                       }
                     ]
                   },

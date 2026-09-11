@@ -56,6 +56,39 @@ describe("applicant dossier", () => {
     expect(dossier.limitations[0].code).toBe("private");
   });
 
+  it("keeps each character's distinct first kill for the same boss", () => {
+    // Break caught: selecting only the dossier-wide earliest kill hid an alt's
+    // later, distinct report instead of retaining its own first-kill evidence.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8"
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids[0].bosses[0]).toMatchObject({
+      firstKills: [
+        {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          characters: ["Ryii"]
+        },
+        {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          characters: ["Ryalts"]
+        }
+      ]
+    });
+  });
+
   it("uses the same result when tied evidence input is reversed", () => {
     const forward = [
       kill(root, { killedAt: "2024-10-01T20:00:00.000Z", isFinalBoss: false }),

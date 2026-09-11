@@ -45,7 +45,8 @@ export const dossierBossSchema = z
     bossId: z.string().min(1),
     bossName: z.string().min(1),
     bossOrder: z.number().int().nonnegative(),
-    firstKill: dossierFirstKillSchema
+    firstKill: dossierFirstKillSchema,
+    firstKills: z.array(dossierFirstKillSchema).min(1).optional()
   })
   .strict();
 

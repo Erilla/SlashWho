@@ -19,6 +19,9 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
         {limitations.map((limitation, index) => (
           <li key={`${limitation.source}-${limitation.code}-${index}`}>
             {limitation.message}
+            {limitation.character
+              ? ` Affected character: ${limitation.character.name}.`
+              : ""}
           </li>
         ))}
       </ul>

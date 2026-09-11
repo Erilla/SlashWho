@@ -97,7 +97,7 @@ describe("DossierPageClient", () => {
     expect(screen.getByText("Raider.IO declared")).toBeVisible();
     expect(screen.getByText("Fingerprint-derived")).toBeVisible();
     expect(
-      screen.getByText(/Warcraft Logs evidence is incomplete/i)
+      screen.getByText(/Warcraft Logs evidence is incomplete.*Ryalts/i)
     ).toBeVisible();
 
     const evidence = screen.getByRole("group", {
