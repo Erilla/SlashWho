@@ -11,7 +11,9 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   await seedSnapshot({
     key,
     displayName: "Ryii",
-    refreshedAt: new Date("2025-04-05T06:07:00.000Z")
+    // This layout fixture must be fresh: queued discovery is covered separately
+    // and the shared fake Raider.IO fixture deliberately holds a refresh.
+    refreshedAt: new Date()
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
