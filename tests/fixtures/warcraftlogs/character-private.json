@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "message": "This character has private logs",
+      "extensions": {
+        "code": "FORBIDDEN",
+        "raw": "private-envelope-marker"
+      }
+    }
+  ]
+}

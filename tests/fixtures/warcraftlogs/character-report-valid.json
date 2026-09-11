@@ -1,0 +1,83 @@
+{
+  "pages": [
+    {
+      "data": {
+        "characterData": {
+          "character": {
+            "recentReports": {
+              "data": [
+                {
+                  "code": "lateReport",
+                  "startTime": 1707098400000,
+                  "fights": [
+                    {
+                      "id": 1,
+                      "encounterID": 1234,
+                      "startTime": 3600000,
+                      "kill": true,
+                      "difficulty": 5
+                    },
+                    {
+                      "id": 9,
+                      "encounterID": 9999,
+                      "startTime": 3600000,
+                      "kill": false,
+                      "difficulty": 5
+                    },
+                    {
+                      "id": 8,
+                      "encounterID": 9998,
+                      "startTime": 3600000,
+                      "kill": true,
+                      "difficulty": 4
+                    }
+                  ]
+                }
+              ],
+              "has_more_pages": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "data": {
+        "characterData": {
+          "character": {
+            "recentReports": {
+              "data": [
+                {
+                  "code": "earlyReport",
+                  "startTime": 1706918400000,
+                  "fights": [
+                    {
+                      "id": 7,
+                      "encounterID": 1234,
+                      "startTime": 3600000,
+                      "kill": true,
+                      "difficulty": 5
+                    }
+                  ]
+                },
+                {
+                  "code": "secondBoss",
+                  "startTime": 1707004800000,
+                  "fights": [
+                    {
+                      "id": 2,
+                      "encounterID": 4321,
+                      "startTime": 7200000,
+                      "kill": true,
+                      "difficulty": 5
+                    }
+                  ]
+                }
+              ],
+              "has_more_pages": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}
