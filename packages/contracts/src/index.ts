@@ -15,6 +15,26 @@ export type {
   SnapshotState
 } from "./character";
 export {
+  applicantDossierSchema,
+  characterKeySchema,
+  createDossierRequestSchema,
+  dossierBossSchema,
+  dossierCharacterSchema,
+  dossierFirstKillSchema,
+  dossierGuildSchema,
+  dossierLimitationSchema,
+  dossierRaidSchema,
+  dossierSourceLabelSchema
+} from "./dossier";
+export type {
+  ApplicantDossier,
+  CharacterKey,
+  CreateDossierRequest,
+  DossierCharacter,
+  DossierLimitation,
+  DossierSourceLabel
+} from "./dossier";
+export {
   publicErrorHttpStatus,
   publicErrorCodeSchema,
   publicErrorMessages,

@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import {
+  applicantDossierSchema,
   characterResourceSchema,
   characterSchema,
+  createDossierRequestSchema,
   createSearchResponseSchema,
   historyPageSchema,
   historicalSnapshotSchema,
@@ -11,6 +13,47 @@ import {
   publicErrorMessages,
   safeApiErrorSchema
 } from "./index";
+
+const applicantCharacter = { region: "eu", realm: "silvermoon", name: "ryii" };
+const validDossier = {
+  root: applicantCharacter,
+  characters: [
+    {
+      key: applicantCharacter,
+      displayName: "Ryii",
+      source: "raiderio_declared"
+    }
+  ],
+  raids: [
+    {
+      raidId: "nerubar-palace",
+      raidName: "Nerub-ar Palace",
+      cuttingEdge: true,
+      bosses: [
+        {
+          bossId: "ansurek",
+          bossName: "Queen Ansurek",
+          bossOrder: 8,
+          firstKill: {
+            killedAt: "2024-10-01T20:00:00.000Z",
+            guild: { name: "Guild", realm: "silvermoon" },
+            historicWorldRank: null,
+            reportUrl: "https://www.warcraftlogs.com/reports/example",
+            characters: ["Ryii"]
+          }
+        }
+      ]
+    }
+  ],
+  limitations: [
+    {
+      source: "warcraft_logs",
+      character: null,
+      code: "rate_limited",
+      message: "Warcraft Logs is temporarily rate limited."
+    }
+  ]
+};
 
 const character = {
   region: "eu",
@@ -170,4 +213,31 @@ it("defines contract-safe authentication and trusted-boundary errors", () => {
   ).toBe("trusted_client_ip_unavailable");
   expect(publicErrorHttpStatus.unauthorized).toBe(401);
   expect(publicErrorHttpStatus.trusted_client_ip_unavailable).toBe(503);
+});
+
+it("accepts a strict applicant dossier request and response", () => {
+  // Break caught: browser input or a dossier response could add unvetted fields
+  // to the reviewer surface, including raw upstream payloads.
+  const characterUrl =
+    "https://www.warcraftlogs.com/character/eu/silvermoon/ryii";
+
+  expect(createDossierRequestSchema.parse({ characterUrl })).toEqual({
+    characterUrl
+  });
+  expect(applicantDossierSchema.parse(validDossier)).toEqual(validDossier);
+  expect(() =>
+    applicantDossierSchema.parse({ ...validDossier, rawResponse: {} })
+  ).toThrow();
+});
+
+it("retains an unknown historic world rank as null", () => {
+  // Break caught: an unavailable historic rank could be converted into a
+  // fabricated numeric finding or rejected entirely.
+  expect(
+    validDossier.raids[0].bosses[0].firstKill.historicWorldRank
+  ).toBeNull();
+  expect(
+    applicantDossierSchema.parse(validDossier).raids[0]?.bosses[0]?.firstKill
+      .historicWorldRank
+  ).toBeNull();
 });
