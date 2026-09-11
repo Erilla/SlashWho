@@ -58,6 +58,21 @@ export type ApplicantDossier = Readonly<{
 function text(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
+function optionalText(a: string | null, b: string | null): number {
+  if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  return text(a, b);
+}
+function optionalNumber(a: number | null, b: number | null): number {
+  if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  return a - b;
+}
+function compareGuild(
+  a: DossierKillEvidence["guild"],
+  b: DossierKillEvidence["guild"]
+): number {
+  if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  return text(a.name, b.name) || text(a.realm, b.realm);
+}
 function compareEvidence(
   a: DossierKillEvidence,
   b: DossierKillEvidence
@@ -68,11 +83,9 @@ function compareEvidence(
     text(a.raidName, b.raidName) ||
     text(a.bossName, b.bossName) ||
     a.bossOrder - b.bossOrder ||
-    text(a.reportUrl ?? "", b.reportUrl ?? "") ||
-    text(a.guild?.name ?? "", b.guild?.name ?? "") ||
-    text(a.guild?.realm ?? "", b.guild?.realm ?? "") ||
-    (a.historicWorldRank ?? Number.MAX_SAFE_INTEGER) -
-      (b.historicWorldRank ?? Number.MAX_SAFE_INTEGER) ||
+    optionalText(a.reportUrl, b.reportUrl) ||
+    compareGuild(a.guild, b.guild) ||
+    optionalNumber(a.historicWorldRank, b.historicWorldRank) ||
     (a.isFinalBoss === b.isFinalBoss ? 0 : a.isFinalBoss ? -1 : 1) ||
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );

@@ -102,6 +102,26 @@ describe("applicant dossier", () => {
     });
   });
 
+  it("distinguishes nullable evidence values when tied input is reversed", () => {
+    const forward = [
+      kill(root, { reportUrl: null, guild: null, historicWorldRank: null }),
+      kill(root, {
+        reportUrl: "",
+        guild: { name: "", realm: "" },
+        historicWorldRank: Number.MAX_SAFE_INTEGER
+      })
+    ];
+    const make = (kills: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter],
+        kills,
+        limitations: []
+      });
+
+    expect(make([...forward].reverse())).toEqual(make(forward));
+  });
+
   it("keeps unavailable historic ranks unknown", () => {
     const dossier = buildApplicantDossier({
       root,
