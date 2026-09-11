@@ -25,20 +25,21 @@
 
 ## File Structure
 
-| File | Responsibility |
-| --- | --- |
-| \`packages/domain/src/character-key.ts\` | Parse both URL forms into \`CharacterKey\`. |
-| \`packages/domain/src/applicant-dossier.ts\` | Pure evidence types and deterministic aggregation. |
-| \`packages/contracts/src/dossier.ts\` | Strict dossier HTTP schemas. |
-| \`packages/raiderio/src/client.ts\` | Historic Mythic first-kill guild/date/rank normalization. |
-| \`packages/warcraftlogs/src/*\` | OAuth, GraphQL, normalized public report evidence. |
-| \`packages/application/src/applicant-dossier-service.ts\` | Read snapshots and assemble the unsaved dossier. |
-| \`apps/web/src/app/api/dossiers/*\` | Start/read dossier-oriented API routes. |
-| \`apps/web/src/components/dossier-*.tsx\` | Accessible linked-character and raid/boss display. |
+| File                                                      | Responsibility                                            |
+| --------------------------------------------------------- | --------------------------------------------------------- |
+| \`packages/domain/src/character-key.ts\`                  | Parse both URL forms into \`CharacterKey\`.               |
+| \`packages/domain/src/applicant-dossier.ts\`              | Pure evidence types and deterministic aggregation.        |
+| \`packages/contracts/src/dossier.ts\`                     | Strict dossier HTTP schemas.                              |
+| \`packages/raiderio/src/client.ts\`                       | Historic Mythic first-kill guild/date/rank normalization. |
+| \`packages/warcraftlogs/src/*\`                           | OAuth, GraphQL, normalized public report evidence.        |
+| \`packages/application/src/applicant-dossier-service.ts\` | Read snapshots and assemble the unsaved dossier.          |
+| \`apps/web/src/app/api/dossiers/*\`                       | Start/read dossier-oriented API routes.                   |
+| \`apps/web/src/components/dossier-*.tsx\`                 | Accessible linked-character and raid/boss display.        |
 
 ### Task 1: Canonical input and dossier domain model
 
 **Files:**
+
 - Modify: \`packages/domain/src/character-key.ts\`
 - Modify: \`packages/domain/src/character-key.test.ts\`
 - Create: \`packages/domain/src/applicant-dossier.ts\`
@@ -46,16 +47,17 @@
 - Modify: \`packages/domain/src/index.ts\`
 
 **Interfaces:**
+
 - Produces: \`parseApplicantCharacterUrl(input: string): CharacterKey\` and \`buildApplicantDossier(input: BuildApplicantDossierInput): ApplicantDossier\`.
 
 - [ ] **Step 1: Write failing URL-parser tests.**
 
 \`\`\`ts
 expect(parseApplicantCharacterUrl(
-  "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
+"https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
 )).toEqual({ region: "eu", realm: "silvermoon", name: "ryii" });
 expect(() => parseApplicantCharacterUrl(
-  "https://raider.io.evil/characters/eu/silvermoon/Ryii"
+"https://raider.io.evil/characters/eu/silvermoon/Ryii"
 )).toThrow("invalid_character_url");
 \`\`\`
 
@@ -69,10 +71,10 @@ Expected: FAIL because \`parseApplicantCharacterUrl\` is absent.
 
 \`\`\`ts
 export function parseApplicantCharacterUrl(input: string): CharacterKey {
-  const url = parseAbsoluteHttpsUrl(input);
-  if (url.hostname === "raider.io") return parseRaiderIoCharacterUrl(input);
-  if (url.hostname === "www.warcraftlogs.com") return parseWarcraftLogsCharacterUrl(url);
-  throw new Error("invalid_character_url");
+const url = parseAbsoluteHttpsUrl(input);
+if (url.hostname === "raider.io") return parseRaiderIoCharacterUrl(input);
+if (url.hostname === "www.warcraftlogs.com") return parseWarcraftLogsCharacterUrl(url);
+throw new Error("invalid_character_url");
 }
 \`\`\`
 
@@ -82,9 +84,9 @@ The Warcraft Logs branch must use the same lowercasing and realm/name grammar as
 
 \`\`\`ts
 const dossier = buildApplicantDossier({
-  root, characters: [rootCharacter, altCharacter],
-  kills: [laterRootKill, earlierAltKill, duplicateAltKill],
-  limitations: [{ source: "warcraft_logs", character: altKey, code: "private" }]
+root, characters: [rootCharacter, altCharacter],
+kills: [laterRootKill, earlierAltKill, duplicateAltKill],
+limitations: [{ source: "warcraft_logs", character: altKey, code: "private" }]
 });
 expect(dossier.raids[0].cuttingEdge).toBe(true);
 expect(dossier.raids[0].bosses[0].firstKill.characters).toEqual(["Ryii", "Ryalts"]);
@@ -101,10 +103,10 @@ Expected: FAIL because dossier values and aggregation are absent.
 
 \`\`\`ts
 export type DossierKillEvidence = Readonly<{
-  raidId: string; raidName: string; bossId: string; bossName: string;
-  bossOrder: number; isFinalBoss: boolean; character: CharacterKey;
-  killedAt: string; guild: { name: string; realm: string } | null;
-  historicWorldRank: number | null; reportUrl: string | null;
+raidId: string; raidName: string; bossId: string; bossName: string;
+bossOrder: number; isFinalBoss: boolean; character: CharacterKey;
+killedAt: string; guild: { name: string; realm: string } | null;
+historicWorldRank: number | null; reportUrl: string | null;
 }>;
 export function buildApplicantDossier(input: BuildApplicantDossierInput): ApplicantDossier;
 \`\`\`
@@ -125,6 +127,7 @@ git commit -m "feat: add applicant dossier domain model"
 ### Task 2: Contract and source-label boundary
 
 **Files:**
+
 - Create: \`packages/contracts/src/dossier.ts\`
 - Modify: \`packages/contracts/src/index.ts\`
 - Modify: \`packages/contracts/src/contracts.test.ts\`
@@ -132,6 +135,7 @@ git commit -m "feat: add applicant dossier domain model"
 - Modify: \`packages/application/src/serializers.test.ts\`
 
 **Interfaces:**
+
 - Consumes: stored snapshot \`discoverySource\`.
 - Produces: \`createDossierRequestSchema\`, \`applicantDossierSchema\`, and \`DossierSourceLabel\`.
 
@@ -139,7 +143,7 @@ git commit -m "feat: add applicant dossier domain model"
 
 \`\`\`ts
 expect(createDossierRequestSchema.parse({ characterUrl: validUrl })).toEqual({
-  characterUrl: validUrl
+characterUrl: validUrl
 });
 expect(() => applicantDossierSchema.parse({ ...validDossier, rawResponse: {} })).toThrow();
 expect(validDossier.raids[0].bosses[0].firstKill.historicWorldRank).toBeNull();
@@ -155,13 +159,13 @@ Expected: FAIL because dossier schemas are absent.
 
 \`\`\`ts
 export const dossierSourceLabelSchema = z.enum([
-  "raiderio_declared", "fingerprint_derived"
+"raiderio_declared", "fingerprint_derived"
 ]);
 export const dossierLimitationSchema = z.object({
-  source: z.enum(["raiderio", "warcraft_logs"]),
-  character: characterKeySchema.nullable(),
-  code: z.enum(["not_found", "private", "rate_limited", "request_cap", "unavailable", "schema_changed"]),
-  message: z.string().min(1)
+source: z.enum(["raiderio", "warcraft_logs"]),
+character: characterKeySchema.nullable(),
+code: z.enum(["not_found", "private", "rate_limited", "request_cap", "unavailable", "schema_changed"]),
+message: z.string().min(1)
 }).strict();
 \`\`\`
 
@@ -181,6 +185,7 @@ git commit -m "feat: define applicant dossier contract"
 ### Task 3: Raider.IO historic-kill evidence gateway
 
 **Files:**
+
 - Modify: \`packages/raiderio/src/types.ts\`
 - Modify: \`packages/raiderio/src/client.ts\`
 - Modify: \`packages/raiderio/src/client.test.ts\`
@@ -190,6 +195,7 @@ git commit -m "feat: define applicant dossier contract"
 - Create: \`tests/fixtures/raiderio/raid-progress-schema-drift.json\`
 
 **Interfaces:**
+
 - Produces: \`getHistoricMythicKills(key, options): Promise<HistoricMythicKillResult>\`.
 
 - [ ] **Step 1: Write failing fixture-driven client tests.**
@@ -197,9 +203,9 @@ git commit -m "feat: define applicant dossier contract"
 \`\`\`ts
 const result = await client.getHistoricMythicKills(key, { tierOrdinals: [30, 31] });
 expect(result).toMatchObject({ kind: "evidence", kills: [expect.objectContaining({
-  bossName: "Queen Ansurek",
-  guild: { name: "Example Guild", realm: "silvermoon" },
-  historicWorldRank: 147
+bossName: "Queen Ansurek",
+guild: { name: "Example Guild", realm: "silvermoon" },
+historicWorldRank: 147
 })] });
 \`\`\`
 
@@ -215,13 +221,13 @@ Expected: FAIL because the historic-kill gateway is absent.
 
 \`\`\`ts
 export type HistoricMythicKill = Readonly<{
-  raidId: string; raidName: string; bossId: string; bossName: string;
-  bossOrder: number; isFinalBoss: boolean; firstDefeated: string;
-  guild: { name: string; realm: string } | null; historicWorldRank: number | null;
+raidId: string; raidName: string; bossId: string; bossName: string;
+bossOrder: number; isFinalBoss: boolean; firstDefeated: string;
+guild: { name: string; realm: string } | null; historicWorldRank: number | null;
 }>;
 export type HistoricMythicKillResult =
-  | { kind: "evidence"; kills: readonly HistoricMythicKill[] }
-  | { kind: "limitation"; code: RaiderIoEvidenceLimitation; retryAfterMs?: number };
+| { kind: "evidence"; kills: readonly HistoricMythicKill[] }
+| { kind: "limitation"; code: RaiderIoEvidenceLimitation; retryAfterMs?: number };
 \`\`\`
 
 Validate every field. Missing guild/rank is \`null\`; invalid response structure is a limitation. Never log raw data, and enforce tier/request caps before fetches.
@@ -240,6 +246,7 @@ git commit -m "feat: gather historic mythic kill evidence"
 ### Task 4: Warcraft Logs gateway package
 
 **Files:**
+
 - Create: \`packages/warcraftlogs/package.json\`
 - Create: \`packages/warcraftlogs/tsconfig.json\`
 - Create: \`packages/warcraftlogs/src/types.ts\`
@@ -253,6 +260,7 @@ git commit -m "feat: gather historic mythic kill evidence"
 - Modify: \`pnpm-lock.yaml\`, \`Dockerfile.web\`
 
 **Interfaces:**
+
 - Produces: \`WarcraftLogsGateway.resolveCharacter()\` and \`WarcraftLogsGateway.getFirstKillReports()\`.
 
 - [ ] **Step 1: Write failing OAuth and GraphQL boundary tests.**
@@ -276,11 +284,11 @@ Expected: FAIL because the package does not exist.
 
 \`\`\`ts
 export interface WarcraftLogsGateway {
-  resolveCharacter(key: CharacterKey, signal?: AbortSignal): Promise<WarcraftLogsIdentityResult>;
-  getFirstKillReports(
-    key: CharacterKey,
-    options: Readonly<{ requestCap: number; signal?: AbortSignal }>
-  ): Promise<WarcraftLogsReportResult>;
+resolveCharacter(key: CharacterKey, signal?: AbortSignal): Promise<WarcraftLogsIdentityResult>;
+getFirstKillReports(
+key: CharacterKey,
+options: Readonly<{ requestCap: number; signal?: AbortSignal }>
+): Promise<WarcraftLogsReportResult>;
 }
 \`\`\`
 
@@ -300,6 +308,7 @@ git commit -m "feat: add warcraft logs dossier gateway"
 ### Task 5: Transient applicant dossier service
 
 **Files:**
+
 - Create: \`packages/application/src/applicant-dossier-service.ts\`
 - Create: \`packages/application/src/applicant-dossier-service.test.ts\`
 - Modify: \`packages/application/src/index.ts\`
@@ -308,6 +317,7 @@ git commit -m "feat: add warcraft logs dossier gateway"
 - Modify: \`packages/application/package.json\`
 
 **Interfaces:**
+
 - Consumes: \`SearchService\`, repositories, both evidence gateways, source-label mapping.
 - Produces: \`ApplicantDossierService.start(input)\` and \`ApplicantDossierService.read(key)\`.
 
@@ -342,8 +352,8 @@ Test invalid bounds and defaults. The character cap selects snapshot order and r
 
 \`\`\`ts
 export interface ApplicantDossierService {
-  start(input: CreateDossierCommand): Promise<CreateDossierResult>;
-  read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
+start(input: CreateDossierCommand): Promise<CreateDossierResult>;
+read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
 }
 \`\`\`
 
@@ -363,6 +373,7 @@ git commit -m "feat: assemble transient applicant dossiers"
 ### Task 6: Web service wiring and dossier API
 
 **Files:**
+
 - Modify: \`apps/web/src/server/config.ts\`
 - Modify: \`apps/web/src/server/config.test.ts\`
 - Modify: \`apps/web/src/server/container.ts\`
@@ -373,6 +384,7 @@ git commit -m "feat: assemble transient applicant dossiers"
 - Modify: \`.env.example\`, \`apps/web/package.json\`
 
 **Interfaces:**
+
 - Produces: \`POST /api/dossiers\` and \`GET /api/dossiers/:region/:realm/:name\`.
 
 - [ ] **Step 1: Write failing web-config tests.**
@@ -392,10 +404,10 @@ Expected: FAIL because Warcraft Logs/dossier config is absent.
 
 \`\`\`ts
 export type WebContainer = Readonly<{
-  searches: SearchService;
-  dossiers: ApplicantDossierService;
-  ready(): Promise<boolean>;
-  close(): Promise<void>;
+searches: SearchService;
+dossiers: ApplicantDossierService;
+ready(): Promise<boolean>;
+close(): Promise<void>;
 }>;
 \`\`\`
 
@@ -405,7 +417,7 @@ Inject fake gateways in tests; never put credentials in client runtime configura
 
 \`\`\`ts
 expect((await POST(new Request("http://test/api/dossiers", {
-  method: "POST", body: JSON.stringify({ characterUrl: wclUrl })
+method: "POST", body: JSON.stringify({ characterUrl: wclUrl })
 }))).status).toBe(202);
 \`\`\`
 
@@ -425,6 +437,7 @@ git commit -m "feat: expose applicant dossier routes"
 ### Task 7: Dossier-only web experience
 
 **Files:**
+
 - Modify: \`apps/web/src/app/page.tsx\`
 - Modify: \`apps/web/src/components/search-form.tsx\`
 - Modify: \`apps/web/src/components/search-form.test.tsx\`
@@ -437,6 +450,7 @@ git commit -m "feat: expose applicant dossier routes"
 - Modify: \`apps/web/src/app/layout.tsx\`, \`apps/web/src/components/site-header.tsx\`, \`apps/web/src/app/globals.css\`
 
 **Interfaces:**
+
 - Consumes: dossier routes and \`applicantDossierSchema\`.
 - Produces: accessible search and dossier pages with no public navigation.
 
@@ -487,6 +501,7 @@ git commit -m "feat: add applicant dossier interface"
 ### Task 8: Retire public routes, update docs, and verify deployment
 
 **Files:**
+
 - Delete: \`apps/web/src/app/characters/**\`
 - Delete: \`apps/web/src/app/api/v1/**\`
 - Delete: \`apps/web/src/app/api/page.tsx\`
@@ -497,6 +512,7 @@ git commit -m "feat: add applicant dossier interface"
 - Create: \`tests/e2e/support/fake-warcraftlogs.ts\`
 
 **Interfaces:**
+
 - Consumes: complete dossier flow.
 - Produces: no reachable public character/history/API UI and documented internal Railway use.
 
