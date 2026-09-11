@@ -29,7 +29,9 @@ export function DossierCharacterList({
                 {character.key.region.toUpperCase()} · {character.key.realm}
               </span>
             </div>
-            <span className="source-badge">{sourceLabel[character.source]}</span>
+            <span className="source-badge">
+              {sourceLabel[character.source]}
+            </span>
           </li>
         ))}
       </ul>

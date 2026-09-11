@@ -7,6 +7,7 @@ import {
   type ApplicantDossier,
   type CharacterKey
 } from "@slashwho/contracts";
+import { toCharacterPath } from "@slashwho/domain";
 import { useEffect, useMemo, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
@@ -24,9 +25,12 @@ const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
 
 function apiError(response: Response, body: unknown): string {
   if (response.status === 404) return "This applicant dossier was not found.";
-  if (response.status === 429) return "Too many dossier requests. Please try again shortly.";
+  if (response.status === 429)
+    return "Too many dossier requests. Please try again shortly.";
   const parsed = safeApiErrorSchema.safeParse(body);
-  return parsed.success ? parsed.data.error.message : "The dossier could not be loaded.";
+  return parsed.success
+    ? parsed.data.error.message
+    : "The dossier could not be loaded.";
 }
 
 export function DossierPageClient({
@@ -37,10 +41,18 @@ export function DossierPageClient({
   const [dossier, setDossier] = useState(initialDossier);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState(
-    initialDossier ? null : jobId ? "Researching applicant dossier…" : "Loading applicant dossier…"
+    initialDossier
+      ? null
+      : jobId
+        ? "Researching applicant dossier…"
+        : "Loading applicant dossier…"
   );
   const dossierPath = useMemo(
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
+    [identity]
+  );
+  const expectedJobCharacterUrl = useMemo(
+    () => toCharacterPath(identity),
     [identity]
   );
 
@@ -106,36 +118,53 @@ export function DossierPageClient({
           setStatus(null);
           return;
         }
+        if (parsed.data.characterUrl !== expectedJobCharacterUrl) {
+          setError(
+            "This research job does not belong to this applicant dossier."
+          );
+          setStatus(null);
+          return;
+        }
         if (parsed.data.status === "complete") {
           await readDossier();
           return;
         }
         if (parsed.data.status === "failed") {
-          setError(parsed.data.error?.message ?? "The applicant research could not be completed.");
+          setError(
+            parsed.data.error?.message ??
+              "The applicant research could not be completed."
+          );
           setStatus(null);
           return;
         }
         if (activeJobStates.has(parsed.data.status)) schedulePoll();
       } catch (caught) {
-        if (stopped || (caught instanceof Error && caught.name === "AbortError")) return;
+        if (
+          stopped ||
+          (caught instanceof Error && caught.name === "AbortError")
+        )
+          return;
         setError("The applicant research status could not be loaded.");
         setStatus(null);
       }
     }
 
     if (jobId) void pollJob();
-    else void readDossier().catch((caught) => {
-      if (caught instanceof Error && caught.name === "AbortError") return;
-      setError("The dossier could not be loaded. Please check your connection.");
-      setStatus(null);
-    });
+    else
+      void readDossier().catch((caught) => {
+        if (caught instanceof Error && caught.name === "AbortError") return;
+        setError(
+          "The dossier could not be loaded. Please check your connection."
+        );
+        setStatus(null);
+      });
 
     return () => {
       stopped = true;
       controller.abort();
       if (timeout) clearTimeout(timeout);
     };
-  }, [dossier, dossierPath, jobId]);
+  }, [dossier, dossierPath, expectedJobCharacterUrl, jobId]);
 
   return (
     <main className="page-shell dossier-page">
@@ -147,8 +176,16 @@ export function DossierPageClient({
         </p>
       </header>
 
-      {status ? <p className="dossier-status" aria-live="polite">{status}</p> : null}
-      {error ? <p className="view-error" role="alert">{error}</p> : null}
+      {status ? (
+        <p className="dossier-status" aria-live="polite">
+          {status}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="view-error" role="alert">
+          {error}
+        </p>
+      ) : null}
 
       {dossier ? (
         <div className="dossier-layout">

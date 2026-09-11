@@ -19,7 +19,9 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
         Historic Cutting Edge
       </h2>
       {cuttingEdgeRaids.length === 0 ? (
-        <p className="empty-state">No historic Cutting Edge evidence was found.</p>
+        <p className="empty-state">
+          No historic Cutting Edge evidence was found.
+        </p>
       ) : (
         <div className="dossier-raid-list">
           {cuttingEdgeRaids.map((raid) => (
@@ -60,7 +62,8 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                         <div>
                           <dt>World rank</dt>
                           <dd>
-                            World rank: {boss.firstKill.historicWorldRank ?? "—"}
+                            World rank:{" "}
+                            {boss.firstKill.historicWorldRank ?? "—"}
                           </dd>
                         </div>
                         <div>

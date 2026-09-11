@@ -8,7 +8,10 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
   if (limitations.length === 0) return null;
 
   return (
-    <section className="dossier-limitations" aria-labelledby="limitations-heading">
+    <section
+      className="dossier-limitations"
+      aria-labelledby="limitations-heading"
+    >
       <h2 className="section-heading" id="limitations-heading">
         Data limitations
       </h2>
