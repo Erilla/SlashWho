@@ -66,7 +66,8 @@ const dossier: ApplicantDossier = {
       source: "warcraft_logs",
       character: { region: "eu", realm: "draenor", name: "ryalts" },
       code: "unavailable",
-      message: "Warcraft Logs data is unavailable for Ryalts."
+      message:
+        "Warcraft Logs evidence is incomplete because the source is temporarily unavailable."
     }
   ]
 };
@@ -96,7 +97,7 @@ describe("DossierPageClient", () => {
     expect(screen.getByText("Raider.IO declared")).toBeVisible();
     expect(screen.getByText("Fingerprint-derived")).toBeVisible();
     expect(
-      screen.getByText(/Warcraft Logs data is unavailable for Ryalts/i)
+      screen.getByText(/Warcraft Logs evidence is incomplete/i)
     ).toBeVisible();
 
     const evidence = screen.getByRole("group", {
@@ -129,18 +130,11 @@ describe("DossierPageClient", () => {
     ).toBeVisible();
   });
 
-  it("stops when a polled job belongs to another applicant", async () => {
-    // Break caught: a job id copied from another applicant dossier could cause the
-    // browser to load or poll data for the wrong character.
+  it("polls the dossier-scoped research status endpoint", async () => {
+    // Break caught: an in-flight dossier could poll the retired versioned API.
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
-        jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
         status: "complete",
-        characterUrl: "/characters/us/illidan/otherapplicant",
-        createdAt: "2026-09-11T12:00:00.000Z",
-        startedAt: "2026-09-11T12:00:01.000Z",
-        completedAt: "2026-09-11T12:00:02.000Z",
-        retryAt: null,
         error: null
       })
     );
@@ -155,10 +149,10 @@ describe("DossierPageClient", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "This research job does not belong to this applicant dossier."
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/dossiers/jobs/ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+        expect.any(Object)
       );
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

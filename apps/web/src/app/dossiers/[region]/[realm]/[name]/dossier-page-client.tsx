@@ -2,12 +2,11 @@
 
 import {
   applicantDossierSchema,
-  jobStatusResponseSchema,
+  dossierResearchStatusSchema,
   safeApiErrorSchema,
   type ApplicantDossier,
   type CharacterKey
 } from "@slashwho/contracts";
-import { toCharacterPath } from "@slashwho/domain";
 import { useEffect, useMemo, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
@@ -49,10 +48,6 @@ export function DossierPageClient({
   );
   const dossierPath = useMemo(
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
-    [identity]
-  );
-  const expectedJobCharacterUrl = useMemo(
-    () => toCharacterPath(identity),
     [identity]
   );
 
@@ -102,7 +97,7 @@ export function DossierPageClient({
     async function pollJob() {
       if (!jobId) return;
       try {
-        const response = await fetch(`/api/v1/searches/${jobId}`, {
+        const response = await fetch(`/api/dossiers/jobs/${jobId}`, {
           cache: "no-store",
           signal: controller.signal
         });
@@ -112,16 +107,9 @@ export function DossierPageClient({
           setStatus(null);
           return;
         }
-        const parsed = jobStatusResponseSchema.safeParse(body);
+        const parsed = dossierResearchStatusSchema.safeParse(body);
         if (!parsed.success) {
           setError("The applicant research returned an unexpected response.");
-          setStatus(null);
-          return;
-        }
-        if (parsed.data.characterUrl !== expectedJobCharacterUrl) {
-          setError(
-            "This research job does not belong to this applicant dossier."
-          );
           setStatus(null);
           return;
         }
@@ -164,7 +152,7 @@ export function DossierPageClient({
       controller.abort();
       if (timeout) clearTimeout(timeout);
     };
-  }, [dossier, dossierPath, expectedJobCharacterUrl, jobId]);
+  }, [dossier, dossierPath, jobId]);
 
   return (
     <main className="page-shell dossier-page">

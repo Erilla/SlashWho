@@ -31,8 +31,10 @@ it("requires Warcraft Logs credentials without duplicating dossier request confi
     WARCRAFT_LOGS_CLIENT_SECRET: "warcraft-logs-client-secret"
   };
 
-  const { WARCRAFT_LOGS_CLIENT_ID: _clientId, ...withoutClientId } =
-    environment;
+  const withoutClientId = {
+    ...environment,
+    WARCRAFT_LOGS_CLIENT_ID: undefined
+  };
   expect(() => loadWebConfig(withoutClientId)).toThrow(
     "warcraft_logs_client_id_required"
   );

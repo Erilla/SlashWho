@@ -78,6 +78,17 @@ export const createDossierRequestSchema = z
   .object({ characterUrl: z.url() })
   .strict();
 
+export const dossierStartResponseSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ready") }).strict(),
+  z
+    .object({
+      kind: z.literal("job"),
+      jobId: z.uuid(),
+      status: z.enum(["queued", "running", "retrying"])
+    })
+    .strict()
+]);
+
 export const applicantDossierSchema = z
   .object({
     root: characterKeySchema,
@@ -92,4 +103,5 @@ export type DossierSourceLabel = z.infer<typeof dossierSourceLabelSchema>;
 export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;
 export type CreateDossierRequest = z.infer<typeof createDossierRequestSchema>;
+export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;

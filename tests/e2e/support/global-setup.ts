@@ -7,6 +7,7 @@ import process from "node:process";
 
 import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
+import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
 
 type ManagedProcess = Readonly<{
   child: ChildProcess;
@@ -91,6 +92,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   let postgres: StartedPostgreSqlContainer | undefined;
   let fixture: Awaited<ReturnType<typeof startFakeRaiderIo>> | undefined;
   let blizzard: Awaited<ReturnType<typeof startFakeBlizzard>> | undefined;
+  let warcraftLogs:
+    Awaited<ReturnType<typeof startFakeWarcraftLogs>> | undefined;
   const processes: ManagedProcess[] = [];
 
   try {
@@ -101,6 +104,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       .start();
     fixture = await startFakeRaiderIo();
     blizzard = await startFakeBlizzard();
+    warcraftLogs = await startFakeWarcraftLogs();
     const databaseUrl = postgres.getConnectionUri();
     process.env.E2E_DATABASE_URL = databaseUrl;
     process.env.E2E_RAIDER_IO_BASE_URL = fixture.baseUrl;
@@ -126,7 +130,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       BLIZZARD_CLIENT_ID: "e2e-blizzard-client-id",
       BLIZZARD_CLIENT_SECRET: "e2e-blizzard-client-secret",
       BLIZZARD_SWEEP_REQUEST_CAP: "12",
-      BLIZZARD_BASE_URL: blizzard.baseUrl
+      BLIZZARD_BASE_URL: blizzard.baseUrl,
+      WARCRAFT_LOGS_CLIENT_ID: "e2e-warcraft-logs-client-id",
+      WARCRAFT_LOGS_CLIENT_SECRET: "e2e-warcraft-logs-client-secret",
+      WARCRAFT_LOGS_BASE_URL: warcraftLogs.baseUrl
     };
 
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
@@ -157,6 +164,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       await Promise.allSettled([
         fixture!.close(),
         blizzard!.close(),
+        warcraftLogs!.close(),
         postgres!.stop()
       ]);
     };
@@ -165,6 +173,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await Promise.allSettled([
       ...(fixture ? [fixture.close()] : []),
       ...(blizzard ? [blizzard.close()] : []),
+      ...(warcraftLogs ? [warcraftLogs.close()] : []),
       ...(postgres ? [postgres.stop()] : [])
     ]);
     throw error;

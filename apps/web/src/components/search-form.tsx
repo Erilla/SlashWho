@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  createSearchResponseSchema,
+  dossierStartResponseSchema,
   safeApiErrorSchema
 } from "@slashwho/contracts";
 import { parseApplicantCharacterUrl } from "@slashwho/domain";
@@ -52,7 +52,7 @@ export function SearchForm() {
         setError(errorMessage(response, body));
         return;
       }
-      const parsed = createSearchResponseSchema.safeParse(body);
+      const parsed = dossierStartResponseSchema.safeParse(body);
       if (!parsed.success) {
         setError(
           "The search returned an unexpected response. Please try again."

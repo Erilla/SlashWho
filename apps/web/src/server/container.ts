@@ -52,6 +52,7 @@ export type WebContainerDependencies = Readonly<{
     fetch: typeof globalThis.fetch;
     clientId: string;
     clientSecret: string;
+    baseUrl?: string;
   }): WarcraftLogsGateway;
   createApplicantDossierService(options: {
     repositories: Pick<Repositories, "snapshots">;
@@ -101,7 +102,8 @@ export async function createWebContainer(
       warcraftLogs: dependencies.createWarcraftLogsGateway({
         fetch: globalThis.fetch,
         clientId: config.dossier.warcraftLogsClientId,
-        clientSecret: config.dossier.warcraftLogsClientSecret
+        clientSecret: config.dossier.warcraftLogsClientSecret,
+        baseUrl: config.dossier.warcraftLogsBaseUrl
       }),
       config: config.application
     });

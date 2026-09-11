@@ -41,6 +41,18 @@ const dossiers = {
 const searches = {
   async authorizePublicRead() {
     return readAllowed;
+  },
+  async getRun() {
+    return {
+      jobId,
+      status: "queued" as const,
+      characterUrl: "/characters/eu/silvermoon/ryii",
+      createdAt: "2026-09-11T12:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+      retryAt: null,
+      error: null
+    };
   }
 };
 
@@ -50,6 +62,7 @@ vi.mock("../../../server/container", () => ({
 
 import { POST } from "./route";
 import { GET } from "./[region]/[realm]/[name]/route";
+import { GET as GET_JOB } from "./jobs/[jobId]/route";
 
 function dossierRequest(body: unknown): Request {
   return new Request("https://slashwho.example/api/dossiers", {
@@ -68,8 +81,6 @@ beforeEach(() => {
     kind: "job",
     jobId,
     status: "queued",
-    statusUrl: `/api/v1/searches/${jobId}`,
-    characterUrl: "/characters/eu/silvermoon/ryii",
     staleCharacter: null
   };
   read = { kind: "ready", dossier };
@@ -83,7 +94,9 @@ describe("POST /api/dossiers", () => {
     // discovery response from the dossier endpoint.
     const response = await POST(dossierRequest({ characterUrl }));
     expect(response.status).toBe(202);
-    expect(response.headers.get("location")).toBe(`/api/v1/searches/${jobId}`);
+    expect(response.headers.get("location")).toBe(
+      `/api/dossiers/jobs/${jobId}`
+    );
     await expect(response.json()).resolves.toMatchObject({
       kind: "job",
       jobId
@@ -149,5 +162,24 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
       "discovery_not_ready"
     );
+  });
+});
+
+describe("GET /api/dossiers/jobs/:jobId", () => {
+  it("exposes only dossier research status at the dossier-scoped endpoint", async () => {
+    // Break caught: in-flight dossier research could continue polling the
+    // retired versioned public API or expose a character URL in its status body.
+    const response = await GET_JOB(
+      new Request(`https://slashwho.example/api/dossiers/jobs/${jobId}`, {
+        headers: { "x-real-ip": "203.0.113.8" }
+      }),
+      { params: Promise.resolve({ jobId }) }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "queued",
+      error: null
+    });
   });
 });

@@ -49,9 +49,7 @@ describe("SearchForm", () => {
           JSON.stringify({
             kind: "job",
             jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
-            status: "queued",
-            statusUrl: "/api/v1/searches/ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
-            characterUrl: "/characters/eu/silvermoon/ryii"
+            status: "queued"
           }),
           { status: 202, headers: { "content-type": "application/json" } }
         )
@@ -85,9 +83,7 @@ describe("SearchForm", () => {
           JSON.stringify({
             kind: "job",
             jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
-            status: "queued",
-            statusUrl: "/api/v1/searches/ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
-            characterUrl: "/characters/eu/silvermoon/ryii"
+            status: "queued"
           }),
           { status: 202, headers: { "content-type": "application/json" } }
         )

@@ -1,20 +1,20 @@
 # Railway deployment
 
-SlashWho runs as three Railway services in each environment: PostgreSQL, the public web/API service, and a private worker. The web and worker images both run the advisory-locked Drizzle migrations before application startup. Only the web service receives a public domain.
+SlashWho runs as three services in a fresh Railway project: PostgreSQL, an unlisted web dossier service, and a private worker. The web and worker images both run the advisory-locked Drizzle migrations before application startup. Only the web service receives a public domain; it is not a public API or searchable directory.
 
 The checked-in settings follow Railway's current [config-as-code reference](https://docs.railway.com/config-as-code/reference), [Dockerfile guidance](https://docs.railway.com/builds/dockerfiles), and [public networking header contract](https://docs.railway.com/networking/public-networking/specs-and-limits). Recheck those pages when changing the deployment boundary.
 
-## Create staging and production
+## Create a fresh project
 
-The environments are named `test` (staging, deploys `main`) and `prod` (production, deploys `prod`), matching SeriouslyCasualBotV2's Railway environments so both projects read the same way.
+The prior Railway project has been retired. These instructions assume no existing Railway project, database, service, environment, migration, or deployment.
 
-1. Create one Railway project with isolated `test` and `prod` environments.
+1. Create one new Railway project with isolated `test` and `prod` environments.
 2. In each environment, add a Railway PostgreSQL service, a web service from this repository, and a worker service from this repository.
 3. Set the web service's config-as-code path to `/railway.web.toml`; set the worker's to `/railway.worker.toml`.
 4. Confirm the web build uses `Dockerfile.web` and the worker build uses `Dockerfile.worker`.
 5. Add `DATABASE_URL` to both app services as a private reference to the environment's PostgreSQL `DATABASE_URL`. Do not paste the public TCP proxy URL into any service variable. Maintainer commands that must reach the database from outside Railway read `DATABASE_PUBLIC_URL` from the PostgreSQL service transiently instead; see [`docs/operations/removals.md`](../operations/removals.md).
 6. Generate a public domain for web only. Do not expose the worker or PostgreSQL services publicly.
-7. Configure both services to deploy `main` in `test` and `prod` in `prod`. Disable direct production deploys from feature branches.
+7. Configure both services to deploy `main` in `test` and `prod` in `prod`. Disable direct production deploys from feature branches. Do not migrate or reuse resources from the retired project.
 
 Steps 3 and 4 have no Railway CLI flag. Set the config-as-code path from each service's settings page, or through the public API:
 
@@ -39,7 +39,14 @@ ANONYMOUS_SEARCHES_PER_HOUR=10
 BOT_SEARCHES_PER_HOUR=60
 PUBLIC_READS_PER_MINUTE=300
 FRESHNESS_HOURS=24
+WARCRAFT_LOGS_CLIENT_ID=<Warcraft Logs OAuth client ID secret>
+WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
+DOSSIER_RAIDERIO_TIER_CAP=8
+DOSSIER_CHARACTER_CAP=12
+DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
 ```
+
+Warcraft Logs credentials and all `DOSSIER_*` caps are web-service-only Railway configuration. Set them as secret/config variables on web; never expose them to the browser or duplicate them on worker.
 
 Worker variables. `DISCOVERY_REQUEST_CAP`, `NEGATIVE_CACHE_TTL_MS`, and the
 Blizzard fingerprint settings are read only by the worker, so set them on the

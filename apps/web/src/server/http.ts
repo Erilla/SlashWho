@@ -1,9 +1,5 @@
-import type {
-  CreateSearchResult,
-  PublicReadAuthorizationResult
-} from "@slashwho/application";
+import type { PublicReadAuthorizationResult } from "@slashwho/application";
 import {
-  createSearchResponseSchema,
   publicErrorHttpStatus,
   publicErrorMessages,
   safeApiErrorSchema,
@@ -13,8 +9,6 @@ import { parseRaiderIoCharacterUrl, type CharacterKey } from "@slashwho/domain";
 import { randomUUID } from "node:crypto";
 
 import { webLogger } from "./logger";
-
-const resourceCacheControl = "public, max-age=60, stale-while-revalidate=300";
 
 export function apiError(
   code: PublicErrorCode,
@@ -32,49 +26,6 @@ export function apiError(
   );
 }
 
-export function createSearchHttpResponse(result: CreateSearchResult): Response {
-  if (result.kind === "character") {
-    return Response.json(
-      createSearchResponseSchema.parse({
-        kind: "character",
-        character: result.character
-      }),
-      { headers: { "cache-control": "no-store" } }
-    );
-  }
-  if (result.kind === "job") {
-    const headers = new Headers({
-      "cache-control": "no-store",
-      location: result.statusUrl
-    });
-    if (result.staleCharacter) {
-      return Response.json(
-        createSearchResponseSchema.parse({
-          kind: "character",
-          character: result.staleCharacter
-        }),
-        { headers }
-      );
-    }
-    return Response.json(
-      createSearchResponseSchema.parse({
-        kind: "job",
-        jobId: result.jobId,
-        status: result.status,
-        statusUrl: result.statusUrl,
-        characterUrl: result.characterUrl
-      }),
-      { status: 202, headers }
-    );
-  }
-  if (result.kind === "rate_limited") {
-    return apiError("rate_limited", {
-      retryAfterSeconds: result.retryAfterSeconds
-    });
-  }
-  return apiError(result.code);
-}
-
 export function publicReadAuthorizationResponse(
   result: PublicReadAuthorizationResult
 ): Response | null {
@@ -85,28 +36,6 @@ export function publicReadAuthorizationResponse(
     });
   }
   return apiError(result.code);
-}
-
-export function publicResourceResponse(
-  value: unknown,
-  options: { authenticated?: boolean } = {}
-): Response {
-  return Response.json(value, {
-    headers: {
-      "cache-control": options.authenticated
-        ? "private, no-store"
-        : resourceCacheControl,
-      // The cacheability of this response depends on whether the caller presented
-      // credentials, so shared caches must key on that header.
-      vary: "authorization"
-    }
-  });
-}
-
-export function jobStatusResponse(value: unknown): Response {
-  return Response.json(value, {
-    headers: { "cache-control": "no-store" }
-  });
 }
 
 export function parseCharacterRoute(params: {
@@ -124,33 +53,6 @@ export function parseCharacterRoute(params: {
       params.realm === key.realm &&
       params.name === key.name
   };
-}
-
-export function canonicalApiCharacterPath(key: CharacterKey): string {
-  return `/api/v1/characters/${key.region}/${key.realm}/${key.name}`;
-}
-
-export function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value
-  );
-}
-
-export function isHistoryCursor(value: string): boolean {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return false;
-  try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8")
-    ) as { refreshedAt?: unknown; id?: unknown };
-    return (
-      typeof parsed.refreshedAt === "string" &&
-      !Number.isNaN(new Date(parsed.refreshedAt).valueOf()) &&
-      typeof parsed.id === "string" &&
-      isUuid(parsed.id)
-    );
-  } catch {
-    return false;
-  }
 }
 
 type HttpLogger = {

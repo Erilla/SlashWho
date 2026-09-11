@@ -47,7 +47,15 @@ export const jobStatusResponseSchema = z
   })
   .strict();
 
+export const dossierResearchStatusSchema = z
+  .object({
+    status: discoveryRunStatusSchema,
+    error: safeErrorDetailSchema.nullable()
+  })
+  .strict();
+
 export type CreateSearchRequest = z.infer<typeof createSearchRequestSchema>;
 export type DiscoveryRunStatus = z.infer<typeof discoveryRunStatusSchema>;
 export type CreateSearchResponse = z.infer<typeof createSearchResponseSchema>;
 export type JobStatusResponse = z.infer<typeof jobStatusResponseSchema>;
+export type DossierResearchStatus = z.infer<typeof dossierResearchStatusSchema>;

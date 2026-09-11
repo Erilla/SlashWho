@@ -1,6 +1,6 @@
 # SlashWho
 
-SlashWho is a public website and versioned API for finding possible World of Warcraft alt characters from a Raider.IO character URL.
+SlashWho is an unlisted, unauthenticated guild tool for researching a World of Warcraft applicant from a Raider.IO or Warcraft Logs character URL.
 
 ```text
 https://raider.io/characters/eu/silvermoon/Ryii
@@ -12,13 +12,13 @@ It extends the alt-discovery work from [Erilla/SeriouslyCasualBotV2](https://git
 
 SlashWho is a Node.js 22/pnpm TypeScript workspace:
 
-- `apps/web` — Next.js website and thin `/api/v1` route adapters.
+- `apps/web` — Next.js applicant-dossier interface and its server-side adapters.
 - `apps/worker` — durable pg-boss discovery worker and readiness server.
 - `packages/application` — authentication, freshness, rate-limit, and use-case orchestration.
 - `packages/domain` — canonical character identity and pure bounded discovery.
 - `packages/raiderio` — sanitized Raider.IO gateway.
 - `packages/database` — PostgreSQL repositories, Drizzle migrations, and queue ownership.
-- `packages/contracts` — strict public request/response schemas shared with bot clients.
+- `packages/contracts` — strict request/response schemas shared by the application.
 
 Successful refreshes are immutable. PostgreSQL atomically publishes the newest snapshot only after its full membership is committed. The service never stores BattleTags, Discord handles, raw client IPs, API keys, guess strings, raw Raider.IO responses, or raw request URLs.
 
@@ -57,9 +57,9 @@ corepack pnpm playwright test
 
 Live Raider.IO traffic is never part of the pull-request gate. Automated discovery tests use sanitized recorded or local fixtures.
 
-## API, privacy, and operations
+## Operations
 
-The running site serves the API reference at `/api` and privacy policy at `/privacy`. Bot compatibility examples are locked in [`tests/fixtures/contracts/bot-client-v1.json`](tests/fixtures/contracts/bot-client-v1.json). Removal requests use the [public issue template](.github/ISSUE_TEMPLATE/removal-request.yml); maintainer procedure is in [`docs/operations/removals.md`](docs/operations/removals.md).
+This is not a public API, searchable directory, or historical character archive. Dossiers are assembled for the current browser request and may contain incomplete source evidence. Maintainers retain the internal snapshot and suppression process in [`docs/operations/removals.md`](docs/operations/removals.md).
 
 Railway setup, variables, health checks, backups, and validation are documented in [`docs/deployment/railway.md`](docs/deployment/railway.md). `main` deploys to the `test` environment. Production is promoted only by fast-forwarding the staging-validated commit to `prod`.
 

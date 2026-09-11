@@ -18,6 +18,7 @@ export {
   applicantDossierSchema,
   characterKeySchema,
   createDossierRequestSchema,
+  dossierStartResponseSchema,
   dossierBossSchema,
   dossierCharacterSchema,
   dossierFirstKillSchema,
@@ -30,6 +31,7 @@ export type {
   ApplicantDossier,
   CharacterKey,
   CreateDossierRequest,
+  DossierStartResponse,
   DossierCharacter,
   DossierLimitation,
   DossierSourceLabel
@@ -51,12 +53,14 @@ export type { HistoricalSnapshot, HistoryItem, HistoryPage } from "./history";
 export {
   createSearchRequestSchema,
   createSearchResponseSchema,
+  dossierResearchStatusSchema,
   discoveryRunStatusSchema,
   jobStatusResponseSchema
 } from "./search";
 export type {
   CreateSearchRequest,
   CreateSearchResponse,
+  DossierResearchStatus,
   DiscoveryRunStatus,
   JobStatusResponse
 } from "./search";

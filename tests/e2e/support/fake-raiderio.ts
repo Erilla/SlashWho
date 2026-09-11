@@ -118,6 +118,32 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       return;
     }
 
+    if (url.pathname.endsWith("/raid-progress")) {
+      json(response, 200, {
+        characterRaidProgress: {
+          raidProgress: [
+            {
+              raid: { id: "nerub-ar-palace", name: "Nerub-ar Palace" },
+              encountersDefeated: {
+                mythic: [
+                  {
+                    slug: "queen-ansurek",
+                    name: "Queen Ansurek",
+                    ordinal: 8,
+                    isFinalBoss: true,
+                    firstDefeated: "2025-01-14T20:30:00.000Z",
+                    guild: { name: "Arachnid", realm: { slug: "Silvermoon" } },
+                    historicWorldRank: 147
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      });
+      return;
+    }
+
     json(response, 404, { status: 404 });
   });
 

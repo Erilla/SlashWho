@@ -62,7 +62,7 @@ function limitationMessage(
     case "request_cap":
       return `${label} evidence was skipped because this dossier reached its request cap.`;
     case "unavailable":
-      return `${label} is temporarily unavailable.`;
+      return `${label} evidence is incomplete because the source is temporarily unavailable.`;
     case "schema_changed":
       return `${label} returned an unexpected response.`;
   }
