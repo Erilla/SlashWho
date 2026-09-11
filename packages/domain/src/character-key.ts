@@ -40,15 +40,12 @@ function parseCharacterPath(url: URL, expectedPrefix: string): CharacterKey {
   } catch {
     return invalidCharacterUrl();
   }
-
   if (parts.length !== 4 || parts[0].toLowerCase() !== expectedPrefix) {
     return invalidCharacterUrl();
   }
-
   const [region, realm, name] = parts
     .slice(1)
     .map((part) => part.toLocaleLowerCase("en-US"));
-
   if (
     !supportedRegions.includes(region as Region) ||
     !/^[a-z0-9-]+$/.test(realm) ||
@@ -56,16 +53,12 @@ function parseCharacterPath(url: URL, expectedPrefix: string): CharacterKey {
   ) {
     return invalidCharacterUrl();
   }
-
   return { region: region as Region, realm, name };
 }
 
 export function parseRaiderIoCharacterUrl(input: string): CharacterKey {
   const url = parseAbsoluteHttpsUrl(input);
-  if (url.hostname !== "raider.io") {
-    return invalidCharacterUrl();
-  }
-
+  if (url.hostname !== "raider.io") return invalidCharacterUrl();
   return parseCharacterPath(url, "characters");
 }
 
@@ -75,13 +68,9 @@ function parseWarcraftLogsCharacterUrl(url: URL): CharacterKey {
 
 export function parseApplicantCharacterUrl(input: string): CharacterKey {
   const url = parseAbsoluteHttpsUrl(input);
-  if (url.hostname === "raider.io") {
-    return parseRaiderIoCharacterUrl(input);
-  }
-  if (url.hostname === "www.warcraftlogs.com") {
+  if (url.hostname === "raider.io") return parseRaiderIoCharacterUrl(input);
+  if (url.hostname === "www.warcraftlogs.com")
     return parseWarcraftLogsCharacterUrl(url);
-  }
-
   return invalidCharacterUrl();
 }
 

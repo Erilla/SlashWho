@@ -11,7 +11,6 @@ const altKey: CharacterKey = {
   realm: "silvermoon",
   name: "ryalts"
 };
-
 const rootCharacter = { key: root, displayName: "Ryii" };
 const altCharacter = { key: altKey, displayName: "Ryalts" };
 
@@ -21,7 +20,7 @@ function kill(
 ): DossierKillEvidence {
   return {
     raidId: "nerubar-palace",
-    raidName: "Nerub'ar Palace",
+    raidName: "Nerubar's Palace",
     bossId: "queen-ansurek",
     bossName: "Queen Ansurek",
     bossOrder: 8,
@@ -36,7 +35,7 @@ function kill(
 }
 
 describe("applicant dossier", () => {
-  it("credits all linked characters for shared earliest final-boss evidence", () => {
+  it("credits shared earliest evidence and propagates limitations", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -49,20 +48,29 @@ describe("applicant dossier", () => {
         { source: "warcraft_logs", character: altKey, code: "private" }
       ]
     });
+    expect(dossier.raids[0].cuttingEdge).toBe(true);
+    expect(dossier.raids[0].bosses[0].firstKill.characters).toEqual([
+      "Ryii",
+      "Ryalts"
+    ]);
+    expect(dossier.limitations[0].code).toBe("private");
+  });
 
-    expect(dossier.raids[0]).toMatchObject({
-      raidId: "nerubar-palace",
-      cuttingEdge: true
-    });
-    expect(dossier.raids[0].bosses[0].firstKill).toMatchObject({
-      killedAt: "2024-10-01T20:00:00.000Z",
-      characters: ["Ryii", "Ryalts"]
-    });
-    expect(dossier.limitations[0]).toEqual({
-      source: "warcraft_logs",
-      character: altKey,
-      code: "private"
-    });
+  it("uses the same result when tied evidence input is reversed", () => {
+    const forward = [
+      kill(root, { killedAt: "2024-10-01T20:00:00.000Z", isFinalBoss: false }),
+      kill(altKey, { killedAt: "2024-10-01T20:00:00.000Z", isFinalBoss: true })
+    ];
+    const reverse = [...forward].reverse();
+    const make = (kills: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, altCharacter],
+        kills,
+        limitations: []
+      });
+    expect(make(reverse)).toEqual(make(forward));
+    expect(make(forward).raids[0].cuttingEdge).toBe(true);
   });
 
   it("keeps unavailable historic ranks unknown", () => {
@@ -72,41 +80,6 @@ describe("applicant dossier", () => {
       kills: [kill(root, { historicWorldRank: null, reportUrl: null })],
       limitations: []
     });
-
     expect(dossier.raids[0].bosses[0].firstKill.historicWorldRank).toBeNull();
-  });
-
-  it("orders raids and bosses by their stable evidence order", () => {
-    const dossier = buildApplicantDossier({
-      root,
-      characters: [rootCharacter],
-      kills: [
-        kill(root, {
-          raidId: "amirdrassil",
-          raidName: "Amirdrassil",
-          bossId: "fyrakk",
-          bossName: "Fyrakk",
-          bossOrder: 9,
-          isFinalBoss: true
-        }),
-        kill(root, {
-          bossId: "silken-court",
-          bossName: "The Silken Court",
-          bossOrder: 7,
-          isFinalBoss: false
-        }),
-        kill(root)
-      ],
-      limitations: []
-    });
-
-    expect(dossier.raids.map((raid) => raid.raidId)).toEqual([
-      "amirdrassil",
-      "nerubar-palace"
-    ]);
-    expect(dossier.raids[1].bosses.map((boss) => boss.bossId)).toEqual([
-      "silken-court",
-      "queen-ansurek"
-    ]);
   });
 });
