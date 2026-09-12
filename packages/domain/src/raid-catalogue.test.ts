@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 
-import { lookupJournalEncounter } from "./raid-catalogue";
+import { lookupJournalEncounter, lookupRaidBossByName } from "./raid-catalogue";
 
 it("maps a Blizzard Journal encounter to its generated raid and boss metadata", () => {
   expect(lookupJournalEncounter("2602")).toEqual({
@@ -14,4 +14,14 @@ it("maps a Blizzard Journal encounter to its generated raid and boss metadata", 
 
 it("does not invent metadata for an unknown Journal encounter", () => {
   expect(lookupJournalEncounter("99999999")).toBeNull();
+});
+
+it("matches an exact normalized raid and boss name when WCL has no Journal ID", () => {
+  expect(
+    lookupRaidBossByName("Nerub-ar Palace", "Queen Ansurek")
+  ).toMatchObject({
+    raidId: "1273",
+    bossId: "2602",
+    bossOrder: 8
+  });
 });

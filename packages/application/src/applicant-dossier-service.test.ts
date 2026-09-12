@@ -172,7 +172,7 @@ describe("applicant dossier service", () => {
         ],
         raids: [
           {
-            raidId: "42",
+            raidId: "1273",
             bosses: [
               {
                 firstKill: {
@@ -218,7 +218,7 @@ describe("applicant dossier service", () => {
         ],
         raids: [
           {
-            raidId: "42",
+            raidId: "1273",
             bosses: [
               {
                 firstKill: {
@@ -279,7 +279,7 @@ describe("applicant dossier service", () => {
       dossier: {
         raids: [
           {
-            raidId: "42",
+            raidId: "1273",
             bosses: [
               {
                 firstKill: {

@@ -1,6 +1,6 @@
 import { canonicalCharacterId } from "./deduplicate";
 import type { CharacterKey } from "./character-key";
-import { lookupJournalEncounter } from "./raid-catalogue";
+import { lookupJournalEncounter, lookupRaidBossByName } from "./raid-catalogue";
 
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
@@ -111,9 +111,10 @@ export function buildApplicantDossier(
   const earliest = new Map<string, DossierKillEvidence>();
   for (const suppliedKill of input.kills) {
     const metadata =
-      suppliedKill.journalBossId === null
+      (suppliedKill.journalBossId === null
         ? null
-        : lookupJournalEncounter(suppliedKill.journalBossId);
+        : lookupJournalEncounter(suppliedKill.journalBossId)) ??
+      lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName);
     const kill = metadata ? { ...suppliedKill, ...metadata } : suppliedKill;
     const key = characterBossKey(kill);
     const current = earliest.get(key);
