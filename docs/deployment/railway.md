@@ -44,9 +44,11 @@ WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
 DOSSIER_RAIDERIO_TIER_CAP=8
 DOSSIER_CHARACTER_CAP=12
 DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
+DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP=20
+DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS=8000
 ```
 
-Warcraft Logs credentials and all `DOSSIER_*` caps are web-service-only Railway configuration. Set them as secret/config variables on web; never expose them to the browser or duplicate them on worker.
+Warcraft Logs credentials and all `DOSSIER_*` values are web-service-only Railway configuration. Set them as secret/config variables on web; never expose them to the browser or duplicate them on worker.
 
 Worker variables. `DISCOVERY_REQUEST_CAP`, `NEGATIVE_CACHE_TTL_MS`, and the
 Blizzard fingerprint settings are read only by the worker, so set them on the

@@ -24,6 +24,7 @@ export {
   dossierFirstKillSchema,
   dossierGuildSchema,
   dossierLimitationSchema,
+  dossierResearchSchema,
   dossierRaidSchema,
   dossierSourceLabelSchema
 } from "./dossier";
@@ -34,6 +35,7 @@ export type {
   DossierStartResponse,
   DossierCharacter,
   DossierLimitation,
+  DossierResearch,
   DossierSourceLabel
 } from "./dossier";
 export {

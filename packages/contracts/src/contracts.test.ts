@@ -17,6 +17,10 @@ import {
 const applicantCharacter = { region: "eu", realm: "silvermoon", name: "ryii" };
 const validDossier = {
   root: applicantCharacter,
+  research: {
+    state: "initial",
+    message: "Linked-character research is still running."
+  },
   characters: [
     {
       key: applicantCharacter,
@@ -245,6 +249,16 @@ it("accepts a strict applicant dossier request and response", () => {
   expect(() =>
     applicantDossierSchema.parse({ ...validDossier, rawResponse: {} })
   ).toThrow();
+});
+
+it("requires a non-empty staged-research disclosure on applicant dossiers", () => {
+  // Break caught: a dossier could be shown without making clear whether its
+  // evidence is root-only, complete, or potentially incomplete.
+  expect(applicantDossierSchema.parse(validDossier).research.state).toBe(
+    "initial"
+  );
+  const { research: _research, ...dossierWithoutResearch } = validDossier;
+  expect(() => applicantDossierSchema.parse(dossierWithoutResearch)).toThrow();
 });
 
 it("retains an unknown historic world rank as null", () => {

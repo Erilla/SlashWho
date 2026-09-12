@@ -24,7 +24,19 @@ export const applicationConfigSchema = z.object({
     .int()
     .min(1_000)
     .max(60_000)
-    .default(15_000)
+    .default(15_000),
+  DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .default(20),
+  DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .default(8_000)
 });
 
 export type ApplicationConfig = z.infer<typeof applicationConfigSchema>;
