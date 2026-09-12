@@ -21,6 +21,12 @@ export type GeneratedJournalRaid = Readonly<{
   }>[];
 }>;
 
+export type FetchJournalRaidsOptions = Readonly<{
+  fetch: typeof globalThis.fetch;
+  accessToken: string;
+  baseUrl: URL;
+}>;
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -69,4 +75,60 @@ export function normalizeJournalRaid(value: unknown): GeneratedJournalRaid | nul
     raidName,
     encounters: encounters as GeneratedJournalRaid["encounters"]
   };
+}
+
+function href(value: unknown, baseUrl: URL): URL | null {
+  const entry = record(value);
+  const key = entry && record(entry.key);
+  const valueHref = key && nonEmptyString(key.href);
+  if (!valueHref) return null;
+  try {
+    const url = new URL(valueHref, baseUrl);
+    return url.origin === baseUrl.origin ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+async function jsonRequest(
+  options: FetchJournalRaidsOptions,
+  url: URL
+): Promise<Record<string, unknown>> {
+  const response = await options.fetch(url, {
+    headers: { Authorization: `Bearer ${options.accessToken}` }
+  });
+  if (!response.ok) throw new Error(`journal_request_failed_${response.status}`);
+  const body = record(await response.json());
+  if (!body) throw new Error("journal_response_invalid");
+  return body;
+}
+
+export async function fetchJournalRaids(
+  options: FetchJournalRaidsOptions
+): Promise<readonly GeneratedJournalRaid[]> {
+  const indexUrl = new URL("/data/wow/journal-expansion/index", options.baseUrl);
+  const index = await jsonRequest(options, indexUrl);
+  if (!Array.isArray(index.tiers)) throw new Error("journal_tiers_invalid");
+
+  const raidUrls = new Map<string, URL>();
+  for (const tier of index.tiers) {
+    const tierUrl = href(tier, options.baseUrl);
+    if (!tierUrl) throw new Error("journal_tier_href_invalid");
+    const tierBody = await jsonRequest(options, tierUrl);
+    if (!Array.isArray(tierBody.raids)) throw new Error("journal_raids_invalid");
+    for (const raid of tierBody.raids) {
+      const raidUrl = href(raid, options.baseUrl);
+      if (!raidUrl) throw new Error("journal_raid_href_invalid");
+      raidUrls.set(raidUrl.toString(), raidUrl);
+    }
+  }
+
+  const raids = new Map<string, GeneratedJournalRaid>();
+  for (const raidUrl of raidUrls.values()) {
+    const raid = normalizeJournalRaid(await jsonRequest(options, raidUrl));
+    if (raid) raids.set(raid.journalRaidId, raid);
+  }
+  return [...raids.values()].sort(
+    (a, b) => Number(a.journalRaidId) - Number(b.journalRaidId)
+  );
 }
