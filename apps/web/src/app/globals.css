@@ -289,9 +289,20 @@ a {
   gap: 1.75rem;
 }
 
-.dossier-raid h3 {
+.dossier-raid-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
   margin: 0 0 0.65rem;
   font-size: 1.15rem;
+}
+
+.dossier-raid-artwork {
+  width: 3.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  object-fit: cover;
 }
 
 .dossier-boss-list {
@@ -301,6 +312,21 @@ a {
 .dossier-boss {
   padding: 1rem 0;
   border-bottom: 1px solid var(--border);
+}
+
+.dossier-boss-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.dossier-boss-artwork {
+  width: 3rem;
+  height: 3rem;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  object-fit: cover;
 }
 
 .dossier-boss h4,

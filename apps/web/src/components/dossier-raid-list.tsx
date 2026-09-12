@@ -24,7 +24,17 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
         <div className="dossier-raid-list">
           {raids.map((raid) => (
             <section className="dossier-raid" key={raid.raidId}>
-              <h3>{raid.raidName}</h3>
+              <h3 className="dossier-raid-heading">
+                {raid.imageUrl ? (
+                  <img
+                    alt={`${raid.raidName} artwork`}
+                    className="dossier-raid-artwork"
+                    loading="lazy"
+                    src={raid.imageUrl}
+                  />
+                ) : null}
+                <span>{raid.raidName}</span>
+              </h3>
               <div className="dossier-boss-list">
                 {raid.bosses.map((boss) => {
                   const firstKills = boss.firstKills ?? [boss.firstKill];
@@ -36,12 +46,24 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                       role="group"
                       aria-label={`${boss.bossName} evidence`}
                     >
-                      <h4>{boss.bossName}</h4>
-                      <p className="dossier-boss-rank">
-                        {firstKill.historicWorldRank === null
-                          ? "World rank: —"
-                          : `World #${firstKill.historicWorldRank}`}
-                      </p>
+                      <div className="dossier-boss-heading">
+                        {boss.imageUrl ? (
+                          <img
+                            alt={`${boss.bossName} artwork`}
+                            className="dossier-boss-artwork"
+                            loading="lazy"
+                            src={boss.imageUrl}
+                          />
+                        ) : null}
+                        <div>
+                          <h4>{boss.bossName}</h4>
+                          <p className="dossier-boss-rank">
+                            {firstKill.historicWorldRank === null
+                              ? "World rank: —"
+                              : `World #${firstKill.historicWorldRank}`}
+                          </p>
+                        </div>
+                      </div>
                       <details>
                         <summary>View first-kill evidence</summary>
                         {firstKills.map((evidence, index) => (
