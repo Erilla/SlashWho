@@ -23,6 +23,7 @@ function kill(
     raidName: "Nerubar's Palace",
     bossId: "queen-ansurek",
     bossName: "Queen Ansurek",
+    journalBossId: null,
     bossOrder: 8,
     isFinalBoss: true,
     character,
@@ -163,5 +164,29 @@ describe("applicant dossier", () => {
       limitations: []
     });
     expect(dossier.raids[0].bosses[0].firstKill.historicWorldRank).toBeNull();
+  });
+
+  it("uses generated Journal metadata when Warcraft Logs supplies a Journal encounter", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          journalBossId: "2602",
+          raidId: "wcl-zone",
+          raidName: "WCL zone name",
+          bossId: "wcl-encounter",
+          bossName: "WCL boss name",
+          bossOrder: 99
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]).toMatchObject({
+      raidId: "1273",
+      raidName: "Nerub-ar Palace",
+      bosses: [{ bossId: "2602", bossName: "Queen Ansurek", bossOrder: 8 }]
+    });
   });
 });

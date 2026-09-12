@@ -125,6 +125,7 @@ async function gatherCharacterEvidence(
             raidName: kill.raidName,
             bossId: kill.bossId,
             bossName: kill.bossName,
+            journalBossId: kill.journalBossId,
             bossOrder: kill.bossOrder,
             isFinalBoss: kill.isFinalBoss,
             character: character.key,
