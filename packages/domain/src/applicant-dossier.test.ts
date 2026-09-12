@@ -49,7 +49,7 @@ describe("applicant dossier", () => {
         { source: "warcraft_logs", character: altKey, code: "private" }
       ]
     });
-    expect(dossier.raids[0].cuttingEdge).toBe(true);
+    expect(dossier.raids[0].cuttingEdge).toBeNull();
     expect(dossier.raids[0].bosses[0].firstKill.characters).toEqual([
       "Ryii",
       "Ryalts"
@@ -104,7 +104,7 @@ describe("applicant dossier", () => {
         limitations: []
       });
     expect(make(reverse)).toEqual(make(forward));
-    expect(make(forward).raids[0].cuttingEdge).toBe(true);
+    expect(make(forward).raids[0].cuttingEdge).toBeNull();
   });
 
   it("uses deterministic descriptive metadata when tied evidence is reversed", () => {
@@ -208,5 +208,40 @@ describe("applicant dossier", () => {
 
     expect(dossier.raids).toHaveLength(1);
     expect(dossier.raids[0]?.raidId).toBe("1273");
+  });
+
+  it("groups completed official Cutting Edge achievements by achievement and timestamp", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [],
+      cuttingEdges: [
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          character: root
+        },
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          character: altKey
+        },
+        {
+          achievementId: "1",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          character: root
+        }
+      ],
+      limitations: []
+    });
+
+    expect(dossier.cuttingEdges).toEqual([
+      expect.objectContaining({
+        achievementId: "40254",
+        achievementName: "Cutting Edge: Queen Ansurek",
+        completedAt: "2025-01-14T20:30:00.000Z",
+        characters: ["Ryalts", "Ryii"]
+      })
+    ]);
   });
 });

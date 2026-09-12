@@ -49,6 +49,7 @@ const validDossier = {
       ]
     }
   ],
+  cuttingEdges: [],
   limitations: [
     {
       source: "warcraft_logs",
@@ -261,6 +262,15 @@ it("requires a non-empty staged-research disclosure on applicant dossiers", () =
     Object.entries(validDossier).filter(([key]) => key !== "research")
   );
   expect(() => applicantDossierSchema.parse(dossierWithoutResearch)).toThrow();
+});
+
+it("requires a separate Cutting Edge achievement collection", () => {
+  const dossierWithoutCuttingEdges = Object.fromEntries(
+    Object.entries(validDossier).filter(([key]) => key !== "cuttingEdges")
+  );
+  expect(() =>
+    applicantDossierSchema.parse(dossierWithoutCuttingEdges)
+  ).toThrow();
 });
 
 it("retains an unknown historic world rank as null", () => {

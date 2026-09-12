@@ -23,6 +23,7 @@ const dossier = applicantDossierSchema.parse({
     }
   ],
   raids: [],
+  cuttingEdges: [],
   limitations: []
 });
 

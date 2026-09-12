@@ -113,6 +113,10 @@ class MutableBlizzardGateway implements BlizzardGateway {
     await onProfileRequest?.();
     return this.fingerprints.get(keyId(key)) ?? new Map();
   }
+
+  async getCompletedAchievements(): Promise<readonly []> {
+    return [];
+  }
 }
 
 function keyId(key: CharacterKey): string {

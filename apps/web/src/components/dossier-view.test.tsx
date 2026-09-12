@@ -65,6 +65,7 @@ const dossier: ApplicantDossier = {
       ]
     }
   ],
+  cuttingEdges: [],
   limitations: [
     {
       source: "warcraft_logs",

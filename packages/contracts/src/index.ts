@@ -21,6 +21,7 @@ export {
   dossierStartResponseSchema,
   dossierBossSchema,
   dossierCharacterSchema,
+  dossierCuttingEdgeSchema,
   dossierFirstKillSchema,
   dossierGuildSchema,
   dossierLimitationSchema,
@@ -34,6 +35,7 @@ export type {
   CreateDossierRequest,
   DossierStartResponse,
   DossierCharacter,
+  DossierCuttingEdge,
   DossierLimitation,
   DossierResearch,
   DossierSourceLabel

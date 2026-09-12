@@ -51,6 +51,7 @@ function dossier(
         ]
       }
     ],
+    cuttingEdges: [],
     limitations: []
   };
 }

@@ -10,10 +10,12 @@ export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,
   ApplicantDossierBoss,
+  ApplicantDossierCuttingEdge,
   ApplicantDossierFirstKill,
   ApplicantDossierRaid,
   BuildApplicantDossierInput,
   DossierCharacter,
+  DossierCuttingEdgeEvidence,
   DossierKillEvidence,
   DossierLimitation
 } from "./applicant-dossier";

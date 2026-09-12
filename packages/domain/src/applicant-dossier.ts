@@ -5,6 +5,7 @@ import {
   lookupRaidBossByName,
   lookupRaidByName
 } from "./raid-catalogue";
+import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
@@ -29,10 +30,16 @@ export type DossierLimitation = Readonly<{
   character: CharacterKey | null;
   code: string;
 }>;
+export type DossierCuttingEdgeEvidence = Readonly<{
+  achievementId: string;
+  completedAt: string;
+  character: CharacterKey;
+}>;
 export type BuildApplicantDossierInput = Readonly<{
   root: CharacterKey;
   characters: readonly DossierCharacter[];
   kills: readonly DossierKillEvidence[];
+  cuttingEdges?: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
 export type ApplicantDossierFirstKill = Readonly<{
@@ -55,10 +62,18 @@ export type ApplicantDossierRaid = Readonly<{
   cuttingEdge: true | null;
   bosses: readonly ApplicantDossierBoss[];
 }>;
+export type ApplicantDossierCuttingEdge = Readonly<{
+  achievementId: string;
+  achievementName: string;
+  description: string;
+  completedAt: string;
+  characters: readonly string[];
+}>;
 export type ApplicantDossier = Readonly<{
   root: CharacterKey;
   characters: readonly DossierCharacter[];
   raids: readonly ApplicantDossierRaid[];
+  cuttingEdges: readonly ApplicantDossierCuttingEdge[];
   limitations: readonly DossierLimitation[];
 }>;
 
@@ -112,6 +127,30 @@ function sharedEvidenceKey(k: DossierKillEvidence): string {
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
+  const cuttingEdges = new Map<
+    string,
+    {
+      achievement: NonNullable<ReturnType<typeof lookupCuttingEdgeAchievement>>;
+      characters: Set<string>;
+    }
+  >();
+  for (const evidence of input.cuttingEdges ?? []) {
+    const achievement = lookupCuttingEdgeAchievement(evidence.achievementId);
+    if (!achievement) continue;
+    const character = input.characters.find(
+      (item) =>
+        canonicalCharacterId(item.key) ===
+        canonicalCharacterId(evidence.character)
+    );
+    if (!character) continue;
+    const key = `${achievement.achievementId}\0${evidence.completedAt}`;
+    const entry = cuttingEdges.get(key) ?? {
+      achievement,
+      characters: new Set<string>()
+    };
+    entry.characters.add(character.displayName);
+    cuttingEdges.set(key, entry);
+  }
   const earliest = new Map<string, DossierKillEvidence>();
   for (const suppliedKill of input.kills) {
     const metadata =
@@ -179,12 +218,26 @@ export function buildApplicantDossier(
   return {
     root: input.root,
     characters: input.characters,
+    cuttingEdges: [...cuttingEdges.entries()]
+      .map(([key, entry]) => {
+        const [, completedAt] = key.split("\0", 2);
+        return {
+          ...entry.achievement,
+          completedAt: completedAt!,
+          characters: [...entry.characters].sort(text)
+        };
+      })
+      .sort(
+        (a, b) =>
+          text(a.completedAt, b.completedAt) ||
+          text(a.achievementId, b.achievementId)
+      ),
     limitations: input.limitations,
     raids: [...raids.entries()]
       .map(([raidId, raid]) => ({
         raidId,
         raidName: raid.raidName,
-        cuttingEdge: raid.final ? (true as const) : null,
+        cuttingEdge: null,
         bosses: raid.bosses.sort(
           (a, b) =>
             a.bossOrder - b.bossOrder ||

@@ -60,6 +60,16 @@ export const dossierRaidSchema = z
   })
   .strict();
 
+export const dossierCuttingEdgeSchema = z
+  .object({
+    achievementId: z.string().regex(/^\d+$/),
+    achievementName: z.string().min(1),
+    description: z.string().min(1),
+    completedAt: z.iso.datetime(),
+    characters: z.array(z.string().min(1)).min(1)
+  })
+  .strict();
+
 export const dossierLimitationSchema = z
   .object({
     source: z.enum(["raiderio", "warcraft_logs"]),
@@ -104,6 +114,7 @@ export const applicantDossierSchema = z
     research: dossierResearchSchema,
     characters: z.array(dossierCharacterSchema),
     raids: z.array(dossierRaidSchema),
+    cuttingEdges: z.array(dossierCuttingEdgeSchema),
     limitations: z.array(dossierLimitationSchema)
   })
   .strict();
@@ -111,6 +122,7 @@ export const applicantDossierSchema = z
 export type CharacterKey = z.infer<typeof characterKeySchema>;
 export type DossierSourceLabel = z.infer<typeof dossierSourceLabelSchema>;
 export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
+export type DossierCuttingEdge = z.infer<typeof dossierCuttingEdgeSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;
 export type DossierResearch = z.infer<typeof dossierResearchSchema>;
 export type CreateDossierRequest = z.infer<typeof createDossierRequestSchema>;
