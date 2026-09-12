@@ -189,4 +189,24 @@ describe("applicant dossier", () => {
       bosses: [{ bossId: "2602", bossName: "Queen Ansurek", bossOrder: 8 }]
     });
   });
+
+  it("keeps mapped and unmapped bosses in the same generated raid section", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" }),
+        kill(root, {
+          raidName: "Nerub-ar Palace",
+          bossId: "unmapped",
+          bossName: "Unmapped boss",
+          journalBossId: null
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toHaveLength(1);
+    expect(dossier.raids[0]?.raidId).toBe("1273");
+  });
 });

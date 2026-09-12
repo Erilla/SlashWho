@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 
-import { lookupJournalEncounter, lookupRaidBossByName } from "./raid-catalogue";
+import {
+  lookupJournalEncounter,
+  lookupRaidBossByName,
+  lookupRaidByName
+} from "./raid-catalogue";
 
 it("maps a Blizzard Journal encounter to its generated raid and boss metadata", () => {
   expect(lookupJournalEncounter("2602")).toEqual({
@@ -23,5 +27,12 @@ it("matches an exact normalized raid and boss name when WCL has no Journal ID", 
     raidId: "1273",
     bossId: "2602",
     bossOrder: 8
+  });
+});
+
+it("matches a unique generated raid name independently of its boss", () => {
+  expect(lookupRaidByName("Nerub-ar Palace")).toEqual({
+    raidId: "1273",
+    raidName: "Nerub-ar Palace"
   });
 });

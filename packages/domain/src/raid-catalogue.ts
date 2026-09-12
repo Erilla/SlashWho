@@ -40,6 +40,19 @@ for (const encounter of encounters.values()) {
   encountersByName.set(key, existing === undefined ? encounter : null);
 }
 
+export type RaidCatalogueRaid = Readonly<{
+  raidId: string;
+  raidName: string;
+}>;
+
+const raidsByName = new Map<string, RaidCatalogueRaid | null>();
+for (const raid of catalogue.raids) {
+  const key = normalizedName(raid.raidName);
+  const current = raidsByName.get(key);
+  const candidate = { raidId: raid.journalRaidId, raidName: raid.raidName };
+  raidsByName.set(key, current === undefined ? candidate : null);
+}
+
 export function lookupJournalEncounter(
   journalBossId: string
 ): RaidCatalogueEncounter | null {
@@ -55,4 +68,8 @@ export function lookupRaidBossByName(
       `${normalizedName(raidName)}\0${normalizedName(bossName)}`
     ) ?? null
   );
+}
+
+export function lookupRaidByName(raidName: string): RaidCatalogueRaid | null {
+  return raidsByName.get(normalizedName(raidName)) ?? null;
 }
