@@ -4,6 +4,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --parallel --filter @slashwho/web --filter @slashwho/worker dev",
+    "generate:cutting-edge-catalogue": "tsx scripts/generate-cutting-edge-catalogue.mts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
