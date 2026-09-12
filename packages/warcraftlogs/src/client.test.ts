@@ -196,6 +196,7 @@ describe("Warcraft Logs gateway", () => {
                             encounterID: 1234,
                             name: "Queen Ansurek",
                             startTime: 3_600_000,
+                            endTime: 3_600_000,
                             kill: true,
                             difficulty: 5,
                             friendlyPlayers: [7]
@@ -205,6 +206,7 @@ describe("Warcraft Logs gateway", () => {
                             encounterID: 0,
                             name: "Trash",
                             startTime: 7_200_000,
+                            endTime: 7_200_000,
                             kill: true,
                             difficulty: 5,
                             friendlyPlayers: [7]
@@ -214,6 +216,7 @@ describe("Warcraft Logs gateway", () => {
                             encounterID: 4321,
                             name: "The Silken Court",
                             startTime: 10_800_000,
+                            endTime: 10_800_000,
                             kill: true,
                             difficulty: 5,
                             friendlyPlayers: [8]
@@ -245,6 +248,125 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
+  });
+
+  it("attributes a Mythic kill to the report guild at the boss death time", async () => {
+    // Break caught: report uploader guilds and the end of the successful pull
+    // are the only public facts that can identify the first-kill guild/date.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "guildReport",
+                        startTime: 1_706_918_400_000,
+                        guild: {
+                          name: "Example Guild",
+                          server: { slug: "silvermoon" }
+                        },
+                        zone: { id: 42, name: "Nerub-ar Palace" },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 3,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 3_600_000,
+                            endTime: 7_200_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          killedAt: "2024-02-03T02:00:00.000Z",
+          guild: { name: "Example Guild", realm: "silvermoon" }
+        }
+      ]
+    });
+  });
+
+  it("keeps a public personal report valid when its guild is null", async () => {
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "personalReport",
+                        startTime: 1_706_918_400_000,
+                        guild: null,
+                        zone: { id: 42, name: "Nerub-ar Palace" },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 3,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 3_600_000,
+                            endTime: 7_200_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({ kind: "evidence", kills: [{ guild: null }] });
   });
 
   it("ignores non-player actors and nullable trash while matching the resolved WCL realm", async () => {
@@ -291,6 +413,7 @@ describe("Warcraft Logs gateway", () => {
                             encounterID: 0,
                             name: null,
                             startTime: 0,
+                            endTime: 0,
                             kill: null,
                             difficulty: null,
                             friendlyPlayers: null
@@ -300,6 +423,7 @@ describe("Warcraft Logs gateway", () => {
                             encounterID: 1234,
                             name: "Queen Ansurek",
                             startTime: 3_600_000,
+                            endTime: 3_600_000,
                             kill: true,
                             difficulty: 5,
                             friendlyPlayers: [7]

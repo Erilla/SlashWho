@@ -27,6 +27,7 @@
                       "encounterID": 1234,
                       "name": "Queen Ansurek",
                       "startTime": 3600000,
+                      "endTime": 3600000,
                       "kill": true,
                       "difficulty": 5,
                       "friendlyPlayers": [7]
@@ -36,6 +37,7 @@
                       "encounterID": 9999,
                       "name": "Wipe",
                       "startTime": 3600000,
+                      "endTime": 3600000,
                       "kill": false,
                       "difficulty": 5,
                       "friendlyPlayers": [7]
@@ -45,6 +47,7 @@
                       "encounterID": 9998,
                       "name": "Heroic boss",
                       "startTime": 3600000,
+                      "endTime": 3600000,
                       "kill": true,
                       "difficulty": 4,
                       "friendlyPlayers": [7]
@@ -85,6 +88,7 @@
                       "encounterID": 1234,
                       "name": "Queen Ansurek",
                       "startTime": 3600000,
+                      "endTime": 3600000,
                       "kill": true,
                       "difficulty": 5,
                       "friendlyPlayers": [7]
@@ -111,6 +115,7 @@
                       "encounterID": 4321,
                       "name": "The Silken Court",
                       "startTime": 7200000,
+                      "endTime": 7200000,
                       "kill": true,
                       "difficulty": 5,
                       "friendlyPlayers": [7]

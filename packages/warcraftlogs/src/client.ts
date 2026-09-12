@@ -37,6 +37,7 @@ const recentReportsQuery = `
           data {
             code
             startTime
+            guild { name server { slug } }
             zone { id name }
             masterData { actors { id name server type } }
             fights {
@@ -44,6 +45,7 @@ const recentReportsQuery = `
               encounterID
               name
               startTime
+              endTime
               kill
               difficulty
               friendlyPlayers
@@ -234,6 +236,7 @@ function firstKillReports(
     const code = report && nonEmptyString(report.code);
     const reportStartTime =
       report && validTimestampMilliseconds(report.startTime);
+    const reportGuild = report && report.guild;
     const fights = report && report.fights;
     const zone = report && record(report.zone);
     const raidId = zone && positiveInteger(zone.id);
@@ -249,6 +252,18 @@ function firstKillReports(
       !Array.isArray(fights)
     ) {
       return { kind: "limitation", code: "schema_drift" };
+    }
+
+    let guild: WarcraftLogsFirstKillEvidence["guild"] = null;
+    if (reportGuild !== null && reportGuild !== undefined) {
+      const guildRecord = record(reportGuild);
+      const guildServer = guildRecord && record(guildRecord.server);
+      const guildName = guildRecord && nonEmptyString(guildRecord.name);
+      const guildRealm = guildServer && nonEmptyString(guildServer.slug);
+      if (!guildName || !guildRealm) {
+        return { kind: "limitation", code: "schema_drift" };
+      }
+      guild = { name: guildName, realm: guildRealm };
     }
 
     const participantIds = new Set<number>();
@@ -278,12 +293,11 @@ function firstKillReports(
       const id = fight && positiveInteger(fight.id);
       const encounterId = fight && nonNegativeInteger(fight.encounterID);
       const bossName = fight && nonEmptyString(fight.name);
-      const fightStartTime =
-        fight && validTimestampMilliseconds(fight.startTime);
+      const fightEndTime = fight && validTimestampMilliseconds(fight.endTime);
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
-      if (!id || encounterId === null || fightStartTime === null) {
+      if (!id || encounterId === null || fightEndTime === null) {
         return { kind: "limitation", code: "schema_drift" };
       }
       // Warcraft Logs represents trash pulls with encounterID 0. They have no
@@ -307,7 +321,7 @@ function firstKillReports(
         continue;
       }
 
-      const killedAtMilliseconds = reportStartTime + fightStartTime;
+      const killedAtMilliseconds = reportStartTime + fightEndTime;
       if (
         !Number.isSafeInteger(killedAtMilliseconds) ||
         killedAtMilliseconds > MAX_DATE_MILLISECONDS
@@ -325,7 +339,7 @@ function firstKillReports(
         killedAt,
         reportUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`,
         fightUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}#fight=${id}`,
-        guild: null,
+        guild,
         historicWorldRank: null
       };
       const current = earliest.get(encounterId);
