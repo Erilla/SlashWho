@@ -86,6 +86,9 @@ function dossierRequest(body: unknown): Request {
 const characterContext = {
   params: Promise.resolve({ region: "eu", realm: "silvermoon", name: "ryii" })
 };
+const noncanonicalCharacterContext = {
+  params: Promise.resolve({ region: "EU", realm: "Silvermoon", name: "Ryii" })
+};
 
 beforeEach(() => {
   started = {
@@ -140,6 +143,25 @@ describe("POST /api/dossiers", () => {
 });
 
 describe("GET /api/dossiers/:region/:realm/:name", () => {
+  it("preserves the recognized initial scope when redirecting to a canonical identity", async () => {
+    // Break caught: a canonical redirect could silently turn a root-only read
+    // into an expanded snapshot-backed read.
+    const response = await GET(
+      new Request(
+        "https://slashwho.example/api/dossiers/EU/Silvermoon/Ryii?scope=initial",
+        { headers: { "x-real-ip": "203.0.113.8" } }
+      ),
+      noncanonicalCharacterContext
+    );
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe(
+      "/api/dossiers/eu/silvermoon/ryii?scope=initial"
+    );
+    expect(readInitialCalls).toBe(0);
+    expect(readCalls).toBe(0);
+  });
+
   it("uses only the initial dossier read after authorizing an initial request", async () => {
     // Break caught: initial evidence could wait for a relationship snapshot or
     // bypass the public-read admission that protects third-party evidence calls.
@@ -204,6 +226,26 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     );
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe("11");
+    expect(readCalls).toBe(0);
+    expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+      "rate_limited"
+    );
+  });
+
+  it("rejects rate-limited initial reads before gathering root evidence", async () => {
+    // Break caught: the initial scope could bypass public-read admission and
+    // spend third-party evidence calls after its rate limit is exhausted.
+    readAllowed = { allowed: false, retryAfterSeconds: 11 };
+    const response = await GET(
+      new Request(
+        "https://slashwho.example/api/dossiers/eu/silvermoon/ryii?scope=initial",
+        { headers: { "x-real-ip": "203.0.113.8" } }
+      ),
+      characterContext
+    );
+
+    expect(response.status).toBe(429);
+    expect(readInitialCalls).toBe(0);
     expect(readCalls).toBe(0);
     expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
       "rate_limited"

@@ -22,11 +22,13 @@ export async function GET(
       return apiError("invalid_character_url");
     }
     if (!parsed.canonical) {
+      const initialScope =
+        new URL(request.url).searchParams.get("scope") === "initial";
       return new Response(null, {
         status: 308,
         headers: {
           "cache-control": "no-store",
-          location: `/api/dossiers/${parsed.key.region}/${parsed.key.realm}/${parsed.key.name}`
+          location: `/api/dossiers/${parsed.key.region}/${parsed.key.realm}/${parsed.key.name}${initialScope ? "?scope=initial" : ""}`
         }
       });
     }

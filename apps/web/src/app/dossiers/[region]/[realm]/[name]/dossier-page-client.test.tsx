@@ -158,4 +158,42 @@ describe("DossierPageClient staged research", () => {
     expect(await screen.findByText("Initial evidence")).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent("Research failed.");
   });
+
+  it("keeps expanded evidence when the initial response arrives after completion", async () => {
+    // Break caught: a slow initial request could overwrite the completed
+    // snapshot-backed dossier after polling has already replaced it.
+    let resolveInitial: (response: Response) => void;
+    const initialResponse = new Promise<Response>((resolve) => {
+      resolveInitial = resolve;
+    });
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`) return initialResponse;
+      if (input === `/api/dossiers/jobs/${jobId}`) {
+        return Promise.resolve(
+          Response.json({ status: "complete", error: null })
+        );
+      }
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(expanded));
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+
+    expect(await screen.findByText("Expanded evidence")).toBeVisible();
+
+    await act(async () => {
+      resolveInitial!(Response.json(initial));
+    });
+
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
+  });
 });

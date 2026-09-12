@@ -7,7 +7,7 @@ import {
   type ApplicantDossier,
   type CharacterKey
 } from "@slashwho/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
@@ -47,6 +47,7 @@ export function DossierPageClient({
         ? "Researching applicant dossier…"
         : "Loading applicant dossier…"
   );
+  const hasExpandedDossier = useRef(false);
   const dossierPath = useMemo(
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
     [identity]
@@ -75,7 +76,7 @@ export function DossierPageClient({
       const parsed = applicantDossierSchema.safeParse(body);
       if (!parsed.success) {
         setError("The dossier returned an unexpected response.");
-      } else {
+      } else if (!hasExpandedDossier.current) {
         setDossier(parsed.data);
       }
       if (!jobId) setStatus(null);
@@ -131,6 +132,7 @@ export function DossierPageClient({
       if (!parsed.success) {
         setError("The dossier returned an unexpected response.");
       } else {
+        hasExpandedDossier.current = true;
         setDossier(parsed.data);
       }
       setStatus(null);
