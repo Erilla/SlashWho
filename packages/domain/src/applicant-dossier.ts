@@ -124,6 +124,10 @@ function sharedEvidenceKey(k: DossierKillEvidence): string {
     : `report\0${k.reportUrl}`;
 }
 
+function isMythicPlusSeason(raidName: string): boolean {
+  return /^mythic\+\s+season\b/i.test(raidName.trim());
+}
+
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
@@ -153,6 +157,7 @@ export function buildApplicantDossier(
   }
   const earliest = new Map<string, DossierKillEvidence>();
   for (const suppliedKill of input.kills) {
+    if (isMythicPlusSeason(suppliedKill.raidName)) continue;
     const metadata =
       (suppliedKill.journalBossId === null
         ? null

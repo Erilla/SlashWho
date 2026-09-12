@@ -244,4 +244,23 @@ describe("applicant dossier", () => {
       })
     ]);
   });
+
+  it("excludes Mythic+ season zones from raid boss evidence", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Mythic+ Season 1",
+          bossName: "Lightblinded Vanguard"
+        }),
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toEqual([
+      expect.objectContaining({ raidName: "Nerub-ar Palace" })
+    ]);
+  });
 });
