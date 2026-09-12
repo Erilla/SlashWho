@@ -3,6 +3,7 @@ export type { CreateBlizzardClientOptions } from "./client";
 export { compareFingerprints } from "./fingerprint";
 export type {
   AchievementFingerprint,
+  CompletedAchievement,
   BlizzardError,
   BlizzardFailure,
   BlizzardGateway,
