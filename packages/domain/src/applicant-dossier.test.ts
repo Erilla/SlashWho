@@ -186,7 +186,15 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]).toMatchObject({
       raidId: "1273",
       raidName: "Nerub-ar Palace",
-      bosses: [{ bossId: "2602", bossName: "Queen Ansurek", bossOrder: 8 }]
+      imageUrl: expect.stringMatching(/^https:\/\//),
+      bosses: [
+        {
+          bossId: "2602",
+          bossName: "Queen Ansurek",
+          bossOrder: 8,
+          imageUrl: expect.stringMatching(/^https:\/\//)
+        }
+      ]
     });
   });
 

@@ -53,12 +53,14 @@ export type ApplicantDossierBoss = Readonly<{
   bossId: string;
   bossName: string;
   bossOrder: number;
+  imageUrl: string | null;
   firstKill: ApplicantDossierFirstKill;
   firstKills: readonly ApplicantDossierFirstKill[];
 }>;
 export type ApplicantDossierRaid = Readonly<{
   raidId: string;
   raidName: string;
+  imageUrl: string | null;
   cuttingEdge: true | null;
   bosses: readonly ApplicantDossierBoss[];
 }>;
@@ -176,7 +178,12 @@ export function buildApplicantDossier(
   }
   const raids = new Map<
     string,
-    { raidName: string; bosses: ApplicantDossierBoss[]; final: boolean }
+    {
+      raidName: string;
+      imageUrl: string | null;
+      bosses: ApplicantDossierBoss[];
+      final: boolean;
+    }
   >();
   for (const kills of byBoss.values()) {
     const byEvidence = new Map<string, DossierKillEvidence[]>();
@@ -207,6 +214,7 @@ export function buildApplicantDossier(
     const selected = firstKills[0]!.selected;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
+      imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
       bosses: [],
       final: false
     };
@@ -214,6 +222,10 @@ export function buildApplicantDossier(
       bossId: selected.bossId,
       bossName: selected.bossName,
       bossOrder: selected.bossOrder,
+      imageUrl:
+        lookupJournalEncounter(selected.bossId)?.imageUrl ??
+        lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
+        null,
       firstKill: firstKills[0]!.firstKill,
       firstKills: firstKills.map((entry) => entry.firstKill)
     });
@@ -244,6 +256,7 @@ export function buildApplicantDossier(
       .map(([raidId, raid]) => ({
         raidId,
         raidName: raid.raidName,
+        imageUrl: raid.imageUrl,
         cuttingEdge: null,
         bosses: raid.bosses.sort(
           (a, b) =>

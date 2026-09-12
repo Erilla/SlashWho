@@ -6,6 +6,7 @@ export type RaidCatalogueEncounter = Readonly<{
   bossId: string;
   bossName: string;
   bossOrder: number;
+  imageUrl: string | null;
 }>;
 
 const encounters = new Map<string, RaidCatalogueEncounter>(
@@ -19,7 +20,8 @@ const encounters = new Map<string, RaidCatalogueEncounter>(
             raidName: raid.raidName,
             bossId: encounter.journalBossId,
             bossName: encounter.bossName,
-            bossOrder: encounter.bossOrder
+            bossOrder: encounter.bossOrder,
+            imageUrl: encounter.imageUrl
           }
         ] as const
     )
@@ -43,13 +45,18 @@ for (const encounter of encounters.values()) {
 export type RaidCatalogueRaid = Readonly<{
   raidId: string;
   raidName: string;
+  imageUrl: string | null;
 }>;
 
 const raidsByName = new Map<string, RaidCatalogueRaid | null>();
 for (const raid of catalogue.raids) {
   const key = normalizedName(raid.raidName);
   const current = raidsByName.get(key);
-  const candidate = { raidId: raid.journalRaidId, raidName: raid.raidName };
+  const candidate = {
+    raidId: raid.journalRaidId,
+    raidName: raid.raidName,
+    imageUrl: raid.imageUrl
+  };
   raidsByName.set(key, current === undefined ? candidate : null);
 }
 

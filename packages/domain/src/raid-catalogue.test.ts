@@ -12,7 +12,8 @@ it("maps a Blizzard Journal encounter to its generated raid and boss metadata", 
     raidName: "Nerub-ar Palace",
     bossId: "2602",
     bossName: "Queen Ansurek",
-    bossOrder: 8
+    bossOrder: 8,
+    imageUrl: expect.stringMatching(/^https:\/\//)
   });
 });
 
@@ -33,6 +34,7 @@ it("matches an exact normalized raid and boss name when WCL has no Journal ID", 
 it("matches a unique generated raid name independently of its boss", () => {
   expect(lookupRaidByName("Nerub-ar Palace")).toEqual({
     raidId: "1273",
-    raidName: "Nerub-ar Palace"
+    raidName: "Nerub-ar Palace",
+    imageUrl: expect.stringMatching(/^https:\/\//)
   });
 });

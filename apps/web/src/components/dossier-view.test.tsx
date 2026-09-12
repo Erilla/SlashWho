@@ -36,12 +36,14 @@ const dossier: ApplicantDossier = {
     {
       raidId: "nerub-ar-palace",
       raidName: "Nerub-ar Palace",
+      imageUrl: null,
       cuttingEdge: true,
       bosses: [
         {
           bossId: "ansurek",
           bossName: "Queen Ansurek",
           bossOrder: 8,
+          imageUrl: null,
           firstKill: {
             killedAt: "2025-01-14T20:30:00.000Z",
             guild: { name: "Arachnid", realm: "Silvermoon" },
@@ -54,6 +56,7 @@ const dossier: ApplicantDossier = {
           bossId: "sikran",
           bossName: "Sikran",
           bossOrder: 5,
+          imageUrl: null,
           firstKill: {
             killedAt: "2025-01-10T20:30:00.000Z",
             guild: null,

@@ -32,12 +32,14 @@ const validDossier = {
     {
       raidId: "nerubar-palace",
       raidName: "Nerub-ar Palace",
+      imageUrl: "https://render.example/raids/nerub-ar.jpg",
       cuttingEdge: true,
       bosses: [
         {
           bossId: "ansurek",
           bossName: "Queen Ansurek",
           bossOrder: 8,
+          imageUrl: "https://render.example/bosses/ansurek.jpg",
           firstKill: {
             killedAt: "2024-10-01T20:00:00.000Z",
             guild: { name: "Guild", realm: "silvermoon" },

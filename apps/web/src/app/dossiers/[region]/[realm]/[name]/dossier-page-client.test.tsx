@@ -34,12 +34,14 @@ function dossier(
       {
         raidId: raidName.toLowerCase().replaceAll(" ", "-"),
         raidName,
+        imageUrl: null,
         cuttingEdge: true,
         bosses: [
           {
             bossId: "boss",
             bossName: `${raidName} boss`,
             bossOrder: 1,
+            imageUrl: null,
             firstKill: {
               killedAt: "2025-01-14T20:30:00.000Z",
               guild: null,

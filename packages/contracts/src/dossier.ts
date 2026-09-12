@@ -46,6 +46,7 @@ export const dossierBossSchema = z
     bossId: z.string().min(1),
     bossName: z.string().min(1),
     bossOrder: z.number().int().nonnegative(),
+    imageUrl: z.url().nullable(),
     firstKill: dossierFirstKillSchema,
     firstKills: z.array(dossierFirstKillSchema).min(1).optional()
   })
@@ -55,6 +56,7 @@ export const dossierRaidSchema = z
   .object({
     raidId: z.string().min(1),
     raidName: z.string().min(1),
+    imageUrl: z.url().nullable(),
     cuttingEdge: z.literal(true).nullable(),
     bosses: z.array(dossierBossSchema)
   })
