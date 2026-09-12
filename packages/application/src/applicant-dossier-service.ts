@@ -15,7 +15,6 @@ import {
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 
 import type { ApplicationConfig } from "./config";
-import { serializeDossierCharacter } from "./serializers";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -29,10 +28,18 @@ export type ReadDossierResult =
 
 export interface ApplicantDossierService {
   start(input: CreateDossierCommand): Promise<CreateDossierResult>;
+  readInitial(
+    key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<ReadDossierResult>;
   read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs";
+type DossierSubject = Pick<
+  StoredSnapshotCharacter,
+  "key" | "displayName" | "source"
+>;
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   limitations: readonly DossierLimitation[];
@@ -83,7 +90,7 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
 }
 
 async function gatherCharacterEvidence(
-  character: StoredSnapshotCharacter,
+  character: DossierSubject,
   options: {
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
     requestCap: number;
@@ -126,6 +133,73 @@ async function gatherCharacterEvidence(
   };
 }
 
+function serializeDossierSubject(character: DossierSubject) {
+  return {
+    key: character.key,
+    displayName: character.displayName,
+    source:
+      character.source === "fingerprint"
+        ? ("fingerprint_derived" as const)
+        : ("raiderio_declared" as const)
+  };
+}
+
+function combineSignals(signal: AbortSignal | undefined, timeout: AbortSignal) {
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+async function assembleDossier(options: {
+  root: CharacterKey;
+  subjects: readonly DossierSubject[];
+  skippedSubjects: readonly DossierSubject[];
+  research: ContractApplicantDossier["research"];
+  warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  requestCap: number;
+  signal: AbortSignal;
+}): Promise<ContractApplicantDossier> {
+  const evidence = await Promise.all(
+    options.subjects.map((character) =>
+      options.requestCap === 0
+        ? Promise.resolve({
+            kills: [],
+            limitations: [
+              limitation("warcraft_logs", character.key, "request_cap")
+            ]
+          })
+        : gatherCharacterEvidence(character, {
+            warcraftLogs: options.warcraftLogs,
+            requestCap: options.requestCap,
+            signal: options.signal
+          })
+    )
+  );
+  const limitations = [
+    ...evidence.flatMap((item) => item.limitations),
+    ...options.skippedSubjects.map((character) =>
+      limitation("warcraft_logs", character.key, "request_cap")
+    )
+  ];
+  const dossier = buildApplicantDossier({
+    root: options.root,
+    characters: options.subjects.map(({ key, displayName }) => ({
+      key,
+      displayName
+    })),
+    kills: evidence.flatMap((item) => item.kills),
+    limitations
+  });
+  return applicantDossierSchema.parse({
+    ...dossier,
+    research: options.research,
+    characters: options.subjects.map(serializeDossierSubject),
+    limitations: dossier.limitations.map((item) => ({
+      ...item,
+      code: contractLimitationCode(item.code),
+      message: limitationMessage(item.source, contractLimitationCode(item.code))
+    }))
+  });
+}
+
 export function createApplicantDossierService(options: {
   repositories: Pick<Repositories, "snapshots">;
   search: Pick<SearchService, "create">;
@@ -146,6 +220,28 @@ export function createApplicantDossierService(options: {
       }
     },
 
+    async readInitial(key, signal) {
+      const timeout = AbortSignal.timeout(
+        options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS
+      );
+      return {
+        kind: "ready",
+        dossier: await assembleDossier({
+          root: key,
+          subjects: [{ key, displayName: key.name, source: "input" }],
+          skippedSubjects: [],
+          research: {
+            state: "initial",
+            message:
+              "Linked-character research is still running; this evidence covers only the submitted character."
+          },
+          warcraftLogs: options.warcraftLogs,
+          requestCap: options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP,
+          signal: combineSignals(signal, timeout)
+        })
+      };
+    },
+
     async read(key, signal) {
       const snapshot = await options.repositories.snapshots.getCurrent(key);
       if (!snapshot) return { kind: "not_ready" };
@@ -158,59 +254,33 @@ export function createApplicantDossierService(options: {
       const timeout = AbortSignal.timeout(
         options.config.DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS
       );
-      const requestSignal = signal
-        ? AbortSignal.any([signal, timeout])
-        : timeout;
+      const requestSignal = combineSignals(signal, timeout);
       // Split one dossier-wide cap across every selected character. The bound
       // is shared (rather than per character) and the timeout covers the whole
       // request, so a large alt list cannot multiply WCL traffic or hang a read.
       const requestCap = Math.floor(
         options.config.DOSSIER_WARCRAFT_LOGS_REQUEST_CAP / selected.length
       );
-      const evidence = await Promise.all(
-        selected.map((character) =>
-          requestCap === 0
-            ? Promise.resolve({
-                kills: [],
-                limitations: [
-                  limitation("warcraft_logs", character.key, "request_cap")
-                ]
-              })
-            : gatherCharacterEvidence(character, {
-                warcraftLogs: options.warcraftLogs,
-                requestCap,
-                signal: requestSignal
-              })
-        )
-      );
-      const limitations = [
-        ...evidence.flatMap((item) => item.limitations),
-        ...skipped.map((character) =>
-          limitation("warcraft_logs", character.key, "request_cap")
-        )
-      ];
-      const dossier = buildApplicantDossier({
-        root: snapshot.rootKey,
-        characters: selected.map(({ key: characterKey, displayName }) => ({
-          key: characterKey,
-          displayName
-        })),
-        kills: evidence.flatMap((item) => item.kills),
-        limitations
-      });
       return {
         kind: "ready",
-        dossier: applicantDossierSchema.parse({
-          ...dossier,
-          characters: selected.map(serializeDossierCharacter),
-          limitations: dossier.limitations.map((item) => ({
-            ...item,
-            code: contractLimitationCode(item.code),
-            message: limitationMessage(
-              item.source,
-              contractLimitationCode(item.code)
-            )
-          }))
+        dossier: await assembleDossier({
+          root: snapshot.rootKey,
+          subjects: selected,
+          skippedSubjects: skipped,
+          research:
+            snapshot.state === "complete"
+              ? {
+                  state: "complete",
+                  message: "Linked-character research is complete."
+                }
+              : {
+                  state: "partial",
+                  message:
+                    "Additional linked characters may exist; this dossier is not exhaustive."
+                },
+          warcraftLogs: options.warcraftLogs,
+          requestCap,
+          signal: requestSignal
         })
       };
     }

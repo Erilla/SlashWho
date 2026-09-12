@@ -182,7 +182,11 @@ describe("applicant dossier service", () => {
               }
             ]
           }
-        ]
+        ],
+        research: {
+          state: "complete",
+          message: "Linked-character research is complete."
+        }
       }
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
@@ -195,6 +199,71 @@ describe("applicant dossier service", () => {
 
     await expect(dossiers.read(root)).resolves.toEqual({ kind: "not_ready" });
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("reads transient root-only evidence without contacting snapshot repositories", async () => {
+    // Break caught: initial evidence could wait on or write linked-character discovery state.
+    const { dossiers, repositories, runsCreate, warcraftLogs } = fixture();
+
+    await expect(dossiers.readInitial(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        root,
+        characters: [
+          {
+            key: root,
+            displayName: "ryii",
+            source: "raiderio_declared"
+          }
+        ],
+        raids: [
+          {
+            raidId: "42",
+            bosses: [
+              {
+                firstKill: {
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/example#fight=9"
+                }
+              }
+            ]
+          }
+        ],
+        research: {
+          state: "initial",
+          message:
+            "Linked-character research is still running; this evidence covers only the submitted character."
+        }
+      }
+    });
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledTimes(1);
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledWith(
+      root,
+      expect.objectContaining({ requestCap: 20 })
+    );
+    expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
+    expect(repositories.snapshots.create).not.toHaveBeenCalled();
+    expect(runsCreate).not.toHaveBeenCalled();
+  });
+
+  it("marks a capped fingerprint snapshot as non-exhaustive", async () => {
+    // Break caught: bounded linked-character discovery could be presented as complete.
+    const snapshot = storedSnapshot();
+    snapshot.state = "partial";
+    snapshot.limitationCode = "fingerprint_sweep_capped";
+    const { dossiers } = fixture({ snapshot });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        research: {
+          state: "partial",
+          message:
+            "Additional linked characters may exist; this dossier is not exhaustive."
+        }
+      }
+    });
   });
 
   it("keeps participant-attributed Warcraft Logs evidence when Raider.IO is limited", async () => {
