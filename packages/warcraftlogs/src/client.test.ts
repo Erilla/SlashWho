@@ -129,6 +129,7 @@ describe("Warcraft Logs gateway", () => {
           raidName: "Nerub-ar Palace",
           bossId: "1234",
           bossName: "Queen Ansurek",
+          journalBossId: null,
           bossOrder: 1234,
           isFinalBoss: false,
           killedAt: "2024-02-03T01:00:00.000Z",
@@ -142,6 +143,7 @@ describe("Warcraft Logs gateway", () => {
           raidName: "Nerub-ar Palace",
           bossId: "4321",
           bossName: "The Silken Court",
+          journalBossId: null,
           bossOrder: 4321,
           isFinalBoss: false,
           killedAt: "2024-02-04T02:00:00.000Z",
@@ -173,7 +175,11 @@ describe("Warcraft Logs gateway", () => {
                       {
                         code: "participantReport",
                         startTime: 1_706_918_400_000,
-                        zone: { id: 42, name: "Nerub-ar Palace" },
+                        zone: {
+                          id: 42,
+                          name: "Nerub-ar Palace",
+                          encounters: [{ id: 1234, journalID: 2345 }]
+                        },
                         masterData: {
                           actors: [
                             {
@@ -270,7 +276,11 @@ describe("Warcraft Logs gateway", () => {
                           name: "Example Guild",
                           server: { slug: "silvermoon" }
                         },
-                        zone: { id: 42, name: "Nerub-ar Palace" },
+                        zone: {
+                          id: 42,
+                          name: "Nerub-ar Palace",
+                          encounters: [{ id: 1234, journalID: 2345 }]
+                        },
                         masterData: {
                           actors: [
                             {
@@ -310,6 +320,7 @@ describe("Warcraft Logs gateway", () => {
       kills: [
         {
           killedAt: "2024-02-03T02:00:00.000Z",
+          journalBossId: "2345",
           guild: { name: "Example Guild", realm: "silvermoon" }
         }
       ]

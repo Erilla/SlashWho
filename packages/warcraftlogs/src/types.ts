@@ -28,6 +28,8 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   raidName: string;
   bossId: string;
   bossName: string;
+  /** Blizzard's Encounter Journal identifier when WCL exposes the mapping. */
+  journalBossId: string | null;
   /** Warcraft Logs does not expose encounter ordering in report lists. */
   bossOrder: number;
   /** The public report schema does not declare final-boss status. */

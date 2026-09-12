@@ -38,7 +38,7 @@ const recentReportsQuery = `
             code
             startTime
             guild { name server { slug } }
-            zone { id name }
+            zone { id name encounters { id journalID } }
             masterData { actors { id name server type } }
             fights {
               id
@@ -266,6 +266,19 @@ function firstKillReports(
       guild = { name: guildName, realm: guildRealm };
     }
 
+    const journalBossIds = new Map<number, string>();
+    const zoneEncounters = zone && zone.encounters;
+    if (Array.isArray(zoneEncounters)) {
+      for (const encounterValue of zoneEncounters) {
+        const encounter = record(encounterValue);
+        const encounterId = encounter && positiveInteger(encounter.id);
+        const journalId = encounter && positiveInteger(encounter.journalID);
+        if (encounterId && journalId) {
+          journalBossIds.set(encounterId, String(journalId));
+        }
+      }
+    }
+
     const participantIds = new Set<number>();
     for (const actorValue of actors) {
       const actor = record(actorValue);
@@ -334,6 +347,7 @@ function firstKillReports(
         raidName,
         bossId: String(encounterId),
         bossName,
+        journalBossId: journalBossIds.get(encounterId) ?? null,
         bossOrder: encounterId,
         isFinalBoss: false,
         killedAt,
