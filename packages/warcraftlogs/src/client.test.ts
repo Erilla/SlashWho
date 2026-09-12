@@ -101,6 +101,7 @@ describe("Warcraft Logs gateway", () => {
         Accept: "application/json"
       });
       const body = JSON.parse(String(init?.body)) as {
+        query: string;
         variables: {
           name: string;
           realm: string;
@@ -108,6 +109,7 @@ describe("Warcraft Logs gateway", () => {
           page: number;
         };
       };
+      expect(body.query).toContain("recentReports(limit: 10,");
       expect(body.variables).toEqual({
         name: "sentinel",
         realm: "silvermoon",
@@ -183,7 +185,7 @@ describe("Warcraft Logs gateway", () => {
                             {
                               id: 8,
                               name: "Someoneelse",
-                              server: "Silvermoon",
+                              server: null,
                               type: "Player"
                             }
                           ]
@@ -485,8 +487,55 @@ describe("Warcraft Logs gateway", () => {
 
     await expect(
       client.getFirstKillReports(key, { requestCap: 1 })
-    ).resolves.toEqual({ kind: "limitation", code: "request_cap" });
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: expect.any(Array),
+      limitation: { kind: "limitation", code: "request_cap" }
+    });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains collected kills if a later report page is malformed", async () => {
+    const firstPage = (
+      fixture("character-report-valid") as { pages: unknown[] }
+    ).pages[0];
+    let page = 0;
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse(page++ === 0 ? firstPage : fixture("schema-drift"))
+    );
+    const result = await client.getFirstKillReports(key, { requestCap: 3 });
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "schema_drift" }
+    });
+    if (result.kind === "evidence")
+      expect(result.kills.length).toBeGreaterThan(0);
+  });
+
+  it("retains collected kills when the history deadline expires", async () => {
+    const firstPage = (
+      fixture("character-report-valid") as { pages: unknown[] }
+    ).pages[0];
+    const controller = new AbortController();
+    let page = 0;
+    const { client } = clientFor((url) => {
+      if (url.pathname === "/oauth/token") return token();
+      if (page++ === 0) return jsonResponse(firstPage);
+      controller.abort(new DOMException("History deadline", "TimeoutError"));
+      throw controller.signal.reason;
+    });
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 3,
+      signal: controller.signal
+    });
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "unavailable" }
+    });
+    if (result.kind === "evidence")
+      expect(result.kills.length).toBeGreaterThan(0);
   });
 
   it("classifies malformed GraphQL envelopes as schema drift without returning them", async () => {

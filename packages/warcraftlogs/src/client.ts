@@ -9,7 +9,9 @@ import type {
 } from "./types";
 
 const MYTHIC_DIFFICULTY = 5;
-const REPORTS_PER_PAGE = 100;
+// Nested actor/fight selections make a 100-report page exceed WCL's
+// 50,000-point query complexity ceiling. Ten reports fit that limit.
+const REPORTS_PER_PAGE = 10;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 
 const resolveCharacterQuery = `
@@ -256,9 +258,12 @@ function firstKillReports(
       const actorId = actor && positiveInteger(actor.id);
       const name = actor && nonEmptyString(actor.name);
       const server = actor && nonEmptyString(actor.server);
-      if (!actorId || !name || !server) {
+      if (!actorId || !name) {
         return { kind: "limitation", code: "schema_drift" };
       }
+      // A player without a realm cannot establish this character's identity.
+      // Ignore that actor rather than discarding other attributable kills.
+      if (!server) continue;
       if (
         name.toLocaleLowerCase("en-US") === requestedKey.name &&
         server.toLocaleLowerCase("en-US") ===
@@ -484,16 +489,25 @@ export function createWarcraftLogsClient(
     }
 
     const earliest = new Map<string, WarcraftLogsFirstKillEvidence>();
+    const partial = (
+      limitation: WarcraftLogsLimitation
+    ): WarcraftLogsReportResult =>
+      earliest.size
+        ? { kind: "evidence", kills: [...earliest.values()], limitation }
+        : limitation;
     for (let page = 1; page <= options.requestCap; page++) {
       const result = await graphql(
         recentReportsQuery,
         { name: key.name, realm: key.realm, region: key.region, page },
         options.signal
-      );
-      if (result.kind !== "success") return result;
+      ).catch((error: unknown) => {
+        if (options.signal?.reason?.name !== "TimeoutError") throw error;
+        return { kind: "limitation" as const, code: "unavailable" as const };
+      });
+      if (result.kind !== "success") return partial(result);
 
       const normalized = firstKillReports(result.value, key);
-      if (normalized.kind === "limitation") return normalized;
+      if (normalized.kind === "limitation") return partial(normalized);
       for (const kill of normalized.kills) {
         const identifier = `${kill.raidId}\u0000${kill.bossId}`;
         const current = earliest.get(identifier);
@@ -524,7 +538,7 @@ export function createWarcraftLogsClient(
         };
       }
     }
-    return { kind: "limitation", code: "request_cap" };
+    return partial({ kind: "limitation", code: "request_cap" });
   }
 
   return { resolveCharacter, getFirstKillReports };

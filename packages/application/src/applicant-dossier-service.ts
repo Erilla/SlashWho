@@ -65,11 +65,11 @@ function limitationMessage(
     case "rate_limited":
       return `${label} is temporarily rate limited.`;
     case "request_cap":
-      return `${label} evidence was skipped because this dossier reached its request cap.`;
+      return `${label} history is incomplete because this dossier reached its request cap. Shown kills are the earliest found so far; older kills may exist.`;
     case "unavailable":
-      return `${label} evidence is incomplete because the source is temporarily unavailable.`;
+      return `${label} history could not be fully loaded. Shown kills are the earliest found so far; older kills may exist.`;
     case "schema_changed":
-      return `${label} returned an unexpected response.`;
+      return `${label} returned an unexpected response, so history is incomplete. Shown kills are the earliest found so far; older kills may exist.`;
   }
 }
 
@@ -106,6 +106,11 @@ async function gatherCharacterEvidence(
       return { kind: "limitation" as const, code: "unavailable" as const };
     });
   const limitations: DossierLimitation[] = [];
+  if (warcraftLogs.kind === "evidence" && warcraftLogs.limitation) {
+    limitations.push(
+      limitation("warcraft_logs", character.key, warcraftLogs.limitation.code)
+    );
+  }
   if (warcraftLogs.kind === "limitation") {
     limitations.push(
       limitation("warcraft_logs", character.key, warcraftLogs.code)

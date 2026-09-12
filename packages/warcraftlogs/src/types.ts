@@ -43,6 +43,7 @@ export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
       kills: readonly WarcraftLogsFirstKillEvidence[];
+      limitation?: WarcraftLogsLimitation;
     }>
   | WarcraftLogsLimitation;
 
