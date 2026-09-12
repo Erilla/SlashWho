@@ -11,6 +11,10 @@ const jobId = "54f14e37-7df7-43db-91d5-21e797d1d145";
 
 const dossier = applicantDossierSchema.parse({
   root: { region: "eu", realm: "silvermoon", name: "ryii" },
+  research: {
+    state: "complete",
+    message: "Linked-character research is complete."
+  },
   characters: [
     {
       key: { region: "eu", realm: "silvermoon", name: "ryii" },
@@ -24,9 +28,12 @@ const dossier = applicantDossierSchema.parse({
 
 let started: unknown;
 let read: { kind: "ready"; dossier: ApplicantDossier } | { kind: "not_ready" };
+let readInitial:
+  { kind: "ready"; dossier: ApplicantDossier } | { kind: "not_ready" };
 let readAllowed:
   { allowed: true } | { allowed: false; retryAfterSeconds: number };
 let readCalls = 0;
+let readInitialCalls = 0;
 
 const dossiers = {
   async start() {
@@ -35,6 +42,10 @@ const dossiers = {
   async read() {
     readCalls += 1;
     return read;
+  },
+  async readInitial() {
+    readInitialCalls += 1;
+    return readInitial;
   }
 };
 
@@ -84,8 +95,20 @@ beforeEach(() => {
     staleCharacter: null
   };
   read = { kind: "ready", dossier };
+  readInitial = {
+    kind: "ready",
+    dossier: applicantDossierSchema.parse({
+      ...dossier,
+      research: {
+        state: "initial",
+        message:
+          "Linked-character research is still running; this evidence covers only the submitted character."
+      }
+    })
+  };
   readAllowed = { allowed: true };
   readCalls = 0;
+  readInitialCalls = 0;
 });
 
 describe("POST /api/dossiers", () => {
@@ -117,6 +140,44 @@ describe("POST /api/dossiers", () => {
 });
 
 describe("GET /api/dossiers/:region/:realm/:name", () => {
+  it("uses only the initial dossier read after authorizing an initial request", async () => {
+    // Break caught: initial evidence could wait for a relationship snapshot or
+    // bypass the public-read admission that protects third-party evidence calls.
+    const response = await GET(
+      new Request(
+        "https://slashwho.example/api/dossiers/eu/silvermoon/ryii?scope=initial",
+        { headers: { "x-real-ip": "203.0.113.8" } }
+      ),
+      characterContext
+    );
+
+    expect(response.status).toBe(200);
+    expect(readInitialCalls).toBe(1);
+    expect(readCalls).toBe(0);
+    expect(
+      applicantDossierSchema.parse(await response.json()).research.state
+    ).toBe("initial");
+  });
+
+  it("keeps unknown scopes on the expanded dossier read", async () => {
+    // Break caught: a misspelled or future scope could accidentally receive
+    // root-only evidence and present it as the snapshot-backed dossier.
+    const response = await GET(
+      new Request(
+        "https://slashwho.example/api/dossiers/eu/silvermoon/ryii?scope=expanded",
+        { headers: { "x-real-ip": "203.0.113.8" } }
+      ),
+      characterContext
+    );
+
+    expect(response.status).toBe(200);
+    expect(readCalls).toBe(1);
+    expect(readInitialCalls).toBe(0);
+    expect(
+      applicantDossierSchema.parse(await response.json()).research.state
+    ).toBe("complete");
+  });
+
   it("returns a strict applicant dossier after admitting the public read", async () => {
     // Break caught: a route could return unvalidated evidence material to the browser.
     const response = await GET(

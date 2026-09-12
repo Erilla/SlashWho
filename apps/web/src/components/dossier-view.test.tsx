@@ -16,6 +16,10 @@ import { DossierPageClient } from "../app/dossiers/[region]/[realm]/[name]/dossi
 
 const dossier: ApplicantDossier = {
   root: { region: "eu", realm: "silvermoon", name: "ryii" },
+  research: {
+    state: "complete",
+    message: "Linked-character research is complete."
+  },
   characters: [
     {
       key: { region: "eu", realm: "silvermoon", name: "ryii" },

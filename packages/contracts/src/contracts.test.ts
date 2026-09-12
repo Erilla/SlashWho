@@ -257,7 +257,9 @@ it("requires a non-empty staged-research disclosure on applicant dossiers", () =
   expect(applicantDossierSchema.parse(validDossier).research.state).toBe(
     "initial"
   );
-  const { research: _research, ...dossierWithoutResearch } = validDossier;
+  const dossierWithoutResearch = Object.fromEntries(
+    Object.entries(validDossier).filter(([key]) => key !== "research")
+  );
   expect(() => applicantDossierSchema.parse(dossierWithoutResearch)).toThrow();
 });
 

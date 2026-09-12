@@ -46,7 +46,9 @@ it("migrates and initializes the durable queue before serving searches", async (
         FRESHNESS_HOURS: 24,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80,
-        DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15000
+        DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15000,
+        DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: 20,
+        DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: 8000
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
@@ -119,6 +121,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     },
     async read() {
       return { kind: "not_ready" as const };
+    },
+    async readInitial() {
+      return { kind: "not_ready" as const };
     }
   };
 
@@ -134,7 +139,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         FRESHNESS_HOURS: 24,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80,
-        DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15000
+        DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15000,
+        DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: 20,
+        DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: 8000
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",

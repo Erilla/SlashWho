@@ -35,7 +35,10 @@ export async function GET(
       await searches.authorizePublicRead(request.headers)
     );
     if (denied) return denied;
-    const result = await dossiers.read(parsed.key, request.signal);
+    const result =
+      new URL(request.url).searchParams.get("scope") === "initial"
+        ? await dossiers.readInitial(parsed.key, request.signal)
+        : await dossiers.read(parsed.key, request.signal);
     if (result.kind === "not_ready") return apiError("discovery_not_ready");
     return Response.json(applicantDossierSchema.parse(result.dossier), {
       headers: { "cache-control": "no-store" }

@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
+import { DossierResearchState } from "../../../../../components/dossier-research-state";
 
 type DossierPageClientProps = Readonly<{
   identity: CharacterKey;
@@ -52,7 +53,48 @@ export function DossierPageClient({
   );
 
   useEffect(() => {
-    if (dossier) return;
+    const controller = new AbortController();
+
+    async function readJson(response: Response): Promise<unknown> {
+      return response.json().catch(() => null);
+    }
+
+    async function readInitialDossier() {
+      const response = await fetch(
+        jobId ? `${dossierPath}?scope=initial` : dossierPath,
+        {
+          cache: "no-store",
+          signal: controller.signal
+        }
+      );
+      const body = await readJson(response);
+      if (!response.ok) {
+        setError(apiError(response, body));
+        return;
+      }
+      const parsed = applicantDossierSchema.safeParse(body);
+      if (!parsed.success) {
+        setError("The dossier returned an unexpected response.");
+      } else {
+        setDossier(parsed.data);
+      }
+      if (!jobId) setStatus(null);
+    }
+
+    if (!initialDossier)
+      void readInitialDossier().catch((caught) => {
+        if (caught instanceof Error && caught.name === "AbortError") return;
+        setError(
+          "The dossier could not be loaded. Please check your connection."
+        );
+        if (!jobId) setStatus(null);
+      });
+
+    return () => controller.abort();
+  }, [dossierPath, initialDossier, jobId]);
+
+  useEffect(() => {
+    if (!jobId) return;
 
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -69,14 +111,14 @@ export function DossierPageClient({
       timeout = setTimeout(() => void pollJob(), delay);
     }
 
-    async function readDossier() {
+    async function readExpandedDossier() {
       const response = await fetch(dossierPath, {
         cache: "no-store",
         signal: controller.signal
       });
       const body = await readJson(response);
       if (!response.ok) {
-        if (response.status === 409 && jobId) {
+        if (response.status === 409) {
           setStatus("Researching applicant dossier…");
           schedulePoll();
           return;
@@ -95,7 +137,6 @@ export function DossierPageClient({
     }
 
     async function pollJob() {
-      if (!jobId) return;
       try {
         const response = await fetch(`/api/dossiers/jobs/${jobId}`, {
           cache: "no-store",
@@ -114,7 +155,7 @@ export function DossierPageClient({
           return;
         }
         if (parsed.data.status === "complete") {
-          await readDossier();
+          await readExpandedDossier();
           return;
         }
         if (parsed.data.status === "failed") {
@@ -127,32 +168,21 @@ export function DossierPageClient({
         }
         if (activeJobStates.has(parsed.data.status)) schedulePoll();
       } catch (caught) {
-        if (
-          stopped ||
-          (caught instanceof Error && caught.name === "AbortError")
-        )
-          return;
+        if (caught instanceof Error && caught.name === "AbortError") return;
+        if (stopped) return;
         setError("The applicant research status could not be loaded.");
         setStatus(null);
       }
     }
 
-    if (jobId) void pollJob();
-    else
-      void readDossier().catch((caught) => {
-        if (caught instanceof Error && caught.name === "AbortError") return;
-        setError(
-          "The dossier could not be loaded. Please check your connection."
-        );
-        setStatus(null);
-      });
+    void pollJob();
 
     return () => {
       stopped = true;
       controller.abort();
       if (timeout) clearTimeout(timeout);
     };
-  }, [dossier, dossierPath, jobId]);
+  }, [dossierPath, jobId]);
 
   return (
     <main className="page-shell dossier-page">
@@ -164,7 +194,8 @@ export function DossierPageClient({
         </p>
       </header>
 
-      {status ? (
+      {dossier ? <DossierResearchState research={dossier.research} /> : null}
+      {status && !dossier ? (
         <p className="dossier-status" aria-live="polite">
           {status}
         </p>
