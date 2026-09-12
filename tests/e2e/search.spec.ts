@@ -48,19 +48,20 @@ test("shows submitted-character evidence while queued discovery is held", async 
   await page.getByRole("button", { name: "Research applicant" }).click();
 
   await expect(page).toHaveURL(/\/dossiers\/eu\/silvermoon\/queued\?job=/);
-  await expect(
-    page.getByText(
-      "Linked-character research is still running; this evidence covers only the submitted character."
-    )
-  ).toBeVisible();
+  const initialDisclosure = page.getByText(
+    "Linked-character research is still running; this evidence covers only the submitted character.",
+    { exact: true }
+  );
+  await expect(initialDisclosure).toBeVisible();
 
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await expect(evidence).toBeVisible();
   await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/release`);
 
   await expect(
-    page.getByText("Linked-character research is complete.")
+    page.getByText("Linked-character research is complete.", { exact: true })
   ).toBeVisible();
+  await expect(initialDisclosure).not.toBeVisible();
   await evidence.getByText("View first-kill evidence").click();
   await expect(
     evidence.getByRole("link", { name: "View Warcraft Logs report" })
@@ -82,7 +83,8 @@ test("discloses that a partial snapshot may omit linked characters", async ({
 
   await expect(
     page.getByText(
-      "Additional linked characters may exist; this dossier is not exhaustive."
+      "Additional linked characters may exist; this dossier is not exhaustive.",
+      { exact: true }
     )
   ).toBeVisible();
 });
