@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
+import { DossierCuttingEdgeList } from "../../../../../components/dossier-cutting-edge-list";
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
@@ -231,6 +232,7 @@ export function DossierPageClient({
       {dossier ? (
         <div className="dossier-layout">
           <DossierCharacterList characters={dossier.characters} />
+          <DossierCuttingEdgeList cuttingEdges={dossier.cuttingEdges} />
           <DossierRaidList raids={dossier.raids} />
           <DossierLimitations limitations={dossier.limitations} />
         </div>

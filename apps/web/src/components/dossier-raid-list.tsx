@@ -12,9 +12,9 @@ function displayGuild(
 
 export function DossierRaidList({ raids }: DossierRaidListProps) {
   return (
-    <section aria-labelledby="historic-cutting-edge-heading">
-      <h2 className="section-heading" id="historic-cutting-edge-heading">
-        Historic Cutting Edge
+    <section aria-labelledby="historic-mythic-evidence-heading">
+      <h2 className="section-heading" id="historic-mythic-evidence-heading">
+        Historic Mythic boss evidence
       </h2>
       {raids.length === 0 ? (
         <p className="empty-state">
@@ -25,11 +25,6 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
           {raids.map((raid) => (
             <section className="dossier-raid" key={raid.raidId}>
               <h3>{raid.raidName}</h3>
-              <p className="dossier-raid-status">
-                {raid.cuttingEdge
-                  ? "Final-boss evidence found"
-                  : "Final-boss status is unknown from public report evidence."}
-              </p>
               <div className="dossier-boss-list">
                 {raid.bosses.map((boss) => {
                   const firstKills = boss.firstKills ?? [boss.firstKill];

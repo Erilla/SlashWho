@@ -65,7 +65,16 @@ const dossier: ApplicantDossier = {
       ]
     }
   ],
-  cuttingEdges: [],
+  cuttingEdges: [
+    {
+      achievementId: "40254",
+      achievementName: "Cutting Edge: Queen Ansurek",
+      description:
+        "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
+      completedAt: "2025-01-14T20:30:00.000Z",
+      characters: ["Ryii", "Ryalts"]
+    }
+  ],
   limitations: [
     {
       source: "warcraft_logs",
@@ -96,6 +105,9 @@ describe("DossierPageClient", () => {
 
     expect(
       screen.getByRole("heading", { name: "Historic Cutting Edge" })
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Historic Mythic boss evidence" })
     ).toBeVisible();
     expect(screen.getByText("Queen Ansurek")).toBeVisible();
     expect(screen.getByText("World #147")).toBeVisible();
