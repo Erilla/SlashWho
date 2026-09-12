@@ -11,6 +11,10 @@ type JournalRaid = Readonly<{
   encounters: unknown;
 }>;
 
+export function isDirectExecution(moduleUrl: string, invokedPath: string): boolean {
+  return new URL(moduleUrl).pathname.replace(/^\//, "") === invokedPath.replace(/\\/g, "/");
+}
+
 export type GeneratedJournalRaid = Readonly<{
   journalRaidId: string;
   raidName: string;
@@ -96,7 +100,13 @@ async function jsonRequest(
   options: FetchJournalRaidsOptions,
   url: URL
 ): Promise<Record<string, unknown>> {
-  const response = await options.fetch(url, {
+  const requestUrl = new URL(url);
+  requestUrl.searchParams.set(
+    "namespace",
+    `static-${options.region ?? "eu"}`
+  );
+  requestUrl.searchParams.set("locale", options.locale ?? "en_GB");
+  const response = await options.fetch(requestUrl, {
     headers: { Authorization: `Bearer ${options.accessToken}` }
   });
   if (!response.ok) throw new Error(`journal_request_failed_${response.status}`);
@@ -109,8 +119,6 @@ export async function fetchJournalRaids(
   options: FetchJournalRaidsOptions
 ): Promise<readonly GeneratedJournalRaid[]> {
   const indexUrl = new URL("/data/wow/journal-expansion/index", options.baseUrl);
-  indexUrl.searchParams.set("namespace", `static-${options.region ?? "eu"}`);
-  indexUrl.searchParams.set("locale", options.locale ?? "en_GB");
   const index = await jsonRequest(options, indexUrl);
   if (!Array.isArray(index.tiers)) throw new Error("journal_tiers_invalid");
 

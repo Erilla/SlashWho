@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
 
-import { fetchJournalRaids, normalizeJournalRaid } from "./raid-catalogue.mts";
+import {
+  fetchJournalRaids,
+  isDirectExecution,
+  normalizeJournalRaid
+} from "./raid-catalogue.mts";
 
 describe("Blizzard Journal raid catalogue", () => {
+  it("recognizes a direct TypeScript script invocation", () => {
+    const script = "C:/workspace/scripts/generate-raid-catalogue.mts";
+    expect(isDirectExecution(pathToFileURL(script).href, script)).toBe(true);
+  });
+
   it("keeps a Mythic raid and preserves the Journal encounter display order", () => {
     expect(
       normalizeJournalRaid({

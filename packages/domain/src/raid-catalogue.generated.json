@@ -1,0 +1,1353 @@
+{
+  "source": "blizzard-journal",
+  "generatedAt": "2026-09-12T15:50:03.104Z",
+  "region": "eu",
+  "locale": "en_GB",
+  "raids": [
+    {
+      "journalRaidId": "369",
+      "raidName": "Siege of Orgrimmar",
+      "encounters": [
+        {
+          "journalBossId": "852",
+          "bossName": "Immerseus",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "849",
+          "bossName": "The Fallen Protectors",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "866",
+          "bossName": "Norushen",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "867",
+          "bossName": "Sha of Pride",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "868",
+          "bossName": "Galakras",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "881",
+          "bossName": "Galakras",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "864",
+          "bossName": "Iron Juggernaut",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "856",
+          "bossName": "Kor'kron Dark Shaman",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "850",
+          "bossName": "General Nazgrim",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "846",
+          "bossName": "Malkorok",
+          "bossOrder": 10
+        },
+        {
+          "journalBossId": "870",
+          "bossName": "Spoils of Pandaria",
+          "bossOrder": 11
+        },
+        {
+          "journalBossId": "851",
+          "bossName": "Thok the Bloodthirsty",
+          "bossOrder": 12
+        },
+        {
+          "journalBossId": "865",
+          "bossName": "Siegecrafter Blackfuse",
+          "bossOrder": 13
+        },
+        {
+          "journalBossId": "853",
+          "bossName": "Paragons of the Klaxxi",
+          "bossOrder": 14
+        },
+        {
+          "journalBossId": "869",
+          "bossName": "Garrosh Hellscream",
+          "bossOrder": 15
+        }
+      ]
+    },
+    {
+      "journalRaidId": "457",
+      "raidName": "Blackrock Foundry",
+      "encounters": [
+        {
+          "journalBossId": "1202",
+          "bossName": "Oregorger",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1155",
+          "bossName": "Hans'gar and Franzok",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1122",
+          "bossName": "Beastlord Darmac",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1161",
+          "bossName": "Gruul",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "1123",
+          "bossName": "Flamebender Ka'graz",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "1147",
+          "bossName": "Operator Thogar",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "1154",
+          "bossName": "The Blast Furnace",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "1162",
+          "bossName": "Kromog",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "1203",
+          "bossName": "The Iron Maidens",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "959",
+          "bossName": "Blackhand",
+          "bossOrder": 10
+        }
+      ]
+    },
+    {
+      "journalRaidId": "477",
+      "raidName": "Highmaul",
+      "encounters": [
+        {
+          "journalBossId": "1128",
+          "bossName": "Kargath Bladefist",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "971",
+          "bossName": "The Butcher",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1195",
+          "bossName": "Tectus",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1196",
+          "bossName": "Brackenspore",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "1148",
+          "bossName": "Twin Ogron",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "1153",
+          "bossName": "Ko'ragh",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "1197",
+          "bossName": "Imperator Mar'gok",
+          "bossOrder": 7
+        }
+      ]
+    },
+    {
+      "journalRaidId": "669",
+      "raidName": "Hellfire Citadel",
+      "encounters": [
+        {
+          "journalBossId": "1426",
+          "bossName": "Hellfire Assault",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1425",
+          "bossName": "Iron Reaver",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1392",
+          "bossName": "Kormrok",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1432",
+          "bossName": "Hellfire High Council",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "1396",
+          "bossName": "Kilrogg Deadeye",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "1372",
+          "bossName": "Gorefiend",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "1433",
+          "bossName": "Shadow-Lord Iskar",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "1427",
+          "bossName": "Socrethar the Eternal",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "1391",
+          "bossName": "Fel Lord Zakuun",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "1447",
+          "bossName": "Xhul'horac",
+          "bossOrder": 10
+        },
+        {
+          "journalBossId": "1394",
+          "bossName": "Tyrant Velhari",
+          "bossOrder": 11
+        },
+        {
+          "journalBossId": "1395",
+          "bossName": "Mannoroth",
+          "bossOrder": 12
+        },
+        {
+          "journalBossId": "1438",
+          "bossName": "Archimonde",
+          "bossOrder": 13
+        }
+      ]
+    },
+    {
+      "journalRaidId": "768",
+      "raidName": "The Emerald Nightmare",
+      "encounters": [
+        {
+          "journalBossId": "1703",
+          "bossName": "Nythendra",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1738",
+          "bossName": "Il'gynoth, Heart of Corruption",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1744",
+          "bossName": "Elerethe Renferal",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1667",
+          "bossName": "Ursoc",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "1704",
+          "bossName": "Dragons of Nightmare",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "1750",
+          "bossName": "Cenarius",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "1726",
+          "bossName": "Xavius",
+          "bossOrder": 7
+        }
+      ]
+    },
+    {
+      "journalRaidId": "786",
+      "raidName": "The Nighthold",
+      "encounters": [
+        {
+          "journalBossId": "1706",
+          "bossName": "Skorpyron",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1725",
+          "bossName": "Chronomatic Anomaly",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1731",
+          "bossName": "Trilliax",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1751",
+          "bossName": "Spellblade Aluriel",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "1762",
+          "bossName": "Tichondrius",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "1713",
+          "bossName": "Krosus",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "1761",
+          "bossName": "High Botanist Tel'arn",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "1732",
+          "bossName": "Star Augur Etraeus",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "1743",
+          "bossName": "Grand Magistrix Elisande",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "1737",
+          "bossName": "Gul'dan",
+          "bossOrder": 10
+        }
+      ]
+    },
+    {
+      "journalRaidId": "861",
+      "raidName": "Trial of Valor",
+      "encounters": [
+        {
+          "journalBossId": "1819",
+          "bossName": "Odyn",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1830",
+          "bossName": "Guarm",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1829",
+          "bossName": "Helya",
+          "bossOrder": 3
+        }
+      ]
+    },
+    {
+      "journalRaidId": "875",
+      "raidName": "Tomb of Sargeras",
+      "encounters": [
+        {
+          "journalBossId": "1862",
+          "bossName": "Goroth",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1867",
+          "bossName": "Demonic Inquisition",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1856",
+          "bossName": "Harjatan",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1903",
+          "bossName": "Sisters of the Moon",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "1861",
+          "bossName": "Mistress Sassz'ine",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "1896",
+          "bossName": "The Desolate Host",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "1897",
+          "bossName": "Maiden of Vigilance",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "1873",
+          "bossName": "Fallen Avatar",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "1898",
+          "bossName": "Kil'jaeden",
+          "bossOrder": 9
+        }
+      ]
+    },
+    {
+      "journalRaidId": "946",
+      "raidName": "Antorus, the Burning Throne",
+      "encounters": [
+        {
+          "journalBossId": "1992",
+          "bossName": "Garothi Worldbreaker",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "1987",
+          "bossName": "Felhounds of Sargeras",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "1997",
+          "bossName": "Antoran High Command",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "1985",
+          "bossName": "Portal Keeper Hasabel",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2025",
+          "bossName": "Eonar the Life-Binder",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2009",
+          "bossName": "Imonar the Soulhunter",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2004",
+          "bossName": "Kin'garoth",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "1986",
+          "bossName": "The Coven of Shivarra",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "1983",
+          "bossName": "Varimathras",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "1984",
+          "bossName": "Aggramar",
+          "bossOrder": 10
+        },
+        {
+          "journalBossId": "2031",
+          "bossName": "Argus the Unmaker",
+          "bossOrder": 11
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1031",
+      "raidName": "Uldir",
+      "encounters": [
+        {
+          "journalBossId": "2168",
+          "bossName": "Taloc",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2167",
+          "bossName": "MOTHER",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2146",
+          "bossName": "Fetid Devourer",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2169",
+          "bossName": "Zek'voz, Herald of N'Zoth",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2166",
+          "bossName": "Vectis",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2195",
+          "bossName": "Zul, Reborn",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2194",
+          "bossName": "Mythrax the Unraveler",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2147",
+          "bossName": "G'huun",
+          "bossOrder": 8
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1176",
+      "raidName": "Battle of Dazar'alor",
+      "encounters": [
+        {
+          "journalBossId": "2333",
+          "bossName": "Champion of the Light",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2344",
+          "bossName": "Champion of the Light",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2325",
+          "bossName": "Grong, the Jungle Lord",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2340",
+          "bossName": "Grong, the Revenant",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2323",
+          "bossName": "Jadefire Masters",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2341",
+          "bossName": "Jadefire Masters",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2342",
+          "bossName": "Opulence",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2330",
+          "bossName": "Conclave of the Chosen",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2335",
+          "bossName": "King Rastakhan",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "2334",
+          "bossName": "High Tinker Mekkatorque",
+          "bossOrder": 10
+        },
+        {
+          "journalBossId": "2337",
+          "bossName": "Stormwall Blockade",
+          "bossOrder": 11
+        },
+        {
+          "journalBossId": "2343",
+          "bossName": "Lady Jaina Proudmoore",
+          "bossOrder": 12
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1177",
+      "raidName": "Crucible of Storms",
+      "encounters": [
+        {
+          "journalBossId": "2328",
+          "bossName": "The Restless Cabal",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2332",
+          "bossName": "Uu'nat, Harbinger of the Void",
+          "bossOrder": 2
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1179",
+      "raidName": "The Eternal Palace",
+      "encounters": [
+        {
+          "journalBossId": "2352",
+          "bossName": "Abyssal Commander Sivara",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2347",
+          "bossName": "Blackwater Behemoth",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2353",
+          "bossName": "Radiance of Azshara",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2354",
+          "bossName": "Lady Ashvane",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2351",
+          "bossName": "Orgozoa",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2359",
+          "bossName": "The Queen's Court",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2349",
+          "bossName": "Za'qul, Harbinger of Ny'alotha",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2361",
+          "bossName": "Queen Azshara",
+          "bossOrder": 8
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1180",
+      "raidName": "Ny'alotha, the Waking City",
+      "encounters": [
+        {
+          "journalBossId": "2368",
+          "bossName": "Wrathion, the Black Emperor",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2365",
+          "bossName": "Maut",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2369",
+          "bossName": "The Prophet Skitra",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2377",
+          "bossName": "Dark Inquisitor Xanesh",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2372",
+          "bossName": "The Hivemind",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2367",
+          "bossName": "Shad'har the Insatiable",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2373",
+          "bossName": "Drest'agath",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2374",
+          "bossName": "Il'gynoth, Corruption Reborn",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2370",
+          "bossName": "Vexiona",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "2364",
+          "bossName": "Ra-den the Despoiled",
+          "bossOrder": 10
+        },
+        {
+          "journalBossId": "2366",
+          "bossName": "Carapace of N'Zoth",
+          "bossOrder": 11
+        },
+        {
+          "journalBossId": "2375",
+          "bossName": "N'Zoth the Corruptor",
+          "bossOrder": 12
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1190",
+      "raidName": "Castle Nathria",
+      "encounters": [
+        {
+          "journalBossId": "2393",
+          "bossName": "Shriekwing",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2429",
+          "bossName": "Huntsman Altimor",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2422",
+          "bossName": "Sun King's Salvation",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2418",
+          "bossName": "Artificer Xy'mox",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2428",
+          "bossName": "Hungering Destroyer",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2420",
+          "bossName": "Lady Inerva Darkvein",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2426",
+          "bossName": "The Council of Blood",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2394",
+          "bossName": "Sludgefist",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2425",
+          "bossName": "Stone Legion Generals",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "2424",
+          "bossName": "Sire Denathrius",
+          "bossOrder": 10
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1193",
+      "raidName": "Sanctum of Domination",
+      "encounters": [
+        {
+          "journalBossId": "2435",
+          "bossName": "The Tarragrue",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2442",
+          "bossName": "The Eye of the Jailer",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2439",
+          "bossName": "The Nine",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2444",
+          "bossName": "Remnant of Ner'zhul",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2445",
+          "bossName": "Soulrender Dormazain",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2443",
+          "bossName": "Painsmith Raznal",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2446",
+          "bossName": "Guardian of the First Ones",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2447",
+          "bossName": "Fatescribe Roh-Kalo",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2440",
+          "bossName": "Kel'Thuzad",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "2441",
+          "bossName": "Sylvanas Windrunner",
+          "bossOrder": 10
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1195",
+      "raidName": "Sepulcher of the First Ones",
+      "encounters": [
+        {
+          "journalBossId": "2458",
+          "bossName": "Vigilant Guardian",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2465",
+          "bossName": "Skolex, the Insatiable Ravener",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2470",
+          "bossName": "Artificer Xy'mox",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2459",
+          "bossName": "Dausegne, the Fallen Oracle",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2460",
+          "bossName": "Prototype Pantheon",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2461",
+          "bossName": "Lihuvim, Principal Architect",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2463",
+          "bossName": "Halondrus the Reclaimer",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2469",
+          "bossName": "Anduin Wrynn",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2457",
+          "bossName": "Lords of Dread",
+          "bossOrder": 9
+        },
+        {
+          "journalBossId": "2467",
+          "bossName": "Rygelon",
+          "bossOrder": 10
+        },
+        {
+          "journalBossId": "2464",
+          "bossName": "The Jailer",
+          "bossOrder": 11
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1200",
+      "raidName": "Vault of the Incarnates",
+      "encounters": [
+        {
+          "journalBossId": "2480",
+          "bossName": "Eranog",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2500",
+          "bossName": "Terros",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2486",
+          "bossName": "The Primal Council",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2482",
+          "bossName": "Sennarth, the Cold Breath",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2502",
+          "bossName": "Dathea, Ascended",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2491",
+          "bossName": "Kurog Grimtotem",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2493",
+          "bossName": "Broodkeeper Diurna",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2499",
+          "bossName": "Raszageth the Storm-Eater",
+          "bossOrder": 8
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1205",
+      "raidName": "Dragon Isles",
+      "encounters": [
+        {
+          "journalBossId": "2515",
+          "bossName": "Strunraan, The Sky's Misery",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2506",
+          "bossName": "Basrikron, The Shale Wing",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2517",
+          "bossName": "Bazual, The Dreaded Flame",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2518",
+          "bossName": "Liskanoth, The Futurebane",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2531",
+          "bossName": "The Zaqali Elders",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2562",
+          "bossName": "Aurostor, The Hibernator",
+          "bossOrder": 6
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1207",
+      "raidName": "Amirdrassil, the Dream's Hope",
+      "encounters": [
+        {
+          "journalBossId": "2564",
+          "bossName": "Gnarlroot",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2554",
+          "bossName": "Igira the Cruel",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2557",
+          "bossName": "Volcoross",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2555",
+          "bossName": "Council of Dreams",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2553",
+          "bossName": "Larodar, Keeper of the Flame",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2556",
+          "bossName": "Nymue, Weaver of the Cycle",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2563",
+          "bossName": "Smolderon",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2565",
+          "bossName": "Tindral Sageswift, Seer of the Flame",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2519",
+          "bossName": "Fyrakk the Blazing",
+          "bossOrder": 9
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1208",
+      "raidName": "Aberrus, the Shadowed Crucible",
+      "encounters": [
+        {
+          "journalBossId": "2522",
+          "bossName": "Kazzara, the Hellforged",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2529",
+          "bossName": "The Amalgamation Chamber",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2530",
+          "bossName": "The Forgotten Experiments",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2524",
+          "bossName": "Assault of the Zaqali",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2525",
+          "bossName": "Rashok, the Elder",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2532",
+          "bossName": "The Vigilant Steward, Zskarn",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2527",
+          "bossName": "Magmorax",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2523",
+          "bossName": "Echo of Neltharion",
+          "bossOrder": 8
+        },
+        {
+          "journalBossId": "2520",
+          "bossName": "Scalecommander Sarkareth",
+          "bossOrder": 9
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1273",
+      "raidName": "Nerub-ar Palace",
+      "encounters": [
+        {
+          "journalBossId": "2607",
+          "bossName": "Ulgrax the Devourer",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2611",
+          "bossName": "The Bloodbound Horror",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2599",
+          "bossName": "Sikran, Captain of the Sureki",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2609",
+          "bossName": "Rasha'nan",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2612",
+          "bossName": "Broodtwister Ovi'nax",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2601",
+          "bossName": "Nexus-Princess Ky'veza",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2608",
+          "bossName": "The Silken Court",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2602",
+          "bossName": "Queen Ansurek",
+          "bossOrder": 8
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1296",
+      "raidName": "Liberation of Undermine",
+      "encounters": [
+        {
+          "journalBossId": "2639",
+          "bossName": "Vexie and the Geargrinders",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2640",
+          "bossName": "Cauldron of Carnage",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2641",
+          "bossName": "Rik Reverb",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2642",
+          "bossName": "Stix Bunkjunker",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2653",
+          "bossName": "Sprocketmonger Lockenstock",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2644",
+          "bossName": "The One-Armed Bandit",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2645",
+          "bossName": "Mug'Zee, Heads of Security",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2646",
+          "bossName": "Chrome King Gallywix",
+          "bossOrder": 8
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1302",
+      "raidName": "Manaforge Omega",
+      "encounters": [
+        {
+          "journalBossId": "2684",
+          "bossName": "Plexus Sentinel",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2686",
+          "bossName": "Loom'ithar",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2685",
+          "bossName": "Soulbinder Naazindhri",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2687",
+          "bossName": "Forgeweaver Araz",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2688",
+          "bossName": "The Soul Hunters",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2747",
+          "bossName": "Fractillus",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2690",
+          "bossName": "Nexus-King Salhadaar",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2691",
+          "bossName": "Dimensius, the All-Devouring",
+          "bossOrder": 8
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1305",
+      "raidName": "Sporefall",
+      "encounters": [
+        {
+          "journalBossId": "2711",
+          "bossName": "Rotmire",
+          "bossOrder": 1
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1307",
+      "raidName": "The Voidspire",
+      "encounters": [
+        {
+          "journalBossId": "2733",
+          "bossName": "Imperator Averzian",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2734",
+          "bossName": "Vorasius",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2736",
+          "bossName": "Fallen-King Salhadaar",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2735",
+          "bossName": "Vaelgor & Ezzorak",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2737",
+          "bossName": "Lightblinded Vanguard",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2738",
+          "bossName": "Crown of the Cosmos",
+          "bossOrder": 6
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1308",
+      "raidName": "March on Quel'Danas",
+      "encounters": [
+        {
+          "journalBossId": "2739",
+          "bossName": "Belo'ren, Child of Al'ar",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2740",
+          "bossName": "Midnight Falls",
+          "bossOrder": 2
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1314",
+      "raidName": "The Dreamrift",
+      "encounters": [
+        {
+          "journalBossId": "2795",
+          "bossName": "Chimaerus the Undreamt God",
+          "bossOrder": 1
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1317",
+      "raidName": "The Tidebound Grotto",
+      "encounters": [
+        {
+          "journalBossId": "2849",
+          "bossName": "Nymrissa Wavecaller",
+          "bossOrder": 1
+        }
+      ]
+    },
+    {
+      "journalRaidId": "1320",
+      "raidName": "The Venomous Abyss",
+      "encounters": [
+        {
+          "journalBossId": "2888",
+          "bossName": "Nek'zali the Soulcoiler",
+          "bossOrder": 1
+        },
+        {
+          "journalBossId": "2874",
+          "bossName": "Entombed Sentinels",
+          "bossOrder": 2
+        },
+        {
+          "journalBossId": "2894",
+          "bossName": "The Lost Explorers",
+          "bossOrder": 3
+        },
+        {
+          "journalBossId": "2882",
+          "bossName": "Vashnik the Malignant",
+          "bossOrder": 4
+        },
+        {
+          "journalBossId": "2871",
+          "bossName": "Sszorak",
+          "bossOrder": 5
+        },
+        {
+          "journalBossId": "2887",
+          "bossName": "The Twin Fangs",
+          "bossOrder": 6
+        },
+        {
+          "journalBossId": "2883",
+          "bossName": "The Coiled Altar",
+          "bossOrder": 7
+        },
+        {
+          "journalBossId": "2895",
+          "bossName": "Ula'tek",
+          "bossOrder": 8
+        }
+      ]
+    }
+  ]
+}
