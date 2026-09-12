@@ -47,8 +47,11 @@ describe("Blizzard Journal raid catalogue", () => {
   });
 
   it("walks Journal tiers and deduplicates Mythic raid instances", async () => {
+    const urls: URL[] = [];
     const fetch = async (input: string | URL) => {
-      const path = new URL(String(input)).pathname;
+      const url = new URL(String(input));
+      urls.push(url);
+      const path = url.pathname;
       const body =
         path === "/data/wow/journal-expansion/index"
           ? { tiers: [{ key: { href: "https://api.example/tier/1" } }] }
@@ -91,5 +94,7 @@ describe("Blizzard Journal raid catalogue", () => {
         encounters: [{ journalBossId: "1", bossName: "First", bossOrder: 1 }]
       }
     ]);
+    expect(urls[0]?.searchParams.get("namespace")).toBe("static-eu");
+    expect(urls[0]?.searchParams.get("locale")).toBe("en_GB");
   });
 });

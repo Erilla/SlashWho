@@ -25,6 +25,8 @@ export type FetchJournalRaidsOptions = Readonly<{
   fetch: typeof globalThis.fetch;
   accessToken: string;
   baseUrl: URL;
+  region?: string;
+  locale?: string;
 }>;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -107,6 +109,8 @@ export async function fetchJournalRaids(
   options: FetchJournalRaidsOptions
 ): Promise<readonly GeneratedJournalRaid[]> {
   const indexUrl = new URL("/data/wow/journal-expansion/index", options.baseUrl);
+  indexUrl.searchParams.set("namespace", `static-${options.region ?? "eu"}`);
+  indexUrl.searchParams.set("locale", options.locale ?? "en_GB");
   const index = await jsonRequest(options, indexUrl);
   if (!Array.isArray(index.tiers)) throw new Error("journal_tiers_invalid");
 
