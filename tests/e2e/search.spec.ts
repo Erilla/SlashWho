@@ -37,7 +37,7 @@ for (const applicantUrl of applicantUrls) {
   });
 }
 
-test("completes queued discovery before reading applicant-bound Warcraft Logs evidence", async ({
+test("shows submitted-character evidence while queued discovery is held", async ({
   page
 }) => {
   await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/hold`);
@@ -48,13 +48,41 @@ test("completes queued discovery before reading applicant-bound Warcraft Logs ev
   await page.getByRole("button", { name: "Research applicant" }).click();
 
   await expect(page).toHaveURL(/\/dossiers\/eu\/silvermoon\/queued\?job=/);
-  await expect(page.getByText("Researching applicant dossier…")).toBeVisible();
-  await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/release`);
+  await expect(
+    page.getByText(
+      "Linked-character research is still running; this evidence covers only the submitted character."
+    )
+  ).toBeVisible();
 
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await expect(evidence).toBeVisible();
+  await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/release`);
+
+  await expect(
+    page.getByText("Linked-character research is complete.")
+  ).toBeVisible();
   await evidence.getByText("View first-kill evidence").click();
   await expect(
     evidence.getByRole("link", { name: "View Warcraft Logs report" })
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
+});
+
+test("discloses that a partial snapshot may omit linked characters", async ({
+  page
+}) => {
+  await seedSnapshot({
+    key: { region: "eu", realm: "silvermoon", name: "partial" },
+    displayName: "Partial",
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z"),
+    state: "partial",
+    limitationCode: "fingerprint_sweep_capped"
+  });
+
+  await page.goto("/dossiers/eu/silvermoon/partial");
+
+  await expect(
+    page.getByText(
+      "Additional linked characters may exist; this dossier is not exhaustive."
+    )
+  ).toBeVisible();
 });

@@ -94,7 +94,7 @@ Railway currently documents `X-Real-IP` as the single remote-client header suppl
 - Both Railway configs gate deployment on `/ready` and restart failed processes up to ten times.
 - Worker draining is 35 seconds, longer than the default 30-second job drain, so graceful shutdown gets the full settlement window.
 
-After each staging deploy, verify `/health`, `/ready`, one new search, one stale refresh, one immutable historical snapshot, rate limiting, a suppressed character, and a graceful worker restart. Promote only the validated `main` commit by fast-forwarding `prod`.
+After each staging deploy, verify `/health`, `/ready`, one new search, one stale refresh, one immutable historical snapshot, rate limiting, a suppressed character, and a graceful worker restart. For the new cold search, confirm that submitted-character evidence and `Linked-character research is still running; this evidence covers only the submitted character.` appear before linked-character discovery finishes, then confirm `Linked-character research is complete.` after release. In `test`, temporarily use a deliberately bounded fingerprint sweep to exercise a capped run and confirm `Additional linked characters may exist; this dossier is not exhaustive.` before restoring the normal test budget. Promote only the validated `main` commit by fast-forwarding `prod`.
 
 ## Backups
 
