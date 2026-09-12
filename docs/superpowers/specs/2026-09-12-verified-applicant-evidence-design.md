@@ -8,13 +8,13 @@
 
 Enrich an applicant dossier with only Warcraft Logs facts that its documented
 public GraphQL schema can prove: the report guild and the timestamp at which a
-Mythic encounter died.  Add a versioned raid-tier catalogue to identify raid
+Mythic encounter died. Add a versioned raid-tier catalogue to identify raid
 encounters and final encounters, allowing the existing pure dossier aggregation
 to mark a tier as Cutting Edge only when public Mythic kill evidence includes
 its catalogue final encounter.
 
-Historic world rank remains `null`.  Warcraft Logs exposes current guild-zone
-progression rank, not the guild's rank at a historical kill.  The application
+Historic world rank remains `null`. Warcraft Logs exposes current guild-zone
+progression rank, not the guild's rank at a historical kill. The application
 must not substitute one for the other.
 
 ## Goals
@@ -40,21 +40,21 @@ must not substitute one for the other.
 ## Architecture
 
 `@slashwho/warcraftlogs` remains responsible for OAuth, report pagination, and
-normalizing report facts.  Its report query asks for `Report.guild` and each
+normalizing report facts. Its report query asks for `Report.guild` and each
 fight's `endTime`; it returns a nullable guild and `report.startTime +
 fight.endTime` for a valid kill.
 
-`@slashwho/domain` owns a static, versioned raid-tier catalogue.  A catalogue
+`@slashwho/domain` owns a static, versioned raid-tier catalogue. A catalogue
 entry is keyed by WCL zone ID and contains the display name, final encounter
-ID, and the full ordered encounter list.  It is the sole source for whether a
-zone is a raid, boss order, and final-boss status.  The catalogue is compiled
+ID, and the full ordered encounter list. It is the sole source for whether a
+zone is a raid, boss order, and final-boss status. The catalogue is compiled
 from documented game/journal evidence with a source reference per tier; it is
 not derived from an upstream response at request time.
 
-The normalized client passes WCL zone and encounter IDs to the catalogue.  An
+The normalized client passes WCL zone and encounter IDs to the catalogue. An
 unmapped zone produces a `raid_metadata_unknown` dossier limitation and is not
-rendered as Cutting Edge evidence.  A mapped encounter has its catalogue name,
-order, and final-boss flag.  The existing dossier builder continues to select
+rendered as Cutting Edge evidence. A mapped encounter has its catalogue name,
+order, and final-boss flag. The existing dossier builder continues to select
 the earliest valid kill per character/boss, deduplicate shared report fights,
 and derives `cuttingEdge` from the catalogue final-boss flag.
 
@@ -78,16 +78,16 @@ public WCL report
   behavior.
 - A zone or encounter absent from the catalogue never gets an invented order,
   final-boss flag, or Cutting Edge claim.
-- A catalogue tier appears only with verified boss evidence.  Missing boss
+- A catalogue tier appears only with verified boss evidence. Missing boss
   evidence is not evidence that the applicant failed to kill it.
 - Historic world rank stays `null` with the existing unknown presentation.
 
 ## Catalogue coverage
 
 The catalogue must cover every WCL raid zone that this application supports,
-with every encounter in each tier.  Entries are added in source-reviewed
+with every encounter in each tier. Entries are added in source-reviewed
 chunks, and an unmapped-zone limitation is the safe behaviour while coverage
-is expanded.  This makes the existing live result immediately less misleading
+is expanded. This makes the existing live result immediately less misleading
 without falsely claiming that a partial catalogue is all historic coverage.
 
 ## Testing strategy

@@ -22,22 +22,24 @@
 
 ## File structure
 
-| File | Responsibility |
-| --- | --- |
-| `packages/domain/src/raid-tier-catalog.ts` | Immutable supported WCL zone/encounter metadata. |
-| `packages/domain/src/applicant-dossier.ts` | Catalogue filtering before pure aggregation. |
-| `packages/warcraftlogs/src/client.ts` | Guild and boss-death-time query/parser. |
-| `packages/application/src/applicant-dossier-service.ts` | Contract-safe metadata limitation message. |
-| `apps/web/src/components/dossier-raid-list.tsx` | First-kill guild and unknown-rank wording. |
+| File                                                    | Responsibility                                   |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `packages/domain/src/raid-tier-catalog.ts`              | Immutable supported WCL zone/encounter metadata. |
+| `packages/domain/src/applicant-dossier.ts`              | Catalogue filtering before pure aggregation.     |
+| `packages/warcraftlogs/src/client.ts`                   | Guild and boss-death-time query/parser.          |
+| `packages/application/src/applicant-dossier-service.ts` | Contract-safe metadata limitation message.       |
+| `apps/web/src/components/dossier-raid-list.tsx`         | First-kill guild and unknown-rank wording.       |
 
 ### Task 1: Add the domain raid-tier catalogue
 
 **Files:**
+
 - Create: `packages/domain/src/raid-tier-catalog.ts`
 - Create: `packages/domain/src/raid-tier-catalog.test.ts`
 - Modify: `packages/domain/src/index.ts`
 
 **Interfaces:**
+
 - Produces: `lookupRaidEncounter(zoneId: string, encounterId: string): RaidEncounterMetadata | null`.
 - Produces: `RaidEncounterMetadata = { raidId; raidName; bossId; bossName; bossOrder; isFinalBoss }`.
 
@@ -46,8 +48,12 @@
 ```ts
 it("maps a configured final encounter to ordered raid metadata", () => {
   expect(lookupRaidEncounter("42", "1234")).toEqual({
-    raidId: "42", raidName: "Nerub-ar Palace", bossId: "1234",
-    bossName: "Queen Ansurek", bossOrder: 8, isFinalBoss: true
+    raidId: "42",
+    raidName: "Nerub-ar Palace",
+    bossId: "1234",
+    bossName: "Queen Ansurek",
+    bossOrder: 8,
+    isFinalBoss: true
   });
 });
 it("rejects a non-raid zone", () => {
@@ -65,13 +71,26 @@ Expected: FAIL because the catalogue module does not exist.
 
 ```ts
 export type RaidEncounterMetadata = Readonly<{
-  raidId: string; raidName: string; bossId: string; bossName: string;
-  bossOrder: number; isFinalBoss: boolean;
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  bossOrder: number;
+  isFinalBoss: boolean;
 }>;
 const entries: readonly RaidEncounterMetadata[] = [
-  { raidId: "42", raidName: "Nerub-ar Palace", bossId: "1234", bossName: "Queen Ansurek", bossOrder: 8, isFinalBoss: true }
+  {
+    raidId: "42",
+    raidName: "Nerub-ar Palace",
+    bossId: "1234",
+    bossName: "Queen Ansurek",
+    bossOrder: 8,
+    isFinalBoss: true
+  }
 ];
-const byKey = new Map(entries.map((item) => [`${item.raidId}\0${item.bossId}`, item]));
+const byKey = new Map(
+  entries.map((item) => [`${item.raidId}\0${item.bossId}`, item])
+);
 export function lookupRaidEncounter(zoneId: string, encounterId: string) {
   return byKey.get(`${zoneId}\0${encounterId}`) ?? null;
 }
@@ -95,11 +114,13 @@ git commit -m "feat: add raid tier catalogue"
 ### Task 2: Normalize WCL report guild and boss-death time
 
 **Files:**
+
 - Modify: `packages/warcraftlogs/src/client.ts`
 - Modify: `packages/warcraftlogs/src/types.ts`
 - Modify: `packages/warcraftlogs/src/client.test.ts`
 
 **Interfaces:**
+
 - Produces: `WarcraftLogsFirstKillEvidence.guild: { name: string; realm: string } | null`.
 - Produces: `killedAt = new Date(report.startTime + fight.endTime).toISOString()`.
 
@@ -107,15 +128,22 @@ git commit -m "feat: add raid tier catalogue"
 
 ```ts
 it("attributes a kill to its report guild at boss death time", async () => {
-  await expect(client.getFirstKillReports(key, { requestCap: 1 }))
-    .resolves.toMatchObject({ kind: "evidence", kills: [{
-      killedAt: "2024-02-03T02:00:00.000Z",
-      guild: { name: "Example Guild", realm: "silvermoon" }
-    }] });
+  await expect(
+    client.getFirstKillReports(key, { requestCap: 1 })
+  ).resolves.toMatchObject({
+    kind: "evidence",
+    kills: [
+      {
+        killedAt: "2024-02-03T02:00:00.000Z",
+        guild: { name: "Example Guild", realm: "silvermoon" }
+      }
+    ]
+  });
 });
 it("keeps a public personal report valid when its guild is null", async () => {
-  await expect(client.getFirstKillReports(key, { requestCap: 1 }))
-    .resolves.toMatchObject({ kind: "evidence", kills: [{ guild: null }] });
+  await expect(
+    client.getFirstKillReports(key, { requestCap: 1 })
+  ).resolves.toMatchObject({ kind: "evidence", kills: [{ guild: null }] });
 });
 ```
 
@@ -145,6 +173,7 @@ git commit -m "feat: attribute WCL kills to report guilds"
 ### Task 3: Filter evidence through catalogue metadata
 
 **Files:**
+
 - Modify: `packages/domain/src/applicant-dossier.ts`
 - Modify: `packages/domain/src/applicant-dossier.test.ts`
 - Modify: `packages/contracts/src/search.ts`
@@ -152,6 +181,7 @@ git commit -m "feat: attribute WCL kills to report guilds"
 - Modify: `packages/application/src/applicant-dossier-service.test.ts`
 
 **Interfaces:**
+
 - Consumes: raw WCL `zoneId` / `encounterId` and `lookupRaidEncounter`.
 - Produces: contract limitation code `raid_metadata_unknown`.
 
@@ -159,13 +189,17 @@ git commit -m "feat: attribute WCL kills to report guilds"
 
 ```ts
 it("does not emit a raid or Cutting Edge claim for unknown metadata", () => {
-  const dossier = buildApplicantDossier({ ...input, kills: [
-    kill(root, { raidId: "99999", bossId: "1", isFinalBoss: false })
-  ] });
+  const dossier = buildApplicantDossier({
+    ...input,
+    kills: [kill(root, { raidId: "99999", bossId: "1", isFinalBoss: false })]
+  });
   expect(dossier.raids).toEqual([]);
-  expect(dossier.limitations).toContainEqual(expect.objectContaining({
-    source: "warcraft_logs", code: "raid_metadata_unknown"
-  }));
+  expect(dossier.limitations).toContainEqual(
+    expect.objectContaining({
+      source: "warcraft_logs",
+      code: "raid_metadata_unknown"
+    })
+  );
 });
 ```
 
@@ -197,10 +231,12 @@ git commit -m "feat: derive Cutting Edge from raid metadata"
 ### Task 4: Clarify rendered evidence provenance
 
 **Files:**
+
 - Modify: `apps/web/src/components/dossier-raid-list.tsx`
 - Modify: `apps/web/src/components/dossier-view.test.tsx`
 
 **Interfaces:**
+
 - Consumes: unchanged `ApplicantDossier`.
 - Produces: visible `First-kill guild` and `World rank: unknown` copy.
 

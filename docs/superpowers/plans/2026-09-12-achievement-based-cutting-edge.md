@@ -24,6 +24,7 @@
 ### Task 1: Generate a versioned Cutting Edge catalogue
 
 **Files:**
+
 - Create: `scripts/cutting-edge-catalogue.mts`
 - Create: `scripts/cutting-edge-catalogue.test.ts`
 - Create: `scripts/generate-cutting-edge-catalogue.mts`
@@ -31,6 +32,7 @@
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces `GeneratedCuttingEdgeAchievement = { achievementId: string; achievementName: string; description: string; categoryId: "15271" }`.
 - Produces `fetchCuttingEdgeAchievements(options): Promise<readonly GeneratedCuttingEdgeAchievement[]>`.
 - The generated JSON has `{ source: "blizzard-achievement-category"; generatedAt: string; region: string; locale: "en_GB"; achievements: GeneratedCuttingEdgeAchievement[] }`.
@@ -43,7 +45,8 @@ it("keeps only Feats of Strength Raid achievements whose names begin Cutting Edg
     {
       achievementId: "40254",
       achievementName: "Cutting Edge: Queen Ansurek",
-      description: "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty before the release of the next raid tier.",
+      description:
+        "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty before the release of the next raid tier.",
       categoryId: "15271"
     }
   ]);
@@ -69,7 +72,10 @@ export async function fetchCuttingEdgeAchievements(
   options: FetchCuttingEdgeAchievementsOptions
 ): Promise<readonly GeneratedCuttingEdgeAchievement[]> {
   const feats = await jsonRequest(options, "/data/wow/achievement-category/81");
-  const raids = await jsonRequest(options, "/data/wow/achievement-category/15271");
+  const raids = await jsonRequest(
+    options,
+    "/data/wow/achievement-category/15271"
+  );
   if (raids.parent_category?.id !== 81) {
     throw new Error("cutting_edge_category_parent_invalid");
   }
@@ -103,12 +109,14 @@ git commit -m "feat: generate Cutting Edge achievement catalogue"
 ### Task 2: Expose completed achievement evidence from the Blizzard client
 
 **Files:**
+
 - Modify: `packages/blizzard/src/types.ts`
 - Modify: `packages/blizzard/src/client.ts`
 - Modify: `packages/blizzard/src/client.test.ts`
 - Modify: `packages/blizzard/src/index.ts`
 
 **Interfaces:**
+
 - Produces `CompletedAchievement = { achievementId: string; completedAt: string }`.
 - Adds `BlizzardGateway.getCompletedAchievements(key, signal?, onProfileRequest?): Promise<readonly CompletedAchievement[]>`.
 
@@ -123,9 +131,12 @@ it("returns only achievement entries with numeric IDs and completion timestamps"
 });
 
 it("does not use criteria completion when the timestamp is present", async () => {
-  await expect(gateway.getCompletedAchievements(character)).resolves.toContainEqual(
-    { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
-  );
+  await expect(
+    gateway.getCompletedAchievements(character)
+  ).resolves.toContainEqual({
+    achievementId: "40254",
+    completedAt: "2025-01-14T20:30:00.000Z"
+  });
 });
 ```
 
@@ -138,14 +149,21 @@ Expected: FAIL because `getCompletedAchievements` is not defined.
 - [ ] **Step 3: Add a purpose-specific profile normalizer and gateway method**
 
 ```ts
-function completedAchievementsFromResponse(value: unknown): readonly CompletedAchievement[] | null {
+function completedAchievementsFromResponse(
+  value: unknown
+): readonly CompletedAchievement[] | null {
   const achievements = valueRecord(value)?.achievements;
   if (!Array.isArray(achievements)) return null;
   return achievements.flatMap((entry) => {
     const id = finiteNumber(valueRecord(entry)?.id);
     const timestamp = finiteNumber(valueRecord(entry)?.completed_timestamp);
     return id !== null && timestamp !== null
-      ? [{ achievementId: String(id), completedAt: new Date(timestamp).toISOString() }]
+      ? [
+          {
+            achievementId: String(id),
+            completedAt: new Date(timestamp).toISOString()
+          }
+        ]
       : [];
   });
 }
@@ -169,6 +187,7 @@ git commit -m "feat: read completed Blizzard achievements"
 ### Task 3: Aggregate Cutting Edge evidence in domain and contract layers
 
 **Files:**
+
 - Create: `packages/domain/src/cutting-edge-catalogue.ts`
 - Create: `packages/domain/src/cutting-edge-catalogue.test.ts`
 - Modify: `packages/domain/src/applicant-dossier.ts`
@@ -179,6 +198,7 @@ git commit -m "feat: read completed Blizzard achievements"
 - Modify: `packages/contracts/src/index.ts`
 
 **Interfaces:**
+
 - Produces `DossierCuttingEdgeEvidence = { achievementId: string; completedAt: string; character: CharacterKey }`.
 - Adds `cuttingEdges: readonly ApplicantDossierCuttingEdge[]` to domain and contract dossiers.
 - `ApplicantDossierCuttingEdge = { achievementId: string; achievementName: string; description: string; completedAt: string; characters: readonly string[] }`.
@@ -199,7 +219,9 @@ it("groups the same completed Cutting Edge achievement across characters", () =>
 });
 
 it("rejects a dossier that omits cuttingEdges", () => {
-  expect(() => applicantDossierSchema.parse(dossierWithoutCuttingEdges)).toThrow();
+  expect(() =>
+    applicantDossierSchema.parse(dossierWithoutCuttingEdges)
+  ).toThrow();
 });
 ```
 
@@ -216,13 +238,15 @@ Load `cutting-edge-catalogue.generated.json` in a focused lookup module. Ignore 
 - [ ] **Step 4: Add strict Zod schemas and exports**
 
 ```ts
-export const dossierCuttingEdgeSchema = z.object({
-  achievementId: z.string().regex(/^\d+$/),
-  achievementName: z.string().min(1),
-  description: z.string().min(1),
-  completedAt: z.iso.datetime(),
-  characters: z.array(z.string().min(1)).min(1)
-}).strict();
+export const dossierCuttingEdgeSchema = z
+  .object({
+    achievementId: z.string().regex(/^\d+$/),
+    achievementName: z.string().min(1),
+    description: z.string().min(1),
+    completedAt: z.iso.datetime(),
+    characters: z.array(z.string().min(1)).min(1)
+  })
+  .strict();
 ```
 
 Require `cuttingEdges` in `applicantDossierSchema` and update all fixtures.
@@ -243,6 +267,7 @@ git commit -m "feat: add dossier Cutting Edge evidence"
 ### Task 4: Gather per-character CE evidence in the dossier service and web container
 
 **Files:**
+
 - Modify: `packages/application/src/applicant-dossier-service.ts`
 - Modify: `packages/application/src/applicant-dossier-service.test.ts`
 - Modify: `apps/web/src/server/config.ts`
@@ -251,6 +276,7 @@ git commit -m "feat: add dossier Cutting Edge evidence"
 - Modify: `apps/web/src/server/container.test.ts`
 
 **Interfaces:**
+
 - `ApplicantDossierService` accepts `blizzard: Pick<BlizzardGateway, "getCompletedAchievements">`.
 - Contract limitation source adds `blizzard`; existing limitation codes remain the typed public status.
 - `WebConfig.dossier` gains `blizzardClientId` and `blizzardClientSecret`.
@@ -266,7 +292,9 @@ it("retains Warcraft Logs evidence when one Blizzard achievement profile is unav
     kind: "ready",
     dossier: {
       raids: [{ raidId: "1273" }],
-      limitations: [{ source: "blizzard", character: root, code: "unavailable" }]
+      limitations: [
+        { source: "blizzard", character: root, code: "unavailable" }
+      ]
     }
   });
 });
@@ -306,6 +334,7 @@ git commit -m "feat: gather dossier Cutting Edge achievements"
 ### Task 5: Render official CE results separately from boss evidence
 
 **Files:**
+
 - Create: `apps/web/src/components/dossier-cutting-edge-list.tsx`
 - Create: `apps/web/src/components/dossier-cutting-edge-list.test.tsx`
 - Modify: `apps/web/src/components/dossier-raid-list.tsx`
@@ -315,6 +344,7 @@ git commit -m "feat: gather dossier Cutting Edge achievements"
 - Modify: `apps/web/src/app/globals.css`
 
 **Interfaces:**
+
 - `DossierCuttingEdgeList({ cuttingEdges })` renders contract `cuttingEdges`.
 - `DossierRaidList` is titled `Historic Mythic boss evidence` and does not make CE claims.
 
@@ -323,14 +353,18 @@ git commit -m "feat: gather dossier Cutting Edge achievements"
 ```tsx
 it("renders an official Cutting Edge achievement with date and characters", () => {
   render(<DossierCuttingEdgeList cuttingEdges={[cuttingEdge]} />);
-  expect(screen.getByRole("heading", { name: "Historic Cutting Edge" })).toBeVisible();
+  expect(
+    screen.getByRole("heading", { name: "Historic Cutting Edge" })
+  ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
   expect(screen.getByText("Ryii, Ryalts")).toBeVisible();
 });
 
 it("labels Warcraft Logs results as Mythic boss evidence", () => {
   render(<DossierRaidList raids={raids} />);
-  expect(screen.getByRole("heading", { name: "Historic Mythic boss evidence" })).toBeVisible();
+  expect(
+    screen.getByRole("heading", { name: "Historic Mythic boss evidence" })
+  ).toBeVisible();
 });
 ```
 
@@ -371,6 +405,7 @@ git commit -m "feat: render verified Cutting Edge achievements"
 ### Task 6: Verify, configure Railway, deploy, and inspect the live dossier
 
 **Files:**
+
 - Modify: `README.md` only if it already documents Railway web-service variables.
 
 - [ ] **Step 1: Run the complete local quality gate**

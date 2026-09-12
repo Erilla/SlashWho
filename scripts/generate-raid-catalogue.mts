@@ -20,7 +20,11 @@ async function accessToken(region: string): Promise<string> {
     body: "grant_type=client_credentials"
   });
   const body = (await response.json()) as { access_token?: unknown };
-  if (!response.ok || typeof body.access_token !== "string" || !body.access_token) {
+  if (
+    !response.ok ||
+    typeof body.access_token !== "string" ||
+    !body.access_token
+  ) {
     throw new Error("blizzard_journal_token_failed");
   }
   return body.access_token;
@@ -50,7 +54,9 @@ async function main() {
 
 if (isDirectExecution(import.meta.url, process.argv[1] ?? "")) {
   void main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : "raid_catalogue_failed");
+    console.error(
+      error instanceof Error ? error.message : "raid_catalogue_failed"
+    );
     process.exitCode = 1;
   });
 }

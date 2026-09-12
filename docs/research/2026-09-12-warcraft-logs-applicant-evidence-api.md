@@ -47,7 +47,9 @@ query ReportApplicantEvidence($code: String!) {
         server {
           name
           slug
-          region { slug }
+          region {
+            slug
+          }
         }
       }
       fights(killType: Kills) {
@@ -80,9 +82,15 @@ query GuildZoneRank($guildId: Int!, $zoneId: Int!) {
     guild(id: $guildId) {
       zoneRanking(zoneId: $zoneId) {
         progress {
-          worldRank { number }
-          regionRank { number }
-          serverRank { number }
+          worldRank {
+            number
+          }
+          regionRank {
+            number
+          }
+          serverRank {
+            number
+          }
         }
       }
     }

@@ -24,6 +24,7 @@
 ### Task 1: Contract and initial-read configuration
 
 **Files:**
+
 - Modify: `packages/contracts/src/dossier.ts`, `packages/contracts/src/index.ts`, `packages/contracts/src/contracts.test.ts`
 - Modify: `packages/application/src/config.ts`, `packages/application/src/config.test.ts`
 - Modify: `.env.example`, `docs/deployment/railway.md`
@@ -33,11 +34,18 @@
 - [ ] **Step 1: Write failing tests**
 
 ```ts
-expect(applicantDossierSchema.parse({
-  root: { region: "eu", realm: "silvermoon", name: "ryii" },
-  characters: [], raids: [], limitations: [],
-  research: { state: "initial", message: "Linked-character research is still running." }
-}).research.state).toBe("initial");
+expect(
+  applicantDossierSchema.parse({
+    root: { region: "eu", realm: "silvermoon", name: "ryii" },
+    characters: [],
+    raids: [],
+    limitations: [],
+    research: {
+      state: "initial",
+      message: "Linked-character research is still running."
+    }
+  }).research.state
+).toBe("initial");
 ```
 
 Assert that omission of `research` fails. Assert config defaults `20`/`8_000` and rejects `0`/`60_001`.
@@ -51,10 +59,12 @@ Expected: missing contract field/config properties fail.
 - [ ] **Step 3: Implement minimal schemas/config**
 
 ```ts
-export const dossierResearchSchema = z.object({
-  state: z.enum(["initial", "complete", "partial"]),
-  message: z.string().min(1)
-}).strict();
+export const dossierResearchSchema = z
+  .object({
+    state: z.enum(["initial", "complete", "partial"]),
+    message: z.string().min(1)
+  })
+  .strict();
 ```
 
 Require it in `applicantDossierSchema`, export it, add the bounded config values, and document them as web-service-only Railway variables.
@@ -71,6 +81,7 @@ git commit -m "feat: define staged dossier research state"
 ### Task 2: Root-only and snapshot-backed dossier service reads
 
 **Files:**
+
 - Modify: `packages/application/src/applicant-dossier-service.ts`
 - Modify: `packages/application/src/applicant-dossier-service.test.ts`
 
@@ -102,7 +113,11 @@ Extract a private helper that accepts normalized dossier subjects, gathers evide
 ```ts
 snapshot.state === "complete"
   ? { state: "complete", message: "Linked-character research is complete." }
-  : { state: "partial", message: "Additional linked characters may exist; this dossier is not exhaustive." };
+  : {
+      state: "partial",
+      message:
+        "Additional linked characters may exist; this dossier is not exhaustive."
+    };
 ```
 
 Initial uses: `Linked-character research is still running; this evidence covers only the submitted character.`
@@ -119,6 +134,7 @@ git commit -m "feat: stage applicant dossier evidence"
 ### Task 3: Dossier route and polling UI
 
 **Files:**
+
 - Modify: `apps/web/src/app/api/dossiers/[region]/[realm]/[name]/route.ts`
 - Modify: `apps/web/src/app/api/dossiers/api-contract.test.ts`
 - Modify: `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.tsx`
@@ -153,6 +169,7 @@ git commit -m "feat: render staged applicant dossiers"
 ### Task 4: Browser coverage and Railway validation
 
 **Files:**
+
 - Modify: `tests/e2e/search.spec.ts`
 - Modify: `tests/e2e/support/fake-raiderio.ts` only if held discovery needs deterministic root evidence
 - Modify: `docs/deployment/railway.md`
@@ -164,10 +181,14 @@ git commit -m "feat: render staged applicant dossiers"
 Before releasing the held fixture, assert:
 
 ```ts
-await expect(page.getByText(
-  "Linked-character research is still running; this evidence covers only the submitted character."
-)).toBeVisible();
-await expect(page.getByRole("group", { name: "Queen Ansurek evidence" })).toBeVisible();
+await expect(
+  page.getByText(
+    "Linked-character research is still running; this evidence covers only the submitted character."
+  )
+).toBeVisible();
+await expect(
+  page.getByRole("group", { name: "Queen Ansurek evidence" })
+).toBeVisible();
 ```
 
 After release, assert `Linked-character research is complete.`. Add a deterministic partial snapshot case asserting `Additional linked characters may exist; this dossier is not exhaustive.`
