@@ -11,17 +11,25 @@ type JournalRaid = Readonly<{
   encounters: unknown;
 }>;
 
-export function isDirectExecution(moduleUrl: string, invokedPath: string): boolean {
-  return new URL(moduleUrl).pathname.replace(/^\//, "") === invokedPath.replace(/\\/g, "/");
+export function isDirectExecution(
+  moduleUrl: string,
+  invokedPath: string
+): boolean {
+  return (
+    new URL(moduleUrl).pathname.replace(/^\//, "") ===
+    invokedPath.replace(/\\/g, "/")
+  );
 }
 
 export type GeneratedJournalRaid = Readonly<{
   journalRaidId: string;
   raidName: string;
+  imageUrl: string | null;
   encounters: readonly Readonly<{
     journalBossId: string;
     bossName: string;
     bossOrder: number;
+    imageUrl: string | null;
   }>[];
 }>;
 
@@ -51,7 +59,9 @@ function nonEmptyString(value: unknown): string | null {
     : null;
 }
 
-export function normalizeJournalRaid(value: unknown): GeneratedJournalRaid | null {
+export function normalizeJournalRaid(
+  value: unknown
+): GeneratedJournalRaid | null {
   const raid = value as JournalRaid;
   const category = record(raid.category);
   if (category?.type !== "RAID" || !Array.isArray(raid.modes)) return null;
@@ -70,7 +80,12 @@ export function normalizeJournalRaid(value: unknown): GeneratedJournalRaid | nul
     const journalBossId = positiveInteger(encounter.id);
     const bossName = nonEmptyString(encounter.name);
     return journalBossId && bossName
-      ? { journalBossId: String(journalBossId), bossName, bossOrder: index + 1 }
+      ? {
+          journalBossId: String(journalBossId),
+          bossName,
+          bossOrder: index + 1,
+          imageUrl: null
+        }
       : null;
   });
   if (encounters.length === 0 || encounters.some((entry) => entry === null)) {
@@ -79,6 +94,7 @@ export function normalizeJournalRaid(value: unknown): GeneratedJournalRaid | nul
   return {
     journalRaidId: String(journalRaidId),
     raidName,
+    imageUrl: null,
     encounters: encounters as GeneratedJournalRaid["encounters"]
   };
 }
@@ -101,24 +117,94 @@ async function jsonRequest(
   url: URL
 ): Promise<Record<string, unknown>> {
   const requestUrl = new URL(url);
-  requestUrl.searchParams.set(
-    "namespace",
-    `static-${options.region ?? "eu"}`
-  );
+  requestUrl.searchParams.set("namespace", `static-${options.region ?? "eu"}`);
   requestUrl.searchParams.set("locale", options.locale ?? "en_GB");
   const response = await options.fetch(requestUrl, {
     headers: { Authorization: `Bearer ${options.accessToken}` }
   });
-  if (!response.ok) throw new Error(`journal_request_failed_${response.status}`);
+  if (!response.ok)
+    throw new Error(`journal_request_failed_${response.status}`);
   const body = record(await response.json());
   if (!body) throw new Error("journal_response_invalid");
   return body;
 }
 
+async function optionalJsonRequest(
+  options: FetchJournalRaidsOptions,
+  url: URL
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await jsonRequest(options, url);
+  } catch {
+    return null;
+  }
+}
+
+function mediaAsset(
+  body: Record<string, unknown> | null,
+  key: string
+): string | null {
+  if (!body || !Array.isArray(body.assets)) return null;
+  const asset = body.assets.map(record).find((value) => value?.key === key);
+  return asset ? nonEmptyString(asset.value) : null;
+}
+
+function primaryCreatureDisplayId(
+  body: Record<string, unknown> | null,
+  encounterName: string
+): number | null {
+  if (!body || !Array.isArray(body.creatures)) return null;
+  const creature = body.creatures
+    .map(record)
+    .find((value) => value?.name === encounterName);
+  return creature
+    ? positiveInteger(record(creature.creature_display)?.id)
+    : null;
+}
+
+async function enrichJournalRaid(
+  options: FetchJournalRaidsOptions,
+  raid: GeneratedJournalRaid
+): Promise<GeneratedJournalRaid> {
+  const raidMedia = await optionalJsonRequest(
+    options,
+    new URL(
+      `/data/wow/media/journal-instance/${raid.journalRaidId}`,
+      options.baseUrl
+    )
+  );
+  const encounters = await Promise.all(
+    raid.encounters.map(async (encounter) => {
+      const journal = await optionalJsonRequest(
+        options,
+        new URL(
+          `/data/wow/journal-encounter/${encounter.journalBossId}`,
+          options.baseUrl
+        )
+      );
+      const displayId = primaryCreatureDisplayId(journal, encounter.bossName);
+      const media = displayId
+        ? await optionalJsonRequest(
+            options,
+            new URL(
+              `/data/wow/media/creature-display/${displayId}`,
+              options.baseUrl
+            )
+          )
+        : null;
+      return { ...encounter, imageUrl: mediaAsset(media, "zoom") };
+    })
+  );
+  return { ...raid, imageUrl: mediaAsset(raidMedia, "tile"), encounters };
+}
+
 export async function fetchJournalRaids(
   options: FetchJournalRaidsOptions
 ): Promise<readonly GeneratedJournalRaid[]> {
-  const indexUrl = new URL("/data/wow/journal-expansion/index", options.baseUrl);
+  const indexUrl = new URL(
+    "/data/wow/journal-expansion/index",
+    options.baseUrl
+  );
   const index = await jsonRequest(options, indexUrl);
   if (!Array.isArray(index.tiers)) throw new Error("journal_tiers_invalid");
 
@@ -127,7 +213,8 @@ export async function fetchJournalRaids(
     const tierUrl = href(tier, options.baseUrl);
     if (!tierUrl) throw new Error("journal_tier_href_invalid");
     const tierBody = await jsonRequest(options, tierUrl);
-    if (!Array.isArray(tierBody.raids)) throw new Error("journal_raids_invalid");
+    if (!Array.isArray(tierBody.raids))
+      throw new Error("journal_raids_invalid");
     for (const raid of tierBody.raids) {
       const raidUrl = href(raid, options.baseUrl);
       if (!raidUrl) throw new Error("journal_raid_href_invalid");
@@ -138,7 +225,10 @@ export async function fetchJournalRaids(
   const raids = new Map<string, GeneratedJournalRaid>();
   for (const raidUrl of raidUrls.values()) {
     const raid = normalizeJournalRaid(await jsonRequest(options, raidUrl));
-    if (raid) raids.set(raid.journalRaidId, raid);
+    if (raid) {
+      const enriched = await enrichJournalRaid(options, raid);
+      raids.set(enriched.journalRaidId, enriched);
+    }
   }
   return [...raids.values()].sort(
     (a, b) => Number(a.journalRaidId) - Number(b.journalRaidId)

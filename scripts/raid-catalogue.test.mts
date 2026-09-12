@@ -28,9 +28,10 @@ describe("Blizzard Journal raid catalogue", () => {
     ).toEqual({
       journalRaidId: "1273",
       raidName: "Nerub-ar Palace",
+      imageUrl: null,
       encounters: [
-        { journalBossId: "1", bossName: "First", bossOrder: 1 },
-        { journalBossId: "2", bossName: "Last", bossOrder: 2 }
+        { journalBossId: "1", bossName: "First", bossOrder: 1, imageUrl: null },
+        { journalBossId: "2", bossName: "Last", bossOrder: 2, imageUrl: null }
       ]
     });
   });
@@ -73,21 +74,48 @@ describe("Blizzard Journal raid catalogue", () => {
                   { key: { href: "https://api.example/raid/9" } }
                 ]
               }
-            : path === "/raid/1273"
+            : path === "/data/wow/media/journal-instance/1273"
               ? {
-                  id: 1273,
-                  name: "Nerub-ar Palace",
-                  category: { type: "RAID" },
-                  modes: [{ mode: { type: "MYTHIC" } }],
-                  encounters: [{ id: 1, name: "First" }]
+                  assets: [
+                    {
+                      key: "tile",
+                      value: "https://render.example/raids/nerub-ar.jpg"
+                    }
+                  ]
                 }
-              : {
-                  id: 9,
-                  name: "Dungeon",
-                  category: { type: "DUNGEON" },
-                  modes: [{ mode: { type: "MYTHIC" } }],
-                  encounters: []
-                };
+              : path === "/data/wow/journal-encounter/1"
+                ? {
+                    creatures: [
+                      {
+                        name: "First",
+                        creature_display: { id: 9001 }
+                      }
+                    ]
+                  }
+                : path === "/data/wow/media/creature-display/9001"
+                  ? {
+                      assets: [
+                        {
+                          key: "zoom",
+                          value: "https://render.example/bosses/first.jpg"
+                        }
+                      ]
+                    }
+                  : path === "/raid/1273"
+                    ? {
+                        id: 1273,
+                        name: "Nerub-ar Palace",
+                        category: { type: "RAID" },
+                        modes: [{ mode: { type: "MYTHIC" } }],
+                        encounters: [{ id: 1, name: "First" }]
+                      }
+                    : {
+                        id: 9,
+                        name: "Dungeon",
+                        category: { type: "DUNGEON" },
+                        modes: [{ mode: { type: "MYTHIC" } }],
+                        encounters: []
+                      };
       return Response.json(body);
     };
 
@@ -101,7 +129,15 @@ describe("Blizzard Journal raid catalogue", () => {
       {
         journalRaidId: "1273",
         raidName: "Nerub-ar Palace",
-        encounters: [{ journalBossId: "1", bossName: "First", bossOrder: 1 }]
+        imageUrl: "https://render.example/raids/nerub-ar.jpg",
+        encounters: [
+          {
+            journalBossId: "1",
+            bossName: "First",
+            bossOrder: 1,
+            imageUrl: "https://render.example/bosses/first.jpg"
+          }
+        ]
       }
     ]);
     expect(urls[0]?.searchParams.get("namespace")).toBe("static-eu");
