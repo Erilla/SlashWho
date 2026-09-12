@@ -74,6 +74,25 @@ afterEach(() => {
 });
 
 describe("DossierPageClient staged research", () => {
+  it("shows a loading indicator while applicant research is in progress", () => {
+    // Break caught: an in-progress dossier could show only static text, making
+    // it unclear that background research is still active.
+    vi.stubGlobal("fetch", () => new Promise<Response>(() => undefined));
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+
+    const status = screen.getByRole("status");
+    expect(status).toBeVisible();
+    expect(status).toHaveTextContent("Researching applicant dossier…");
+    expect(status.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
+  });
+
   it("shows initial evidence while queued research polls, then replaces it after completion", async () => {
     // Break caught: polling could be skipped as soon as initial evidence exists,
     // leaving a root-only dossier visible after linked-character research finishes.
@@ -117,6 +136,12 @@ describe("DossierPageClient staged research", () => {
     expect(
       screen.getByText(initial.research.message).closest("[aria-live]")
     ).toHaveAttribute("aria-live", "polite");
+    expect(
+      screen
+        .getByText(initial.research.message)
+        .closest(".dossier-status")
+        ?.querySelector('svg[aria-hidden="true"]')
+    ).toBeInTheDocument();
     expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
 
     await act(async () => {

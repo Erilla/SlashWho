@@ -208,10 +208,31 @@ a {
 }
 
 .dossier-status {
+  display: flex;
   min-height: 3.7rem;
+  align-items: center;
+  gap: 0.65rem;
   margin: 0;
   padding: 1rem 0;
   color: var(--muted);
+}
+
+.dossier-loading-spinner {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  animation: dossier-spin 0.85s linear infinite;
+  fill: none;
+  stroke: currentColor;
+  stroke-dasharray: 12 38;
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+@keyframes dossier-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .dossier-layout {
@@ -463,6 +484,7 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .dossier-loading-spinner,
   .state-badge::before {
     animation: none !important;
   }

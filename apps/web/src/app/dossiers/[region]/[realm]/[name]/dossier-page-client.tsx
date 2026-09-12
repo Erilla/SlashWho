@@ -219,8 +219,15 @@ export function DossierPageClient({
         <DossierResearchState research={visibleResearch} />
       ) : null}
       {status && !dossier ? (
-        <p className="dossier-status" aria-live="polite">
-          {status}
+        <p className="dossier-status" role="status">
+          <svg
+            aria-hidden="true"
+            className="dossier-loading-spinner"
+            viewBox="0 0 24 24"
+          >
+            <circle cx="12" cy="12" r="8" />
+          </svg>
+          <span>{status}</span>
         </p>
       ) : null}
       {visibleError ? (
