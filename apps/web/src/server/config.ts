@@ -12,6 +12,8 @@ export type WebConfig = Readonly<{
     warcraftLogsClientId: string;
     warcraftLogsClientSecret: string;
     warcraftLogsBaseUrl?: string;
+    blizzardClientId: string;
+    blizzardClientSecret: string;
   }>;
 }>;
 
@@ -70,7 +72,15 @@ export function loadWebConfig(
         "warcraft_logs_client_secret_required"
       ),
       warcraftLogsBaseUrl:
-        environment.WARCRAFT_LOGS_BASE_URL?.trim() || undefined
+        environment.WARCRAFT_LOGS_BASE_URL?.trim() || undefined,
+      blizzardClientId: requiredSecret(
+        environment.BLIZZARD_CLIENT_ID,
+        "blizzard_client_id_required"
+      ),
+      blizzardClientSecret: requiredSecret(
+        environment.BLIZZARD_CLIENT_SECRET,
+        "blizzard_client_secret_required"
+      )
     }
   };
 }

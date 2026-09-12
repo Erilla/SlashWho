@@ -26,7 +26,7 @@ export type DossierKillEvidence = Readonly<{
   reportUrl: string | null;
 }>;
 export type DossierLimitation = Readonly<{
-  source: "raiderio" | "warcraft_logs";
+  source: "raiderio" | "warcraft_logs" | "blizzard";
   character: CharacterKey | null;
   code: string;
 }>;
@@ -222,7 +222,9 @@ export function buildApplicantDossier(
       .map(([key, entry]) => {
         const [, completedAt] = key.split("\0", 2);
         return {
-          ...entry.achievement,
+          achievementId: entry.achievement.achievementId,
+          achievementName: entry.achievement.achievementName,
+          description: entry.achievement.description,
           completedAt: completedAt!,
           characters: [...entry.characters].sort(text)
         };

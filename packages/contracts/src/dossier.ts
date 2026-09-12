@@ -72,7 +72,7 @@ export const dossierCuttingEdgeSchema = z
 
 export const dossierLimitationSchema = z
   .object({
-    source: z.enum(["raiderio", "warcraft_logs"]),
+    source: z.enum(["raiderio", "warcraft_logs", "blizzard"]),
     character: characterKeySchema.nullable(),
     code: z.enum([
       "not_found",

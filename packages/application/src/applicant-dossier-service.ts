@@ -9,9 +9,11 @@ import {
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
   type CharacterKey,
+  type DossierCuttingEdgeEvidence,
   type DossierKillEvidence,
   type DossierLimitation
 } from "@slashwho/domain";
+import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 
 import type { ApplicationConfig } from "./config";
@@ -35,12 +37,13 @@ export interface ApplicantDossierService {
   read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
 }
 
-type EvidenceSource = "raiderio" | "warcraft_logs";
+type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
 type DossierSubject = Pick<StoredSnapshotCharacter, "key" | "displayName"> & {
   source: StoredSnapshotCharacter["source"] | "submitted";
 };
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
+  cuttingEdges: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
 
@@ -56,7 +59,12 @@ function limitationMessage(
   source: EvidenceSource,
   code: ContractDossierLimitation["code"]
 ): string {
-  const label = source === "raiderio" ? "Raider.IO" : "Warcraft Logs";
+  const label =
+    source === "raiderio"
+      ? "Raider.IO"
+      : source === "blizzard"
+        ? "Blizzard achievement data"
+        : "Warcraft Logs";
   switch (code) {
     case "not_found":
       return `${label} has no public evidence for this character.`;
@@ -67,6 +75,8 @@ function limitationMessage(
     case "request_cap":
       return `${label} history is incomplete because this dossier reached its request cap. Shown kills are the earliest found so far; older kills may exist.`;
     case "unavailable":
+      if (source === "blizzard")
+        return `${label} could not be read; Cutting Edge status is unknown for this character.`;
       return `${label} history could not be fully loaded. Shown kills are the earliest found so far; older kills may exist.`;
     case "schema_changed":
       return `${label} returned an unexpected response, so history is incomplete. Shown kills are the earliest found so far; older kills may exist.`;
@@ -92,19 +102,28 @@ async function gatherCharacterEvidence(
   character: DossierSubject,
   options: {
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     requestCap: number;
     signal?: AbortSignal;
   }
 ): Promise<EvidenceResult> {
-  const warcraftLogs = await options.warcraftLogs
-    .getFirstKillReports(character.key, {
-      requestCap: options.requestCap,
-      signal: options.signal
-    })
-    .catch((error: unknown) => {
-      if (isAbort(error, options.signal)) throw error;
-      return { kind: "limitation" as const, code: "unavailable" as const };
-    });
+  const [warcraftLogs, blizzard] = await Promise.all([
+    options.warcraftLogs
+      .getFirstKillReports(character.key, {
+        requestCap: options.requestCap,
+        signal: options.signal
+      })
+      .catch((error: unknown) => {
+        if (isAbort(error, options.signal)) throw error;
+        return { kind: "limitation" as const, code: "unavailable" as const };
+      }),
+    options.blizzard
+      .getCompletedAchievements(character.key, options.signal)
+      .catch((error: unknown) => {
+        if (isAbort(error, options.signal)) throw error;
+        return null;
+      })
+  ]);
   const limitations: DossierLimitation[] = [];
   if (warcraftLogs.kind === "evidence" && warcraftLogs.limitation) {
     limitations.push(
@@ -115,6 +134,9 @@ async function gatherCharacterEvidence(
     limitations.push(
       limitation("warcraft_logs", character.key, warcraftLogs.code)
     );
+  }
+  if (blizzard === null) {
+    limitations.push(limitation("blizzard", character.key, "unavailable"));
   }
   return {
     limitations,
@@ -134,7 +156,12 @@ async function gatherCharacterEvidence(
             historicWorldRank: kill.historicWorldRank,
             reportUrl: kill.fightUrl
           }))
-        : []
+        : [],
+    cuttingEdges:
+      blizzard?.map((achievement) => ({
+        ...achievement,
+        character: character.key
+      })) ?? []
   };
 }
 
@@ -161,6 +188,7 @@ async function assembleDossier(options: {
   skippedSubjects: readonly DossierSubject[];
   research: ContractApplicantDossier["research"];
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   requestCap: number;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
@@ -169,12 +197,14 @@ async function assembleDossier(options: {
       options.requestCap === 0
         ? Promise.resolve({
             kills: [],
+            cuttingEdges: [],
             limitations: [
               limitation("warcraft_logs", character.key, "request_cap")
             ]
           })
         : gatherCharacterEvidence(character, {
             warcraftLogs: options.warcraftLogs,
+            blizzard: options.blizzard,
             requestCap: options.requestCap,
             signal: options.signal
           })
@@ -193,6 +223,7 @@ async function assembleDossier(options: {
       displayName
     })),
     kills: evidence.flatMap((item) => item.kills),
+    cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
     limitations
   });
   return applicantDossierSchema.parse({
@@ -211,6 +242,7 @@ export function createApplicantDossierService(options: {
   repositories: Pick<Repositories, "snapshots">;
   search: Pick<SearchService, "create">;
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   config: ApplicationConfig;
 }): ApplicantDossierService {
   return {
@@ -243,6 +275,7 @@ export function createApplicantDossierService(options: {
               "Linked-character research is still running; this evidence covers only the submitted character."
           },
           warcraftLogs: options.warcraftLogs,
+          blizzard: options.blizzard,
           requestCap: options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP,
           signal: combineSignals(signal, timeout)
         })
@@ -286,6 +319,7 @@ export function createApplicantDossierService(options: {
                     "Additional linked characters may exist; this dossier is not exhaustive."
                 },
           warcraftLogs: options.warcraftLogs,
+          blizzard: options.blizzard,
           requestCap,
           signal: requestSignal
         })

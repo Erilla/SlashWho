@@ -17,6 +17,7 @@ import {
   createWarcraftLogsClient,
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
+import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
 import { Pool } from "pg";
 
 import { loadWebConfig, type WebConfig } from "./config";
@@ -54,10 +55,16 @@ export type WebContainerDependencies = Readonly<{
     clientSecret: string;
     baseUrl?: string;
   }): WarcraftLogsGateway;
+  createBlizzardGateway(options: {
+    fetch: typeof globalThis.fetch;
+    clientId: string;
+    clientSecret: string;
+  }): BlizzardGateway;
   createApplicantDossierService(options: {
     repositories: Pick<Repositories, "snapshots">;
     search: Pick<SearchService, "create">;
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     config: ApplicationConfig;
   }): ApplicantDossierService;
 }>;
@@ -70,6 +77,7 @@ const defaultDependencies: WebContainerDependencies = {
   createSearchService,
   createRaiderIoGateway: createRaiderIoClient,
   createWarcraftLogsGateway: createWarcraftLogsClient,
+  createBlizzardGateway: createBlizzardClient,
   createApplicantDossierService
 };
 
@@ -98,6 +106,11 @@ export async function createWebContainer(
         clientId: config.dossier.warcraftLogsClientId,
         clientSecret: config.dossier.warcraftLogsClientSecret,
         baseUrl: config.dossier.warcraftLogsBaseUrl
+      }),
+      blizzard: dependencies.createBlizzardGateway({
+        fetch: globalThis.fetch,
+        clientId: config.dossier.blizzardClientId,
+        clientSecret: config.dossier.blizzardClientSecret
       }),
       config: config.application
     });

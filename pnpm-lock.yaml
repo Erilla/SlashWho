@@ -65,6 +65,9 @@ importers:
       '@slashwho/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@slashwho/blizzard':
+        specifier: workspace:*
+        version: link:../../packages/blizzard
       '@slashwho/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

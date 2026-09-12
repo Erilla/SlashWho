@@ -54,7 +54,9 @@ it("migrates and initializes the durable queue before serving searches", async (
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         warcraftLogsClientId: "warcraft-logs-client-id",
-        warcraftLogsClientSecret: "warcraft-logs-client-secret"
+        warcraftLogsClientSecret: "warcraft-logs-client-secret",
+        blizzardClientId: "blizzard-client-id",
+        blizzardClientSecret: "blizzard-client-secret"
       }
     },
     {
@@ -79,6 +81,9 @@ it("migrates and initializes the durable queue before serving searches", async (
         return {} as never;
       },
       createWarcraftLogsGateway() {
+        return {} as never;
+      },
+      createBlizzardGateway() {
         return {} as never;
       },
       createApplicantDossierService() {
@@ -147,7 +152,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         warcraftLogsClientId: "warcraft-logs-client-id",
-        warcraftLogsClientSecret: "warcraft-logs-client-secret"
+        warcraftLogsClientSecret: "warcraft-logs-client-secret",
+        blizzardClientId: "blizzard-client-id",
+        blizzardClientSecret: "blizzard-client-secret"
       }
     },
     {
@@ -168,6 +175,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         return {} as never;
       },
       createWarcraftLogsGateway() {
+        return {} as never;
+      },
+      createBlizzardGateway() {
         return {} as never;
       },
       createApplicantDossierService() {

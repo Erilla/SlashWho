@@ -1,6 +1,7 @@
 import type { SearchService } from "./search-service";
 import type { Repositories, StoredSnapshot } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
+import type { BlizzardGateway } from "@slashwho/blizzard";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
@@ -96,6 +97,14 @@ function fixture(
       ]
     })
   } as unknown as Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  const blizzard = {
+    getCompletedAchievements: vi.fn().mockResolvedValue([
+      {
+        achievementId: "40254",
+        completedAt: "2025-01-14T20:30:00.000Z"
+      }
+    ])
+  } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">;
   const config = applicationConfigSchema.parse({
     BOT_API_KEY: "b".repeat(32),
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -110,9 +119,10 @@ function fixture(
     repositories,
     search,
     warcraftLogs,
+    blizzard,
     config
   });
-  return { dossiers, repositories, runsCreate, search, warcraftLogs };
+  return { dossiers, repositories, runsCreate, search, warcraftLogs, blizzard };
 }
 
 describe("applicant dossier service", () => {
@@ -183,6 +193,9 @@ describe("applicant dossier service", () => {
             ]
           }
         ],
+        cuttingEdges: [
+          { achievementId: "40254", characters: ["Ryalts", "Ryii"] }
+        ],
         research: {
           state: "complete",
           message: "Linked-character research is complete."
@@ -191,6 +204,23 @@ describe("applicant dossier service", () => {
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
+  });
+
+  it("retains Warcraft Logs evidence when Blizzard achievement data is unavailable", async () => {
+    const { dossiers, blizzard } = fixture();
+    vi.mocked(blizzard.getCompletedAchievements).mockRejectedValueOnce(
+      Object.assign(new Error("blizzard_transient"), { kind: "transient" })
+    );
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        raids: [{ raidId: "1273" }],
+        limitations: [
+          { source: "blizzard", character: root, code: "unavailable" }
+        ]
+      }
+    });
   });
 
   it("returns not_ready without contacting evidence sources when no snapshot exists", async () => {
