@@ -39,7 +39,9 @@ export function DossierPageClient({
   jobId
 }: DossierPageClientProps) {
   const [dossier, setDossier] = useState(initialDossier);
+  const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [researchFailed, setResearchFailed] = useState(false);
   const [status, setStatus] = useState(
     initialDossier
       ? null
@@ -69,14 +71,15 @@ export function DossierPageClient({
         }
       );
       const body = await readJson(response);
+      if (controller.signal.aborted || hasExpandedDossier.current) return;
       if (!response.ok) {
-        setError(apiError(response, body));
+        setInitialError(apiError(response, body));
         return;
       }
       const parsed = applicantDossierSchema.safeParse(body);
       if (!parsed.success) {
-        setError("The dossier returned an unexpected response.");
-      } else if (!hasExpandedDossier.current) {
+        setInitialError("The dossier returned an unexpected response.");
+      } else {
         setDossier(parsed.data);
       }
       if (!jobId) setStatus(null);
@@ -85,7 +88,8 @@ export function DossierPageClient({
     if (!initialDossier)
       void readInitialDossier().catch((caught) => {
         if (caught instanceof Error && caught.name === "AbortError") return;
-        setError(
+        if (controller.signal.aborted || hasExpandedDossier.current) return;
+        setInitialError(
           "The dossier could not be loaded. Please check your connection."
         );
         if (!jobId) setStatus(null);
@@ -134,6 +138,8 @@ export function DossierPageClient({
       } else {
         hasExpandedDossier.current = true;
         setDossier(parsed.data);
+        setInitialError(null);
+        setError(null);
       }
       setStatus(null);
     }
@@ -161,6 +167,7 @@ export function DossierPageClient({
           return;
         }
         if (parsed.data.status === "failed") {
+          setResearchFailed(true);
           setError(
             parsed.data.error?.message ??
               "The applicant research could not be completed."
@@ -186,6 +193,17 @@ export function DossierPageClient({
     };
   }, [dossierPath, jobId]);
 
+  const visibleError = error ?? initialError;
+  const research = dossier?.research;
+  const visibleResearch =
+    research && research.state === "initial" && researchFailed
+      ? {
+          ...research,
+          message:
+            "Linked-character research failed; this evidence covers only the submitted character."
+        }
+      : research;
+
   return (
     <main className="page-shell dossier-page">
       <header className="dossier-heading">
@@ -196,15 +214,17 @@ export function DossierPageClient({
         </p>
       </header>
 
-      {dossier ? <DossierResearchState research={dossier.research} /> : null}
+      {visibleResearch ? (
+        <DossierResearchState research={visibleResearch} />
+      ) : null}
       {status && !dossier ? (
         <p className="dossier-status" aria-live="polite">
           {status}
         </p>
       ) : null}
-      {error ? (
+      {visibleError ? (
         <p className="view-error" role="alert">
-          {error}
+          {visibleError}
         </p>
       ) : null}
 

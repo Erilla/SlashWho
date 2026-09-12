@@ -22,11 +22,11 @@ published a snapshot.
 
 The user interface distinguishes these states:
 
-| State | Evidence scope | Required disclosure |
-| --- | --- | --- |
-| `initial` | Submitted character only | Linked-character research is still running; this is not the full applicant record. |
-| `complete` | Every character in a complete current snapshot | Full linked-character research completed. |
-| `partial` | Every character in a partial current snapshot | Additional linked characters may exist; the displayed dossier is not exhaustive. |
+| State      | Evidence scope                                 | Required disclosure                                                                |
+| ---------- | ---------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `initial`  | Submitted character only                       | Linked-character research is still running; this is not the full applicant record. |
+| `complete` | Every character in a complete current snapshot | Full linked-character research completed.                                          |
+| `partial`  | Every character in a partial current snapshot  | Additional linked characters may exist; the displayed dossier is not exhaustive.   |
 
 `complete` describes the discovery snapshot, not universal proof that every
 external log exists. All source-specific Warcraft Logs limitations continue to
@@ -46,6 +46,8 @@ Applicant URL
 The initial route does not wait for a snapshot and does not persist a dossier,
 evidence, or raw provider payload. It builds its root-only dossier using the
 same aggregation and limitation rules as the expanded dossier.
+Its character is labelled `submitted`, because no relationship source has yet
+been established. Snapshot-backed source labels retain their existing mapping.
 
 The established `discovery_runs`, queue, fingerprint admission, snapshots, and
 source labels remain the sole durable representation of linked characters. No
@@ -62,7 +64,11 @@ new relationship or evidence tables are introduced.
 - On a completed job, the client requests the expanded dossier and replaces the
   initial dossier. A partial snapshot produces `partial`, never `complete`.
 - On a failed job, the client keeps initial evidence and shows research failure
-  separately. Refreshing a job URL resumes the same job status/research view.
+  separately, replacing the running disclosure with a failed, root-only
+  disclosure even if initial evidence arrives afterward. Refreshing a job URL
+  resumes the same job status/research view.
+- Successful expansion clears initial-read errors and ignores late initial
+  responses, including failures.
 
 ## Safeguards
 

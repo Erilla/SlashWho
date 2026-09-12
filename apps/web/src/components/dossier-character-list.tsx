@@ -5,6 +5,7 @@ type DossierCharacterListProps = Readonly<{
 }>;
 
 const sourceLabel: Record<DossierCharacter["source"], string> = {
+  submitted: "Submitted character",
   raiderio_declared: "Raider.IO declared",
   fingerprint_derived: "Fingerprint-derived"
 };

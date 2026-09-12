@@ -36,10 +36,9 @@ export interface ApplicantDossierService {
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs";
-type DossierSubject = Pick<
-  StoredSnapshotCharacter,
-  "key" | "displayName" | "source"
->;
+type DossierSubject = Pick<StoredSnapshotCharacter, "key" | "displayName"> & {
+  source: StoredSnapshotCharacter["source"] | "submitted";
+};
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   limitations: readonly DossierLimitation[];
@@ -138,9 +137,11 @@ function serializeDossierSubject(character: DossierSubject) {
     key: character.key,
     displayName: character.displayName,
     source:
-      character.source === "fingerprint"
-        ? ("fingerprint_derived" as const)
-        : ("raiderio_declared" as const)
+      character.source === "submitted"
+        ? ("submitted" as const)
+        : character.source === "fingerprint"
+          ? ("fingerprint_derived" as const)
+          : ("raiderio_declared" as const)
   };
 }
 
@@ -228,7 +229,7 @@ export function createApplicantDossierService(options: {
         kind: "ready",
         dossier: await assembleDossier({
           root: key,
-          subjects: [{ key, displayName: key.name, source: "input" }],
+          subjects: [{ key, displayName: key.name, source: "submitted" }],
           skippedSubjects: [],
           research: {
             state: "initial",

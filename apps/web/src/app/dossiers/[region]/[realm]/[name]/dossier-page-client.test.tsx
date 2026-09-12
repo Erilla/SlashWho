@@ -27,7 +27,7 @@ function dossier(
       {
         key: identity,
         displayName: "Ryii",
-        source: "raiderio_declared"
+        source: state === "initial" ? "submitted" : "raiderio_declared"
       }
     ],
     raids: [
@@ -111,6 +111,8 @@ describe("DossierPageClient staged research", () => {
       await Promise.resolve();
     });
     expect(screen.getByText("Initial evidence")).toBeVisible();
+    expect(screen.getByText("Submitted character")).toBeVisible();
+    expect(screen.queryByText("Raider.IO declared")).not.toBeInTheDocument();
     expect(
       screen.getByText(initial.research.message).closest("[aria-live]")
     ).toHaveAttribute("aria-live", "polite");
@@ -157,7 +159,110 @@ describe("DossierPageClient staged research", () => {
 
     expect(await screen.findByText("Initial evidence")).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent("Research failed.");
+    expect(
+      screen.queryByText(/research is still running/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/research failed;.*only the submitted character/i)
+    ).toBeVisible();
   });
+
+  it("discloses failed research when root evidence arrives after the job failure", async () => {
+    // Break caught: a late initial response can reintroduce a running disclosure after failure.
+    let resolveInitial!: (response: Response) => void;
+    const initialResponse = new Promise<Response>((resolve) => {
+      resolveInitial = resolve;
+    });
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input === `${dossierPath}?scope=initial`) return initialResponse;
+      return Promise.resolve(
+        Response.json({
+          status: "failed",
+          error: { code: "upstream_unavailable", message: "Research failed." }
+        })
+      );
+    });
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Research failed."
+    );
+    await act(async () => {
+      resolveInitial(Response.json(initial));
+    });
+    expect(screen.getByText("Initial evidence")).toBeVisible();
+    expect(
+      screen.queryByText(/research is still running/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/research failed;.*only the submitted character/i)
+    ).toBeVisible();
+  });
+
+  it.each([
+    ["HTTP", "before"],
+    ["schema", "before"],
+    ["network", "before"],
+    ["HTTP", "after"],
+    ["schema", "after"],
+    ["network", "after"]
+  ])(
+    "discards an initial %s failure %s successful expansion",
+    async (failure, timing) => {
+      // Break caught: initial errors can survive expansion or arrive after the expanded dossier.
+      let resolveInitial!: (response: Response) => void;
+      let rejectInitial!: (error: Error) => void;
+      let resolveJob!: (response: Response) => void;
+      const initialResponse = new Promise<Response>((resolve, reject) => {
+        resolveInitial = resolve;
+        rejectInitial = reject;
+      });
+      const jobResponse = new Promise<Response>((resolve) => {
+        resolveJob = resolve;
+      });
+      vi.stubGlobal("fetch", (input: string) => {
+        if (input === `${dossierPath}?scope=initial`) return initialResponse;
+        if (input === `/api/dossiers/jobs/${jobId}`) return jobResponse;
+        if (input === dossierPath)
+          return Promise.resolve(Response.json(expanded));
+        throw new Error(`Unexpected request: ${input}`);
+      });
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={null}
+          jobId={jobId}
+        />
+      );
+      const failInitial = () => {
+        if (failure === "network") rejectInitial(new Error("Connection lost"));
+        else
+          resolveInitial(
+            Response.json({}, { status: failure === "HTTP" ? 503 : 200 })
+          );
+      };
+      if (timing === "before") {
+        await act(async () => {
+          failInitial();
+        });
+        expect(screen.getByRole("alert")).toBeVisible();
+      }
+      await act(async () => {
+        resolveJob(Response.json({ status: "complete", error: null }));
+      });
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+      if (timing === "after")
+        await act(async () => {
+          failInitial();
+        });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    }
+  );
 
   it("keeps expanded evidence when the initial response arrives after completion", async () => {
     // Break caught: a slow initial request could overwrite the completed

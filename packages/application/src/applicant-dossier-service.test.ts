@@ -213,7 +213,7 @@ describe("applicant dossier service", () => {
           {
             key: root,
             displayName: "ryii",
-            source: "raiderio_declared"
+            source: "submitted"
           }
         ],
         raids: [
