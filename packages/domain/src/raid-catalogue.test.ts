@@ -20,8 +20,36 @@ it("maps Rinn's Sszorak evidence to the published leaderboard", () => {
     raidSlug: "the-venomous-abyss",
     bossSlug: "sszorak"
   });
-  expect(lookupRaiderIoBoss("The Dreamrift", "Unknown")).toBeNull();
+  expect(lookupRaiderIoBoss("Unknown raid", "Unknown")).toBeNull();
 });
+
+it.each([
+  [
+    "Manaforge Omega",
+    "Dimensius, the All-Devouring",
+    "manaforge-omega",
+    "dimensius"
+  ],
+  [
+    "The Voidspire",
+    "Fallen-King Salhadaar",
+    "tier-mn-1",
+    "fallenking-salhadaar"
+  ],
+  ["The Voidspire", "Vaelgor & Ezzorak", "tier-mn-1", "vaelgor-ezzorak"],
+  [
+    "The Dreamrift",
+    "Chimaerus the Undreamt God",
+    "tier-mn-1",
+    "chimaerus-the-undreamt-god"
+  ],
+  ["March on Quel'Danas", "Midnight Falls", "tier-mn-1", "midnight-falls"]
+])(
+  "uses published identifiers for %s / %s",
+  (raid, boss, raidSlug, bossSlug) => {
+    expect(lookupRaiderIoBoss(raid, boss)).toEqual({ raidSlug, bossSlug });
+  }
+);
 
 it("maps a Blizzard Journal encounter to its generated raid and boss metadata", () => {
   expect(lookupJournalEncounter("2602")).toEqual({

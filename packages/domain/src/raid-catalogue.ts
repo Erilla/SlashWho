@@ -32,6 +32,10 @@ const raiderIoRaidSlugs = new Map<string, string>([
   ["1296", "liberation-of-undermine"],
   ["1302", "manaforge-omega"],
   ["1305", "sporefall"],
+  // Raider.IO combines the three opening Midnight raids into one tier.
+  ["1307", "tier-mn-1"],
+  ["1308", "tier-mn-1"],
+  ["1314", "tier-mn-1"],
   ["1317", "the-tidebound-grotto"],
   ["1320", "the-venomous-abyss"]
 ]);
@@ -72,7 +76,9 @@ const canonicalTierOrdinals = new Map<string, number>([
 // labels. Keep verified exceptions keyed by the immutable Journal encounter.
 const raiderIoBossSlugOverrides = new Map<string, string>([
   ["2332", "uunat-harbinger-of-the-void"],
-  ["2599", "sikran"]
+  ["2599", "sikran"],
+  ["2691", "dimensius"],
+  ["2736", "fallenking-salhadaar"]
 ]);
 
 const encounters = new Map<string, RaidCatalogueEncounter>(
