@@ -7,7 +7,7 @@ type DossierResearchStateProps = Readonly<{
 export function DossierResearchState({ research }: DossierResearchStateProps) {
   return (
     <p className="dossier-status" aria-live="polite" role="status">
-      {research.state === "initial" ? (
+      {research.state === "initial" || research.state === "gathering" ? (
         <svg
           aria-hidden="true"
           className="dossier-loading-spinner"

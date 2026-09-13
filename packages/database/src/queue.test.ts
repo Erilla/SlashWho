@@ -37,6 +37,7 @@ vi.mock("pg-boss", () => ({
 
 import {
   createDiscoveryQueue,
+  collectCharacterEvidenceQueueName,
   discoverCharacterQueueName,
   fingerprintAdmissionQueueName,
   updateActiveRetryDelay
@@ -79,7 +80,14 @@ describe("fingerprint admission queue", () => {
     const worker = queueFakes.workers.find(
       ({ name }) => name === fingerprintAdmissionQueueName
     );
-    await worker?.handler([{ data: { runId } }]);
+    await worker?.handler([
+      {
+        data: { runId },
+        retryCount: 0,
+        retryLimit: 4,
+        signal: new AbortController().signal
+      } as never
+    ]);
 
     expect(queueFakes.createQueue).toHaveBeenCalledWith(
       fingerprintAdmissionQueueName,
@@ -98,7 +106,55 @@ describe("fingerprint admission queue", () => {
     expect(delivered).toEqual([runId]);
 
     await queue.stop({ graceful: true, timeoutMs: 1 });
-    await worker?.handler([{ data: { runId } }]);
+    await worker?.handler([
+      {
+        data: { runId },
+        retryCount: 0,
+        retryLimit: 4,
+        signal: new AbortController().signal
+      } as never
+    ]);
     expect(delivered).toEqual([runId]);
+  });
+});
+
+describe("character evidence queue", () => {
+  it("delivers one singleton evidence scan per evidence run", async () => {
+    // Break caught: duplicate dossier reads could fan out into concurrent WCL
+    // scans for the same durable evidence run.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    const runId = "00000000-0000-4000-8000-000000000005";
+    const delivered: Array<{ runId: string; attempt: number }> = [];
+
+    await queue.start();
+    await queue.enqueueCharacterEvidence(runId);
+    await queue.workCharacterEvidence(async (payload, context) => {
+      delivered.push({ runId: payload.runId, attempt: context.attempt });
+    });
+
+    const worker = queueFakes.workers.find(
+      ({ name }) => name === collectCharacterEvidenceQueueName
+    );
+    await worker?.handler([
+      {
+        data: { runId },
+        retryCount: 0,
+        retryLimit: 4,
+        signal: new AbortController().signal
+      } as never
+    ]);
+
+    expect(queueFakes.createQueue).toHaveBeenCalledWith(
+      collectCharacterEvidenceQueueName,
+      expect.objectContaining({ policy: "exclusive" })
+    );
+    expect(queueFakes.send).toHaveBeenCalledWith(
+      collectCharacterEvidenceQueueName,
+      { runId },
+      { singletonKey: runId }
+    );
+    expect(delivered).toEqual([{ runId, attempt: 1 }]);
   });
 });

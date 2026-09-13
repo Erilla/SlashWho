@@ -27,6 +27,8 @@ function dossier(
       {
         key: identity,
         displayName: "Ryii",
+        className: "Mage",
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
         source: state === "initial" ? "submitted" : "raiderio_declared"
       }
     ],
@@ -68,6 +70,17 @@ const expanded = dossier(
   "Linked-character research is complete.",
   "Expanded evidence"
 );
+const gatheringEvidence = {
+  ...dossier(
+    "partial",
+    "Gathering historic Mythic evidence for this applicant.",
+    "Cached evidence"
+  ),
+  research: {
+    state: "gathering",
+    message: "Gathering historic Mythic evidence for this applicant."
+  }
+} as unknown as ApplicantDossier;
 
 afterEach(() => {
   cleanup();
@@ -76,6 +89,41 @@ afterEach(() => {
 });
 
 describe("DossierPageClient staged research", () => {
+  it("polls the cached dossier while historic evidence is gathering", async () => {
+    // Break caught: the browser could leave a partial cached dossier static
+    // after its evidence jobs finish, hiding newly collected current-tier kills.
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(() => Promise.resolve(Response.json(expanded)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={gatheringEvidence}
+        jobId={null}
+      />
+    );
+
+    expect(screen.getByText("Cached evidence")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Gathering historic Mythic evidence"
+    );
+    expect(
+      screen.getByRole("status").querySelector('svg[aria-hidden="true"]')
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      dossierPath,
+      expect.objectContaining({ cache: "no-store" })
+    );
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByText("Cached evidence")).not.toBeInTheDocument();
+  });
+
   it("shows a loading indicator while applicant research is in progress", () => {
     // Break caught: an in-progress dossier could show only static text, making
     // it unclear that background research is still active.

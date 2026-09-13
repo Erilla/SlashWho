@@ -9,7 +9,7 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
 
   return (
     <section
-      className="dossier-limitations"
+      className="dossier-panel dossier-limitations"
       aria-labelledby="limitations-heading"
     >
       <h2 className="section-heading" id="limitations-heading">

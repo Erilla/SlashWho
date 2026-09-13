@@ -1,5 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierMediaFallback } from "./dossier-media-fallback";
+
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
 }>;
@@ -10,9 +12,19 @@ function displayGuild(
   return guild ? `${guild.name} · ${guild.realm}` : "—";
 }
 
+function displayDate(isoDate: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeZone: "UTC"
+  }).format(new Date(isoDate));
+}
+
 export function DossierRaidList({ raids }: DossierRaidListProps) {
   return (
-    <section aria-labelledby="historic-mythic-evidence-heading">
+    <section
+      aria-labelledby="historic-mythic-evidence-heading"
+      className="dossier-panel dossier-mythic-evidence-panel"
+    >
       <h2 className="section-heading" id="historic-mythic-evidence-heading">
         Historic Mythic boss evidence
       </h2>
@@ -32,7 +44,12 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                     loading="lazy"
                     src={raid.imageUrl}
                   />
-                ) : null}
+                ) : (
+                  <DossierMediaFallback
+                    alt={`${raid.raidName} artwork`}
+                    className="dossier-raid-artwork"
+                  />
+                )}
                 <span>{raid.raidName}</span>
               </h3>
               <div className="dossier-boss-list">
@@ -54,9 +71,18 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                             loading="lazy"
                             src={boss.imageUrl}
                           />
-                        ) : null}
+                        ) : (
+                          <DossierMediaFallback
+                            alt={`${boss.bossName} artwork`}
+                            className="dossier-boss-artwork"
+                          />
+                        )}
                         <div>
                           <h4>{boss.bossName}</h4>
+                          <p className="dossier-boss-first-kill">
+                            First kill: {displayDate(firstKill.killedAt)} ·{" "}
+                            {firstKill.characters.join(", ") || "—"}
+                          </p>
                           <p className="dossier-boss-rank">
                             {firstKill.historicWorldRank === null
                               ? "World rank: —"
@@ -65,54 +91,57 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                         </div>
                       </div>
                       <details>
-                        <summary>View first-kill evidence</summary>
-                        {firstKills.map((evidence, index) => (
-                          <dl
-                            className="dossier-evidence"
-                            key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
-                          >
-                            <div>
-                              <dt>First kill</dt>
-                              <dd>
-                                <time dateTime={evidence.killedAt}>
-                                  {new Intl.DateTimeFormat("en-GB", {
-                                    dateStyle: "medium",
-                                    timeZone: "UTC"
-                                  }).format(new Date(evidence.killedAt))}
-                                </time>
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>Guild</dt>
-                              <dd>Guild: {displayGuild(evidence.guild)}</dd>
-                            </div>
-                            <div>
-                              <dt>World rank</dt>
-                              <dd>
-                                World rank: {evidence.historicWorldRank ?? "—"}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>Report</dt>
-                              <dd>
-                                {evidence.reportUrl ? (
-                                  <a
-                                    className="external-link"
-                                    href={evidence.reportUrl}
-                                  >
-                                    View Warcraft Logs report
-                                  </a>
-                                ) : (
-                                  "Report: —"
-                                )}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>Characters present</dt>
-                              <dd>{evidence.characters.join(", ") || "—"}</dd>
-                            </div>
-                          </dl>
-                        ))}
+                        <summary>View kill evidence</summary>
+                        <section
+                          aria-label="Kill evidence"
+                          className="dossier-evidence-list"
+                        >
+                          {firstKills.map((evidence, index) => (
+                            <dl
+                              className="dossier-evidence"
+                              key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
+                            >
+                              <div>
+                                <dt>{index === 0 ? "First kill" : "Kill"}</dt>
+                                <dd>
+                                  <time dateTime={evidence.killedAt}>
+                                    {displayDate(evidence.killedAt)}
+                                  </time>
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Guild</dt>
+                                <dd>Guild: {displayGuild(evidence.guild)}</dd>
+                              </div>
+                              <div>
+                                <dt>World rank</dt>
+                                <dd>
+                                  World rank:{" "}
+                                  {evidence.historicWorldRank ?? "—"}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Report</dt>
+                                <dd>
+                                  {evidence.reportUrl ? (
+                                    <a
+                                      className="external-link"
+                                      href={evidence.reportUrl}
+                                    >
+                                      View Warcraft Logs report
+                                    </a>
+                                  ) : (
+                                    "Report: —"
+                                  )}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Characters present</dt>
+                                <dd>{evidence.characters.join(", ") || "—"}</dd>
+                              </div>
+                            </dl>
+                          ))}
+                        </section>
                       </details>
                     </article>
                   );

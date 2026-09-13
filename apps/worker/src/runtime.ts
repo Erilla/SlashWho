@@ -1,4 +1,5 @@
 import {
+  createApplicantEvidenceJobHandler,
   cleanupExpired,
   createDiscoveryJobHandler,
   recoverPendingSearches,
@@ -18,6 +19,10 @@ import {
 } from "@slashwho/database";
 import type { RaiderIoGateway } from "@slashwho/domain";
 import { createRaiderIoClient } from "@slashwho/raiderio";
+import {
+  createWarcraftLogsClient,
+  type WarcraftLogsGateway
+} from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
 
 import type { WorkerConfig } from "./config";
@@ -34,6 +39,9 @@ export type WorkerRuntimeDependencies = {
   createRepositories: (pool: RuntimePool) => Repositories;
   createQueue: (connectionString: string) => DiscoveryQueue;
   createGateway: (config: WorkerConfig) => RaiderIoGateway;
+  createEvidenceGateway: (
+    config: WorkerConfig
+  ) => Pick<WarcraftLogsGateway, "getFirstKillReports">;
   createFingerprintIntegration?: (
     config: WorkerConfig
   ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
@@ -42,6 +50,7 @@ export type WorkerRuntimeDependencies = {
     logger?: DiscoveryLogger
   ) => FingerprintAlertNotifier;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
+  createEvidenceHandler: typeof createApplicantEvidenceJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
 };
 
@@ -120,10 +129,17 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       baseUrl: config.raiderIoBaseUrl,
       timeoutMs: config.raiderIoTimeoutMs
     }),
+  createEvidenceGateway: (config) =>
+    createWarcraftLogsClient({
+      fetch: globalThis.fetch,
+      clientId: config.warcraftLogsClientId,
+      clientSecret: config.warcraftLogsClientSecret
+    }),
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
     createFingerprintAlertNotifier(config, { logger }),
   createHandler: createDiscoveryJobHandler,
+  createEvidenceHandler: createApplicantEvidenceJobHandler,
   sleep: (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds))
 };
@@ -181,6 +197,19 @@ export async function createWorkerRuntime(
       negativeCacheTtlMs: config.negativeCacheTtlMs,
       ...(logger ? { logger } : {})
     });
+    const evidence = (
+      repositories as Repositories & {
+        evidence: Parameters<
+          typeof createApplicantEvidenceJobHandler
+        >[0]["evidence"];
+      }
+    ).evidence;
+    if (!evidence) throw new Error("character_evidence_repository_unavailable");
+    const evidenceHandler = dependencies.createEvidenceHandler({
+      evidence,
+      warcraftLogs: dependencies.createEvidenceGateway(config),
+      requestCap: config.evidenceRequestCap
+    });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);
     const dispatchAdmittedFingerprintRun = async (runId: string) => {
@@ -232,6 +261,9 @@ export async function createWorkerRuntime(
     });
     await initializedQueue.work(async (payload, context) => {
       await handler.execute(payload.runId, context);
+    });
+    await initializedQueue.workCharacterEvidence(async (payload, context) => {
+      await evidenceHandler.execute(payload.runId, context);
     });
     ready = true;
 

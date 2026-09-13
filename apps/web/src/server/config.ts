@@ -9,9 +9,6 @@ export type WebConfig = Readonly<{
   dossier: Readonly<{
     raiderIoBaseUrl: string;
     raiderIoTimeoutMs: number;
-    warcraftLogsClientId: string;
-    warcraftLogsClientSecret: string;
-    warcraftLogsBaseUrl?: string;
     blizzardClientId: string;
     blizzardClientSecret: string;
   }>;
@@ -63,16 +60,6 @@ export function loadWebConfig(
         10_000,
         "invalid_raider_io_timeout_ms"
       ),
-      warcraftLogsClientId: requiredSecret(
-        environment.WARCRAFT_LOGS_CLIENT_ID,
-        "warcraft_logs_client_id_required"
-      ),
-      warcraftLogsClientSecret: requiredSecret(
-        environment.WARCRAFT_LOGS_CLIENT_SECRET,
-        "warcraft_logs_client_secret_required"
-      ),
-      warcraftLogsBaseUrl:
-        environment.WARCRAFT_LOGS_BASE_URL?.trim() || undefined,
       blizzardClientId: requiredSecret(
         environment.BLIZZARD_CLIENT_ID,
         "blizzard_client_id_required"

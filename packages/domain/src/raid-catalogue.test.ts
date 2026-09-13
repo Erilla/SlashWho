@@ -13,6 +13,8 @@ it("maps a Blizzard Journal encounter to its generated raid and boss metadata", 
     bossId: "2602",
     bossName: "Queen Ansurek",
     bossOrder: 8,
+    isFinalBoss: true,
+    raiderIoBossSlug: null,
     imageUrl: expect.stringMatching(/^https:\/\//)
   });
 });
@@ -35,6 +37,8 @@ it("matches a unique generated raid name independently of its boss", () => {
   expect(lookupRaidByName("Nerub-ar Palace")).toEqual({
     raidId: "1273",
     raidName: "Nerub-ar Palace",
+    tierOrdinal: 20,
+    raiderIoRaidSlug: "nerubar-palace",
     imageUrl: expect.stringMatching(/^https:\/\//)
   });
 });

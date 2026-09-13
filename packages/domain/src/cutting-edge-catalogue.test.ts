@@ -6,7 +6,8 @@ it("looks up a generated Cutting Edge achievement by its official ID", () => {
   expect(lookupCuttingEdgeAchievement("40254")).toMatchObject({
     achievementId: "40254",
     achievementName: "Cutting Edge: Queen Ansurek",
-    categoryId: "15271"
+    categoryId: "15271",
+    iconUrl: "https://render.worldofwarcraft.com/eu/icons/56/5779391.jpg"
   });
 });
 
