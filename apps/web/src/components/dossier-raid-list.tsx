@@ -78,7 +78,22 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                           />
                         )}
                         <div>
-                          <h4>{boss.bossName}</h4>
+                          <h4 className="dossier-boss-title">
+                            <svg
+                              aria-label="Verified Mythic kill"
+                              className="dossier-kill-icon"
+                              role="img"
+                              viewBox="0 0 20 20"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                            >
+                              <title>Verified Mythic kill</title>
+                              <circle cx="10" cy="10" r="8" />
+                              <path d="m6 10 3 3 5-6" />
+                            </svg>
+                            <span>{boss.bossName}</span>
+                          </h4>
                           <p className="dossier-boss-first-kill">
                             First kill: {displayDate(firstKill.killedAt)} ·{" "}
                             {firstKill.characters.join(", ") || "—"}
