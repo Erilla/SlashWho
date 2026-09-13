@@ -17,9 +17,15 @@ export type {
 } from "./queue";
 export type {
   CallerClass,
+  CharacterEvidenceRun,
+  CharacterMythicKillInput,
+  CompletedCharacterEvidence,
   CreateSnapshotInput,
   DiscoveryRun,
   DiscoverySource,
+  EvidenceRepository,
+  EvidenceReservationResult,
+  EvidenceRunStatus,
   FingerprintAdmission,
   FingerprintAdmissionDispatch,
   FingerprintSweepRepository,
@@ -35,5 +41,6 @@ export type {
   SnapshotRepository,
   StoredSnapshot,
   StoredSnapshotCharacter,
+  StoredCharacterMythicKill,
   SuppressionRepository
 } from "./repositories";

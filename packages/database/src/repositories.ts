@@ -6,6 +6,8 @@ import type {
 import type { CharacterKey } from "@slashwho/domain";
 
 export type CallerClass = "anonymous" | "bot";
+export type EvidenceRunStatus =
+  "queued" | "running" | "retrying" | "complete" | "partial" | "failed";
 export type DiscoverySource =
   "input" | "claimed" | "declared_main" | "profile_guess" | "fingerprint";
 
@@ -132,6 +134,83 @@ export interface NegativeCacheRepository {
   cleanupExpired(at?: Date): Promise<number>;
 }
 
+export interface CharacterEvidenceRun {
+  id: string;
+  key: CharacterKey;
+  queueJobId: string | null;
+  status: EvidenceRunStatus;
+  attempt: number;
+  limitationCode: string | null;
+  errorCode: string | null;
+  createdAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+}
+
+export interface CharacterMythicKillInput {
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  journalBossId: string | null;
+  bossOrder: number;
+  isFinalBoss: boolean;
+  killedAt: string;
+  reportUrl: string;
+  fightUrl: string;
+  guild: { name: string; realm: string } | null;
+  historicWorldRank?: number | null;
+}
+
+export interface StoredCharacterMythicKill extends CharacterMythicKillInput {
+  id: string;
+}
+
+export interface CompletedCharacterEvidence {
+  run: CharacterEvidenceRun;
+  kills: readonly StoredCharacterMythicKill[];
+}
+
+export type EvidenceReservationResult =
+  | {
+      kind: "fresh";
+      run: CharacterEvidenceRun;
+      completed: CompletedCharacterEvidence;
+    }
+  | {
+      kind: "active";
+      run: CharacterEvidenceRun;
+      completed: CompletedCharacterEvidence | null;
+    }
+  | {
+      kind: "reserved";
+      run: CharacterEvidenceRun;
+      completed: CompletedCharacterEvidence | null;
+    };
+
+export interface EvidenceRepository {
+  reserve(input: {
+    key: CharacterKey;
+    freshnessCutoff: Date;
+    at: Date;
+  }): Promise<EvidenceReservationResult>;
+  find(id: string): Promise<CharacterEvidenceRun | null>;
+  claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
+  markEnqueued(id: string, queueJobId: string): Promise<void>;
+  publish(
+    runId: string,
+    input: {
+      state: "complete" | "partial";
+      limitationCode: string | null;
+      kills: readonly CharacterMythicKillInput[];
+      completedAt: Date;
+    }
+  ): Promise<void>;
+  fail(id: string, code: string): Promise<void>;
+  getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
+  listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
+}
+
 export type FingerprintAdmission =
   | { kind: "not_due" }
   | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
@@ -215,5 +294,6 @@ export interface Repositories {
   suppressions: SuppressionRepository;
   rateLimits: RateLimitRepository;
   negativeCache: NegativeCacheRepository;
+  evidence: EvidenceRepository;
   fingerprintSweeps: FingerprintSweepRepository;
 }
