@@ -16,6 +16,9 @@ import type {
   HistoricMythicKill,
   HistoricMythicKillOptions,
   HistoricMythicKillResult,
+  MythicBossRanking,
+  MythicBossRankingsOptions,
+  MythicBossRankingsResult,
   RaiderIoGateway,
   RaiderIoProfile
 } from "./types";
@@ -57,6 +60,21 @@ const historicRaidProgressResponseSchema = z.object({
       })
     )
   })
+});
+
+const bossRankingsResponseSchema = z.object({
+  bossRankings: z.array(
+    z.object({
+      rank: z.number().int().positive(),
+      guild: z.object({
+        name: z.string().min(1),
+        realm: z.object({ slug: z.string().min(1) })
+      }),
+      encountersDefeated: z.object({
+        firstDefeated: z.string().datetime()
+      })
+    })
+  )
 });
 
 export type CreateRaiderIoClientOptions = {
@@ -156,6 +174,39 @@ function historicKillLimitation(error: unknown): HistoricMythicKillResult {
   }
 }
 
+function bossRankingLimitation(error: unknown): MythicBossRankingsResult {
+  if (!isRaiderIoFailure(error)) {
+    return { kind: "limitation", code: "unavailable" };
+  }
+
+  switch (error.kind) {
+    case "not_found":
+      return { kind: "limitation", code: "not_found" };
+    case "forbidden":
+      return { kind: "limitation", code: "private" };
+    case "schema_drift":
+      return { kind: "limitation", code: "schema_drift" };
+    case "transient":
+      return {
+        kind: "limitation",
+        code: error.status === 429 ? "rate_limited" : "unavailable",
+        ...(error.retryAfterMs === undefined
+          ? {}
+          : { retryAfterMs: error.retryAfterMs })
+      };
+  }
+}
+
+function normalizeBossRankings(value: unknown): readonly MythicBossRanking[] {
+  const parsed = bossRankingsResponseSchema.parse(value);
+  return parsed.bossRankings.map((row) => ({
+    rank: row.rank,
+    guildName: row.guild.name,
+    guildRealm: row.guild.realm.slug,
+    firstDefeated: row.encountersDefeated.firstDefeated
+  }));
+}
+
 function boundedTierOrdinals(
   options: HistoricMythicKillOptions
 ): readonly number[] | null {
@@ -177,6 +228,7 @@ export function createRaiderIoClient(
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error("invalid_timeout");
   }
+  const bossRankings = new Map<string, readonly MythicBossRanking[]>();
 
   async function request<T>(
     url: URL,
@@ -350,10 +402,44 @@ export function createRaiderIoClient(
     return { kind: "evidence", kills: [...earliestKills.values()] };
   }
 
+  async function getMythicBossRankings(
+    rankingOptions: MythicBossRankingsOptions,
+    signal?: AbortSignal
+  ): Promise<MythicBossRankingsResult> {
+    const raidSlug = rankingOptions.raidSlug;
+    const bossSlug = rankingOptions.bossSlug;
+    if (!raidSlug || !bossSlug) {
+      return { kind: "limitation", code: "schema_drift" };
+    }
+
+    signal?.throwIfAborted();
+    const cacheKey = `${raidSlug}\u0000${bossSlug}`;
+    const cached = bossRankings.get(cacheKey);
+    if (cached) return { kind: "rankings", rows: cached };
+
+    const url = new URL("/api/v1/raiding/boss-rankings", baseUrl);
+    url.search = new URLSearchParams({
+      raid: raidSlug,
+      boss: bossSlug,
+      difficulty: "mythic",
+      region: "world"
+    }).toString();
+
+    try {
+      const rows = await request(url, normalizeBossRankings, signal);
+      bossRankings.set(cacheKey, rows);
+      return { kind: "rankings", rows };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return bossRankingLimitation(error);
+    }
+  }
+
   return {
     getCharacter,
     getClaimedCharacters,
     resolveProfileGuess,
-    getHistoricMythicKills
+    getHistoricMythicKills,
+    getMythicBossRankings
   };
 }

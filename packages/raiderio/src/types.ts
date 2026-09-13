@@ -57,6 +57,26 @@ export type HistoricMythicKillOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
+export type MythicBossRanking = Readonly<{
+  rank: number;
+  guildName: string;
+  guildRealm: string;
+  firstDefeated: string;
+}>;
+
+export type MythicBossRankingsOptions = Readonly<{
+  raidSlug: string;
+  bossSlug: string;
+}>;
+
+export type MythicBossRankingsResult =
+  | { kind: "rankings"; rows: readonly MythicBossRanking[] }
+  | {
+      kind: "limitation";
+      code: RaiderIoEvidenceLimitation;
+      retryAfterMs?: number;
+    };
+
 export interface RaiderIoGateway {
   getCharacter(
     key: CharacterKey,
@@ -75,4 +95,8 @@ export interface RaiderIoGateway {
     key: CharacterKey,
     options: HistoricMythicKillOptions
   ): Promise<HistoricMythicKillResult>;
+  getMythicBossRankings(
+    options: MythicBossRankingsOptions,
+    signal?: AbortSignal
+  ): Promise<MythicBossRankingsResult>;
 }
