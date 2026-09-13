@@ -6,6 +6,29 @@ type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
 }>;
 
+function ReportLinks({
+  evidence
+}: {
+  evidence: ApplicantDossier["raids"][number]["bosses"][number]["firstKill"];
+}) {
+  const urls =
+    evidence.reportUrls ?? (evidence.reportUrl ? [evidence.reportUrl] : []);
+  if (urls.length === 0) return <>Report: —</>;
+  return (
+    <ul className="dossier-report-links">
+      {urls.map((url, index) => (
+        <li key={url}>
+          <a className="external-link" href={url}>
+            {urls.length === 1
+              ? "View Warcraft Logs report"
+              : `View Warcraft Logs report ${index + 1}`}
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function displayGuild(
   guild: ApplicantDossier["raids"][number]["bosses"][number]["firstKill"]["guild"]
 ) {
@@ -121,18 +144,9 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                                 </dd>
                               </div>
                               <div>
-                                <dt>Report</dt>
+                                <dt>Reports</dt>
                                 <dd>
-                                  {evidence.reportUrl ? (
-                                    <a
-                                      className="external-link"
-                                      href={evidence.reportUrl}
-                                    >
-                                      View Warcraft Logs report
-                                    </a>
-                                  ) : (
-                                    "Report: —"
-                                  )}
+                                  <ReportLinks evidence={evidence} />
                                 </dd>
                               </div>
                               <div>
