@@ -394,6 +394,7 @@ export function createWarcraftLogsClient(
     throw new Error("invalid_base_url");
   }
   let cachedToken: AccessToken | undefined;
+  let tokenRequest: Promise<string | WarcraftLogsLimitation> | undefined;
 
   function tokenUrl(): URL {
     return new URL("/oauth/token", baseUrl ?? "https://www.warcraftlogs.com");
@@ -404,6 +405,20 @@ export function createWarcraftLogsClient(
   }
 
   async function accessToken(
+    signal?: AbortSignal
+  ): Promise<string | WarcraftLogsLimitation> {
+    signal?.throwIfAborted();
+    tokenRequest ??= fetchAccessToken(AbortSignal.timeout(15_000)).finally(
+      () => {
+        tokenRequest = undefined;
+      }
+    );
+    const token = await tokenRequest;
+    signal?.throwIfAborted();
+    return token;
+  }
+
+  async function fetchAccessToken(
     signal?: AbortSignal
   ): Promise<string | WarcraftLogsLimitation> {
     if (cachedToken && cachedToken.expiresAt > Date.now()) {

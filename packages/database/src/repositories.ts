@@ -189,6 +189,7 @@ export type EvidenceReservationResult =
     };
 
 export interface EvidenceRepository {
+  cleanupExpired(at?: Date): Promise<number>;
   reserve(input: {
     key: CharacterKey;
     freshnessCutoff: Date;

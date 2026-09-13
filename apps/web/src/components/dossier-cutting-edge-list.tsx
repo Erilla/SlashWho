@@ -17,6 +17,9 @@ export function DossierCuttingEdgeList({
       <h2 className="section-heading" id="historic-cutting-edge-heading">
         Historic Cutting Edge
       </h2>
+      <p className="empty-state">
+        New achievements may take up to 15 minutes to appear.
+      </p>
       {cuttingEdges.length === 0 ? (
         <p className="empty-state">
           No public Cutting Edge achievements were found.

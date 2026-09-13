@@ -39,6 +39,23 @@ function tokenResponse(): Response {
 }
 
 describe("Blizzard gateway", () => {
+  it("shares OAuth refresh across concurrent character reads", async () => {
+    let tokens = 0;
+    const { gateway } = clientFor((url) => {
+      if (url.pathname === "/token") {
+        tokens++;
+        return tokenResponse();
+      }
+      return Response.json({ achievements: [] });
+    });
+    await Promise.all([
+      gateway.getCompletedAchievements(key),
+      gateway.getCompletedAchievements({ ...key, name: "alt" })
+    ]);
+    expect(tokens).toBe(1);
+    expect(await gateway.getCompletedAchievements(key)).toEqual([]);
+    expect(tokens).toBe(1);
+  });
   it("uses an explicitly configured endpoint for local integration fixtures", async () => {
     // Break caught: e2e sweeps could send test credentials to the public
     // Blizzard endpoints even when the test suite provides a local fixture.

@@ -11,6 +11,7 @@ import type {
 } from "@slashwho/database";
 import {
   buildApplicantDossier,
+  lookupCuttingEdgeAchievement,
   lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
@@ -23,6 +24,7 @@ import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { MythicBossRanking, RaiderIoGateway } from "@slashwho/raiderio";
 
 import type { ApplicationConfig } from "./config";
+import { createBoundedCache } from "./bounded-cache";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -333,7 +335,67 @@ export function createApplicantDossierService(options: {
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   config: ApplicationConfig;
+  onCacheEvent?: (source: string, event: string) => void;
 }): ApplicantDossierService {
+  const achievements = createBoundedCache<
+    Awaited<ReturnType<BlizzardGateway["getCompletedAchievements"]>>
+  >({
+    ttlMs: 15 * 60_000,
+    maxEntries: 1_000,
+    observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
+  });
+  const rankings = createBoundedCache<
+    Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
+  >({
+    ttlMs: 15 * 60_000,
+    maxEntries: 256,
+    observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
+  });
+  const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
+    async getCompletedAchievements(key, signal) {
+      signal?.throwIfAborted();
+      const result = await achievements(
+        `${key.region}/${key.realm}/${key.name}`,
+        async () => {
+          const rows = await options.blizzard.getCompletedAchievements(
+            key,
+            AbortSignal.timeout(15_000)
+          );
+          return rows
+            .filter(
+              (row) => lookupCuttingEdgeAchievement(row.achievementId) !== null
+            )
+            .map(({ achievementId, completedAt }) => ({
+              achievementId,
+              completedAt
+            }));
+        }
+      );
+      signal?.throwIfAborted();
+      return result;
+    }
+  };
+  const raiderio: Pick<RaiderIoGateway, "getMythicBossRankings"> = {
+    async getMythicBossRankings(boss, signal) {
+      signal?.throwIfAborted();
+      try {
+        const result = await rankings(JSON.stringify(boss), async () => {
+          const response = await options.raiderio.getMythicBossRankings(
+            boss,
+            AbortSignal.timeout(15_000)
+          );
+          if (response.kind !== "rankings")
+            throw new Error("rankings_unavailable");
+          return response;
+        });
+        signal?.throwIfAborted();
+        return result;
+      } catch {
+        signal?.throwIfAborted();
+        return { kind: "limitation", code: "unavailable" };
+      }
+    }
+  };
   return {
     async start(input) {
       try {
@@ -370,8 +432,8 @@ export function createApplicantDossierService(options: {
           },
           repositories: options.repositories,
           queue: options.queue,
-          blizzard: options.blizzard,
-          raiderio: options.raiderio,
+          blizzard,
+          raiderio,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
@@ -408,8 +470,8 @@ export function createApplicantDossierService(options: {
                 },
           repositories: options.repositories,
           queue: options.queue,
-          blizzard: options.blizzard,
-          raiderio: options.raiderio,
+          blizzard,
+          raiderio,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
