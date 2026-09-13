@@ -286,12 +286,10 @@ function firstKillReports(
       const actorId = actor && positiveInteger(actor.id);
       const name = actor && nonEmptyString(actor.name);
       const server = actor && nonEmptyString(actor.server);
-      if (!actorId || !name) {
-        return { kind: "limitation", code: "schema_drift" };
-      }
-      // A player without a realm cannot establish this character's identity.
-      // Ignore that actor rather than discarding other attributable kills.
-      if (!server) continue;
+      // An actor without a complete identity cannot establish this character's
+      // participation. Ignore it rather than discarding other attributable
+      // kills in the report.
+      if (!actorId || !name || !server) continue;
       if (
         name.toLocaleLowerCase("en-US") === requestedKey.name &&
         server.toLocaleLowerCase("en-US") ===
