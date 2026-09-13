@@ -30,7 +30,10 @@ const raiderIoRaidSlugs = new Map<string, string>([
   ["1208", "aberrus-the-shadowed-crucible"],
   ["1273", "nerubar-palace"],
   ["1296", "liberation-of-undermine"],
-  ["1302", "manaforge-omega"]
+  ["1302", "manaforge-omega"],
+  ["1305", "sporefall"],
+  ["1317", "the-tidebound-grotto"],
+  ["1320", "the-venomous-abyss"]
 ]);
 
 const canonicalTierOrdinals = new Map<string, number>([

@@ -71,9 +71,12 @@ const bossRankingsResponseSchema = z.object({
         realm: z.object({ slug: z.string().min(1) }),
         region: z.object({ slug: z.string().min(1) })
       }),
-      encountersDefeated: z.object({
-        firstDefeated: z.string().datetime()
-      })
+      encountersDefeated: z.array(
+        z.object({
+          slug: z.string().min(1),
+          firstDefeated: z.string().datetime()
+        })
+      )
     })
   )
 });
@@ -198,15 +201,30 @@ function bossRankingLimitation(error: unknown): MythicBossRankingsResult {
   }
 }
 
-function normalizeBossRankings(value: unknown): readonly MythicBossRanking[] {
+function normalizeBossRankings(
+  value: unknown,
+  bossSlug: string
+): readonly MythicBossRanking[] {
   const parsed = bossRankingsResponseSchema.parse(value);
-  return parsed.bossRankings.map((row) => ({
-    rank: row.rank,
-    guildName: row.guild.name,
-    guildRealm: row.guild.realm.slug,
-    guildRegion: row.guild.region.slug,
-    firstDefeated: row.encountersDefeated.firstDefeated
-  }));
+  return parsed.bossRankings.flatMap((row) => {
+    // Rows include duplicate recordings and later kills. Only the guild's
+    // earliest defeat of the requested boss carries this progression rank.
+    const encounter = row.encountersDefeated
+      .filter((entry) => entry.slug === bossSlug)
+      .sort(
+        (a, b) => Date.parse(a.firstDefeated) - Date.parse(b.firstDefeated)
+      )[0];
+    if (!encounter) return [];
+    return [
+      {
+        rank: row.rank,
+        guildName: row.guild.name,
+        guildRealm: row.guild.realm.slug,
+        guildRegion: row.guild.region.slug,
+        firstDefeated: encounter.firstDefeated
+      }
+    ];
+  });
 }
 
 function boundedTierOrdinals(
@@ -230,7 +248,6 @@ export function createRaiderIoClient(
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error("invalid_timeout");
   }
-  const bossRankings = new Map<string, readonly MythicBossRanking[]>();
 
   async function request<T>(
     url: URL,
@@ -415,9 +432,6 @@ export function createRaiderIoClient(
     }
 
     signal?.throwIfAborted();
-    const cacheKey = `${raidSlug}\u0000${bossSlug}`;
-    const cached = bossRankings.get(cacheKey);
-    if (cached) return { kind: "rankings", rows: cached };
 
     const url = new URL("/api/v1/raiding/boss-rankings", baseUrl);
     url.search = new URLSearchParams({
@@ -428,8 +442,12 @@ export function createRaiderIoClient(
     }).toString();
 
     try {
-      const rows = await request(url, normalizeBossRankings, signal);
-      bossRankings.set(cacheKey, rows);
+      // The application owns the bounded, expiring ranking cache.
+      const rows = await request(
+        url,
+        (value) => normalizeBossRankings(value, bossSlug),
+        signal
+      );
       return { kind: "rankings", rows };
     } catch (error) {
       if (signal?.aborted) throw signal.reason;

@@ -6,6 +6,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it } from "vitest";
 
 import { createRaiderIoClient } from "./index";
+import recordedRankings from "./fixtures/queen-ansurek-rankings.json";
 
 type FixtureName =
   | "character-visible-owner"
@@ -566,7 +567,7 @@ describe("Raider.IO gateway", () => {
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it("normalizes and caches published Mythic boss rankings", async () => {
+  it("normalizes published Mythic boss rankings without an unbounded gateway cache", async () => {
     // Break caught: callers could receive an unvalidated upstream leaderboard,
     // or repeated evidence enrichment could exceed Raider.IO's rate limits.
     let calls = 0;
@@ -592,9 +593,12 @@ describe("Raider.IO gateway", () => {
                 realm: { slug: "tarren-mill" },
                 region: { slug: "eu" }
               },
-              encountersDefeated: {
-                firstDefeated: "2025-01-14T20:30:00.000Z"
-              }
+              encountersDefeated: [
+                {
+                  slug: "queen-ansurek",
+                  firstDefeated: "2025-01-14T20:30:00.000Z"
+                }
+              ]
             }
           ]
         }),
@@ -628,7 +632,52 @@ describe("Raider.IO gateway", () => {
       raidSlug: "nerubar-palace",
       bossSlug: "queen-ansurek"
     });
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
+  });
+
+  it("uses the earliest exact-boss kill from recorded duplicate and later encounters", async () => {
+    const payload = structuredClone(recordedRankings);
+    payload.bossRankings[0]!.encountersDefeated.reverse();
+    payload.bossRankings[0]!.encountersDefeated.unshift({
+      slug: "other-boss",
+      firstDefeated: "2020-01-01T00:00:00Z",
+      lastDefeated: "2020-01-01T00:00:00Z"
+    });
+    const gateway = createRaiderIoClient({
+      fetch: async () => Response.json(payload),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+    await expect(
+      gateway.getMythicBossRankings({
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek"
+      })
+    ).resolves.toEqual({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 1,
+          guildName: "Liquid",
+          guildRealm: "illidan",
+          guildRegion: "us",
+          firstDefeated: "2024-09-29T07:02:27Z"
+        },
+        {
+          rank: 2,
+          guildName: "Echo",
+          guildRealm: "tarren-mill",
+          guildRegion: "eu",
+          firstDefeated: "2024-09-30T12:07:25Z"
+        }
+      ]
+    });
+    await expect(
+      gateway.getMythicBossRankings({
+        raidSlug: "nerubar-palace",
+        bossSlug: "absent-boss"
+      })
+    ).resolves.toEqual({ kind: "rankings", rows: [] });
   });
 
   it("returns a rate-limit limitation for boss-ranking requests", async () => {
