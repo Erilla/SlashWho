@@ -24,8 +24,12 @@ it("migrates and initializes the durable queue before serving searches", async (
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async enqueueCharacterEvidence() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
     async work() {},
     async workFingerprintAdmissions() {},
+    async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async stop() {},
     isReady() {
@@ -109,8 +113,12 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async enqueueCharacterEvidence() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
     async work() {},
     async workFingerprintAdmissions() {},
+    async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async stop() {},
     isReady() {
