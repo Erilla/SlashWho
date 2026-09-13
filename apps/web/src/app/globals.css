@@ -682,6 +682,33 @@ a {
   text-transform: uppercase;
 }
 
+.dossier-cutting-edge-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.dossier-cutting-edge-heading .section-heading {
+  margin: 0;
+}
+
+.dossier-cutting-edge-count {
+  flex: 0 0 auto;
+  min-width: 1.5rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-align: center;
+}
+
 .character-list,
 .history-list {
   padding: 0;
