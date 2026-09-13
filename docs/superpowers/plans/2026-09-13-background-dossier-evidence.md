@@ -74,6 +74,7 @@
 ### Task 5: Fallback media and raid blocks
 
 **Files:**
+
 - Modify: `apps/web/src/components/dossier-raid-list.tsx`, `apps/web/src/components/dossier-cutting-edge-list.tsx`, `apps/web/src/app/globals.css`
 - Create: `apps/web/src/components/dossier-media-fallback.tsx`
 - Test: `apps/web/src/components/dossier-raid-list.test.tsx`, `apps/web/src/components/dossier-cutting-edge-list.test.tsx`
