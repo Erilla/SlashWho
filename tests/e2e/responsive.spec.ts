@@ -49,7 +49,7 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await evidence.getByText("View kill evidence").click();
   await expect(
-    evidence.getByRole("link", { name: "View Warcraft Logs report" })
+    evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
   expect(
     await page.evaluate(
