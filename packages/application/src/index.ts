@@ -15,6 +15,13 @@ export {
 export type { CallerIdentity } from "./auth";
 export { applicationConfigSchema } from "./config";
 export type { ApplicationConfig } from "./config";
+export { createApplicantDossierService } from "./applicant-dossier-service";
+export type {
+  ApplicantDossierService,
+  CreateDossierCommand,
+  CreateDossierResult,
+  ReadDossierResult
+} from "./applicant-dossier-service";
 export { createRateLimiter } from "./rate-limit";
 export type {
   RateLimitDecision,

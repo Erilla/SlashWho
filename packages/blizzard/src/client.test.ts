@@ -193,6 +193,30 @@ describe("Blizzard gateway", () => {
     ).toHaveLength(1);
   });
 
+  it("returns completed achievements from timestamps without consulting criteria", async () => {
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      return Response.json({
+        achievements: [
+          {
+            id: 40254,
+            completed_timestamp: 1_737_232_200_000,
+            criteria: { is_completed: false }
+          },
+          { id: "2", completed_timestamp: 200 },
+          { id: 3, completed_timestamp: "300" }
+        ]
+      });
+    });
+
+    await expect(gateway.getCompletedAchievements(key)).resolves.toEqual([
+      {
+        achievementId: "40254",
+        completedAt: "2025-01-18T20:30:00.000Z"
+      }
+    ]);
+  });
+
   it("passes the abort signal and never includes an upstream body in its error", async () => {
     // Break caught: cancellation could be omitted, or an upstream error body
     // could enter a typed failure and be logged later.

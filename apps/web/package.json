@@ -4,13 +4,17 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
+    "test": "vitest run --root ../.. --project unit apps/web/src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@slashwho/application": "workspace:*",
+    "@slashwho/blizzard": "workspace:*",
     "@slashwho/contracts": "workspace:*",
     "@slashwho/database": "workspace:*",
     "@slashwho/domain": "workspace:*",
+    "@slashwho/raiderio": "workspace:*",
+    "@slashwho/warcraftlogs": "workspace:*",
     "next": "16.3.0",
     "pg": "^8.22.0",
     "pino": "^10.1.0",

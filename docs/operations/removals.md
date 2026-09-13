@@ -1,6 +1,6 @@
 # Character removal operations
 
-Removal means suppression from every public current, history, snapshot, and job-status response. It does not delete immutable snapshots or rewrite historical membership.
+Removal means internal suppression from future discovery and dossier reads. It does not delete immutable snapshots or rewrite historical membership.
 
 ## Connecting the maintainer shell
 
@@ -20,7 +20,7 @@ Run `unset DATABASE_URL` when the operation is finished, and never paste the val
 
 ## Intake and staging verification
 
-1. Accept requests only through the public removal-request issue template. Ask for private ownership evidence through a private maintainer channel if it is needed; never request it in GitHub comments.
+1. Accept requests through maintainer intake. Ask for private ownership evidence through a private maintainer channel if it is needed; never request it in GitHub comments.
 2. Normalize the submitted Raider.IO URL and record the GitHub issue number as the reason, for example `github-issue-123`.
 3. Export the `test` environment's `DATABASE_URL` as above, then apply and verify the suppression in staging first:
 
@@ -30,7 +30,7 @@ corepack pnpm ops:removals -- audit "https://raider.io/characters/eu/silvermoon/
 corepack pnpm ops:removals -- verify "https://raider.io/characters/eu/silvermoon/Ryii"
 ```
 
-The command prints only the canonical public character identity and whether suppression is active. `verify` exits with status 2 when it is inactive. Confirm the public character, history, snapshot, and any known job URL all return the safe not-found response.
+The command prints only the canonical character identity and whether suppression is active. `verify` exits with status 2 when it is inactive. Confirm the character no longer appears in a new dossier read.
 
 ## Production suppression
 

@@ -65,6 +65,9 @@ importers:
       '@slashwho/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@slashwho/blizzard':
+        specifier: workspace:*
+        version: link:../../packages/blizzard
       '@slashwho/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -74,6 +77,12 @@ importers:
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@slashwho/raiderio':
+        specifier: workspace:*
+        version: link:../../packages/raiderio
+      '@slashwho/warcraftlogs':
+        specifier: workspace:*
+        version: link:../../packages/warcraftlogs
       next:
         specifier: 16.3.0
         version: 16.3.0(@types/node@26.1.2)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -160,6 +169,12 @@ importers:
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../domain
+      '@slashwho/raiderio':
+        specifier: workspace:*
+        version: link:../raiderio
+      '@slashwho/warcraftlogs':
+        specifier: workspace:*
+        version: link:../warcraftlogs
       zod:
         specifier: ^4.3.5
         version: 4.4.3
@@ -214,6 +229,12 @@ importers:
       zod:
         specifier: ^4.3.5
         version: 4.4.3
+
+  packages/warcraftlogs:
+    dependencies:
+      '@slashwho/domain':
+        specifier: workspace:*
+        version: link:../domain
 
 packages:
 

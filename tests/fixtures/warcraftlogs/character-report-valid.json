@@ -1,0 +1,133 @@
+{
+  "pages": [
+    {
+      "data": {
+        "characterData": {
+          "character": {
+            "server": { "normalizedName": "Silvermoon" },
+            "recentReports": {
+              "data": [
+                {
+                  "code": "lateReport",
+                  "startTime": 1707098400000,
+                  "zone": { "id": 42, "name": "Nerub-ar Palace" },
+                  "masterData": {
+                    "actors": [
+                      {
+                        "id": 7,
+                        "name": "Sentinel",
+                        "server": "Silvermoon",
+                        "type": "Player"
+                      }
+                    ]
+                  },
+                  "fights": [
+                    {
+                      "id": 1,
+                      "encounterID": 1234,
+                      "name": "Queen Ansurek",
+                      "startTime": 3600000,
+                      "endTime": 3600000,
+                      "kill": true,
+                      "difficulty": 5,
+                      "friendlyPlayers": [7]
+                    },
+                    {
+                      "id": 9,
+                      "encounterID": 9999,
+                      "name": "Wipe",
+                      "startTime": 3600000,
+                      "endTime": 3600000,
+                      "kill": false,
+                      "difficulty": 5,
+                      "friendlyPlayers": [7]
+                    },
+                    {
+                      "id": 8,
+                      "encounterID": 9998,
+                      "name": "Heroic boss",
+                      "startTime": 3600000,
+                      "endTime": 3600000,
+                      "kill": true,
+                      "difficulty": 4,
+                      "friendlyPlayers": [7]
+                    }
+                  ]
+                }
+              ],
+              "has_more_pages": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "data": {
+        "characterData": {
+          "character": {
+            "server": { "normalizedName": "Silvermoon" },
+            "recentReports": {
+              "data": [
+                {
+                  "code": "earlyReport",
+                  "startTime": 1706918400000,
+                  "zone": { "id": 42, "name": "Nerub-ar Palace" },
+                  "masterData": {
+                    "actors": [
+                      {
+                        "id": 7,
+                        "name": "Sentinel",
+                        "server": "Silvermoon",
+                        "type": "Player"
+                      }
+                    ]
+                  },
+                  "fights": [
+                    {
+                      "id": 7,
+                      "encounterID": 1234,
+                      "name": "Queen Ansurek",
+                      "startTime": 3600000,
+                      "endTime": 3600000,
+                      "kill": true,
+                      "difficulty": 5,
+                      "friendlyPlayers": [7]
+                    }
+                  ]
+                },
+                {
+                  "code": "secondBoss",
+                  "startTime": 1707004800000,
+                  "zone": { "id": 42, "name": "Nerub-ar Palace" },
+                  "masterData": {
+                    "actors": [
+                      {
+                        "id": 7,
+                        "name": "Sentinel",
+                        "server": "Silvermoon",
+                        "type": "Player"
+                      }
+                    ]
+                  },
+                  "fights": [
+                    {
+                      "id": 2,
+                      "encounterID": 4321,
+                      "name": "The Silken Court",
+                      "startTime": 7200000,
+                      "endTime": 7200000,
+                      "kill": true,
+                      "difficulty": 5,
+                      "friendlyPlayers": [7]
+                    }
+                  ]
+                }
+              ],
+              "has_more_pages": false
+            }
+          }
+        }
+      }
+    }
+  ]
+}

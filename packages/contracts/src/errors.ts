@@ -3,6 +3,7 @@ import { z } from "zod";
 export const publicErrorCodeSchema = z.enum([
   "invalid_character_url",
   "character_not_found",
+  "discovery_not_ready",
   "rate_limited",
   "upstream_unavailable",
   "search_failed",
@@ -16,6 +17,7 @@ export type PublicErrorCode = z.infer<typeof publicErrorCodeSchema>;
 export const publicErrorHttpStatus = {
   invalid_character_url: 400,
   character_not_found: 404,
+  discovery_not_ready: 409,
   rate_limited: 429,
   upstream_unavailable: 503,
   search_failed: 500,
@@ -32,6 +34,7 @@ export const publicErrorHttpStatus = {
 export const publicErrorMessages = {
   invalid_character_url: "The character URL is invalid.",
   character_not_found: "The character was not found.",
+  discovery_not_ready: "Discovery is still in progress.",
   rate_limited: "Too many requests.",
   upstream_unavailable: "Character data is temporarily unavailable.",
   search_failed: "The search could not be completed.",

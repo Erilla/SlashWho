@@ -6,7 +6,8 @@ import type {
   BlizzardFailure,
   BlizzardGateway,
   BlizzardProfileRequestObserver,
-  BlizzardRosterCharacter
+  BlizzardRosterCharacter,
+  CompletedAchievement
 } from "./types";
 
 export type CreateBlizzardClientOptions = Readonly<{
@@ -134,6 +135,26 @@ function fingerprintFromResponse(
     if (id !== null && timestamp !== null) fingerprint.set(id, timestamp);
   }
   return fingerprint;
+}
+
+function completedAchievementsFromResponse(
+  value: unknown
+): readonly CompletedAchievement[] | null {
+  const response = valueRecord(value);
+  if (!response || !Array.isArray(response.achievements)) return null;
+
+  const achievements: CompletedAchievement[] = [];
+  for (const achievement of response.achievements) {
+    const entry = valueRecord(achievement);
+    const id = entry && finiteNumber(entry.id);
+    const timestamp = entry && finiteNumber(entry.completed_timestamp);
+    if (id === null || timestamp === null || !Number.isSafeInteger(id))
+      continue;
+    const completedAt = new Date(timestamp).toISOString();
+    if (Number.isNaN(Date.parse(completedAt))) continue;
+    achievements.push({ achievementId: String(id), completedAt });
+  }
+  return achievements;
 }
 
 function blizzardSlug(value: string): string {
@@ -363,7 +384,25 @@ export function createBlizzardClient(
     );
   }
 
-  return { getGuildRoster, getAchievementFingerprint };
+  async function getCompletedAchievements(
+    key: CharacterKey,
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
+  ): Promise<readonly CompletedAchievement[]> {
+    const validKey = validCharacterKey(key);
+    return request(
+      achievementsUrl(validKey),
+      completedAchievementsFromResponse,
+      signal,
+      onProfileRequest
+    );
+  }
+
+  return {
+    getGuildRoster,
+    getAchievementFingerprint,
+    getCompletedAchievements
+  };
 }
 
 export { createBlizzardError };

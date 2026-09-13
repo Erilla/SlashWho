@@ -1,0 +1,206 @@
+{
+  "source": "blizzard-achievement-category",
+  "generatedAt": "2026-09-12T18:52:29.657Z",
+  "region": "eu",
+  "locale": "en_GB",
+  "achievements": [
+    {
+      "achievementId": "7485",
+      "achievementName": "Cutting Edge: Will of the Emperor",
+      "description": "Defeat the Will of the Emperor in Mogu'shan Vaults on Heroic difficulty, before the release of patch 5.2.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "7486",
+      "achievementName": "Cutting Edge: Grand Empress Shek'zeer",
+      "description": "Defeat Grand Empress Shek'zeer in Heart of Fear on Heroic difficulty, before the release of patch 5.2.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "7487",
+      "achievementName": "Cutting Edge: Sha of Fear",
+      "description": "Defeat the Sha of Fear in Terrace of Endless Spring on Heroic difficulty, before the release of patch 5.2.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "8238",
+      "achievementName": "Cutting Edge: Lei Shen",
+      "description": "Defeat Lei Shen in Throne of Thunder on Heroic difficulty, before the release of patch 5.4.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "8260",
+      "achievementName": "Cutting Edge: Ra-den",
+      "description": "Defeat Ra-den in Throne of Thunder, before the release of patch 5.4.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "8400",
+      "achievementName": "Cutting Edge: Garrosh Hellscream (10 player)",
+      "description": "Defeat Garrosh Hellscream on 10-Player Heroic difficulty, before the release of patch 6.0.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "8401",
+      "achievementName": "Cutting Edge: Garrosh Hellscream (25 player)",
+      "description": "Defeat Garrosh Hellscream on 25-Player Heroic difficulty, before the release of patch 6.0.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "9442",
+      "achievementName": "Cutting Edge: Imperator's Fall",
+      "description": "Complete the Imperator Mar'gok encounter in Highmaul on Mythic difficulty, before the release of patch 6.2.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "9443",
+      "achievementName": "Cutting Edge: Blackhand's Crucible",
+      "description": "Defeat Warlord Blackhand in Blackrock Foundry on Mythic difficulty, before the release of patch 6.2.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "10045",
+      "achievementName": "Cutting Edge: The Black Gate",
+      "description": "Defeat Archimonde on Mythic difficulty, before the release of patch 7.0.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "11191",
+      "achievementName": "Cutting Edge: Xavius",
+      "description": "Defeat Xavius in the Emerald Nightmare on Mythic difficulty, before the opening of the Nighthold.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "11192",
+      "achievementName": "Cutting Edge: Gul'dan",
+      "description": "Defeat Gul'dan in The Nighthold on Mythic difficulty, before the opening of the Tomb of Sargeras.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "11580",
+      "achievementName": "Cutting Edge: Helya",
+      "description": "Defeat Helya in Trial of Valor on Mythic difficulty, before the opening of the Tomb of Sargeras.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "11875",
+      "achievementName": "Cutting Edge: Kil'jaeden",
+      "description": "Defeat Kil'jaeden in Tomb of Sargeras on Mythic difficulty, before the opening of Antorus, the Burning Throne.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "12111",
+      "achievementName": "Cutting Edge: Argus the Unmaker",
+      "description": "Defeat Argus the Unmaker in Antorus, the Burning Throne, on Mythic difficulty, before the release of patch 8.0.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "12535",
+      "achievementName": "Cutting Edge: G'huun",
+      "description": "Defeat G'huun in Uldir on Mythic difficulty, before the beginning of the Battle of Dazar'alor.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "13323",
+      "achievementName": "Cutting Edge: Lady Jaina Proudmoore",
+      "description": "Defeat Lady Jaina Proudmoore in Battle of Dazar'alor on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "13419",
+      "achievementName": "Cutting Edge: Uu'nat, Harbinger of the Void",
+      "description": "Defeat Uu'nat, Harbinger of the Void in Crucible of Storms on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "13785",
+      "achievementName": "Cutting Edge: Queen Azshara",
+      "description": "Defeat Queen Azshara in The Eternal Palace on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "14069",
+      "achievementName": "Cutting Edge: N'Zoth the Corruptor",
+      "description": "Defeat N'Zoth the Corruptor in Ny'alotha, the Waking City on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "14461",
+      "achievementName": "Cutting Edge: Sire Denathrius",
+      "description": "Defeat Sire Denathrius in Castle Nathria on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "15135",
+      "achievementName": "Cutting Edge: Sylvanas Windrunner",
+      "description": "Defeat Sylvanas Windrunner in the Sanctum of Domination on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "15471",
+      "achievementName": "Cutting Edge: The Jailer",
+      "description": "Defeat The Jailer in the Sepulcher of the First Ones on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "17108",
+      "achievementName": "Cutting Edge: Raszageth the Storm-Eater",
+      "description": "Defeat Raszageth the Storm-Eater in Vault of the Incarnates on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "18254",
+      "achievementName": "Cutting Edge: Scalecommander Sarkareth",
+      "description": "Defeat  Scalecommander Sarkareth in Aberrus, the Shadowed Crucible on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "19351",
+      "achievementName": "Cutting Edge: Fyrakk the Blazing",
+      "description": "Defeat Fyrakk the Blazing in Amirdrassil, the Dream's Hope on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "40254",
+      "achievementName": "Cutting Edge: Queen Ansurek",
+      "description": "Defeat Queen Ansurek in Nerub-ar Palace on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "41297",
+      "achievementName": "Cutting Edge: Chrome King Gallywix",
+      "description": "Defeat Chrome King Gallywix in the Liberation of Undermine on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "41625",
+      "achievementName": "Cutting Edge: Dimensius, the All-Devouring",
+      "description": "Defeat Dimensius, the All-Devouring in Manaforge Omega on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "61492",
+      "achievementName": "Cutting Edge: Chimaerus, the Undreamt God",
+      "description": "Defeat Chimaerus, the Undreamt God in the Dreamrift on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "61625",
+      "achievementName": "Cutting Edge: Crown of the Cosmos",
+      "description": "Defeat Crown of the Cosmos in The Voidspire on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "61627",
+      "achievementName": "Cutting Edge: Midnight Falls",
+      "description": "Defeat Midnight Falls in the March on Quel'Danas on Mythic difficulty, before the release of the next raid tier.",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "63651",
+      "achievementName": "Cutting Edge: Ula'tek",
+      "description": "Defeat Ula'tek in The Venomous Abyss on Mythic difficulty, during Midnight Season 2.",
+      "categoryId": "15271"
+    }
+  ]
+}

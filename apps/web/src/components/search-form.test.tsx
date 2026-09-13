@@ -20,25 +20,27 @@ describe("SearchForm", () => {
     push.mockReset();
   });
 
-  it("places an accessible validation error next to an invalid URL", async () => {
+  it("places an accessible validation error next to an invalid applicant URL", async () => {
     const user = userEvent.setup();
     render(<SearchForm />);
 
     const input = screen.getByRole("textbox", {
-      name: "Raider.IO character URL"
+      name: "Applicant URL"
     });
     await user.type(input, "https://example.com/not-a-character");
-    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
 
     expect(input).toHaveAccessibleDescription(
-      "Enter a Raider.IO character URL."
+      "Enter a Raider.IO or Warcraft Logs character URL."
     );
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter a Raider.IO character URL."
+      "Enter a Raider.IO or Warcraft Logs character URL."
     );
   });
 
-  it("submits with Enter and navigates to the canonical character route", async () => {
+  it("submits a Raider.IO applicant URL and navigates to its dossier", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
@@ -47,9 +49,7 @@ describe("SearchForm", () => {
           JSON.stringify({
             kind: "job",
             jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
-            status: "queued",
-            statusUrl: "/api/v1/searches/ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
-            characterUrl: "/characters/eu/silvermoon/ryii"
+            status: "queued"
           }),
           { status: 202, headers: { "content-type": "application/json" } }
         )
@@ -58,12 +58,49 @@ describe("SearchForm", () => {
     render(<SearchForm />);
 
     await user.type(
-      screen.getByRole("textbox", { name: "Raider.IO character URL" }),
-      "https://raider.io/characters/EU/Silvermoon/Ryii{Enter}"
+      screen.getByRole("textbox", { name: "Applicant URL" }),
+      "https://raider.io/characters/EU/Silvermoon/Ryii"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
     );
 
     expect(push).toHaveBeenCalledWith(
-      "/characters/eu/silvermoon/ryii?job=ca3ccfdf-1e8b-49b1-9729-459f42a104c0"
+      "/dossiers/eu/silvermoon/ryii?job=ca3ccfdf-1e8b-49b1-9729-459f42a104c0"
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/dossiers",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("submits a Warcraft Logs applicant URL and navigates to its dossier", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            kind: "job",
+            jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+            status: "queued"
+          }),
+          { status: 202, headers: { "content-type": "application/json" } }
+        )
+      )
+    );
+    render(<SearchForm />);
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Applicant URL" }),
+      "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
+
+    expect(push).toHaveBeenCalledWith(
+      "/dossiers/eu/silvermoon/ryii?job=ca3ccfdf-1e8b-49b1-9729-459f42a104c0"
     );
   });
 
@@ -89,10 +126,12 @@ describe("SearchForm", () => {
     render(<SearchForm />);
 
     await user.type(
-      screen.getByRole("textbox", { name: "Raider.IO character URL" }),
+      screen.getByRole("textbox", { name: "Applicant URL" }),
       "https://raider.io/characters/eu/silvermoon/Ryii"
     );
-    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Too many searches. Try again in 42 seconds."

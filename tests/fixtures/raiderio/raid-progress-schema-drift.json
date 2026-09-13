@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "body": {
+    "characterRaidProgress": {
+      "raidProgress": [
+        {
+          "raid": {
+            "id": "nerub-ar-palace"
+          },
+          "encountersDefeated": {
+            "mythic": []
+          }
+        }
+      ]
+    }
+  }
+}

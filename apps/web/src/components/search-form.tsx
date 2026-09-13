@@ -1,14 +1,14 @@
 "use client";
 
 import {
-  createSearchResponseSchema,
+  dossierStartResponseSchema,
   safeApiErrorSchema
 } from "@slashwho/contracts";
-import { parseRaiderIoCharacterUrl, toCharacterPath } from "@slashwho/domain";
+import { parseApplicantCharacterUrl } from "@slashwho/domain";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-const invalidUrlMessage = "Enter a Raider.IO character URL.";
+const invalidUrlMessage = "Enter a Raider.IO or Warcraft Logs character URL.";
 
 function errorMessage(response: Response, body: unknown): string {
   const parsed = safeApiErrorSchema.safeParse(body);
@@ -32,8 +32,9 @@ export function SearchForm() {
     event.preventDefault();
     setError(null);
 
+    let identity: ReturnType<typeof parseApplicantCharacterUrl>;
     try {
-      parseRaiderIoCharacterUrl(value);
+      identity = parseApplicantCharacterUrl(value);
     } catch {
       setError(invalidUrlMessage);
       return;
@@ -41,7 +42,7 @@ export function SearchForm() {
 
     setPending(true);
     try {
-      const response = await fetch("/api/v1/searches", {
+      const response = await fetch("/api/dossiers", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ characterUrl: value })
@@ -51,7 +52,7 @@ export function SearchForm() {
         setError(errorMessage(response, body));
         return;
       }
-      const parsed = createSearchResponseSchema.safeParse(body);
+      const parsed = dossierStartResponseSchema.safeParse(body);
       if (!parsed.success) {
         setError(
           "The search returned an unexpected response. Please try again."
@@ -59,16 +60,13 @@ export function SearchForm() {
         return;
       }
       if (parsed.data.kind === "job") {
-        router.push(`${parsed.data.characterUrl}?job=${parsed.data.jobId}`);
+        router.push(
+          `/dossiers/${identity.region}/${identity.realm}/${identity.name}?job=${parsed.data.jobId}`
+        );
         return;
       }
-      const { region, realm, name } = parsed.data.character.character;
       router.push(
-        toCharacterPath({
-          region,
-          realm,
-          name: name.toLocaleLowerCase("en-US")
-        })
+        `/dossiers/${identity.region}/${identity.realm}/${identity.name}`
       );
     } catch {
       setError(
@@ -82,7 +80,7 @@ export function SearchForm() {
   return (
     <form className="search-form" onSubmit={submit} noValidate>
       <label className="visually-hidden" htmlFor="character-url">
-        Raider.IO character URL
+        Applicant URL
       </label>
       <div className="search-control">
         <input
@@ -94,7 +92,7 @@ export function SearchForm() {
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
-          placeholder="https://raider.io/characters/eu/silvermoon/Ryii"
+          placeholder="Raider.IO or Warcraft Logs character URL"
           value={value}
           onChange={(event) => setValue(event.currentTarget.value)}
           aria-invalid={error !== null}
@@ -102,7 +100,7 @@ export function SearchForm() {
           disabled={pending}
         />
         <button className="search-button" type="submit" disabled={pending}>
-          {pending ? "Searching…" : "Search"}
+          {pending ? "Researching…" : "Research applicant"}
         </button>
       </div>
       <p

@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import {
+  applicantDossierSchema,
   characterResourceSchema,
   characterSchema,
+  createDossierRequestSchema,
   createSearchResponseSchema,
   historyPageSchema,
   historicalSnapshotSchema,
@@ -11,6 +13,54 @@ import {
   publicErrorMessages,
   safeApiErrorSchema
 } from "./index";
+
+const applicantCharacter = { region: "eu", realm: "silvermoon", name: "ryii" };
+const validDossier = {
+  root: applicantCharacter,
+  research: {
+    state: "initial",
+    message: "Linked-character research is still running."
+  },
+  characters: [
+    {
+      key: applicantCharacter,
+      displayName: "Ryii",
+      source: "raiderio_declared"
+    }
+  ],
+  raids: [
+    {
+      raidId: "nerubar-palace",
+      raidName: "Nerub-ar Palace",
+      imageUrl: "https://render.example/raids/nerub-ar.jpg",
+      cuttingEdge: true,
+      bosses: [
+        {
+          bossId: "ansurek",
+          bossName: "Queen Ansurek",
+          bossOrder: 8,
+          imageUrl: "https://render.example/bosses/ansurek.jpg",
+          firstKill: {
+            killedAt: "2024-10-01T20:00:00.000Z",
+            guild: { name: "Guild", realm: "silvermoon" },
+            historicWorldRank: null,
+            reportUrl: "https://www.warcraftlogs.com/reports/example",
+            characters: ["Ryii"]
+          }
+        }
+      ]
+    }
+  ],
+  cuttingEdges: [],
+  limitations: [
+    {
+      source: "warcraft_logs",
+      character: null,
+      code: "rate_limited",
+      message: "Warcraft Logs is temporarily rate limited."
+    }
+  ]
+};
 
 const character = {
   region: "eu",
@@ -89,6 +139,23 @@ it("publishes one public message per error code", () => {
       }).error.message
     ).toBe(publicErrorMessages[code]);
   }
+});
+
+it("defines a strict safe response while dossier discovery is pending", () => {
+  // Break caught: the dossier route could hand-write a 409 response that its
+  // advertised safe-error schema cannot validate.
+  expect(
+    safeApiErrorSchema.parse({
+      error: {
+        code: "discovery_not_ready",
+        message: "Discovery is still in progress."
+      }
+    }).error.code
+  ).toBe("discovery_not_ready");
+  expect(publicErrorHttpStatus.discovery_not_ready).toBe(409);
+  expect(publicErrorMessages.discovery_not_ready).toBe(
+    "Discovery is still in progress."
+  );
 });
 
 it("accepts queued and cached search outcomes", () => {
@@ -170,4 +237,52 @@ it("defines contract-safe authentication and trusted-boundary errors", () => {
   ).toBe("trusted_client_ip_unavailable");
   expect(publicErrorHttpStatus.unauthorized).toBe(401);
   expect(publicErrorHttpStatus.trusted_client_ip_unavailable).toBe(503);
+});
+
+it("accepts a strict applicant dossier request and response", () => {
+  // Break caught: browser input or a dossier response could add unvetted fields
+  // to the reviewer surface, including raw upstream payloads.
+  const characterUrl =
+    "https://www.warcraftlogs.com/character/eu/silvermoon/ryii";
+
+  expect(createDossierRequestSchema.parse({ characterUrl })).toEqual({
+    characterUrl
+  });
+  expect(applicantDossierSchema.parse(validDossier)).toEqual(validDossier);
+  expect(() =>
+    applicantDossierSchema.parse({ ...validDossier, rawResponse: {} })
+  ).toThrow();
+});
+
+it("requires a non-empty staged-research disclosure on applicant dossiers", () => {
+  // Break caught: a dossier could be shown without making clear whether its
+  // evidence is root-only, complete, or potentially incomplete.
+  expect(applicantDossierSchema.parse(validDossier).research.state).toBe(
+    "initial"
+  );
+  const dossierWithoutResearch = Object.fromEntries(
+    Object.entries(validDossier).filter(([key]) => key !== "research")
+  );
+  expect(() => applicantDossierSchema.parse(dossierWithoutResearch)).toThrow();
+});
+
+it("requires a separate Cutting Edge achievement collection", () => {
+  const dossierWithoutCuttingEdges = Object.fromEntries(
+    Object.entries(validDossier).filter(([key]) => key !== "cuttingEdges")
+  );
+  expect(() =>
+    applicantDossierSchema.parse(dossierWithoutCuttingEdges)
+  ).toThrow();
+});
+
+it("retains an unknown historic world rank as null", () => {
+  // Break caught: an unavailable historic rank could be converted into a
+  // fabricated numeric finding or rejected entirely.
+  expect(
+    validDossier.raids[0].bosses[0].firstKill.historicWorldRank
+  ).toBeNull();
+  expect(
+    applicantDossierSchema.parse(validDossier).raids[0]?.bosses[0]?.firstKill
+      .historicWorldRank
+  ).toBeNull();
 });

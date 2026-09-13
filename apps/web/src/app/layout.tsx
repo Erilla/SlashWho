@@ -10,11 +10,12 @@ type RootLayoutProps = Readonly<{
 
 export const metadata: Metadata = {
   title: {
-    default: "Who — find connected World of Warcraft characters",
+    default: "Who — applicant research dossiers",
     template: "%s · Who"
   },
   description:
-    "Find publicly connected World of Warcraft characters from a Raider.IO character URL."
+    "Research World of Warcraft applicants from Raider.IO or Warcraft Logs character URLs.",
+  robots: { index: false, follow: false }
 };
 
 export default function RootLayout({ children }: RootLayoutProps) {

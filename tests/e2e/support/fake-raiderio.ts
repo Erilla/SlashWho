@@ -29,7 +29,15 @@ const ownerCharacters = [
   }
 ] as const;
 
-function upstreamCharacter(character: (typeof ownerCharacters)[number]) {
+function upstreamCharacter(
+  character: Readonly<{
+    name: string;
+    level: number;
+    className: string;
+    realm: string;
+    region: string;
+  }>
+) {
   return {
     name: character.name,
     level: character.level,
@@ -86,11 +94,25 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       return;
     }
 
-    if (url.pathname === "/api/characters/eu/silvermoon/ryii") {
+    if (url.pathname === "/__control/hold") {
+      released = false;
+      json(response, 200, { released: false });
+      return;
+    }
+
+    if (
+      url.pathname === "/api/characters/eu/silvermoon/ryii" ||
+      url.pathname === "/api/characters/eu/silvermoon/queued"
+    ) {
+      const queued = url.pathname.endsWith("/queued");
       const send = () =>
         json(response, 200, {
           characterDetails: {
-            character: upstreamCharacter(ownerCharacters[0]),
+            character: upstreamCharacter(
+              queued
+                ? { ...ownerCharacters[0], name: "Queued" }
+                : ownerCharacters[0]
+            ),
             user: { name: "fixture-owner" },
             characterCustomizations: {
               discord_profile: null,
@@ -113,6 +135,32 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
           characters: ownerCharacters.map((character) => ({
             character: upstreamCharacter(character)
           }))
+        }
+      });
+      return;
+    }
+
+    if (url.pathname.endsWith("/raid-progress")) {
+      json(response, 200, {
+        characterRaidProgress: {
+          raidProgress: [
+            {
+              raid: { id: "nerub-ar-palace", name: "Nerub-ar Palace" },
+              encountersDefeated: {
+                mythic: [
+                  {
+                    slug: "queen-ansurek",
+                    name: "Queen Ansurek",
+                    ordinal: 8,
+                    isFinalBoss: true,
+                    firstDefeated: "2025-01-14T20:30:00.000Z",
+                    guild: { name: "Arachnid", realm: { slug: "Silvermoon" } },
+                    historicWorldRank: 147
+                  }
+                ]
+              }
+            }
+          ]
         }
       });
       return;

@@ -1,5 +1,6 @@
 import {
   characterResourceSchema,
+  type DossierCharacter,
   historicalSnapshotSchema,
   historyPageSchema,
   jobStatusResponseSchema,
@@ -11,6 +12,7 @@ import {
   type JobStatusResponse
 } from "@slashwho/contracts";
 import type {
+  DiscoverySource,
   DiscoveryRun,
   SnapshotHistoryPage,
   StoredSnapshot,
@@ -26,6 +28,25 @@ function serializeCharacter(character: StoredSnapshotCharacter): Character {
     className: character.className,
     level: character.level,
     raiderIoUrl: character.raiderIoUrl
+  };
+}
+
+const dossierSourceLabels: Record<DiscoverySource, DossierCharacter["source"]> =
+  {
+    input: "raiderio_declared",
+    claimed: "raiderio_declared",
+    declared_main: "raiderio_declared",
+    profile_guess: "raiderio_declared",
+    fingerprint: "fingerprint_derived"
+  };
+
+export function serializeDossierCharacter(
+  character: StoredSnapshotCharacter
+): DossierCharacter {
+  return {
+    key: character.key,
+    displayName: character.displayName,
+    source: dossierSourceLabels[character.source]
   };
 }
 

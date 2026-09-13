@@ -11,7 +11,32 @@ export const applicationConfigSchema = z.object({
   ANONYMOUS_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(10),
   BOT_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(60),
   PUBLIC_READS_PER_MINUTE: z.coerce.number().int().positive().default(300),
-  FRESHNESS_HOURS: z.coerce.number().positive().default(24)
+  FRESHNESS_HOURS: z.coerce.number().positive().default(24),
+  DOSSIER_CHARACTER_CAP: z.coerce.number().int().min(1).max(30).default(12),
+  DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .default(80),
+  DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .default(15_000),
+  DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .default(20),
+  DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(60_000)
+    .default(8_000)
 });
 
 export type ApplicationConfig = z.infer<typeof applicationConfigSchema>;

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   serializeCharacterResource,
+  serializeDossierCharacter,
   serializeHistoryPage,
   serializeJobStatus,
   serializeSnapshot
@@ -58,6 +59,30 @@ const run: DiscoveryRun = {
 };
 
 describe("public serializers", () => {
+  it("maps only fingerprint discovery to the fingerprint-derived dossier label", () => {
+    // Break caught: a changed source mapping could present a Raider.IO-declared
+    // relationship as fingerprint-derived, or conceal a fingerprint-derived link.
+    for (const source of [
+      "input",
+      "claimed",
+      "declared_main",
+      "profile_guess"
+    ] as const) {
+      expect(
+        serializeDossierCharacter({ ...snapshot.characters[0]!, source })
+      ).toMatchObject({
+        displayName: "Ryii",
+        source: "raiderio_declared"
+      });
+    }
+    expect(
+      serializeDossierCharacter({
+        ...snapshot.characters[1]!,
+        source: "fingerprint"
+      })
+    ).toMatchObject({ source: "fingerprint_derived" });
+  });
+
   it("allowlists character fields and omits discovery provenance", () => {
     // Break caught: internal source, run, limitation, or storage fields could enter JSON.
     const resource = serializeCharacterResource(snapshot, run);

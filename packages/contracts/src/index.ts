@@ -15,6 +15,32 @@ export type {
   SnapshotState
 } from "./character";
 export {
+  applicantDossierSchema,
+  characterKeySchema,
+  createDossierRequestSchema,
+  dossierStartResponseSchema,
+  dossierBossSchema,
+  dossierCharacterSchema,
+  dossierCuttingEdgeSchema,
+  dossierFirstKillSchema,
+  dossierGuildSchema,
+  dossierLimitationSchema,
+  dossierResearchSchema,
+  dossierRaidSchema,
+  dossierSourceLabelSchema
+} from "./dossier";
+export type {
+  ApplicantDossier,
+  CharacterKey,
+  CreateDossierRequest,
+  DossierStartResponse,
+  DossierCharacter,
+  DossierCuttingEdge,
+  DossierLimitation,
+  DossierResearch,
+  DossierSourceLabel
+} from "./dossier";
+export {
   publicErrorHttpStatus,
   publicErrorCodeSchema,
   publicErrorMessages,
@@ -31,12 +57,14 @@ export type { HistoricalSnapshot, HistoryItem, HistoryPage } from "./history";
 export {
   createSearchRequestSchema,
   createSearchResponseSchema,
+  dossierResearchStatusSchema,
   discoveryRunStatusSchema,
   jobStatusResponseSchema
 } from "./search";
 export type {
   CreateSearchRequest,
   CreateSearchResponse,
+  DossierResearchStatus,
   DiscoveryRunStatus,
   JobStatusResponse
 } from "./search";
