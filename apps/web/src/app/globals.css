@@ -470,6 +470,21 @@ a {
   font-size: 1rem;
 }
 
+.dossier-boss-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.dossier-kill-icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 0.2em;
+  color: var(--success);
+}
+
 .dossier-boss-rank {
   margin-top: 0.28rem;
   color: var(--muted);
