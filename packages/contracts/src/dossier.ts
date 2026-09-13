@@ -20,6 +20,8 @@ export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
     displayName: z.string().min(1),
+    className: z.string().min(1).nullable(),
+    raiderIoUrl: z.url(),
     source: dossierSourceLabelSchema
   })
   .strict();
@@ -67,6 +69,7 @@ export const dossierCuttingEdgeSchema = z
     achievementId: z.string().regex(/^\d+$/),
     achievementName: z.string().min(1),
     description: z.string().min(1),
+    iconUrl: z.url().nullable(),
     completedAt: z.iso.datetime(),
     characters: z.array(z.string().min(1)).min(1)
   })

@@ -27,6 +27,8 @@ function dossier(
       {
         key: identity,
         displayName: "Ryii",
+        className: "Mage",
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
         source: state === "initial" ? "submitted" : "raiderio_declared"
       }
     ],

@@ -76,3 +76,53 @@ it("keeps text evidence intact when official artwork is unavailable", () => {
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
 });
+
+it("shows first-kill metadata and lists every kill in chronological order", () => {
+  render(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: true,
+            bosses: [
+              {
+                ...boss,
+                imageUrl: null,
+                firstKills: [
+                  {
+                    killedAt: "2025-01-14T20:30:00.000Z",
+                    guild: { name: "Method", realm: "Tarren Mill" },
+                    historicWorldRank: 2,
+                    reportUrl: "https://www.warcraftlogs.com/reports/first",
+                    characters: ["Ryii"]
+                  },
+                  {
+                    killedAt: "2025-02-14T20:30:00.000Z",
+                    guild: { name: "Method", realm: "Tarren Mill" },
+                    historicWorldRank: null,
+                    reportUrl: "https://www.warcraftlogs.com/reports/second",
+                    characters: ["Ryalts"]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  expect(screen.getByText("First kill: 14 Jan 2025 · Ryii")).toBeVisible();
+  expect(screen.getByText("View kill evidence")).toBeVisible();
+
+  const dates = screen
+    .getAllByText(/14 (Jan|Feb) 2025/)
+    .filter((date) => date.tagName === "TIME");
+  expect(dates.map((date) => date.textContent)).toEqual([
+    "14 Jan 2025",
+    "14 Feb 2025"
+  ]);
+});

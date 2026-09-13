@@ -4,6 +4,7 @@ export type GeneratedCuttingEdgeAchievement = Readonly<{
   achievementId: string;
   achievementName: string;
   description: string;
+  iconUrl: string | null;
   categoryId: "15271";
 }>;
 
@@ -50,6 +51,14 @@ async function jsonRequest(
   return body;
 }
 
+function mediaAsset(media: JsonRecord, key: string): string | null {
+  if (!Array.isArray(media.assets)) return null;
+  const asset = media.assets
+    .map(record)
+    .find((candidate) => candidate?.key === key);
+  return asset ? nonEmptyString(asset.value) : null;
+}
+
 function categoryContainsRaids(category: JsonRecord): boolean {
   const categories = category.subcategories;
   if (!Array.isArray(categories)) return false;
@@ -78,10 +87,12 @@ async function fetchDefinition(
   ) {
     throw new Error("cutting_edge_achievement_invalid");
   }
+  const media = await jsonRequest(options, `/data/wow/media/achievement/${id}`);
   return {
     achievementId: String(id),
     achievementName,
     description,
+    iconUrl: mediaAsset(media, "icon"),
     categoryId: "15271"
   };
 }
@@ -102,13 +113,15 @@ export async function fetchCuttingEdgeAchievements(
   }
   const entries = raids.achievements;
   if (!Array.isArray(entries)) throw new Error("cutting_edge_category_invalid");
-  const ids = entries.flatMap((entry) => {
-    const candidate = record(entry);
-    const id = positiveInteger(candidate?.id);
-    const name = nonEmptyString(candidate?.name);
-    return id !== null && name?.startsWith("Cutting Edge:") ? [id] : [];
-  });
-  return Promise.all(ids.map((id) => fetchDefinition(options, id))).then(
+  const ids = new Set(
+    entries.flatMap((entry) => {
+      const candidate = record(entry);
+      const id = positiveInteger(candidate?.id);
+      const name = nonEmptyString(candidate?.name);
+      return id !== null && name?.startsWith("Cutting Edge:") ? [id] : [];
+    })
+  );
+  return Promise.all([...ids].map((id) => fetchDefinition(options, id))).then(
     (items) =>
       items.sort((a, b) => Number(a.achievementId) - Number(b.achievementId))
   );

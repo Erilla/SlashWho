@@ -100,6 +100,34 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       return;
     }
 
+    if (url.pathname === "/api/v1/raiding/boss-rankings") {
+      if (
+        url.searchParams.get("raid") !== "nerubar-palace" ||
+        url.searchParams.get("boss") !== "queen-ansurek" ||
+        url.searchParams.get("difficulty") !== "mythic" ||
+        url.searchParams.get("region") !== "world"
+      ) {
+        json(response, 404, { status: 404 });
+        return;
+      }
+      json(response, 200, {
+        bossRankings: [
+          {
+            rank: 147,
+            guild: {
+              name: "Arachnid",
+              realm: { slug: "silvermoon" },
+              region: { slug: "eu" }
+            },
+            encountersDefeated: {
+              firstDefeated: "2025-01-13T21:31:40.000Z"
+            }
+          }
+        ]
+      });
+      return;
+    }
+
     if (
       url.pathname === "/api/characters/eu/silvermoon/ryii" ||
       url.pathname === "/api/characters/eu/silvermoon/queued"

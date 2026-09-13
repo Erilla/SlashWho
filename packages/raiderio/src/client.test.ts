@@ -565,4 +565,121 @@ describe("Raider.IO gateway", () => {
 
     await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
+
+  it("normalizes and caches published Mythic boss rankings", async () => {
+    // Break caught: callers could receive an unvalidated upstream leaderboard,
+    // or repeated evidence enrichment could exceed Raider.IO's rate limits.
+    let calls = 0;
+    const fetch: typeof globalThis.fetch = async (input) => {
+      calls += 1;
+      const url = new URL(
+        typeof input === "string" || input instanceof URL ? input : input.url
+      );
+      expect(url.pathname).toBe("/api/v1/raiding/boss-rankings");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        raid: "nerubar-palace",
+        boss: "queen-ansurek",
+        difficulty: "mythic",
+        region: "world"
+      });
+      return new Response(
+        JSON.stringify({
+          bossRankings: [
+            {
+              rank: 2,
+              guild: {
+                name: "Echo",
+                realm: { slug: "tarren-mill" },
+                region: { slug: "eu" }
+              },
+              encountersDefeated: {
+                firstDefeated: "2025-01-14T20:30:00.000Z"
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    };
+    const gateway = createRaiderIoClient({
+      fetch,
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await expect(
+      gateway.getMythicBossRankings({
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek"
+      })
+    ).resolves.toEqual({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Echo",
+          guildRealm: "tarren-mill",
+          guildRegion: "eu",
+          firstDefeated: "2025-01-14T20:30:00.000Z"
+        }
+      ]
+    });
+    await gateway.getMythicBossRankings({
+      raidSlug: "nerubar-palace",
+      bossSlug: "queen-ansurek"
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("returns a rate-limit limitation for boss-ranking requests", async () => {
+    const gateway = createRaiderIoClient({
+      fetch: async () =>
+        new Response(JSON.stringify({}), {
+          status: 429,
+          headers: { "Retry-After": "30" }
+        }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await expect(
+      gateway.getMythicBossRankings({
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek"
+      })
+    ).resolves.toEqual({
+      kind: "limitation",
+      code: "rate_limited",
+      retryAfterMs: 30_000
+    });
+  });
+
+  it("returns schema_drift when a boss-ranking row is malformed", async () => {
+    const gateway = createRaiderIoClient({
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            bossRankings: [
+              {
+                rank: 0,
+                guild: { name: "Echo", realm: { slug: "tarren-mill" } },
+                encountersDefeated: {
+                  firstDefeated: "2025-01-14T20:30:00.000Z"
+                }
+              }
+            ]
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await expect(
+      gateway.getMythicBossRankings({
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek"
+      })
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+  });
 });

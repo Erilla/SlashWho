@@ -8,7 +8,10 @@ export function DossierCuttingEdgeList({
   cuttingEdges
 }: DossierCuttingEdgeListProps) {
   return (
-    <section aria-labelledby="historic-cutting-edge-heading">
+    <section
+      aria-labelledby="historic-cutting-edge-heading"
+      className="dossier-panel dossier-cutting-edge-panel"
+    >
       <h2 className="section-heading" id="historic-cutting-edge-heading">
         Historic Cutting Edge
       </h2>
@@ -17,24 +20,34 @@ export function DossierCuttingEdgeList({
           No public Cutting Edge achievements were found.
         </p>
       ) : (
-        <ul className="dossier-raid-list">
+        <ul className="dossier-cutting-edge-list">
           {cuttingEdges.map((achievement) => (
             <li
-              className="dossier-raid"
-              key={`${achievement.achievementId}-${achievement.completedAt}`}
+              className="dossier-achievement-card"
+              key={achievement.achievementId}
             >
-              <h3>{achievement.achievementName}</h3>
-              <p>{achievement.description}</p>
-              <p>
-                Achieved:{" "}
-                <time dateTime={achievement.completedAt}>
-                  {new Intl.DateTimeFormat("en-GB", {
-                    dateStyle: "medium",
-                    timeZone: "UTC"
-                  }).format(new Date(achievement.completedAt))}
-                </time>
-              </p>
-              <p>{achievement.characters.join(", ")}</p>
+              {achievement.iconUrl ? (
+                <img
+                  alt={`${achievement.achievementName} icon`}
+                  className="dossier-achievement-icon"
+                  loading="lazy"
+                  src={achievement.iconUrl}
+                />
+              ) : null}
+              <div>
+                <h3>{achievement.achievementName}</h3>
+                <p>{achievement.description}</p>
+                <p>
+                  Achieved:{" "}
+                  <time dateTime={achievement.completedAt}>
+                    {new Intl.DateTimeFormat("en-GB", {
+                      dateStyle: "medium",
+                      timeZone: "UTC"
+                    }).format(new Date(achievement.completedAt))}
+                  </time>
+                </p>
+                <p>{achievement.characters.join(", ")}</p>
+              </div>
             </li>
           ))}
         </ul>

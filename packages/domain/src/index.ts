@@ -6,6 +6,7 @@ export {
   toRaiderIoUrl
 } from "./character-key";
 export type { CharacterKey, Region } from "./character-key";
+export { lookupRaiderIoBoss } from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,

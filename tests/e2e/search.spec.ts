@@ -28,13 +28,27 @@ for (const applicantUrl of applicantUrls) {
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Ryii" })).toHaveAttribute(
+      "href",
+      /raider\.io\/characters\/eu\/silvermoon\/ryii$/
+    );
     await expect(page.getByText("Queen Ansurek")).toBeVisible();
-    await page
-      .getByRole("group", { name: "Queen Ansurek evidence" })
-      .getByText("View first-kill evidence")
-      .click();
+    const evidence = page.getByRole("group", {
+      name: "Queen Ansurek evidence"
+    });
+    await expect(evidence.getByText("World #147")).toBeVisible();
+    await evidence.getByText("View kill evidence").click();
+    await expect
+      .poll(() =>
+        evidence
+          .locator(".dossier-evidence time")
+          .evaluateAll((times) =>
+            times.map((time) => time.getAttribute("datetime"))
+          )
+      )
+      .toEqual(["2025-01-13T21:31:40.000Z", "2025-01-13T22:31:40.000Z"]);
     await expect(
-      page.getByRole("link", { name: "View Warcraft Logs report" })
+      evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
     ).toBeVisible();
   });
 }
@@ -64,9 +78,9 @@ test("shows submitted-character evidence while queued discovery is held", async 
     page.getByText("Linked-character research is complete.", { exact: true })
   ).toBeVisible();
   await expect(initialDisclosure).not.toBeVisible();
-  await evidence.getByText("View first-kill evidence").click();
+  await evidence.getByText("View kill evidence").click();
   await expect(
-    evidence.getByRole("link", { name: "View Warcraft Logs report" })
+    evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
 });
 
