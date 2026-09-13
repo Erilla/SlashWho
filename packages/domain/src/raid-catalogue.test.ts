@@ -3,8 +3,25 @@ import { expect, it } from "vitest";
 import {
   lookupJournalEncounter,
   lookupRaidBossByName,
+  lookupRaiderIoBoss,
   lookupRaidByName
 } from "./raid-catalogue";
+
+it.each([
+  ["Sporefall", "sporefall"],
+  ["The Tidebound Grotto", "the-tidebound-grotto"],
+  ["The Venomous Abyss", "the-venomous-abyss"]
+])("maps the published Raider.IO raid %s", (name, slug) => {
+  expect(lookupRaidByName(name)?.raiderIoRaidSlug).toBe(slug);
+});
+
+it("maps Rinn's Sszorak evidence to the published leaderboard", () => {
+  expect(lookupRaiderIoBoss("The Venomous Abyss", "Sszorak")).toEqual({
+    raidSlug: "the-venomous-abyss",
+    bossSlug: "sszorak"
+  });
+  expect(lookupRaiderIoBoss("The Dreamrift", "Unknown")).toBeNull();
+});
 
 it("maps a Blizzard Journal encounter to its generated raid and boss metadata", () => {
   expect(lookupJournalEncounter("2602")).toEqual({

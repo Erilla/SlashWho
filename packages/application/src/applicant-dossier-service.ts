@@ -21,7 +21,11 @@ import {
   type DossierLimitation
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
-import type { MythicBossRanking, RaiderIoGateway } from "@slashwho/raiderio";
+import type {
+  MythicBossRanking,
+  MythicBossRankingsResult,
+  RaiderIoGateway
+} from "@slashwho/raiderio";
 
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache } from "./bounded-cache";
@@ -71,12 +75,21 @@ function limitationMessage(
   source: EvidenceSource,
   code: ContractDossierLimitation["code"]
 ): string {
+  if (source === "raiderio") {
+    const reason =
+      code === "schema_changed"
+        ? "an unexpected response"
+        : code === "rate_limited"
+          ? "rate limiting"
+          : code === "not_found"
+            ? "a missing leaderboard"
+            : code === "private"
+              ? "denied leaderboard access"
+              : "a lookup failure";
+    return `Some historic boss world ranks could not be checked because of ${reason} from Raider.IO. Verified kill evidence is still shown.`;
+  }
   const label =
-    source === "raiderio"
-      ? "Raider.IO"
-      : source === "blizzard"
-        ? "Blizzard achievement data"
-        : "Warcraft Logs";
+    source === "blizzard" ? "Blizzard achievement data" : "Warcraft Logs";
   switch (code) {
     case "not_found":
       return `${label} has no public evidence for this character.`;
@@ -233,8 +246,12 @@ async function enrichHistoricRanks(options: {
   kills: readonly DossierKillEvidence[];
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   signal: AbortSignal;
-}): Promise<readonly DossierKillEvidence[]> {
+}): Promise<{
+  kills: readonly DossierKillEvidence[];
+  limitations: readonly DossierLimitation[];
+}> {
   const rankings = new Map<string, readonly MythicBossRanking[]>();
+  const failures = new Map<string, DossierLimitation>();
   const requests = new Map<
     string,
     Readonly<{ raidSlug: string; bossSlug: string }>
@@ -251,9 +268,15 @@ async function enrichHistoricRanks(options: {
         options.signal
       );
       if (result.kind === "rankings") rankings.set(key, result.rows);
+      else
+        failures.set(result.code, {
+          source: "raiderio",
+          character: null,
+          code: result.code
+        });
     })
   );
-  return options.kills.map((kill) => {
+  const kills = options.kills.map((kill) => {
     const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
     if (!boss) return kill;
     const rows = rankings.get(`${boss.raidSlug}\0${boss.bossSlug}`);
@@ -261,6 +284,12 @@ async function enrichHistoricRanks(options: {
       ? { ...kill, historicWorldRank: historicRank(kill, rows) }
       : kill;
   });
+  return {
+    kills,
+    limitations: [...failures.values()].sort((a, b) =>
+      a.code.localeCompare(b.code)
+    )
+  };
 }
 
 async function assembleDossier(options: {
@@ -292,6 +321,11 @@ async function assembleDossier(options: {
       limitation("warcraft_logs", character.key, "request_cap")
     )
   ];
+  const ranked = await enrichHistoricRanks({
+    kills: evidence.flatMap((item) => item.kills),
+    raiderio: options.raiderio,
+    signal: options.signal
+  });
   const dossier = buildApplicantDossier({
     root: options.root,
     characters: options.subjects.map(
@@ -302,13 +336,9 @@ async function assembleDossier(options: {
         raiderIoUrl
       })
     ),
-    kills: await enrichHistoricRanks({
-      kills: evidence.flatMap((item) => item.kills),
-      raiderio: options.raiderio,
-      signal: options.signal
-    }),
+    kills: ranked.kills,
     cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
-    limitations
+    limitations: [...limitations, ...ranked.limitations]
   });
   return applicantDossierSchema.parse({
     ...dossier,
@@ -326,6 +356,14 @@ async function assembleDossier(options: {
       message: limitationMessage(item.source, contractLimitationCode(item.code))
     }))
   });
+}
+
+class RankingLookupFailure extends Error {
+  constructor(
+    readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
+  ) {
+    super("rankings_unavailable");
+  }
 }
 
 export function createApplicantDossierService(options: {
@@ -384,14 +422,20 @@ export function createApplicantDossierService(options: {
             boss,
             AbortSignal.timeout(15_000)
           );
-          if (response.kind !== "rankings")
-            throw new Error("rankings_unavailable");
+          if (response.kind !== "rankings") {
+            options.onCacheEvent?.(
+              "raiderio_rankings",
+              `failure_${response.code}`
+            );
+            throw new RankingLookupFailure(response);
+          }
           return response;
         });
         signal?.throwIfAborted();
         return result;
-      } catch {
+      } catch (error) {
         signal?.throwIfAborted();
+        if (error instanceof RankingLookupFailure) return error.result;
         return { kind: "limitation", code: "unavailable" };
       }
     }
