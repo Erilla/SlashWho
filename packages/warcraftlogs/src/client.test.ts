@@ -225,11 +225,11 @@ describe("Warcraft Logs gateway", () => {
                             id: 4,
                             encounterID: 0,
                             name: "Trash",
-                            startTime: 7_200_000,
-                            endTime: 7_200_000,
-                            kill: true,
-                            difficulty: 5,
-                            friendlyPlayers: [7]
+                            startTime: null,
+                            endTime: null,
+                            kill: null,
+                            difficulty: null,
+                            friendlyPlayers: null
                           },
                           {
                             id: 5,

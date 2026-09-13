@@ -3,7 +3,8 @@ import type { CharacterKey } from "./character-key";
 import {
   lookupJournalEncounter,
   lookupRaidBossByName,
-  lookupRaidByName
+  lookupRaidByName,
+  lookupUniqueRaidBossByName
 } from "./raid-catalogue";
 import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 
@@ -170,7 +171,8 @@ export function buildApplicantDossier(
       (suppliedKill.journalBossId === null
         ? null
         : lookupJournalEncounter(suppliedKill.journalBossId)) ??
-      lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName);
+      lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName) ??
+      lookupUniqueRaidBossByName(suppliedKill.bossName);
     const raid = lookupRaidByName(suppliedKill.raidName);
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
     allKills.push(kill);

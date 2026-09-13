@@ -435,4 +435,33 @@ describe("applicant dossier", () => {
       expect.objectContaining({ raidName: "Nerub-ar Palace" })
     ]);
   });
+
+  it("uses unique boss metadata when Warcraft Logs groups Midnight raids under one zone", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "combined-midnight-zone",
+          raidName: "VS / DR / MQD",
+          bossId: "wcl-chimaerus",
+          bossName: "Chimaerus the Undreamt God",
+          journalBossId: null
+        }),
+        kill(root, {
+          raidId: "combined-midnight-zone",
+          raidName: "VS / DR / MQD",
+          bossId: "wcl-midnight-falls",
+          bossName: "Midnight Falls",
+          journalBossId: null
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids.map((raid) => raid.raidName)).toEqual([
+      "The Dreamrift",
+      "March on Quel'Danas"
+    ]);
+  });
 });
