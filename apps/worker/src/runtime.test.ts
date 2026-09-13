@@ -124,10 +124,12 @@ function runtimeFakes() {
     rateLimits: vi.fn(async () => 2),
     negativeCache: vi.fn(async () => 3),
     suppressions: vi.fn(async () => 4),
-    fingerprintRequests: vi.fn(async () => 5)
+    fingerprintRequests: vi.fn(async () => 5),
+    evidence: vi.fn(async () => 6)
   };
   const repositories = {
     evidence: {
+      cleanupExpired: cleanup.evidence,
       async find() {
         return null;
       },
@@ -481,6 +483,7 @@ describe("worker runtime", () => {
     expect(fakes.cleanup.negativeCache).toHaveBeenCalledOnce();
     expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
     expect(fakes.cleanup.fingerprintRequests).toHaveBeenCalledOnce();
+    expect(fakes.cleanup.evidence).toHaveBeenCalledOnce();
     await runtime.stop();
   });
 

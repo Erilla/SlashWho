@@ -208,6 +208,80 @@ function fixture(
 }
 
 describe("applicant dossier service", () => {
+  it("lets an uncancelled reader finish a shared achievement request", async () => {
+    const { dossiers, blizzard } = fixture();
+    let finish!: () => void;
+    vi.mocked(blizzard.getCompletedAchievements).mockImplementation(
+      async () => {
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        return [
+          { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+        ];
+      }
+    );
+    const controller = new AbortController();
+    const first = dossiers.readInitial(root, controller.signal);
+    const rejected = expect(first).rejects.toThrow();
+    const second = dossiers.readInitial(root);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    controller.abort();
+    finish();
+    await rejected;
+    expect(await second).toMatchObject({
+      dossier: { cuttingEdges: [{ achievementId: "40254" }] }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+  });
+  it("reuses source evidence across concurrent reads but follows a replacement snapshot", async () => {
+    const { dossiers, repositories, blizzard, raiderio } = fixture();
+    const results = await Promise.all([
+      dossiers.read(root),
+      dossiers.read(root)
+    ]);
+    expect(results[0]).toEqual(results[1]);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+    vi.mocked(repositories.snapshots.getCurrent).mockResolvedValue(
+      storedSnapshot([storedSnapshot().characters[0]!])
+    );
+    const changed = await dossiers.read(root);
+    expect(changed).toMatchObject({
+      dossier: {
+        characters: [{ key: root }],
+        cuttingEdges: [{ characters: ["Ryii"] }]
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires achievements and reports a failed refresh without stale Cutting Edge claims", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dossiers, blizzard } = fixture();
+      await dossiers.read(root);
+      await dossiers.read(root);
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(15 * 60_000);
+      vi.mocked(blizzard.getCompletedAchievements).mockRejectedValue(
+        new Error("offline")
+      );
+      const expired = await dossiers.read(root);
+      expect(expired).toMatchObject({
+        dossier: {
+          cuttingEdges: [],
+          limitations: [
+            { source: "blizzard", character: root, code: "unavailable" },
+            { source: "blizzard", character: alt, code: "unavailable" }
+          ]
+        }
+      });
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each([
     raiderUrl,
     "https://www.warcraftlogs.com/character/eu/silvermoon/ryii"

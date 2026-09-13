@@ -63,6 +63,23 @@ function token(): Response {
 }
 
 describe("Warcraft Logs gateway", () => {
+  it("shares OAuth refresh across concurrent character reads", async () => {
+    let tokens = 0;
+    const { client } = clientFor((url) => {
+      if (url.pathname === "/oauth/token") {
+        tokens++;
+        return token();
+      }
+      return jsonResponse({ data: { characterData: { character: null } } });
+    });
+    await Promise.all([
+      client.resolveCharacter(key),
+      client.resolveCharacter({ ...key, name: "alt" })
+    ]);
+    expect(tokens).toBe(1);
+    await client.resolveCharacter(key);
+    expect(tokens).toBe(1);
+  });
   it("resolves a requested key to Warcraft Logs' canonical public character", async () => {
     // Break caught: an upstream transfer or rename could be attributed to the
     // requested key instead of the canonical public character.

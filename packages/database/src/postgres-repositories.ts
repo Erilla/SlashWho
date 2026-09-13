@@ -1680,6 +1680,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
+      async cleanupExpired(at = new Date()) {
+        if (Number.isNaN(at.valueOf()))
+          throw new RangeError("evidence_cleanup_time_invalid");
+        // Retain terminal scans for 30 days, then cascade-delete their fights.
+        // Active scans are owned by the queue and must never be removed here.
+        const result = await pool.query(
+          `DELETE FROM character_evidence_runs
+           WHERE status IN ('complete', 'partial', 'failed')
+             AND completed_at < $1::timestamptz - interval '30 days'`,
+          [at]
+        );
+        return result.rowCount ?? 0;
+      },
       async reserve({ key, freshnessCutoff, at }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
