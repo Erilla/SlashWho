@@ -661,8 +661,84 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("uses stored snapshot order for the character cap and reports every skipped evidence stream", async () => {
-    // Break caught: a cap could depend on incidental identity ordering or silently omit evidence.
+  it.each(["claimed", "fingerprint"] as const)(
+    "prioritises the root and higher levels before capping %s characters",
+    async (source) => {
+      // Break caught: stored order or source priority could spend the cap on a low-level alt.
+      const [submitted, linked] = storedSnapshot().characters;
+      const low = {
+        ...linked!,
+        level: 10,
+        source:
+          source === "claimed" ? ("fingerprint" as const) : ("claimed" as const)
+      };
+      const high = {
+        ...linked!,
+        key: third,
+        displayName: "Third",
+        level: 100,
+        source
+      };
+      const input = { ...submitted!, level: 1 };
+      const snapshot = storedSnapshot([low, high, input]);
+      const original = structuredClone(snapshot);
+      const { dossiers, repositories, blizzard } = fixture({
+        snapshot,
+        characterCap: 2
+      });
+
+      const result = await dossiers.read(root);
+
+      expect(result).toMatchObject({
+        kind: "ready",
+        dossier: {
+          characters: [{ key: root }, { key: third }],
+          limitations: [{ character: alt, code: "request_cap" }]
+        }
+      });
+      expect(
+        vi
+          .mocked(repositories.evidence.reserve)
+          .mock.calls.map(([{ key }]) => key)
+      ).toEqual([root, third]);
+      expect(
+        vi
+          .mocked(blizzard.getCompletedAchievements)
+          .mock.calls.map(([key]) => key)
+      ).toEqual([root, third]);
+      expect(snapshot).toEqual(original);
+    }
+  );
+
+  it("orders equal-level characters by region, realm, then name regardless of stored order", async () => {
+    // Break caught: unstable or partial tie-breaking changes which characters get evidence under a cap.
+    const [submitted, linked] = storedSnapshot().characters;
+    const keys = [
+      { region: "us", realm: "aegwynn", name: "aaa" },
+      { region: "eu", realm: "silvermoon", name: "zzz" },
+      { region: "eu", realm: "silvermoon", name: "aaa" },
+      { region: "eu", realm: "aegwynn", name: "zzz" }
+    ] as const;
+    const characters = keys.map((key) => ({ ...linked!, key }));
+    for (const ordered of [characters, [...characters].reverse()]) {
+      const { dossiers } = fixture({
+        snapshot: storedSnapshot([...ordered, submitted!])
+      });
+      const result = await dossiers.read(root);
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") throw new Error("Expected a ready dossier");
+      expect(result.dossier.characters.map(({ key }) => key)).toEqual([
+        root,
+        keys[3],
+        keys[2],
+        keys[1],
+        keys[0]
+      ]);
+    }
+  });
+
+  it("reports every evidence stream skipped by the character cap", async () => {
+    // Break caught: a cap could silently omit evidence.
     const { dossiers, repositories, warcraftLogs } = fixture({
       characterCap: 1,
       snapshot: storedSnapshot([

@@ -11,6 +11,7 @@ import type {
 } from "@slashwho/database";
 import {
   buildApplicantDossier,
+  canonicalCharacterId,
   lookupCuttingEdgeAchievement,
   lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
@@ -490,11 +491,23 @@ export function createApplicantDossierService(options: {
       const snapshot = await options.repositories.snapshots.getCurrent(key);
       if (!snapshot) return { kind: "not_ready" };
 
-      const selected = snapshot.characters.slice(
-        0,
-        options.config.DOSSIER_CHARACTER_CAP
-      );
-      const skipped = snapshot.characters.slice(selected.length);
+      const rootId = canonicalCharacterId(snapshot.rootKey);
+      // Rank before applying the cap so the displayed list and evidence requests
+      // prioritise the same characters without changing the immutable snapshot.
+      const ordered = [...snapshot.characters].sort((left, right) => {
+        const rootOrder =
+          Number(canonicalCharacterId(right.key) === rootId) -
+          Number(canonicalCharacterId(left.key) === rootId);
+        return (
+          rootOrder ||
+          right.level - left.level ||
+          left.key.region.localeCompare(right.key.region, "en") ||
+          left.key.realm.localeCompare(right.key.realm, "en") ||
+          left.key.name.localeCompare(right.key.name, "en")
+        );
+      });
+      const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
+      const skipped = ordered.slice(selected.length);
       return {
         kind: "ready",
         dossier: await assembleDossier({
