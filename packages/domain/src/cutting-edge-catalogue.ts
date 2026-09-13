@@ -4,6 +4,7 @@ export type CuttingEdgeCatalogueAchievement = Readonly<{
   achievementId: string;
   achievementName: string;
   description: string;
+  iconUrl: string | null;
   categoryId: string;
 }>;
 
