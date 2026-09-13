@@ -117,6 +117,11 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
 
   expect(screen.getByText("First kill: 14 Jan 2025 · Ryii")).toBeVisible();
   expect(screen.getByText("View kill evidence")).toBeVisible();
+  expect(screen.getAllByText("First kill")).toHaveLength(1);
+  expect(screen.getByText("Kill")).toBeInTheDocument();
+  expect(
+    screen.getByRole("region", { hidden: true, name: "Kill evidence" })
+  ).toBeInTheDocument();
 
   const dates = screen
     .getAllByText(/14 (Jan|Feb) 2025/)
