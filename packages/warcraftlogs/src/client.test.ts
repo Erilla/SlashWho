@@ -207,6 +207,12 @@ describe("Warcraft Logs gateway", () => {
                               name: "Someoneelse",
                               server: null,
                               type: "Player"
+                            },
+                            {
+                              id: 9,
+                              name: null,
+                              server: "Silvermoon",
+                              type: "Player"
                             }
                           ]
                         },
