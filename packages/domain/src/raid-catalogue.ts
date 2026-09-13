@@ -7,6 +7,7 @@ export type RaidCatalogueEncounter = Readonly<{
   bossName: string;
   bossOrder: number;
   isFinalBoss: boolean;
+  raiderIoBossSlug: string | null;
   imageUrl: string | null;
 }>;
 
@@ -64,6 +65,13 @@ const canonicalTierOrdinals = new Map<string, number>([
   ["1320", 28]
 ]);
 
+// Raider.IO boss slugs are identifiers, not mechanically derived display
+// labels. Keep verified exceptions keyed by the immutable Journal encounter.
+const raiderIoBossSlugOverrides = new Map<string, string>([
+  ["2332", "uunat-harbinger-of-the-void"],
+  ["2599", "sikran"]
+]);
+
 const encounters = new Map<string, RaidCatalogueEncounter>(
   catalogue.raids.flatMap((raid) =>
     raid.encounters.map(
@@ -79,6 +87,8 @@ const encounters = new Map<string, RaidCatalogueEncounter>(
             isFinalBoss:
               encounter.bossOrder ===
               Math.max(...raid.encounters.map((item) => item.bossOrder)),
+            raiderIoBossSlug:
+              raiderIoBossSlugOverrides.get(encounter.journalBossId) ?? null,
             imageUrl: encounter.imageUrl
           }
         ] as const
@@ -159,6 +169,7 @@ export function lookupRaiderIoBoss(
 ): Readonly<{ raidSlug: string; bossSlug: string }> | null {
   const raid = lookupRaidByName(raidName);
   if (!raid?.raiderIoRaidSlug) return null;
-  const bossSlug = raiderIoBossSlug(bossName);
+  const encounter = lookupRaidBossByName(raidName, bossName);
+  const bossSlug = encounter?.raiderIoBossSlug ?? raiderIoBossSlug(bossName);
   return bossSlug ? { raidSlug: raid.raiderIoRaidSlug, bossSlug } : null;
 }

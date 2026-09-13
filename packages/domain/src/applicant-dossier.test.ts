@@ -412,6 +412,9 @@ describe("applicant dossier", () => {
       raidSlug: "crucible-of-storms",
       bossSlug: "uunat-harbinger-of-the-void"
     });
+    expect(
+      lookupRaiderIoBoss("Nerub-ar Palace", "Sikran, Captain of the Sureki")
+    ).toEqual({ raidSlug: "nerubar-palace", bossSlug: "sikran" });
   });
 
   it("excludes Mythic+ season zones from raid boss evidence", () => {

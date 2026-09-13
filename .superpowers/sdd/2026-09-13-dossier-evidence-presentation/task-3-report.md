@@ -30,3 +30,12 @@
 - Follow-up verification: focused dossier, application, Raider.IO, Warcraft
   Logs, and contracts tests (85 passed); `corepack pnpm typecheck`; and
   `corepack pnpm format:check` all passed.
+
+### Slug metadata follow-up
+
+- Follow-up commit: `HEAD` (the corrective commit containing this report update).
+- Raider.IO catalogue lookup now reads verified Journal-encounter overrides
+  before considering a display-name fallback. The metadata covers Uu'nat
+  (`2332`) and Sikran (`2599`), whose public boss slugs cannot be obtained by
+  formatting their display names.
+- Regression coverage asserts `uunat-harbinger-of-the-void` and `sikran`.
