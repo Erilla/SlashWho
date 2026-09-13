@@ -1,5 +1,9 @@
 import type { SearchService } from "./search-service";
-import type { Repositories, StoredSnapshot } from "@slashwho/database";
+import type {
+  Repositories,
+  StoredCharacterMythicKill,
+  StoredSnapshot
+} from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
@@ -58,6 +62,25 @@ function fixture(
   } = {}
 ) {
   const runsCreate = vi.fn();
+  const enqueueCharacterEvidence = vi.fn().mockResolvedValue("evidence-job");
+  const markEnqueued = vi.fn().mockResolvedValue(undefined);
+  const cachedKills: readonly StoredCharacterMythicKill[] = [
+    {
+      id: "10000000-0000-4000-8000-000000000011",
+      raidId: "42",
+      raidName: "Nerub-ar Palace",
+      bossId: "1234",
+      bossName: "Queen Ansurek",
+      journalBossId: null,
+      bossOrder: 8,
+      isFinalBoss: false,
+      killedAt: "2024-10-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/example",
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
+      guild: { name: "Example Guild", realm: "silvermoon" },
+      historicWorldRank: null
+    }
+  ];
   const repositories = {
     snapshots: {
       getCurrent: vi
@@ -70,7 +93,40 @@ function fixture(
       find: vi.fn(),
       listHistory: vi.fn()
     },
-    runs: { create: runsCreate }
+    runs: { create: runsCreate },
+    evidence: {
+      reserve: vi.fn().mockImplementation(async ({ key }) => ({
+        kind: "fresh",
+        run: {
+          id: "10000000-0000-4000-8000-000000000012",
+          key,
+          queueJobId: "evidence-job",
+          status: "complete",
+          attempt: 1,
+          limitationCode: null,
+          errorCode: null,
+          createdAt: new Date("2026-09-11T12:00:00.000Z"),
+          startedAt: new Date("2026-09-11T12:00:00.000Z"),
+          completedAt: new Date()
+        },
+        completed: {
+          run: {
+            id: "10000000-0000-4000-8000-000000000012",
+            key,
+            queueJobId: "evidence-job",
+            status: "complete",
+            attempt: 1,
+            limitationCode: null,
+            errorCode: null,
+            createdAt: new Date("2026-09-11T12:00:00.000Z"),
+            startedAt: new Date("2026-09-11T12:00:00.000Z"),
+            completedAt: new Date()
+          },
+          kills: cachedKills
+        }
+      })),
+      markEnqueued
+    }
   } as unknown as Repositories;
   const search = {
     create: vi.fn().mockResolvedValue({
@@ -133,7 +189,7 @@ function fixture(
   const dossiers = createApplicantDossierService({
     repositories,
     search,
-    warcraftLogs,
+    queue: { enqueueCharacterEvidence },
     blizzard,
     raiderio,
     config
@@ -142,6 +198,8 @@ function fixture(
     dossiers,
     repositories,
     runsCreate,
+    enqueueCharacterEvidence,
+    markEnqueued,
     search,
     warcraftLogs,
     blizzard,
@@ -191,9 +249,9 @@ describe("applicant dossier service", () => {
     expect(runsCreate).not.toHaveBeenCalled();
   });
 
-  it("assembles current snapshot evidence without writing a dossier or mutating the snapshot", async () => {
+  it("assembles current snapshot evidence from the durable cache without calling Warcraft Logs", async () => {
     // Break caught: evidence reads could persist a dossier or lose the Warcraft Logs link matching a boss and timestamp.
-    const { dossiers, repositories, runsCreate } = fixture();
+    const { dossiers, repositories, runsCreate, warcraftLogs } = fixture();
 
     const result = await dossiers.read(root);
 
@@ -239,6 +297,7 @@ describe("applicant dossier service", () => {
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
   it("only enriches a kill with a unique Raider.IO guild, region, realm, and time match", async () => {
@@ -330,8 +389,8 @@ describe("applicant dossier service", () => {
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
-  it("reads transient root-only evidence without contacting snapshot repositories", async () => {
-    // Break caught: initial evidence could wait on or write linked-character discovery state.
+  it("reads cached root-only evidence without contacting snapshot repositories", async () => {
+    // Break caught: initial dossier reads could bypass the durable cache and re-query Warcraft Logs.
     const { dossiers, repositories, runsCreate, warcraftLogs } = fixture();
 
     await expect(dossiers.readInitial(root)).resolves.toMatchObject({
@@ -366,10 +425,9 @@ describe("applicant dossier service", () => {
       }
     });
 
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledTimes(1);
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledWith(
-      root,
-      expect.objectContaining({ requestCap: 20 })
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: root })
     );
     expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
@@ -426,7 +484,7 @@ describe("applicant dossier service", () => {
 
   it("uses stored snapshot order for the character cap and reports every skipped evidence stream", async () => {
     // Break caught: a cap could depend on incidental identity ordering or silently omit evidence.
-    const { dossiers, warcraftLogs } = fixture({
+    const { dossiers, repositories, warcraftLogs } = fixture({
       characterCap: 1,
       snapshot: storedSnapshot([
         {
@@ -454,7 +512,11 @@ describe("applicant dossier service", () => {
 
     const result = await dossiers.read(root);
 
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledTimes(1);
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(repositories.evidence.reserve).toHaveBeenCalledTimes(1);
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: alt })
+    );
     expect(result).toMatchObject({
       kind: "ready",
       dossier: {
@@ -470,22 +532,22 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("shares one Warcraft Logs request cap across selected characters", async () => {
-    // Break caught: treating the configured cap as per-character multiplied
-    // upstream traffic for every linked character in the snapshot.
-    const { dossiers, warcraftLogs } = fixture({ warcraftLogsRequestCap: 6 });
+  it("reads each selected character from its own durable evidence cache", async () => {
+    // Break caught: a cached dossier could omit an alt's evidence stream or return to direct Warcraft Logs reads.
+    const { dossiers, repositories, warcraftLogs } = fixture({
+      warcraftLogsRequestCap: 6
+    });
 
     await dossiers.read(root);
 
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenNthCalledWith(
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(repositories.evidence.reserve).toHaveBeenNthCalledWith(
       1,
-      root,
-      expect.objectContaining({ requestCap: 3 })
+      expect.objectContaining({ key: root })
     );
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenNthCalledWith(
+    expect(repositories.evidence.reserve).toHaveBeenNthCalledWith(
       2,
-      alt,
-      expect.objectContaining({ requestCap: 3 })
+      expect.objectContaining({ key: alt })
     );
   });
 });
