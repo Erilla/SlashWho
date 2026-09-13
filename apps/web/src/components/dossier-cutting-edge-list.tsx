@@ -14,9 +14,18 @@ export function DossierCuttingEdgeList({
       aria-labelledby="historic-cutting-edge-heading"
       className="dossier-panel dossier-cutting-edge-panel"
     >
-      <h2 className="section-heading" id="historic-cutting-edge-heading">
-        Historic Cutting Edge
-      </h2>
+      <div className="dossier-cutting-edge-heading">
+        <h2 className="section-heading" id="historic-cutting-edge-heading">
+          Historic Cutting Edge
+        </h2>
+        <span
+          aria-label={`${cuttingEdges.length} Cutting Edge ${cuttingEdges.length === 1 ? "achievement" : "achievements"}`}
+          className="dossier-cutting-edge-count"
+          role="img"
+        >
+          {cuttingEdges.length}
+        </span>
+      </div>
       <p className="empty-state">
         New achievements may take up to 15 minutes to appear.
       </p>
