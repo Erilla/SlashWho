@@ -25,6 +25,8 @@ const validDossier = {
     {
       key: applicantCharacter,
       displayName: "Ryii",
+      className: "Mage",
+      raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
       source: "raiderio_declared"
     }
   ],

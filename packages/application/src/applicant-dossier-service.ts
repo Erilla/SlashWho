@@ -6,6 +6,7 @@ import {
 import type { Repositories, StoredSnapshotCharacter } from "@slashwho/database";
 import {
   buildApplicantDossier,
+  lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
   type CharacterKey,
@@ -14,6 +15,7 @@ import {
   type DossierLimitation
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
+import type { MythicBossRanking, RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 
 import type { ApplicationConfig } from "./config";
@@ -38,9 +40,13 @@ export interface ApplicantDossierService {
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
-type DossierSubject = Pick<StoredSnapshotCharacter, "key" | "displayName"> & {
+type DossierSubject = Readonly<{
+  key: CharacterKey;
+  displayName: string;
+  className: string | null;
+  raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted";
-};
+}>;
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
@@ -169,6 +175,8 @@ function serializeDossierSubject(character: DossierSubject) {
   return {
     key: character.key,
     displayName: character.displayName,
+    className: character.className,
+    raiderIoUrl: character.raiderIoUrl,
     source:
       character.source === "submitted"
         ? ("submitted" as const)
@@ -176,6 +184,71 @@ function serializeDossierSubject(character: DossierSubject) {
           ? ("fingerprint_derived" as const)
           : ("raiderio_declared" as const)
   };
+}
+
+function normalizedIdentity(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLocaleLowerCase("en-US");
+}
+
+function normalizedRealm(value: string): string {
+  return normalizedIdentity(value).replace(/^connected/, "");
+}
+
+function historicRank(
+  kill: DossierKillEvidence,
+  rankings: readonly MythicBossRanking[]
+): number | null {
+  if (!kill.guild) return null;
+  const killedAt = Date.parse(kill.killedAt);
+  if (!Number.isFinite(killedAt)) return null;
+  const matches = rankings.filter(
+    (ranking) =>
+      normalizedIdentity(ranking.guildName) ===
+        normalizedIdentity(kill.guild!.name) &&
+      normalizedRealm(ranking.guildRealm) ===
+        normalizedRealm(kill.guild!.realm) &&
+      normalizedIdentity(ranking.guildRegion) ===
+        normalizedIdentity(kill.character.region) &&
+      Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <= 120_000
+  );
+  return matches.length === 1 ? matches[0]!.rank : null;
+}
+
+async function enrichHistoricRanks(options: {
+  kills: readonly DossierKillEvidence[];
+  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  signal: AbortSignal;
+}): Promise<readonly DossierKillEvidence[]> {
+  const rankings = new Map<string, readonly MythicBossRanking[]>();
+  const requests = new Map<
+    string,
+    Readonly<{ raidSlug: string; bossSlug: string }>
+  >();
+  for (const kill of options.kills) {
+    if (!kill.guild) continue;
+    const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+    if (boss) requests.set(`${boss.raidSlug}\0${boss.bossSlug}`, boss);
+  }
+  await Promise.all(
+    [...requests.entries()].map(async ([key, boss]) => {
+      const result = await options.raiderio.getMythicBossRankings(
+        boss,
+        options.signal
+      );
+      if (result.kind === "rankings") rankings.set(key, result.rows);
+    })
+  );
+  return options.kills.map((kill) => {
+    const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+    if (!boss) return kill;
+    const rows = rankings.get(`${boss.raidSlug}\0${boss.bossSlug}`);
+    return rows
+      ? { ...kill, historicWorldRank: historicRank(kill, rows) }
+      : kill;
+  });
 }
 
 function combineSignals(signal: AbortSignal | undefined, timeout: AbortSignal) {
@@ -189,6 +262,7 @@ async function assembleDossier(options: {
   research: ContractApplicantDossier["research"];
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   requestCap: number;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
@@ -218,11 +292,19 @@ async function assembleDossier(options: {
   ];
   const dossier = buildApplicantDossier({
     root: options.root,
-    characters: options.subjects.map(({ key, displayName }) => ({
-      key,
-      displayName
-    })),
-    kills: evidence.flatMap((item) => item.kills),
+    characters: options.subjects.map(
+      ({ key, displayName, className, raiderIoUrl }) => ({
+        key,
+        displayName,
+        className,
+        raiderIoUrl
+      })
+    ),
+    kills: await enrichHistoricRanks({
+      kills: evidence.flatMap((item) => item.kills),
+      raiderio: options.raiderio,
+      signal: options.signal
+    }),
     cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
     limitations
   });
@@ -243,6 +325,7 @@ export function createApplicantDossierService(options: {
   search: Pick<SearchService, "create">;
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   config: ApplicationConfig;
 }): ApplicantDossierService {
   return {
@@ -267,7 +350,15 @@ export function createApplicantDossierService(options: {
         kind: "ready",
         dossier: await assembleDossier({
           root: key,
-          subjects: [{ key, displayName: key.name, source: "submitted" }],
+          subjects: [
+            {
+              key,
+              displayName: key.name,
+              className: null,
+              raiderIoUrl: toRaiderIoUrl(key),
+              source: "submitted"
+            }
+          ],
           skippedSubjects: [],
           research: {
             state: "initial",
@@ -276,6 +367,7 @@ export function createApplicantDossierService(options: {
           },
           warcraftLogs: options.warcraftLogs,
           blizzard: options.blizzard,
+          raiderio: options.raiderio,
           requestCap: options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP,
           signal: combineSignals(signal, timeout)
         })
@@ -320,6 +412,7 @@ export function createApplicantDossierService(options: {
                 },
           warcraftLogs: options.warcraftLogs,
           blizzard: options.blizzard,
+          raiderio: options.raiderio,
           requestCap,
           signal: requestSignal
         })

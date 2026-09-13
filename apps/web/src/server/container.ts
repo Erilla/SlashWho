@@ -65,6 +65,7 @@ export type WebContainerDependencies = Readonly<{
     search: Pick<SearchService, "create">;
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+    raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
     config: ApplicationConfig;
   }): ApplicantDossierService;
 }>;
@@ -111,6 +112,11 @@ export async function createWebContainer(
         fetch: globalThis.fetch,
         clientId: config.dossier.blizzardClientId,
         clientSecret: config.dossier.blizzardClientSecret
+      }),
+      raiderio: dependencies.createRaiderIoGateway({
+        fetch: globalThis.fetch,
+        baseUrl: config.dossier.raiderIoBaseUrl,
+        timeoutMs: config.dossier.raiderIoTimeoutMs
       }),
       config: config.application
     });

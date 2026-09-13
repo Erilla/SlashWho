@@ -10,6 +10,8 @@ import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
   displayName: string;
+  className?: string | null;
+  raiderIoUrl?: string;
 }>;
 export type DossierKillEvidence = Readonly<{
   raidId: string;
@@ -64,10 +66,13 @@ export type ApplicantDossierRaid = Readonly<{
   cuttingEdge: true | null;
   bosses: readonly ApplicantDossierBoss[];
 }>;
+type AggregatedDossierBoss = ApplicantDossierBoss &
+  Readonly<{ isFinalBoss: boolean }>;
 export type ApplicantDossierCuttingEdge = Readonly<{
   achievementId: string;
   achievementName: string;
   description: string;
+  iconUrl: string | null;
   completedAt: string;
   characters: readonly string[];
 }>;
@@ -114,15 +119,12 @@ function compareEvidence(
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
 }
-function characterBossKey(k: DossierKillEvidence): string {
-  return [canonicalCharacterId(k.character), k.raidId, k.bossId].join("\0");
-}
 function sharedEvidenceKey(k: DossierKillEvidence): string {
   // A participant can only share evidence when the source identifies the same
   // fight. Timestamp-only evidence cannot prove that two character kills were
   // the same event, so it remains distinct per character.
   return k.reportUrl === null
-    ? `character\0${canonicalCharacterId(k.character)}`
+    ? `character\0${canonicalCharacterId(k.character)}\0${k.killedAt}`
     : `report\0${k.reportUrl}`;
 }
 
@@ -138,6 +140,7 @@ export function buildApplicantDossier(
     {
       achievement: NonNullable<ReturnType<typeof lookupCuttingEdgeAchievement>>;
       characters: Set<string>;
+      completedAt: string;
     }
   >();
   for (const evidence of input.cuttingEdges ?? []) {
@@ -149,15 +152,18 @@ export function buildApplicantDossier(
         canonicalCharacterId(evidence.character)
     );
     if (!character) continue;
-    const key = `${achievement.achievementId}\0${evidence.completedAt}`;
+    const key = achievement.achievementId;
     const entry = cuttingEdges.get(key) ?? {
       achievement,
-      characters: new Set<string>()
+      characters: new Set<string>(),
+      completedAt: evidence.completedAt
     };
+    if (evidence.completedAt < entry.completedAt)
+      entry.completedAt = evidence.completedAt;
     entry.characters.add(character.displayName);
     cuttingEdges.set(key, entry);
   }
-  const earliest = new Map<string, DossierKillEvidence>();
+  const allKills: DossierKillEvidence[] = [];
   for (const suppliedKill of input.kills) {
     if (isMythicPlusSeason(suppliedKill.raidName)) continue;
     const metadata =
@@ -167,12 +173,10 @@ export function buildApplicantDossier(
       lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName);
     const raid = lookupRaidByName(suppliedKill.raidName);
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
-    const key = characterBossKey(kill);
-    const current = earliest.get(key);
-    if (!current || compareEvidence(kill, current) < 0) earliest.set(key, kill);
+    allKills.push(kill);
   }
   const byBoss = new Map<string, DossierKillEvidence[]>();
-  for (const kill of earliest.values()) {
+  for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");
     byBoss.set(key, [...(byBoss.get(key) ?? []), kill]);
   }
@@ -181,8 +185,8 @@ export function buildApplicantDossier(
     {
       raidName: string;
       imageUrl: string | null;
-      bosses: ApplicantDossierBoss[];
-      final: boolean;
+      bosses: AggregatedDossierBoss[];
+      tierOrdinal: number | null;
     }
   >();
   for (const kills of byBoss.values()) {
@@ -216,7 +220,7 @@ export function buildApplicantDossier(
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
       bosses: [],
-      final: false
+      tierOrdinal: lookupRaidByName(selected.raidName)?.tierOrdinal ?? null
     };
     raid.bosses.push({
       bossId: selected.bossId,
@@ -227,28 +231,30 @@ export function buildApplicantDossier(
         lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
         null,
       firstKill: firstKills[0]!.firstKill,
-      firstKills: firstKills.map((entry) => entry.firstKill)
+      firstKills: firstKills.map((entry) => entry.firstKill),
+      isFinalBoss: selected.isFinalBoss
     });
-    raid.final ||= kills.some((kill) => kill.isFinalBoss);
     raids.set(selected.raidId, raid);
   }
   return {
     root: input.root,
     characters: input.characters,
     cuttingEdges: [...cuttingEdges.entries()]
-      .map(([key, entry]) => {
-        const [, completedAt] = key.split("\0", 2);
+      .map(([, entry]) => {
         return {
           achievementId: entry.achievement.achievementId,
           achievementName: entry.achievement.achievementName,
           description: entry.achievement.description,
-          completedAt: completedAt!,
-          characters: [...entry.characters].sort(text)
+          iconUrl: entry.achievement.iconUrl,
+          completedAt: entry.completedAt,
+          characters: input.characters
+            .filter((character) => entry.characters.has(character.displayName))
+            .map((character) => character.displayName)
         };
       })
       .sort(
         (a, b) =>
-          text(a.completedAt, b.completedAt) ||
+          text(b.completedAt, a.completedAt) ||
           text(a.achievementId, b.achievementId)
       ),
     limitations: input.limitations,
@@ -258,13 +264,28 @@ export function buildApplicantDossier(
         raidName: raid.raidName,
         imageUrl: raid.imageUrl,
         cuttingEdge: null,
-        bosses: raid.bosses.sort(
-          (a, b) =>
-            a.bossOrder - b.bossOrder ||
-            text(a.bossName, b.bossName) ||
-            text(a.bossId, b.bossId)
-        )
+        bosses: raid.bosses
+          .sort(
+            (a, b) =>
+              Number(b.isFinalBoss) - Number(a.isFinalBoss) ||
+              b.bossOrder - a.bossOrder ||
+              text(a.bossName, b.bossName) ||
+              text(a.bossId, b.bossId)
+          )
+          .map(({ isFinalBoss, ...boss }) => {
+            void isFinalBoss;
+            return boss;
+          })
       }))
-      .sort((a, b) => text(a.raidName, b.raidName) || text(a.raidId, b.raidId))
+      .sort((a, b) => {
+        const tierA = raids.get(a.raidId)?.tierOrdinal ?? null;
+        const tierB = raids.get(b.raidId)?.tierOrdinal ?? null;
+        if (tierA !== null || tierB !== null) {
+          if (tierA === null) return 1;
+          if (tierB === null) return -1;
+          if (tierA !== tierB) return tierB - tierA;
+        }
+        return text(a.raidName, b.raidName) || text(a.raidId, b.raidId);
+      })
   };
 }

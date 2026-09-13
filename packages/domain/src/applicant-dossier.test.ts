@@ -218,7 +218,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]?.raidId).toBe("1273");
   });
 
-  it("groups completed official Cutting Edge achievements by achievement and timestamp", () => {
+  it("merges Cutting Edge dates using the earliest completion and all qualifying characters", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -231,7 +231,7 @@ describe("applicant dossier", () => {
         },
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
+          completedAt: "2025-02-14T20:30:00.000Z",
           character: altKey
         },
         {
@@ -248,8 +248,136 @@ describe("applicant dossier", () => {
         achievementId: "40254",
         achievementName: "Cutting Edge: Queen Ansurek",
         completedAt: "2025-01-14T20:30:00.000Z",
-        characters: ["Ryalts", "Ryii"]
+        characters: ["Ryii", "Ryalts"],
+        iconUrl: null
       })
+    ]);
+  });
+
+  it("retains distinct reports and timestamp fallbacks, credits shared reports, and sorts oldest first", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, { killedAt: "2024-10-04T20:00:00.000Z", reportUrl: null }),
+        kill(root, { killedAt: "2024-10-03T20:00:00.000Z", reportUrl: null }),
+        kill(altKey, { killedAt: "2024-10-03T20:00:00.000Z", reportUrl: null }),
+        kill(root, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/later#fight=8"
+        }),
+        kill(root),
+        kill(root),
+        kill(altKey)
+      ],
+      limitations: []
+    });
+    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+      expect.objectContaining({
+        killedAt: "2024-10-01T20:00:00.000Z",
+        characters: ["Ryii", "Ryalts"]
+      }),
+      expect.objectContaining({
+        killedAt: "2024-10-02T20:00:00.000Z",
+        characters: ["Ryii"]
+      }),
+      expect.objectContaining({
+        killedAt: "2024-10-03T20:00:00.000Z",
+        characters: ["Ryalts"]
+      }),
+      expect.objectContaining({
+        killedAt: "2024-10-03T20:00:00.000Z",
+        characters: ["Ryii"]
+      }),
+      expect.objectContaining({
+        killedAt: "2024-10-04T20:00:00.000Z",
+        characters: ["Ryii"]
+      })
+    ]);
+  });
+
+  it("orders tiers by release and bosses final-first then descending encounter order", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Nerub-ar Palace",
+          bossName: "Sikran",
+          journalBossId: "2599",
+          isFinalBoss: false
+        }),
+        kill(root, {
+          raidName: "Nerub-ar Palace",
+          journalBossId: "2602",
+          isFinalBoss: false
+        }),
+        kill(root, {
+          raidName: "Amirdrassil, the Dream's Hope",
+          bossName: "Fyrakk the Blazing",
+          journalBossId: "2519"
+        }),
+        kill(root, {
+          raidName: "Aberrus, the Shadowed Crucible",
+          bossName: "Scalecommander Sarkareth",
+          journalBossId: "2520"
+        }),
+        kill(root, {
+          raidId: "unknown",
+          raidName: "Unknown raid",
+          bossId: "final",
+          bossName: "Final",
+          bossOrder: 1
+        }),
+        kill(root, {
+          raidId: "unknown",
+          raidName: "Unknown raid",
+          bossId: "earlier",
+          bossName: "Earlier",
+          bossOrder: 2,
+          isFinalBoss: false
+        })
+      ],
+      limitations: []
+    });
+    expect(dossier.raids.map((raid) => raid.raidName)).toEqual([
+      "Nerub-ar Palace",
+      "Amirdrassil, the Dream's Hope",
+      "Aberrus, the Shadowed Crucible",
+      "Unknown raid"
+    ]);
+    expect(dossier.raids[0]!.bosses.map((boss) => boss.bossName)).toEqual([
+      "Queen Ansurek",
+      "Sikran, Captain of the Sureki"
+    ]);
+    expect(dossier.raids[3]!.bosses.map((boss) => boss.bossName)).toEqual([
+      "Final",
+      "Earlier"
+    ]);
+  });
+
+  it("orders merged Cutting Edge achievements newest completion first", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [],
+      limitations: [],
+      cuttingEdges: [
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          character: root
+        },
+        {
+          achievementId: "41297",
+          completedAt: "2025-05-14T20:30:00.000Z",
+          character: root
+        }
+      ]
+    });
+    expect(dossier.cuttingEdges.map((entry) => entry.achievementId)).toEqual([
+      "41297",
+      "40254"
     ]);
   });
 

@@ -61,6 +61,7 @@ export type MythicBossRanking = Readonly<{
   rank: number;
   guildName: string;
   guildRealm: string;
+  guildRegion: string;
   firstDefeated: string;
 }>;
 

@@ -2,6 +2,7 @@ import type { SearchService } from "./search-service";
 import type { Repositories, StoredSnapshot } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
@@ -91,7 +92,7 @@ function fixture(
           killedAt: "2024-10-01T20:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/example",
           fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
-          guild: null,
+          guild: { name: "Example Guild", realm: "silvermoon" },
           historicWorldRank: null
         }
       ]
@@ -105,6 +106,20 @@ function fixture(
       }
     ])
   } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">;
+  const raiderio = {
+    getMythicBossRankings: vi.fn().mockResolvedValue({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        }
+      ]
+    })
+  } as unknown as Pick<RaiderIoGateway, "getMythicBossRankings">;
   const config = applicationConfigSchema.parse({
     BOT_API_KEY: "b".repeat(32),
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -120,9 +135,18 @@ function fixture(
     search,
     warcraftLogs,
     blizzard,
+    raiderio,
     config
   });
-  return { dossiers, repositories, runsCreate, search, warcraftLogs, blizzard };
+  return {
+    dossiers,
+    repositories,
+    runsCreate,
+    search,
+    warcraftLogs,
+    blizzard,
+    raiderio
+  };
 }
 
 describe("applicant dossier service", () => {
@@ -177,8 +201,18 @@ describe("applicant dossier service", () => {
       kind: "ready",
       dossier: {
         characters: [
-          { displayName: "Ryii", source: "raiderio_declared" },
-          { displayName: "Ryalts", source: "fingerprint_derived" }
+          {
+            displayName: "Ryii",
+            className: "Mage",
+            raiderIoUrl: raiderUrl,
+            source: "raiderio_declared"
+          },
+          {
+            displayName: "Ryalts",
+            className: "Priest",
+            raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+            source: "fingerprint_derived"
+          }
         ],
         raids: [
           {
@@ -187,14 +221,15 @@ describe("applicant dossier service", () => {
               {
                 firstKill: {
                   reportUrl:
-                    "https://www.warcraftlogs.com/reports/example#fight=9"
+                    "https://www.warcraftlogs.com/reports/example#fight=9",
+                  historicWorldRank: 2
                 }
               }
             ]
           }
         ],
         cuttingEdges: [
-          { achievementId: "40254", characters: ["Ryalts", "Ryii"] }
+          { achievementId: "40254", characters: ["Ryii", "Ryalts"] }
         ],
         research: {
           state: "complete",
@@ -204,6 +239,70 @@ describe("applicant dossier service", () => {
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
+  });
+
+  it("only enriches a kill with a unique Raider.IO guild, region, realm, and time match", async () => {
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Example Guild",
+          guildRealm: "connected-silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:01:59.000Z"
+        },
+        {
+          rank: 3,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "us",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        }
+      ]
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        raids: [{ bosses: [{ firstKill: { historicWorldRank: 2 } }] }]
+      }
+    });
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledWith(
+      { raidSlug: "nerubar-palace", bossSlug: "queen-ansurek" },
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("leaves the rank unknown when multiple leaderboard rows match the same kill", async () => {
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        },
+        {
+          rank: 3,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:01:00.000Z"
+        }
+      ]
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }]
+      }
+    });
   });
 
   it("retains Warcraft Logs evidence when Blizzard achievement data is unavailable", async () => {

@@ -87,9 +87,9 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("paginates public reports and keeps the earliest Mythic kill per encounter", async () => {
-    // Break caught: later report pages could be ignored, leaving a later kill as
-    // the applicant's claimed first kill.
+  it("paginates public reports and retains every distinct Mythic kill", async () => {
+    // Break caught: collapsing report pages to one kill per encounter hid the
+    // complete chronological evidence needed by an applicant dossier.
     const pages = (fixture("character-report-valid") as { pages: unknown[] })
       .pages;
     let page = 0;
@@ -135,6 +135,20 @@ describe("Warcraft Logs gateway", () => {
           killedAt: "2024-02-03T01:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/earlyReport",
           fightUrl: "https://www.warcraftlogs.com/reports/earlyReport#fight=7",
+          guild: null,
+          historicWorldRank: null
+        },
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1234",
+          bossName: "Queen Ansurek",
+          journalBossId: null,
+          bossOrder: 1234,
+          isFinalBoss: false,
+          killedAt: "2024-02-05T03:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/lateReport",
+          fightUrl: "https://www.warcraftlogs.com/reports/lateReport#fight=1",
           guild: null,
           historicWorldRank: null
         },

@@ -15,6 +15,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
           achievementName: "Cutting Edge: Queen Ansurek",
           description:
             "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
+          iconUrl: null,
           completedAt: "2025-01-14T20:30:00.000Z",
           characters: ["Ryii", "Ryalts"]
         }

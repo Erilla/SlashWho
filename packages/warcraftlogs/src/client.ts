@@ -230,7 +230,7 @@ function firstKillReports(
     return { kind: "limitation", code: "schema_drift" };
   }
 
-  const earliest = new Map<number, WarcraftLogsFirstKillEvidence>();
+  const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
   for (const reportValue of reports) {
     const report = record(reportValue);
     const code = report && nonEmptyString(report.code);
@@ -356,21 +356,13 @@ function firstKillReports(
         guild,
         historicWorldRank: null
       };
-      const current = earliest.get(encounterId);
-      if (
-        !current ||
-        candidate.killedAt < current.killedAt ||
-        (candidate.killedAt === current.killedAt &&
-          candidate.fightUrl < current.fightUrl)
-      ) {
-        earliest.set(encounterId, candidate);
-      }
+      kills.set(candidate.fightUrl, candidate);
     }
   }
 
   return {
     kind: "evidence",
-    kills: [...earliest.values()].sort(
+    kills: [...kills.values()].sort(
       (a, b) =>
         a.bossOrder - b.bossOrder ||
         a.killedAt.localeCompare(b.killedAt) ||
@@ -516,12 +508,12 @@ export function createWarcraftLogsClient(
       return { kind: "limitation", code: "request_cap" };
     }
 
-    const earliest = new Map<string, WarcraftLogsFirstKillEvidence>();
+    const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
     const partial = (
       limitation: WarcraftLogsLimitation
     ): WarcraftLogsReportResult =>
-      earliest.size
-        ? { kind: "evidence", kills: [...earliest.values()], limitation }
+      kills.size
+        ? { kind: "evidence", kills: [...kills.values()], limitation }
         : limitation;
     for (let page = 1; page <= options.requestCap; page++) {
       const result = await graphql(
@@ -537,16 +529,7 @@ export function createWarcraftLogsClient(
       const normalized = firstKillReports(result.value, key);
       if (normalized.kind === "limitation") return partial(normalized);
       for (const kill of normalized.kills) {
-        const identifier = `${kill.raidId}\u0000${kill.bossId}`;
-        const current = earliest.get(identifier);
-        if (
-          !current ||
-          kill.killedAt < current.killedAt ||
-          (kill.killedAt === current.killedAt &&
-            kill.fightUrl < current.fightUrl)
-        ) {
-          earliest.set(identifier, kill);
-        }
+        kills.set(kill.fightUrl, kill);
       }
 
       const hasMorePages = hasMoreReportPages(result.value);
@@ -556,7 +539,7 @@ export function createWarcraftLogsClient(
       if (!hasMorePages) {
         return {
           kind: "evidence",
-          kills: [...earliest.values()].sort(
+          kills: [...kills.values()].sort(
             (a, b) =>
               a.raidId.localeCompare(b.raidId) ||
               a.bossOrder - b.bossOrder ||

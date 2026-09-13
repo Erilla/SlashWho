@@ -68,7 +68,8 @@ const bossRankingsResponseSchema = z.object({
       rank: z.number().int().positive(),
       guild: z.object({
         name: z.string().min(1),
-        realm: z.object({ slug: z.string().min(1) })
+        realm: z.object({ slug: z.string().min(1) }),
+        region: z.object({ slug: z.string().min(1) })
       }),
       encountersDefeated: z.object({
         firstDefeated: z.string().datetime()
@@ -203,6 +204,7 @@ function normalizeBossRankings(value: unknown): readonly MythicBossRanking[] {
     rank: row.rank,
     guildName: row.guild.name,
     guildRealm: row.guild.realm.slug,
+    guildRegion: row.guild.region.slug,
     firstDefeated: row.encountersDefeated.firstDefeated
   }));
 }

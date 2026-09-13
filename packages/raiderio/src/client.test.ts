@@ -589,7 +589,8 @@ describe("Raider.IO gateway", () => {
               rank: 2,
               guild: {
                 name: "Echo",
-                realm: { slug: "tarren-mill" }
+                realm: { slug: "tarren-mill" },
+                region: { slug: "eu" }
               },
               encountersDefeated: {
                 firstDefeated: "2025-01-14T20:30:00.000Z"
@@ -618,6 +619,7 @@ describe("Raider.IO gateway", () => {
           rank: 2,
           guildName: "Echo",
           guildRealm: "tarren-mill",
+          guildRegion: "eu",
           firstDefeated: "2025-01-14T20:30:00.000Z"
         }
       ]

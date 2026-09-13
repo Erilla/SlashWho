@@ -24,11 +24,15 @@ const dossier: ApplicantDossier = {
     {
       key: { region: "eu", realm: "silvermoon", name: "ryii" },
       displayName: "Ryii",
+      className: "Mage",
+      raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
       source: "raiderio_declared"
     },
     {
       key: { region: "eu", realm: "draenor", name: "ryalts" },
       displayName: "Ryalts",
+      className: "Priest",
+      raiderIoUrl: "https://raider.io/characters/eu/draenor/ryalts",
       source: "fingerprint_derived"
     }
   ],
@@ -74,6 +78,7 @@ const dossier: ApplicantDossier = {
       achievementName: "Cutting Edge: Queen Ansurek",
       description:
         "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
+      iconUrl: null,
       completedAt: "2025-01-14T20:30:00.000Z",
       characters: ["Ryii", "Ryalts"]
     }
