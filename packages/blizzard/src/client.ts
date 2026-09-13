@@ -165,9 +165,22 @@ export function createBlizzardClient(
   options: CreateBlizzardClientOptions
 ): BlizzardGateway {
   let cachedToken: AccessToken | undefined;
+  let tokenRequest: Promise<string> | undefined;
   let cachedClassNames: ReadonlyMap<number, string> | undefined;
 
   async function accessToken(signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    tokenRequest ??= fetchAccessToken(AbortSignal.timeout(15_000)).finally(
+      () => {
+        tokenRequest = undefined;
+      }
+    );
+    const token = await tokenRequest;
+    signal?.throwIfAborted();
+    return token;
+  }
+
+  async function fetchAccessToken(signal?: AbortSignal): Promise<string> {
     if (cachedToken && cachedToken.expiresAt > Date.now()) {
       return cachedToken.value;
     }

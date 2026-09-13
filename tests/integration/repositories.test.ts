@@ -157,6 +157,38 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("reserves one scan under concurrent cache misses and prunes expired terminal scans with their fights", async () => {
+    const at = new Date("2026-09-13T12:00:00Z");
+    const input = { key: rootKey, at, freshnessCutoff: at };
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => repositories.evidence.reserve(input))
+    );
+    expect(results.filter((result) => result.kind === "reserved")).toHaveLength(
+      1
+    );
+    expect(new Set(results.map((result) => result.run.id)).size).toBe(1);
+    await repositories.evidence.publish(results[0]!.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: [mythicKill()],
+      completedAt: new Date("2026-08-01T12:00:00Z")
+    });
+    const active = await repositories.evidence.reserve(input);
+    expect(active.kind).toBe("reserved");
+    expect(await repositories.evidence.cleanupExpired(at)).toBe(1);
+    expect(await repositories.evidence.getCompleted(rootKey)).toBeNull();
+    expect(await repositories.evidence.find(active.run.id)).toMatchObject({
+      status: "queued"
+    });
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM character_mythic_kills"
+        )
+      ).rows[0].count
+    ).toBe(0);
+  });
+
   it("atomically publishes a complete replacement evidence scan", async () => {
     // Break caught: a reader could observe a completed run with only part of
     // its normalized WCL fights after a worker crashes during persistence.

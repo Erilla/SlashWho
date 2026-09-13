@@ -37,3 +37,4 @@ export type {
   FingerprintGateway,
   FingerprintSweepOutcome
 } from "./fingerprint-discovery";
+export { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";

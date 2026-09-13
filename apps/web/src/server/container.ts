@@ -57,6 +57,7 @@ export type WebContainerDependencies = Readonly<{
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
     config: ApplicationConfig;
+    onCacheEvent?: (source: string, event: string) => void;
   }): ApplicantDossierService;
 }>;
 
@@ -89,6 +90,10 @@ export async function createWebContainer(
       config: config.application
     });
     const dossiers = dependencies.createApplicantDossierService({
+      onCacheEvent: (source, event) =>
+        console.info(
+          JSON.stringify({ event: "dossier_cache", source, outcome: event })
+        ),
       repositories,
       search: searches,
       queue: initializedQueue,

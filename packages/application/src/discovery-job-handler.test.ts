@@ -312,6 +312,9 @@ function createMemoryRepositories(): Repositories {
       }
     },
     evidence: {
+      async cleanupExpired() {
+        return 0;
+      },
       async reserve() {
         throw new Error("not used");
       },
