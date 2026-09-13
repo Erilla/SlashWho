@@ -63,6 +63,7 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
                           encounterID: 1234,
                           name: "Queen Ansurek",
                           startTime: 3_600_000,
+                          endTime: 3_900_000,
                           kill: true,
                           difficulty: 5,
                           friendlyPlayers: [7]

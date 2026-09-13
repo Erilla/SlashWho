@@ -22,7 +22,9 @@ for (const applicantUrl of applicantUrls) {
     await page.getByLabel("Applicant URL").fill(applicantUrl);
     await page.getByRole("button", { name: "Research applicant" }).click();
 
-    await expect(page).toHaveURL(/\/dossiers\/eu\/silvermoon\/ryii$/);
+    await expect(page).toHaveURL(
+      /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
+    );
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
