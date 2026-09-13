@@ -250,7 +250,7 @@ describe("applicant dossier", () => {
         achievementName: "Cutting Edge: Queen Ansurek",
         completedAt: "2025-01-14T20:30:00.000Z",
         characters: ["Ryii", "Ryalts"],
-        iconUrl: null
+        iconUrl: "https://render.worldofwarcraft.com/eu/icons/56/5779391.jpg"
       })
     ]);
   });
