@@ -486,6 +486,28 @@ describe("applicant dossier", () => {
     ]);
   });
 
+  it("excludes generic dungeon zones from historic raid evidence", () => {
+    // Break caught: dungeon encounters such as Brewmaster Aldryr could appear
+    // in the applicant's raid history when Warcraft Logs uses a generic zone.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Heroic Dungeons",
+          bossName: "Brewmaster Aldryr",
+          journalBossId: null
+        }),
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toEqual([
+      expect.objectContaining({ raidName: "Nerub-ar Palace" })
+    ]);
+  });
+
   it("uses unique boss metadata when Warcraft Logs groups Midnight raids under one zone", () => {
     const dossier = buildApplicantDossier({
       root,

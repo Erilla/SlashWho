@@ -153,8 +153,10 @@ function sameGuildKill(
   );
 }
 
-function isMythicPlusSeason(raidName: string): boolean {
-  return /^mythic\+\s+seasons?\b/i.test(raidName.trim());
+function isNonRaidWclZone(zoneName: string): boolean {
+  return /^(?:mythic\+\s+seasons?|(?:normal|heroic|mythic)\s+dungeons)\b/i.test(
+    zoneName.trim()
+  );
 }
 
 export function buildApplicantDossier(
@@ -190,7 +192,7 @@ export function buildApplicantDossier(
   }
   const allKills: DossierKillEvidence[] = [];
   for (const suppliedKill of input.kills) {
-    if (isMythicPlusSeason(suppliedKill.raidName)) continue;
+    if (isNonRaidWclZone(suppliedKill.raidName)) continue;
     const metadata =
       (suppliedKill.journalBossId === null
         ? null
