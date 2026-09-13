@@ -104,10 +104,18 @@ function normalizedName(value: string): string {
 }
 
 const encountersByName = new Map<string, RaidCatalogueEncounter | null>();
+const encountersByBossName = new Map<string, RaidCatalogueEncounter | null>();
 for (const encounter of encounters.values()) {
   const key = `${normalizedName(encounter.raidName)}\0${normalizedName(encounter.bossName)}`;
   const existing = encountersByName.get(key);
   encountersByName.set(key, existing === undefined ? encounter : null);
+
+  const bossKey = normalizedName(encounter.bossName);
+  const existingBoss = encountersByBossName.get(bossKey);
+  encountersByBossName.set(
+    bossKey,
+    existingBoss === undefined ? encounter : null
+  );
 }
 
 export type RaidCatalogueRaid = Readonly<{
@@ -147,6 +155,16 @@ export function lookupRaidBossByName(
       `${normalizedName(raidName)}\0${normalizedName(bossName)}`
     ) ?? null
   );
+}
+
+/**
+ * Warcraft Logs sometimes reports a combined raid-zone label. A boss name can
+ * still restore the Journal raid only when it is unique in the catalogue.
+ */
+export function lookupUniqueRaidBossByName(
+  bossName: string
+): RaidCatalogueEncounter | null {
+  return encountersByBossName.get(normalizedName(bossName)) ?? null;
 }
 
 export function lookupRaidByName(raidName: string): RaidCatalogueRaid | null {
