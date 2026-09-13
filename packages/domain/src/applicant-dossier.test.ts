@@ -136,37 +136,6 @@ describe("applicant dossier", () => {
     expect(make(forward).raids[0].cuttingEdge).toBeNull();
   });
 
-  it("uses deterministic descriptive metadata when tied evidence is reversed", () => {
-    const forward = [
-      kill(root, {
-        raidName: "Nerub-ar Palace",
-        bossName: "Zeta Boss",
-        bossOrder: 1
-      }),
-      kill(root, {
-        raidName: "Nerub-ar Palace",
-        bossName: "Alpha Boss",
-        bossOrder: 1
-      })
-    ];
-    const make = (kills: DossierKillEvidence[]) =>
-      buildApplicantDossier({
-        root,
-        characters: [rootCharacter],
-        kills,
-        limitations: []
-      });
-
-    expect(make([...forward].reverse())).toEqual(make(forward));
-    expect(make(forward).raids[0]).toMatchObject({
-      raidName: "Nerub-ar Palace"
-    });
-    expect(make(forward).raids[0].bosses[0]).toMatchObject({
-      bossName: "Alpha Boss",
-      bossOrder: 1
-    });
-  });
-
   it("distinguishes nullable evidence values when tied input is reversed", () => {
     const forward = [
       kill(root, { reportUrl: null, guild: null, historicWorldRank: null }),
@@ -508,6 +477,29 @@ describe("applicant dossier", () => {
       kills: [
         kill(root, {
           raidName: "Cinderbrew Meadery",
+          bossName: "Brewmaster Aldryr",
+          journalBossId: null
+        }),
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toEqual([
+      expect.objectContaining({ raidName: "Nerub-ar Palace" })
+    ]);
+  });
+
+  it("excludes a dungeon boss reported under a raid zone", () => {
+    // Break caught: a WCL report listed Brewmaster Aldryr under Liberation of
+    // Undermine. A recognised zone alone must not turn an unknown boss into
+    // raid evidence.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Liberation of Undermine",
           bossName: "Brewmaster Aldryr",
           journalBossId: null
         }),

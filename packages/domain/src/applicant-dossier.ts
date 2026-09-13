@@ -193,14 +193,20 @@ export function buildApplicantDossier(
   const allKills: DossierKillEvidence[] = [];
   for (const suppliedKill of input.kills) {
     if (isNonRaidWclZone(suppliedKill.raidName)) continue;
-    const metadata =
-      (suppliedKill.journalBossId === null
-        ? null
-        : lookupJournalEncounter(suppliedKill.journalBossId)) ??
-      lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName) ??
-      lookupUniqueRaidBossByName(suppliedKill.bossName);
     const raid = lookupRaidByName(suppliedKill.raidName);
-    if (metadata === null && raid === null) continue;
+    const journalEncounter =
+      suppliedKill.journalBossId === null
+        ? null
+        : lookupJournalEncounter(suppliedKill.journalBossId);
+    const namedEncounter = lookupRaidBossByName(
+      suppliedKill.raidName,
+      suppliedKill.bossName
+    );
+    const metadata = raid
+      ? (namedEncounter ??
+        (journalEncounter?.raidId === raid.raidId ? journalEncounter : null))
+      : (journalEncounter ?? lookupUniqueRaidBossByName(suppliedKill.bossName));
+    if (metadata === null) continue;
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
     allKills.push(kill);
   }
