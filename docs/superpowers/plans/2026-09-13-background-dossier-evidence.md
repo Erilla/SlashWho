@@ -23,7 +23,6 @@
 ### Task 1: Evidence cache persistence and queue
 
 **Files:**
-
 - Modify: `packages/database/src/schema.ts`, `packages/database/src/repositories.ts`, `packages/database/src/postgres-repositories.ts`, `packages/database/src/index.ts`, `packages/database/src/queue.ts`
 - Create: `packages/database/drizzle/0004_character_evidence.sql`
 - Test: `packages/database/src/postgres-repositories.test.ts`, `packages/database/src/queue.test.ts`
@@ -37,7 +36,6 @@
 ### Task 2: Worker-owned WCL collection
 
 **Files:**
-
 - Modify: `apps/worker/src/config.ts`, `apps/worker/src/runtime.ts`, `packages/application/src/applicant-evidence-job-handler.ts`, `packages/application/src/index.ts`, `packages/warcraftlogs/src/client.ts`
 - Create: `packages/application/src/applicant-evidence-job-handler.test.ts`
 - Test: `apps/worker/src/config.test.ts`, `apps/worker/src/runtime.test.ts`, `packages/warcraftlogs/src/client.test.ts`
@@ -50,7 +48,6 @@
 ### Task 3: Cached dossier orchestration and browser refresh
 
 **Files:**
-
 - Modify: `packages/application/src/applicant-dossier-service.ts`, `packages/application/src/applicant-dossier-service.test.ts`, `apps/web/src/server/container.ts`, `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.tsx`, `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.test.tsx`
 - Test: `apps/web/src/app/api/dossiers/api-contract.test.ts`
 
@@ -63,7 +60,6 @@
 ### Task 4: Same-kill coalescing
 
 **Files:**
-
 - Modify: `packages/domain/src/applicant-dossier.ts`, `packages/domain/src/applicant-dossier.test.ts`
 
 - [ ] Add a failing domain test with two report URLs for the same boss/guild within two minutes; expect one evidence row with unioned characters and deterministic report selection.
@@ -74,7 +70,10 @@
 ### Task 5: Fallback media and raid blocks
 
 **Files:**
+<<<<<<< HEAD
 
+=======
+>>>>>>> 67d59d0 (docs: design background applicant evidence)
 - Modify: `apps/web/src/components/dossier-raid-list.tsx`, `apps/web/src/components/dossier-cutting-edge-list.tsx`, `apps/web/src/app/globals.css`
 - Create: `apps/web/src/components/dossier-media-fallback.tsx`
 - Test: `apps/web/src/components/dossier-raid-list.test.tsx`, `apps/web/src/components/dossier-cutting-edge-list.test.tsx`
