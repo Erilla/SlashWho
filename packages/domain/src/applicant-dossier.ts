@@ -154,7 +154,7 @@ function sameGuildKill(
 }
 
 function isMythicPlusSeason(raidName: string): boolean {
-  return /^mythic\+\s+season\b/i.test(raidName.trim());
+  return /^mythic\+\s+seasons?\b/i.test(raidName.trim());
 }
 
 export function buildApplicantDossier(

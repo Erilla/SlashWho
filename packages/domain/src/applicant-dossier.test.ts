@@ -464,6 +464,28 @@ describe("applicant dossier", () => {
     ]);
   });
 
+  it("excludes plural Mythic+ season zones when their boss cannot identify a raid", () => {
+    // Break caught: an ambiguous reused boss name could be presented beneath a
+    // Mythic+ seasonal zone as if it were raid evidence.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Mythic+ Seasons 1 - 3",
+          bossName: "Artificer Xy'mox",
+          journalBossId: null
+        }),
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toEqual([
+      expect.objectContaining({ raidName: "Nerub-ar Palace" })
+    ]);
+  });
+
   it("uses unique boss metadata when Warcraft Logs groups Midnight raids under one zone", () => {
     const dossier = buildApplicantDossier({
       root,
