@@ -22,6 +22,46 @@ const boss = {
 
 afterEach(cleanup);
 
+it("shows the grouped rank in the summary and retains all distinct report links", () => {
+  const reportUrls = [
+    "https://www.warcraftlogs.com/reports/one#fight=1",
+    "https://www.warcraftlogs.com/reports/two#fight=2"
+  ];
+  render(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "1320",
+          raidName: "The Venomous Abyss",
+          imageUrl: null,
+          cuttingEdge: null,
+          bosses: [
+            {
+              ...boss,
+              bossName: "Nek'zali the Soulcoiler",
+              imageUrl: null,
+              firstKill: {
+                ...boss.firstKill,
+                historicWorldRank: 48,
+                guild: { name: "Rancour", realm: "draenor" },
+                reportUrl: reportUrls[0]!,
+                reportUrls
+              }
+            }
+          ]
+        }
+      ]}
+    />
+  );
+  expect(screen.getByText("World #48")).toBeVisible();
+  expect(
+    screen
+      .getAllByRole("link", { hidden: true })
+      .map((link) => link.getAttribute("href"))
+  ).toEqual(reportUrls);
+  expect(screen.getAllByText("First kill")).toHaveLength(1);
+});
+
 it("renders official raid and boss artwork when supplied", () => {
   // Break caught: official catalogue media could reach the dossier but never
   // become visible to a guild reviewer.

@@ -103,7 +103,7 @@ describe("applicant dossier", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/first#fight=8"
         }),
         kill(altKey, {
-          killedAt: "2024-10-01T20:01:30.000Z",
+          killedAt: "2024-10-01T20:00:01.500Z",
           reportUrl: "https://www.warcraftlogs.com/reports/second#fight=8"
         })
       ],
