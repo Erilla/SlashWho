@@ -160,7 +160,7 @@ export function buildApplicantDossier(
     };
     if (evidence.completedAt < entry.completedAt)
       entry.completedAt = evidence.completedAt;
-    entry.characters.add(character.displayName);
+    entry.characters.add(canonicalCharacterId(character.key));
     cuttingEdges.set(key, entry);
   }
   const allKills: DossierKillEvidence[] = [];
@@ -248,7 +248,9 @@ export function buildApplicantDossier(
           iconUrl: entry.achievement.iconUrl,
           completedAt: entry.completedAt,
           characters: input.characters
-            .filter((character) => entry.characters.has(character.displayName))
+            .filter((character) =>
+              entry.characters.has(canonicalCharacterId(character.key))
+            )
             .map((character) => character.displayName)
         };
       })

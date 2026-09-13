@@ -18,3 +18,15 @@
 
 - Raider.IO ranks remain unknown for unmapped or unavailable leaderboard bosses, no leaderboard row, and ambiguous or mismatched source data. This is intentional rather than inferring a rank.
 - The unrelated `apps/web/next-env.d.ts` working-tree change was left unstaged.
+
+## Review follow-up
+
+- Follow-up commit: `HEAD` (the corrective commit containing this report update).
+- Removed comma-based boss-title truncation so canonical Raider.IO slugs retain
+  subtitles, with a regression for `Uu'nat, Harbinger of the Void`.
+- Cutting Edge participant union now records canonical character identities,
+  preventing same-named characters on different realms or regions from being
+  credited incorrectly.
+- Follow-up verification: focused dossier, application, Raider.IO, Warcraft
+  Logs, and contracts tests (85 passed); `corepack pnpm typecheck`; and
+  `corepack pnpm format:check` all passed.

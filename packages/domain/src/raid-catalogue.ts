@@ -145,7 +145,6 @@ export function lookupRaidByName(raidName: string): RaidCatalogueRaid | null {
 
 function raiderIoBossSlug(bossName: string): string {
   return bossName
-    .split(",", 1)[0]!
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[’']/g, "")

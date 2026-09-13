@@ -4,6 +4,7 @@ import {
   buildApplicantDossier,
   type DossierKillEvidence
 } from "./applicant-dossier";
+import { lookupRaiderIoBoss } from "./raid-catalogue";
 
 const root: CharacterKey = { region: "eu", realm: "silvermoon", name: "ryii" };
 const altKey: CharacterKey = {
@@ -379,6 +380,38 @@ describe("applicant dossier", () => {
       "41297",
       "40254"
     ]);
+  });
+
+  it("credits Cutting Edge only to the matching canonical character identity", () => {
+    const sameNamedAlt: CharacterKey = {
+      region: "us",
+      realm: "illidan",
+      name: "ryii"
+    };
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, { key: sameNamedAlt, displayName: "Ryii" }],
+      kills: [],
+      cuttingEdges: [
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          character: root
+        }
+      ],
+      limitations: []
+    });
+
+    expect(dossier.cuttingEdges[0]!.characters).toEqual(["Ryii"]);
+  });
+
+  it("keeps the full verified Raider.IO boss slug when a name includes a subtitle", () => {
+    expect(
+      lookupRaiderIoBoss("Crucible of Storms", "Uu'nat, Harbinger of the Void")
+    ).toEqual({
+      raidSlug: "crucible-of-storms",
+      bossSlug: "uunat-harbinger-of-the-void"
+    });
   });
 
   it("excludes Mythic+ season zones from raid boss evidence", () => {
