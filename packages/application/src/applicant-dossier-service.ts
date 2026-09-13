@@ -24,6 +24,7 @@ import {
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type {
   MythicBossRanking,
+  MythicBossRankingsOptions,
   MythicBossRankingsResult,
   RaiderIoGateway
 } from "@slashwho/raiderio";
@@ -232,6 +233,9 @@ function historicRank(
   if (!Number.isFinite(killedAt)) return null;
   const matches = rankings.filter(
     (ranking) =>
+      (!ranking.bossSlug ||
+        ranking.bossSlug ===
+          lookupRaiderIoBoss(kill.raidName, kill.bossName)?.bossSlug) &&
       normalizedIdentity(ranking.guildName) ===
         normalizedIdentity(kill.guild!.name) &&
       normalizedRealm(ranking.guildRealm) ===
@@ -241,6 +245,29 @@ function historicRank(
       Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <= 120_000
   );
   return matches.length === 1 ? matches[0]!.rank : null;
+}
+
+function rankingKey(options: MythicBossRankingsOptions): string {
+  return JSON.stringify(
+    options.guild
+      ? [
+          options.raidSlug,
+          options.guild.region,
+          options.guild.realm,
+          options.guild.name
+        ]
+      : [options.raidSlug, options.bossSlug]
+  );
+}
+
+function guildRankingRequest(
+  kill: DossierKillEvidence
+): MythicBossRankingsOptions | null {
+  if (!kill.guild) return null;
+  const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+  return boss
+    ? { ...boss, guild: { ...kill.guild, region: kill.character.region } }
+    : null;
 }
 
 async function enrichHistoricRanks(options: {
@@ -253,14 +280,11 @@ async function enrichHistoricRanks(options: {
 }> {
   const rankings = new Map<string, readonly MythicBossRanking[]>();
   const failures = new Map<string, DossierLimitation>();
-  const requests = new Map<
-    string,
-    Readonly<{ raidSlug: string; bossSlug: string }>
-  >();
+  const requests = new Map<string, MythicBossRankingsOptions>();
   for (const kill of options.kills) {
     if (!kill.guild) continue;
-    const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
-    if (boss) requests.set(`${boss.raidSlug}\0${boss.bossSlug}`, boss);
+    const boss = guildRankingRequest(kill);
+    if (boss) requests.set(rankingKey(boss), boss);
   }
   await Promise.all(
     [...requests.entries()].map(async ([key, boss]) => {
@@ -278,9 +302,9 @@ async function enrichHistoricRanks(options: {
     })
   );
   const kills = options.kills.map((kill) => {
-    const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+    const boss = guildRankingRequest(kill);
     if (!boss) return kill;
-    const rows = rankings.get(`${boss.raidSlug}\0${boss.bossSlug}`);
+    const rows = rankings.get(rankingKey(boss));
     return rows
       ? { ...kill, historicWorldRank: historicRank(kill, rows) }
       : kill;
@@ -418,7 +442,7 @@ export function createApplicantDossierService(options: {
     async getMythicBossRankings(boss, signal) {
       signal?.throwIfAborted();
       try {
-        const result = await rankings(JSON.stringify(boss), async () => {
+        const result = await rankings(rankingKey(boss), async () => {
           const response = await options.raiderio.getMythicBossRankings(
             boss,
             AbortSignal.timeout(15_000)

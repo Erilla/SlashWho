@@ -58,6 +58,7 @@ export type HistoricMythicKillOptions = Readonly<{
 }>;
 
 export type MythicBossRanking = Readonly<{
+  bossSlug?: string;
   rank: number;
   guildName: string;
   guildRealm: string;
@@ -68,6 +69,8 @@ export type MythicBossRanking = Readonly<{
 export type MythicBossRankingsOptions = Readonly<{
   raidSlug: string;
   bossSlug: string;
+  /** When supplied, returns all confirmed boss ranks for this guild and raid. */
+  guild?: Readonly<{ name: string; realm: string; region: string }>;
 }>;
 
 export type MythicBossRankingsResult =

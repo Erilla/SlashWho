@@ -59,6 +59,7 @@ function fixture(
     snapshot?: StoredSnapshot | null;
     characterCap?: number;
     warcraftLogsRequestCap?: number;
+    additionalKills?: readonly StoredCharacterMythicKill[];
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -122,7 +123,7 @@ function fixture(
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
             completedAt: new Date()
           },
-          kills: cachedKills
+          kills: [...cachedKills, ...(options.additionalKills ?? [])]
         }
       })),
       markEnqueued
@@ -415,6 +416,72 @@ describe("applicant dossier service", () => {
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
+  it("shares a guild raid lookup across bosses without mixing their ranks", async () => {
+    const { dossiers, raiderio } = fixture({
+      additionalKills: [
+        {
+          id: "10000000-0000-4000-8000-000000000021",
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "5678",
+          bossName: "The Silken Court",
+          journalBossId: null,
+          bossOrder: 7,
+          isFinalBoss: false,
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/court",
+          fightUrl: "https://www.warcraftlogs.com/reports/court#fight=1",
+          guild: { name: "Example Guild", realm: "silvermoon" },
+          historicWorldRank: null
+        },
+        {
+          id: "10000000-0000-4000-8000-000000000022",
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "9012",
+          bossName: "Ulgrax the Devourer",
+          journalBossId: null,
+          bossOrder: 1,
+          isFinalBoss: false,
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/ulgrax",
+          fightUrl: "https://www.warcraftlogs.com/reports/ulgrax#fight=1",
+          guild: { name: "Other Guild", realm: "silvermoon" },
+          historicWorldRank: null
+        }
+      ]
+    });
+    vi.mocked(raiderio.getMythicBossRankings).mockImplementation(
+      async (request) => ({
+        kind: "rankings",
+        rows: (request.guild?.name === "Other Guild"
+          ? [{ bossSlug: "ulgrax-the-devourer", rank: 741 }]
+          : [
+              { bossSlug: "queen-ansurek", rank: 371 },
+              { bossSlug: "the-silken-court", rank: 412 }
+            ]
+        ).map((row) => ({
+          ...row,
+          guildName: request.guild!.name,
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        }))
+      })
+    );
+    const result = await dossiers.read(root);
+    expect(result.kind).toBe("ready");
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    expect(
+      result.dossier.raids
+        .flatMap((raid) => raid.bosses)
+        .map((boss) => boss.firstKill.historicWorldRank)
+        .sort()
+    ).toEqual([371, 412, 741]);
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+  });
+
   it("only enriches a kill with a unique Raider.IO guild, region, realm, and time match", async () => {
     const { dossiers, raiderio } = fixture();
     vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
@@ -444,12 +511,17 @@ describe("applicant dossier service", () => {
       }
     });
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledWith(
-      { raidSlug: "nerubar-palace", bossSlug: "queen-ansurek" },
+      {
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek",
+        guild: { name: "Example Guild", realm: "silvermoon", region: "eu" }
+      },
       expect.any(AbortSignal)
     );
   });
 
   it.each([
+    { bossSlug: "other-boss" },
     { guildName: "Other Guild" },
     { guildRealm: "draenor" },
     { guildRegion: "us" },

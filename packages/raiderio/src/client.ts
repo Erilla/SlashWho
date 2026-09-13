@@ -81,6 +81,26 @@ const bossRankingsResponseSchema = z.object({
   )
 });
 
+const guildBossRanksSchema = z.object({
+  bossRankings: z.array(
+    z.object({
+      boss: z.string().min(1),
+      ranks: z.object({ world: z.number().int().nonnegative() })
+    })
+  )
+});
+const guildEncountersSchema = z.object({
+  name: z.string().min(1),
+  realm: z.string().min(1),
+  region: z.string().min(1),
+  raid_encounters: z.array(
+    z.object({
+      slug: z.string().min(1),
+      defeatedAt: z.string().datetime().nullable()
+    })
+  )
+});
+
 export type CreateRaiderIoClientOptions = {
   fetch: typeof globalThis.fetch;
   baseUrl: string;
@@ -432,6 +452,61 @@ export function createRaiderIoClient(
     }
 
     signal?.throwIfAborted();
+
+    if (rankingOptions.guild) {
+      const guild = rankingOptions.guild;
+      const ranksUrl = new URL("/api/guilds/raid-rankings", baseUrl);
+      ranksUrl.search = new URLSearchParams({
+        region: guild.region,
+        realm: guild.realm,
+        guild: guild.name,
+        raid: raidSlug,
+        difficulty: "mythic"
+      }).toString();
+      const profileUrl = new URL("/api/v1/guilds/profile", baseUrl);
+      profileUrl.search = new URLSearchParams({
+        region: guild.region,
+        realm: guild.realm,
+        name: guild.name,
+        fields: `raid_encounters:${raidSlug}:mythic`
+      }).toString();
+      try {
+        const [ranks, profile] = await Promise.all([
+          request(
+            ranksUrl,
+            (value) => guildBossRanksSchema.parse(value),
+            signal
+          ),
+          request(
+            profileUrl,
+            (value) => guildEncountersSchema.parse(value),
+            signal
+          )
+        ]);
+        // The website also ranks unfinished attempts. A matching confirmed
+        // first defeat is required before a rank can enrich kill evidence.
+        const rows = ranks.bossRankings.flatMap((row) => {
+          const defeats = profile.raid_encounters.filter(
+            (kill) => kill.slug === row.boss && kill.defeatedAt
+          );
+          if (row.ranks.world <= 0 || defeats.length !== 1) return [];
+          return [
+            {
+              bossSlug: row.boss,
+              rank: row.ranks.world,
+              guildName: profile.name,
+              guildRealm: profile.realm,
+              guildRegion: profile.region,
+              firstDefeated: defeats[0]!.defeatedAt!
+            }
+          ];
+        });
+        return { kind: "rankings", rows };
+      } catch (error) {
+        if (signal?.aborted) throw signal.reason;
+        return bossRankingLimitation(error);
+      }
+    }
 
     const url = new URL("/api/v1/raiding/boss-rankings", baseUrl);
     url.search = new URLSearchParams({

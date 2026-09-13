@@ -2,6 +2,27 @@
 
 Follow-up to issue #80, checked against the public Raider.IO API on 2026-09-14.
 
+## Correction: guild-specific boss ranks are available
+
+The coverage conclusion below describes only the documented public leaderboard,
+not all data available from Raider.IO. Inspection of the guild website found
+`/api/guilds/raid-rankings?region=eu&realm=draenor&guild=Rancour&raid=the-venomous-abyss&difficulty=mythic`.
+Its `bossRankings` entries carry explicit `boss` and `ranks.world` fields:
+Sszorak 276, Vashnik 476, Entombed Sentinels 297, Lost Explorers 30 and Nekzali 48.
+Historical Nerub-ar Palace returns eight boss ranks, including Queen Ansurek
+381 (distinct from the overall raid rank of 371).
+
+The client now joins this website endpoint with the documented guild profile's
+`raid_encounters:RAID:mythic` field. Only a boss with a confirmed defeat date
+is eligible: the website also returns attempt standings for undefeated bosses.
+The application retains exact boss/guild/realm/region and first-kill time matching,
+and shares a bounded 15-minute cache by guild and raid across all linked characters.
+The website endpoint is not the documented v1 contract; strict schema validation
+preserves a source limitation if it changes.
+
+The following investigation is retained as context for the earlier incorrect
+conclusion; it is superseded by this verified source.
+
 ## Verified identifier fixes
 
 The [static-data endpoint](https://raider.io/api/v1/raiding/static-data?expansion_id=11)
