@@ -5,6 +5,7 @@ import {
   createPostgresRepositories,
   runMigrations,
   type Repositories,
+  type CharacterMythicKillInput,
   type SnapshotCharacterInput,
   type StoredSnapshot
 } from "../../packages/database/src";
@@ -34,6 +35,25 @@ function observation(
     level: 80,
     raiderIoUrl: `https://raider.io/characters/${key.region}/${key.realm}/${key.name}`,
     source
+  };
+}
+
+function mythicKill(
+  overrides: Partial<CharacterMythicKillInput> = {}
+): CharacterMythicKillInput {
+  return {
+    raidId: "42",
+    raidName: "Nerub-ar Palace",
+    bossId: "1234",
+    bossName: "Queen Ansurek",
+    journalBossId: "3014",
+    bossOrder: 8,
+    isFinalBoss: true,
+    killedAt: "2026-08-04T12:00:00.000Z",
+    reportUrl: "https://www.warcraftlogs.com/reports/example",
+    fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
+    guild: { name: "Example Guild", realm: "silvermoon" },
+    ...overrides
   };
 }
 
@@ -76,6 +96,8 @@ describe("PostgreSQL repositories", () => {
 
   beforeEach(async () => {
     await pool.query(`TRUNCATE TABLE
+      character_mythic_kills,
+      character_evidence_runs,
       snapshot_characters,
       snapshots,
       discovery_runs,
@@ -84,6 +106,93 @@ describe("PostgreSQL repositories", () => {
       negative_character_cache,
       rate_limit_events
       CASCADE`);
+  });
+
+  it("retains the last completed evidence while a stale character refresh is active", async () => {
+    // Break caught: a refresh could make previously completed dossier evidence
+    // disappear until its replacement scan finishes.
+    const completedAt = new Date("2026-08-04T12:00:00.000Z");
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: completedAt
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: [mythicKill()],
+      completedAt
+    });
+
+    const refresh = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:01:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+
+    expect(refresh).toMatchObject({
+      kind: "reserved",
+      completed: {
+        run: { id: first.run.id, status: "complete" },
+        kills: [mythicKill()]
+      }
+    });
+    await expect(
+      repositories.evidence.getCompleted(rootKey)
+    ).resolves.toMatchObject({
+      run: { id: first.run.id, status: "complete" },
+      kills: [mythicKill()]
+    });
+    await expect(
+      repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-08-04T12:01:00.000Z"),
+        at: new Date("2026-08-04T13:01:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      kind: "active",
+      run: { id: refresh.run.id, status: "queued" },
+      completed: { run: { id: first.run.id } }
+    });
+  });
+
+  it("atomically publishes a complete replacement evidence scan", async () => {
+    // Break caught: a reader could observe a completed run with only part of
+    // its normalized WCL fights after a worker crashes during persistence.
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "partial",
+      limitationCode: "request_cap",
+      completedAt: new Date("2026-08-04T12:05:00.000Z"),
+      kills: [
+        mythicKill(),
+        mythicKill({
+          bossId: "1235",
+          bossName: "Silken Court",
+          bossOrder: 7,
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=2"
+        })
+      ]
+    });
+
+    await expect(repositories.evidence.getCompleted(rootKey)).resolves.toEqual({
+      run: expect.objectContaining({
+        id: reserved.run.id,
+        status: "partial",
+        limitationCode: "request_cap"
+      }),
+      kills: [
+        expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
+        expect.objectContaining({ bossId: "1235", bossOrder: 7 })
+      ]
+    });
   });
 
   afterAll(async () => {
