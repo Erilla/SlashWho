@@ -113,13 +113,15 @@ export async function fetchCuttingEdgeAchievements(
   }
   const entries = raids.achievements;
   if (!Array.isArray(entries)) throw new Error("cutting_edge_category_invalid");
-  const ids = entries.flatMap((entry) => {
-    const candidate = record(entry);
-    const id = positiveInteger(candidate?.id);
-    const name = nonEmptyString(candidate?.name);
-    return id !== null && name?.startsWith("Cutting Edge:") ? [id] : [];
-  });
-  return Promise.all(ids.map((id) => fetchDefinition(options, id))).then(
+  const ids = new Set(
+    entries.flatMap((entry) => {
+      const candidate = record(entry);
+      const id = positiveInteger(candidate?.id);
+      const name = nonEmptyString(candidate?.name);
+      return id !== null && name?.startsWith("Cutting Edge:") ? [id] : [];
+    })
+  );
+  return Promise.all([...ids].map((id) => fetchDefinition(options, id))).then(
     (items) =>
       items.sort((a, b) => Number(a.achievementId) - Number(b.achievementId))
   );
