@@ -39,6 +39,7 @@ export const dossierFirstKillSchema = z
     guild: dossierGuildSchema.nullable(),
     historicWorldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable(),
+    reportUrls: z.array(z.url()).optional(),
     characters: z.array(z.string().min(1))
   })
   .strict();
