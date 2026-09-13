@@ -200,6 +200,7 @@ export function buildApplicantDossier(
       lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName) ??
       lookupUniqueRaidBossByName(suppliedKill.bossName);
     const raid = lookupRaidByName(suppliedKill.raidName);
+    if (metadata === null && raid === null) continue;
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
     allKills.push(kill);
   }

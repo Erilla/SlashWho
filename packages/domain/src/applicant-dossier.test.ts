@@ -139,12 +139,12 @@ describe("applicant dossier", () => {
   it("uses deterministic descriptive metadata when tied evidence is reversed", () => {
     const forward = [
       kill(root, {
-        raidName: "Zeta Raid",
+        raidName: "Nerub-ar Palace",
         bossName: "Zeta Boss",
-        bossOrder: 9
+        bossOrder: 1
       }),
       kill(root, {
-        raidName: "Alpha Raid",
+        raidName: "Nerub-ar Palace",
         bossName: "Alpha Boss",
         bossOrder: 1
       })
@@ -158,7 +158,9 @@ describe("applicant dossier", () => {
       });
 
     expect(make([...forward].reverse())).toEqual(make(forward));
-    expect(make(forward).raids[0]).toMatchObject({ raidName: "Alpha Raid" });
+    expect(make(forward).raids[0]).toMatchObject({
+      raidName: "Nerub-ar Palace"
+    });
     expect(make(forward).raids[0].bosses[0]).toMatchObject({
       bossName: "Alpha Boss",
       bossOrder: 1
@@ -351,20 +353,14 @@ describe("applicant dossier", () => {
           bossName: "Scalecommander Sarkareth",
           journalBossId: "2520"
         }),
+        // An unclassified zone must not be presented as a raid: it could be a
+        // dungeon or another non-raid instance.
         kill(root, {
           raidId: "unknown",
-          raidName: "Unknown raid",
-          bossId: "final",
-          bossName: "Final",
+          raidName: "Unknown instance",
+          bossId: "unknown",
+          bossName: "Unknown Boss",
           bossOrder: 1
-        }),
-        kill(root, {
-          raidId: "unknown",
-          raidName: "Unknown raid",
-          bossId: "earlier",
-          bossName: "Earlier",
-          bossOrder: 2,
-          isFinalBoss: false
         })
       ],
       limitations: []
@@ -372,16 +368,11 @@ describe("applicant dossier", () => {
     expect(dossier.raids.map((raid) => raid.raidName)).toEqual([
       "Nerub-ar Palace",
       "Amirdrassil, the Dream's Hope",
-      "Aberrus, the Shadowed Crucible",
-      "Unknown raid"
+      "Aberrus, the Shadowed Crucible"
     ]);
     expect(dossier.raids[0]!.bosses.map((boss) => boss.bossName)).toEqual([
       "Queen Ansurek",
       "Sikran, Captain of the Sureki"
-    ]);
-    expect(dossier.raids[3]!.bosses.map((boss) => boss.bossName)).toEqual([
-      "Final",
-      "Earlier"
     ]);
   });
 
@@ -495,6 +486,28 @@ describe("applicant dossier", () => {
       kills: [
         kill(root, {
           raidName: "Heroic Dungeons",
+          bossName: "Brewmaster Aldryr",
+          journalBossId: null
+        }),
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toEqual([
+      expect.objectContaining({ raidName: "Nerub-ar Palace" })
+    ]);
+  });
+
+  it("excludes named dungeon zones from historic raid evidence", () => {
+    // Break caught: a named dungeon zone could bypass the generic-zone filter
+    // and present its boss as raid evidence.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Cinderbrew Meadery",
           bossName: "Brewmaster Aldryr",
           journalBossId: null
         }),
