@@ -135,7 +135,7 @@ describe("DossierPageClient", () => {
       .setup()
       .click(
         within(screen.getByText("Sikran").closest("article")!).getByText(
-          "View first-kill evidence"
+          "View kill evidence"
         )
       );
     expect(

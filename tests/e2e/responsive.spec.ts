@@ -47,7 +47,7 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
     page.getByRole("heading", { name: "Historic Cutting Edge" })
   ).toBeVisible();
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
-  await evidence.getByText("View first-kill evidence").click();
+  await evidence.getByText("View kill evidence").click();
   await expect(
     evidence.getByRole("link", { name: "View Warcraft Logs report" })
   ).toHaveAttribute("href", /e2eReport#fight=9$/);

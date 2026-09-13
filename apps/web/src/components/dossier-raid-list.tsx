@@ -10,9 +10,19 @@ function displayGuild(
   return guild ? `${guild.name} · ${guild.realm}` : "—";
 }
 
+function displayDate(isoDate: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeZone: "UTC"
+  }).format(new Date(isoDate));
+}
+
 export function DossierRaidList({ raids }: DossierRaidListProps) {
   return (
-    <section aria-labelledby="historic-mythic-evidence-heading">
+    <section
+      aria-labelledby="historic-mythic-evidence-heading"
+      className="dossier-panel dossier-mythic-evidence-panel"
+    >
       <h2 className="section-heading" id="historic-mythic-evidence-heading">
         Historic Mythic boss evidence
       </h2>
@@ -57,6 +67,10 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                         ) : null}
                         <div>
                           <h4>{boss.bossName}</h4>
+                          <p className="dossier-boss-first-kill">
+                            First kill: {displayDate(firstKill.killedAt)} ·{" "}
+                            {firstKill.characters.join(", ") || "—"}
+                          </p>
                           <p className="dossier-boss-rank">
                             {firstKill.historicWorldRank === null
                               ? "World rank: —"
@@ -65,7 +79,7 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                         </div>
                       </div>
                       <details>
-                        <summary>View first-kill evidence</summary>
+                        <summary>View kill evidence</summary>
                         {firstKills.map((evidence, index) => (
                           <dl
                             className="dossier-evidence"
@@ -75,10 +89,7 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                               <dt>First kill</dt>
                               <dd>
                                 <time dateTime={evidence.killedAt}>
-                                  {new Intl.DateTimeFormat("en-GB", {
-                                    dateStyle: "medium",
-                                    timeZone: "UTC"
-                                  }).format(new Date(evidence.killedAt))}
+                                  {displayDate(evidence.killedAt)}
                                 </time>
                               </dd>
                             </div>
