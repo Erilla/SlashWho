@@ -129,6 +129,30 @@ function sharedEvidenceKey(k: DossierKillEvidence): string {
     : `report\0${k.reportUrl}`;
 }
 
+function sameGuildKill(
+  a: DossierKillEvidence,
+  b: DossierKillEvidence
+): boolean {
+  if (
+    a.guild === null ||
+    b.guild === null ||
+    a.reportUrl === null ||
+    b.reportUrl === null
+  )
+    return false;
+  const aTime = Date.parse(a.killedAt);
+  const bTime = Date.parse(b.killedAt);
+  return (
+    Number.isFinite(aTime) &&
+    Number.isFinite(bTime) &&
+    a.guild.name.trim().toLocaleLowerCase("en-US") ===
+      b.guild.name.trim().toLocaleLowerCase("en-US") &&
+    a.guild.realm.trim().toLocaleLowerCase("en-US") ===
+      b.guild.realm.trim().toLocaleLowerCase("en-US") &&
+    Math.abs(aTime - bTime) <= 120_000
+  );
+}
+
 function isMythicPlusSeason(raidName: string): boolean {
   return /^mythic\+\s+season\b/i.test(raidName.trim());
 }
@@ -192,12 +216,19 @@ export function buildApplicantDossier(
     }
   >();
   for (const kills of byBoss.values()) {
-    const byEvidence = new Map<string, DossierKillEvidence[]>();
-    for (const kill of kills) {
-      const key = sharedEvidenceKey(kill);
-      byEvidence.set(key, [...(byEvidence.get(key) ?? []), kill]);
+    const groupedEvidence: DossierKillEvidence[][] = [];
+    for (const kill of [...kills].sort(compareEvidence)) {
+      const group = groupedEvidence.find((candidate) => {
+        const selected = candidate[0]!;
+        return (
+          sharedEvidenceKey(selected) === sharedEvidenceKey(kill) ||
+          sameGuildKill(selected, kill)
+        );
+      });
+      if (group) group.push(kill);
+      else groupedEvidence.push([kill]);
     }
-    const firstKills = [...byEvidence.values()]
+    const firstKills = groupedEvidence
       .map((shared) => {
         const selected = [...shared].sort(compareEvidence)[0]!;
         const ids = new Set(

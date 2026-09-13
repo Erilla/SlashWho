@@ -91,6 +91,34 @@ describe("applicant dossier", () => {
     });
   });
 
+  it("coalesces duplicate reports of the same guild kill", () => {
+    // Break caught: two Warcraft Logs uploads of one guild kill rendered as
+    // separate evidence rows and made an applicant's history look inflated.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/first#fight=8"
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-01T20:01:30.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/second#fight=8"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+      expect.objectContaining({
+        killedAt: "2024-10-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/first#fight=8",
+        characters: ["Ryii", "Ryalts"]
+      })
+    ]);
+  });
+
   it("uses the same result when tied evidence input is reversed", () => {
     const forward = [
       kill(root, { killedAt: "2024-10-01T20:00:00.000Z", isFinalBoss: false }),
