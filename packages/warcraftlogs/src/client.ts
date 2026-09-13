@@ -310,13 +310,16 @@ function firstKillReports(
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
-      if (!id || encounterId === null || fightEndTime === null) {
+      if (!id || encounterId === null) {
         return { kind: "limitation", code: "schema_drift" };
       }
       // Warcraft Logs represents trash pulls with encounterID 0. They have no
       // boss identity and must not turn an otherwise valid report into schema
       // drift or dossier evidence.
       if (encounterId === 0) continue;
+      if (fightEndTime === null) {
+        return { kind: "limitation", code: "schema_drift" };
+      }
       if (
         typeof killed !== "boolean" ||
         !Number.isSafeInteger(difficulty) ||
