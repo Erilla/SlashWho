@@ -70,6 +70,60 @@ export async function seedSnapshot(
   }
 }
 
+export async function seedCharacterEvidence(key: CharacterKey): Promise<void> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    const repositories = createPostgresRepositories(pool);
+    const now = new Date();
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(now.valueOf() - 60_000),
+      at: now
+    });
+    if (reservation.kind === "fresh") return;
+    if (reservation.kind !== "reserved") {
+      throw new Error("e2e_character_evidence_not_reserved");
+    }
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      completedAt: now,
+      kills: [
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1234",
+          bossName: "Queen Ansurek",
+          journalBossId: null,
+          bossOrder: 8,
+          isFinalBoss: true,
+          killedAt: "2025-01-13T21:31:40.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/e2eReport",
+          fightUrl: "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
+          guild: { name: "Arachnid", realm: "silvermoon" },
+          historicWorldRank: 147
+        },
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1234",
+          bossName: "Queen Ansurek",
+          journalBossId: null,
+          bossOrder: 8,
+          isFinalBoss: true,
+          killedAt: "2025-01-13T22:31:40.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/e2eReport",
+          fightUrl: "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
+          guild: { name: "Arachnid", realm: "silvermoon" },
+          historicWorldRank: 147
+        }
+      ]
+    });
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function suppressCharacter(
   key: CharacterKey,
   reason: string

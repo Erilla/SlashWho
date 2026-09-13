@@ -2,6 +2,7 @@ export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
 export {
   createDiscoveryQueue,
+  collectCharacterEvidenceQueueName,
   DiscoveryQueueStopTimeoutError,
   discoverCharacterQueueName,
   fingerprintAdmissionQueueName,
@@ -9,15 +10,22 @@ export {
 } from "./queue";
 export type {
   CreateDiscoveryQueueOptions,
+  CollectCharacterEvidenceJob,
   DiscoverCharacterJob,
   DiscoveryQueue,
   DiscoveryWorkContext
 } from "./queue";
 export type {
   CallerClass,
+  CharacterEvidenceRun,
+  CharacterMythicKillInput,
+  CompletedCharacterEvidence,
   CreateSnapshotInput,
   DiscoveryRun,
   DiscoverySource,
+  EvidenceRepository,
+  EvidenceReservationResult,
+  EvidenceRunStatus,
   FingerprintAdmission,
   FingerprintAdmissionDispatch,
   FingerprintSweepRepository,
@@ -33,5 +41,6 @@ export type {
   SnapshotRepository,
   StoredSnapshot,
   StoredSnapshotCharacter,
+  StoredCharacterMythicKill,
   SuppressionRepository
 } from "./repositories";

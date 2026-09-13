@@ -26,6 +26,8 @@ describe("database migrations", () => {
     `);
 
     expect(result.rows.map(({ name }) => name)).toEqual([
+      "character_evidence_runs",
+      "character_mythic_kills",
       "characters",
       "discovery_runs",
       "fingerprint_sweep_admissions",

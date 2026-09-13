@@ -3,12 +3,16 @@ import type { CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
+  CharacterEvidenceRun,
+  CompletedCharacterEvidence,
+  EvidenceReservationResult,
   CreateSnapshotInput,
   DiscoveryRun,
   FingerprintAdmission,
   Repositories,
   SnapshotHistoryItem,
   SnapshotHistoryPage,
+  StoredCharacterMythicKill,
   StoredSnapshot,
   StoredSnapshotCharacter
 } from "./repositories";
@@ -56,6 +60,38 @@ interface SnapshotCharacterRow {
   display_order: number;
 }
 
+interface EvidenceRunRow {
+  id: string;
+  region: CharacterKey["region"];
+  realm_slug: string;
+  normalized_name: string;
+  queue_job_id: string | null;
+  status: CharacterEvidenceRun["status"];
+  attempt: number;
+  limitation_code: string | null;
+  error_code: string | null;
+  created_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+}
+
+interface CharacterMythicKillRow {
+  id: string;
+  raid_id: string;
+  raid_name: string;
+  boss_id: string;
+  boss_name: string;
+  journal_boss_id: string | null;
+  boss_order: number;
+  is_final_boss: boolean;
+  killed_at: Date;
+  report_url: string;
+  fight_url: string;
+  guild_name: string | null;
+  guild_realm: string | null;
+  historic_world_rank: number | null;
+}
+
 type Queryable = Pick<Pool | PoolClient, "query">;
 
 const activeRunSql = "('queued', 'running', 'retrying')";
@@ -63,6 +99,15 @@ const activeRunSql = "('queued', 'running', 'retrying')";
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
     `root:${key.region}:${key.realm}:${key.name}`
+  ]);
+}
+
+async function lockCharacterEvidence(
+  client: Queryable,
+  key: CharacterKey
+): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    `character-evidence:${key.region}:${key.realm}:${key.name}`
   ]);
 }
 
@@ -213,6 +258,81 @@ function mapRun(row: RunRow): DiscoveryRun {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     snapshotId: row.snapshot_id
+  };
+}
+
+function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
+  return {
+    id: row.id,
+    key: {
+      region: row.region,
+      realm: row.realm_slug,
+      name: row.normalized_name
+    },
+    queueJobId: row.queue_job_id,
+    status: row.status,
+    attempt: row.attempt,
+    limitationCode: row.limitation_code,
+    errorCode: row.error_code,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at
+  };
+}
+
+function mapCharacterMythicKill(
+  row: CharacterMythicKillRow
+): StoredCharacterMythicKill {
+  return {
+    id: row.id,
+    raidId: row.raid_id,
+    raidName: row.raid_name,
+    bossId: row.boss_id,
+    bossName: row.boss_name,
+    journalBossId: row.journal_boss_id,
+    bossOrder: row.boss_order,
+    isFinalBoss: row.is_final_boss,
+    killedAt: row.killed_at.toISOString(),
+    reportUrl: row.report_url,
+    fightUrl: row.fight_url,
+    guild:
+      row.guild_name === null
+        ? null
+        : { name: row.guild_name, realm: row.guild_realm! },
+    historicWorldRank: row.historic_world_rank
+  };
+}
+
+async function loadCompletedEvidence(
+  client: Queryable,
+  key: CharacterKey
+): Promise<CompletedCharacterEvidence | null> {
+  const runResult = await client.query<EvidenceRunRow>(
+    `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+            attempt, limitation_code, error_code, created_at, started_at,
+            completed_at
+     FROM character_evidence_runs
+     WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+       AND status IN ('complete', 'partial')
+     ORDER BY completed_at DESC, id DESC
+     LIMIT 1`,
+    [key.region, key.realm, key.name]
+  );
+  const run = runResult.rows[0];
+  if (!run) return null;
+
+  const killsResult = await client.query<CharacterMythicKillRow>(
+    `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
+            boss_order, is_final_boss, killed_at, report_url, fight_url,
+            guild_name, guild_realm, historic_world_rank
+     FROM character_mythic_kills
+     WHERE evidence_run_id = $1
+     ORDER BY killed_at, source_fight_key`,
+    [run.id]
+  );
+  return {
+    run: mapEvidenceRun(run),
+    kills: killsResult.rows.map(mapCharacterMythicKill)
   };
 }
 
@@ -1556,6 +1676,234 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [at]
         );
         return result.rowCount ?? 0;
+      }
+    },
+
+    evidence: {
+      async reserve({ key, freshnessCutoff, at }) {
+        if (
+          Number.isNaN(freshnessCutoff.valueOf()) ||
+          Number.isNaN(at.valueOf())
+        ) {
+          throw new RangeError("character_evidence_reservation_time_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockCharacterEvidence(client, key);
+          const completed = await loadCompletedEvidence(client, key);
+          if (
+            completed !== null &&
+            completed.run.completedAt !== null &&
+            completed.run.completedAt >= freshnessCutoff
+          ) {
+            await client.query("COMMIT");
+            return {
+              kind: "fresh",
+              run: completed.run,
+              completed
+            } satisfies EvidenceReservationResult;
+          }
+
+          const active = await client.query<EvidenceRunRow>(
+            `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+                    attempt, limitation_code, error_code, created_at, started_at,
+                    completed_at
+             FROM character_evidence_runs
+             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+               AND status IN ('queued', 'running', 'retrying')
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1`,
+            [key.region, key.realm, key.name]
+          );
+          if (active.rows[0]) {
+            await client.query("COMMIT");
+            return {
+              kind: "active",
+              run: mapEvidenceRun(active.rows[0]),
+              completed
+            } satisfies EvidenceReservationResult;
+          }
+
+          const inserted = await client.query<EvidenceRunRow>(
+            `INSERT INTO character_evidence_runs
+              (region, realm_slug, normalized_name)
+             VALUES ($1, $2, $3)
+             RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
+                       attempt, limitation_code, error_code, created_at, started_at,
+                       completed_at`,
+            [key.region, key.realm, key.name]
+          );
+          await client.query("COMMIT");
+          return {
+            kind: "reserved",
+            run: mapEvidenceRun(inserted.rows[0]!),
+            completed
+          } satisfies EvidenceReservationResult;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async find(id) {
+        const result = await pool.query<EvidenceRunRow>(
+          `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+                  attempt, limitation_code, error_code, created_at, started_at,
+                  completed_at
+           FROM character_evidence_runs WHERE id = $1`,
+          [id]
+        );
+        return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
+      },
+
+      async claim(id, attempt) {
+        if (!Number.isInteger(attempt) || attempt < 1) {
+          throw new RangeError("character_evidence_attempt_invalid");
+        }
+        const result = await pool.query<EvidenceRunRow>(
+          `UPDATE character_evidence_runs
+           SET status = 'running', attempt = $2,
+               started_at = COALESCE(started_at, now()), error_code = NULL
+           WHERE id = $1
+             AND attempt < $2
+             AND status IN ('queued', 'running', 'retrying')
+           RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
+                     attempt, limitation_code, error_code, created_at, started_at,
+                     completed_at`,
+          [id, attempt]
+        );
+        return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
+      },
+
+      async markEnqueued(id, queueJobId) {
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET queue_job_id = $2
+           WHERE id = $1
+             AND status = 'queued'
+             AND (queue_job_id IS NULL OR queue_job_id = $2)`,
+          [id, queueJobId]
+        );
+        if (result.rowCount !== 1) {
+          throw new Error("character_evidence_run_not_enqueuable");
+        }
+      },
+
+      async publish(runId, input) {
+        if (
+          Number.isNaN(input.completedAt.valueOf()) ||
+          (input.state === "complete" && input.limitationCode !== null) ||
+          (input.state === "partial" && input.limitationCode === null)
+        ) {
+          throw new RangeError("character_evidence_publication_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const active = await client.query<{ id: string }>(
+            `SELECT id FROM character_evidence_runs
+             WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
+             FOR UPDATE`,
+            [runId]
+          );
+          if (active.rowCount !== 1) {
+            throw new Error("character_evidence_run_not_active");
+          }
+          for (const kill of input.kills) {
+            if (
+              kill.guild !== null &&
+              (kill.guild.name.length === 0 || kill.guild.realm.length === 0)
+            ) {
+              throw new RangeError("character_evidence_guild_invalid");
+            }
+            await client.query(
+              `INSERT INTO character_mythic_kills
+                (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
+                 boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
+                 report_url, fight_url, guild_name, guild_realm, historic_world_rank)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+              [
+                runId,
+                kill.fightUrl,
+                kill.raidId,
+                kill.raidName,
+                kill.bossId,
+                kill.bossName,
+                kill.journalBossId,
+                kill.bossOrder,
+                kill.isFinalBoss,
+                kill.killedAt,
+                kill.reportUrl,
+                kill.fightUrl,
+                kill.guild?.name ?? null,
+                kill.guild?.realm ?? null,
+                kill.historicWorldRank ?? null
+              ]
+            );
+          }
+          const publication = await client.query(
+            `UPDATE character_evidence_runs
+             SET status = $2, limitation_code = $3, error_code = NULL,
+                 completed_at = $4
+             WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
+            [runId, input.state, input.limitationCode, input.completedAt]
+          );
+          if (publication.rowCount !== 1) {
+            throw new Error("character_evidence_run_not_active");
+          }
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async fail(id, code) {
+        if (code.length === 0)
+          throw new RangeError("character_evidence_error_invalid");
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET status = 'failed', error_code = $2, completed_at = now()
+           WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
+          [id, code]
+        );
+        if (result.rowCount !== 1) {
+          throw new Error("character_evidence_run_not_active");
+        }
+      },
+
+      async getCompleted(key) {
+        return loadCompletedEvidence(pool, key);
+      },
+
+      async listStatus(keys) {
+        if (keys.length === 0) return [];
+        const result = await pool.query<EvidenceRunRow>(
+          `SELECT DISTINCT ON (run.region, run.realm_slug, run.normalized_name)
+             run.id, run.region, run.realm_slug, run.normalized_name,
+             run.queue_job_id, run.status, run.attempt, run.limitation_code,
+             run.error_code, run.created_at, run.started_at, run.completed_at
+           FROM character_evidence_runs run
+           JOIN unnest($1::text[], $2::text[], $3::text[])
+             AS requested(region, realm_slug, normalized_name)
+             ON requested.region = run.region
+            AND requested.realm_slug = run.realm_slug
+            AND requested.normalized_name = run.normalized_name
+           ORDER BY run.region, run.realm_slug, run.normalized_name,
+             (run.status IN ('queued', 'running', 'retrying')) DESC,
+             run.created_at DESC, run.id DESC`,
+          [
+            keys.map((key) => key.region),
+            keys.map((key) => key.realm),
+            keys.map((key) => key.name)
+          ]
+        );
+        return result.rows.map(mapEvidenceRun);
       }
     },
 

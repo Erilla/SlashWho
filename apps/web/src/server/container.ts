@@ -13,10 +13,6 @@ import {
   type Repositories
 } from "@slashwho/database";
 import { createRaiderIoClient, type RaiderIoGateway } from "@slashwho/raiderio";
-import {
-  createWarcraftLogsClient,
-  type WarcraftLogsGateway
-} from "@slashwho/warcraftlogs";
 import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
 import { Pool } from "pg";
 
@@ -49,21 +45,15 @@ export type WebContainerDependencies = Readonly<{
     baseUrl: string;
     timeoutMs: number;
   }): RaiderIoGateway;
-  createWarcraftLogsGateway(options: {
-    fetch: typeof globalThis.fetch;
-    clientId: string;
-    clientSecret: string;
-    baseUrl?: string;
-  }): WarcraftLogsGateway;
   createBlizzardGateway(options: {
     fetch: typeof globalThis.fetch;
     clientId: string;
     clientSecret: string;
   }): BlizzardGateway;
   createApplicantDossierService(options: {
-    repositories: Pick<Repositories, "snapshots">;
+    repositories: Pick<Repositories, "snapshots" | "evidence">;
+    queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     search: Pick<SearchService, "create">;
-    warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
     config: ApplicationConfig;
@@ -77,7 +67,6 @@ const defaultDependencies: WebContainerDependencies = {
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
   createSearchService,
   createRaiderIoGateway: createRaiderIoClient,
-  createWarcraftLogsGateway: createWarcraftLogsClient,
   createBlizzardGateway: createBlizzardClient,
   createApplicantDossierService
 };
@@ -102,12 +91,7 @@ export async function createWebContainer(
     const dossiers = dependencies.createApplicantDossierService({
       repositories,
       search: searches,
-      warcraftLogs: dependencies.createWarcraftLogsGateway({
-        fetch: globalThis.fetch,
-        clientId: config.dossier.warcraftLogsClientId,
-        clientSecret: config.dossier.warcraftLogsClientSecret,
-        baseUrl: config.dossier.warcraftLogsBaseUrl
-      }),
+      queue: initializedQueue,
       blizzard: dependencies.createBlizzardGateway({
         fetch: globalThis.fetch,
         clientId: config.dossier.blizzardClientId,

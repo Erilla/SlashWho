@@ -35,7 +35,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
   ).toHaveAttribute("src", "https://render.example/40254.jpg");
 });
 
-it("keeps achievement details when an official icon is unavailable", () => {
+it("renders fallback artwork when an official achievement icon is unavailable", () => {
   render(
     <DossierCuttingEdgeList
       cuttingEdges={[
@@ -51,6 +51,8 @@ it("keeps achievement details when an official icon is unavailable", () => {
     />
   );
 
-  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("img", { name: "Cutting Edge: Queen Ansurek icon" })
+  ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
 });

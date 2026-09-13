@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-import { seedSnapshot } from "./support/seed";
+import { seedCharacterEvidence, seedSnapshot } from "./support/seed";
 
 const applicantUrls = [
   "https://raider.io/characters/eu/silvermoon/Ryii",
@@ -17,6 +17,11 @@ for (const applicantUrl of applicantUrls) {
       key: { region: "eu", realm: "silvermoon", name: "ryii" },
       displayName: "Ryii",
       refreshedAt: new Date("2026-09-11T00:00:00.000Z")
+    });
+    await seedCharacterEvidence({
+      region: "eu",
+      realm: "silvermoon",
+      name: "ryii"
     });
     await page.goto("/");
     await page.getByLabel("Applicant URL").fill(applicantUrl);
@@ -56,6 +61,11 @@ for (const applicantUrl of applicantUrls) {
 test("shows submitted-character evidence while queued discovery is held", async ({
   page
 }) => {
+  await seedCharacterEvidence({
+    region: "eu",
+    realm: "silvermoon",
+    name: "queued"
+  });
   await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/hold`);
   await page.goto("/");
   await page

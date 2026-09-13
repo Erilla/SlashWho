@@ -194,6 +194,54 @@ export function DossierPageClient({
     };
   }, [dossierPath, jobId]);
 
+  useEffect(() => {
+    if (dossier?.research.state !== "gathering") return;
+
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    let attempt = 0;
+
+    async function pollEvidence() {
+      try {
+        const response = await fetch(dossierPath, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          setError(apiError(response, body));
+          return;
+        }
+        const parsed = applicantDossierSchema.safeParse(body);
+        if (!parsed.success) {
+          setError("The dossier returned an unexpected response.");
+          return;
+        }
+        setDossier(parsed.data);
+        setInitialError(null);
+        setError(null);
+        if (parsed.data.research.state !== "gathering") return;
+        const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
+        attempt += 1;
+        timeout = setTimeout(() => void pollEvidence(), delay);
+      } catch (caught) {
+        if (caught instanceof Error && caught.name === "AbortError") return;
+        if (!stopped) {
+          setError("The applicant evidence status could not be loaded.");
+        }
+      }
+    }
+
+    timeout = setTimeout(() => void pollEvidence(), pollDelaysMs[0]);
+
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [dossier?.research.state, dossierPath]);
+
   const visibleError = error ?? initialError;
   const research = dossier?.research;
   const visibleResearch =

@@ -3,7 +3,12 @@ import {
   type ApplicantDossier as ContractApplicantDossier,
   type DossierLimitation as ContractDossierLimitation
 } from "@slashwho/contracts";
-import type { Repositories, StoredSnapshotCharacter } from "@slashwho/database";
+import type {
+  DiscoveryQueue,
+  Repositories,
+  StoredCharacterMythicKill,
+  StoredSnapshotCharacter
+} from "@slashwho/database";
 import {
   buildApplicantDossier,
   lookupRaiderIoBoss,
@@ -16,7 +21,6 @@ import {
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { MythicBossRanking, RaiderIoGateway } from "@slashwho/raiderio";
-import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 
 import type { ApplicationConfig } from "./config";
 import type {
@@ -104,41 +108,61 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
   );
 }
 
+function cachedKill(
+  kill: StoredCharacterMythicKill,
+  character: CharacterKey
+): DossierKillEvidence {
+  return {
+    raidId: kill.raidId,
+    raidName: kill.raidName,
+    bossId: kill.bossId,
+    bossName: kill.bossName,
+    journalBossId: kill.journalBossId,
+    bossOrder: kill.bossOrder,
+    isFinalBoss: kill.isFinalBoss,
+    character,
+    killedAt: kill.killedAt,
+    guild: kill.guild,
+    historicWorldRank: kill.historicWorldRank ?? null,
+    reportUrl: kill.fightUrl
+  };
+}
+
 async function gatherCharacterEvidence(
   character: DossierSubject,
   options: {
-    warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+    repositories: Pick<Repositories, "evidence">;
+    queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
-    requestCap: number;
+    freshnessCutoff: Date;
     signal?: AbortSignal;
   }
-): Promise<EvidenceResult> {
-  const [warcraftLogs, blizzard] = await Promise.all([
-    options.warcraftLogs
-      .getFirstKillReports(character.key, {
-        requestCap: options.requestCap,
-        signal: options.signal
-      })
-      .catch((error: unknown) => {
-        if (isAbort(error, options.signal)) throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      }),
-    options.blizzard
-      .getCompletedAchievements(character.key, options.signal)
-      .catch((error: unknown) => {
-        if (isAbort(error, options.signal)) throw error;
-        return null;
-      })
-  ]);
-  const limitations: DossierLimitation[] = [];
-  if (warcraftLogs.kind === "evidence" && warcraftLogs.limitation) {
-    limitations.push(
-      limitation("warcraft_logs", character.key, warcraftLogs.limitation.code)
+): Promise<EvidenceResult & { gathering: boolean }> {
+  const reservation = await options.repositories.evidence.reserve({
+    key: character.key,
+    freshnessCutoff: options.freshnessCutoff,
+    at: new Date()
+  });
+  if (reservation.kind === "reserved") {
+    const queueJobId = await options.queue.enqueueCharacterEvidence(
+      reservation.run.id
+    );
+    await options.repositories.evidence.markEnqueued(
+      reservation.run.id,
+      queueJobId
     );
   }
-  if (warcraftLogs.kind === "limitation") {
+  const blizzard = await options.blizzard
+    .getCompletedAchievements(character.key, options.signal)
+    .catch((error: unknown) => {
+      if (isAbort(error, options.signal)) throw error;
+      return null;
+    });
+  const limitations: DossierLimitation[] = [];
+  const completed = reservation.completed;
+  if (completed?.run.limitationCode) {
     limitations.push(
-      limitation("warcraft_logs", character.key, warcraftLogs.code)
+      limitation("warcraft_logs", character.key, completed.run.limitationCode)
     );
   }
   if (blizzard === null) {
@@ -147,27 +171,13 @@ async function gatherCharacterEvidence(
   return {
     limitations,
     kills:
-      warcraftLogs.kind === "evidence"
-        ? warcraftLogs.kills.map((kill) => ({
-            raidId: kill.raidId,
-            raidName: kill.raidName,
-            bossId: kill.bossId,
-            bossName: kill.bossName,
-            journalBossId: kill.journalBossId,
-            bossOrder: kill.bossOrder,
-            isFinalBoss: kill.isFinalBoss,
-            character: character.key,
-            killedAt: kill.killedAt,
-            guild: kill.guild,
-            historicWorldRank: kill.historicWorldRank,
-            reportUrl: kill.fightUrl
-          }))
-        : [],
+      completed?.kills.map((kill) => cachedKill(kill, character.key)) ?? [],
     cuttingEdges:
       blizzard?.map((achievement) => ({
         ...achievement,
         character: character.key
-      })) ?? []
+      })) ?? [],
+    gathering: reservation.kind !== "fresh"
   };
 }
 
@@ -251,37 +261,27 @@ async function enrichHistoricRanks(options: {
   });
 }
 
-function combineSignals(signal: AbortSignal | undefined, timeout: AbortSignal) {
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 async function assembleDossier(options: {
   root: CharacterKey;
   subjects: readonly DossierSubject[];
   skippedSubjects: readonly DossierSubject[];
   research: ContractApplicantDossier["research"];
-  warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  repositories: Pick<Repositories, "evidence">;
+  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
-  requestCap: number;
+  freshnessCutoff: Date;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
   const evidence = await Promise.all(
     options.subjects.map((character) =>
-      options.requestCap === 0
-        ? Promise.resolve({
-            kills: [],
-            cuttingEdges: [],
-            limitations: [
-              limitation("warcraft_logs", character.key, "request_cap")
-            ]
-          })
-        : gatherCharacterEvidence(character, {
-            warcraftLogs: options.warcraftLogs,
-            blizzard: options.blizzard,
-            requestCap: options.requestCap,
-            signal: options.signal
-          })
+      gatherCharacterEvidence(character, {
+        repositories: options.repositories,
+        queue: options.queue,
+        blizzard: options.blizzard,
+        freshnessCutoff: options.freshnessCutoff,
+        signal: options.signal
+      })
     )
   );
   const limitations = [
@@ -310,7 +310,13 @@ async function assembleDossier(options: {
   });
   return applicantDossierSchema.parse({
     ...dossier,
-    research: options.research,
+    research: evidence.some((item) => item.gathering)
+      ? {
+          state: "gathering" as const,
+          message:
+            "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+        }
+      : options.research,
     characters: options.subjects.map(serializeDossierSubject),
     limitations: dossier.limitations.map((item) => ({
       ...item,
@@ -321,9 +327,9 @@ async function assembleDossier(options: {
 }
 
 export function createApplicantDossierService(options: {
-  repositories: Pick<Repositories, "snapshots">;
+  repositories: Pick<Repositories, "snapshots" | "evidence">;
+  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create">;
-  warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   config: ApplicationConfig;
@@ -343,9 +349,6 @@ export function createApplicantDossierService(options: {
     },
 
     async readInitial(key, signal) {
-      const timeout = AbortSignal.timeout(
-        options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS
-      );
       return {
         kind: "ready",
         dossier: await assembleDossier({
@@ -365,11 +368,14 @@ export function createApplicantDossierService(options: {
             message:
               "Linked-character research is still running; this evidence covers only the submitted character."
           },
-          warcraftLogs: options.warcraftLogs,
+          repositories: options.repositories,
+          queue: options.queue,
           blizzard: options.blizzard,
           raiderio: options.raiderio,
-          requestCap: options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP,
-          signal: combineSignals(signal, timeout)
+          freshnessCutoff: new Date(
+            Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
+          ),
+          signal: signal ?? new AbortController().signal
         })
       };
     },
@@ -383,16 +389,6 @@ export function createApplicantDossierService(options: {
         options.config.DOSSIER_CHARACTER_CAP
       );
       const skipped = snapshot.characters.slice(selected.length);
-      const timeout = AbortSignal.timeout(
-        options.config.DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS
-      );
-      const requestSignal = combineSignals(signal, timeout);
-      // Split one dossier-wide cap across every selected character. The bound
-      // is shared (rather than per character) and the timeout covers the whole
-      // request, so a large alt list cannot multiply WCL traffic or hang a read.
-      const requestCap = Math.floor(
-        options.config.DOSSIER_WARCRAFT_LOGS_REQUEST_CAP / selected.length
-      );
       return {
         kind: "ready",
         dossier: await assembleDossier({
@@ -410,11 +406,14 @@ export function createApplicantDossierService(options: {
                   message:
                     "Additional linked characters may exist; this dossier is not exhaustive."
                 },
-          warcraftLogs: options.warcraftLogs,
+          repositories: options.repositories,
+          queue: options.queue,
           blizzard: options.blizzard,
           raiderio: options.raiderio,
-          requestCap,
-          signal: requestSignal
+          freshnessCutoff: new Date(
+            Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
+          ),
+          signal: signal ?? new AbortController().signal
         })
       };
     }

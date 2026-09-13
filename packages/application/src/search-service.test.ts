@@ -188,6 +188,32 @@ function policyFixture(
         return 0;
       }
     },
+    evidence: {
+      async reserve() {
+        throw new Error("not used");
+      },
+      async find() {
+        return null;
+      },
+      async claim() {
+        return null;
+      },
+      async markEnqueued() {
+        throw new Error("not used");
+      },
+      async publish() {
+        throw new Error("not used");
+      },
+      async fail() {
+        throw new Error("not used");
+      },
+      async getCompleted() {
+        return null;
+      },
+      async listStatus() {
+        return [];
+      }
+    },
     fingerprintSweeps: {
       async requestAdmission() {
         return { kind: "not_due" };

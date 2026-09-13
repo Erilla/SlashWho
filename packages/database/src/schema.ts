@@ -44,6 +44,11 @@ export const discoverySource = pgEnum("discovery_source", [
   "fingerprint"
 ]);
 
+export const characterEvidenceRunStatus = pgEnum(
+  "character_evidence_run_status",
+  ["queued", "running", "retrying", "complete", "partial", "failed"]
+);
+
 export const characters = pgTable(
   "characters",
   {
@@ -334,5 +339,71 @@ export const fingerprintSweepRequestEvents = pgTable(
   },
   (table) => [
     index("fingerprint_sweep_request_events_window_idx").on(table.requestedAt)
+  ]
+);
+
+export const characterEvidenceRuns = pgTable(
+  "character_evidence_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    queueJobId: text("queue_job_id"),
+    status: characterEvidenceRunStatus("status").default("queued").notNull(),
+    attempt: integer("attempt").default(0).notNull(),
+    limitationCode: text("limitation_code"),
+    errorCode: text("error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true })
+  },
+  (table) => [
+    uniqueIndex("character_evidence_runs_one_active_key_idx")
+      .on(table.region, table.realmSlug, table.normalizedName)
+      .where(sql`${table.status} in ('queued', 'running', 'retrying')`),
+    index("character_evidence_runs_completed_key_idx").on(
+      table.region,
+      table.realmSlug,
+      table.normalizedName,
+      table.completedAt
+    )
+  ]
+);
+
+export const characterMythicKills = pgTable(
+  "character_mythic_kills",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    evidenceRunId: uuid("evidence_run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    sourceFightKey: text("source_fight_key").notNull(),
+    raidId: text("raid_id").notNull(),
+    raidName: text("raid_name").notNull(),
+    bossId: text("boss_id").notNull(),
+    bossName: text("boss_name").notNull(),
+    journalBossId: text("journal_boss_id"),
+    bossOrder: integer("boss_order").notNull(),
+    isFinalBoss: boolean("is_final_boss").notNull(),
+    killedAt: timestamp("killed_at", { withTimezone: true }).notNull(),
+    reportUrl: text("report_url").notNull(),
+    fightUrl: text("fight_url").notNull(),
+    guildName: text("guild_name"),
+    guildRealm: text("guild_realm"),
+    historicWorldRank: integer("historic_world_rank")
+  },
+  (table) => [
+    uniqueIndex("character_mythic_kills_source_fight_idx").on(
+      table.evidenceRunId,
+      table.sourceFightKey
+    ),
+    index("character_mythic_kills_run_idx").on(table.evidenceRunId),
+    check(
+      "character_mythic_kills_guild_identity_check",
+      sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
+    )
   ]
 );

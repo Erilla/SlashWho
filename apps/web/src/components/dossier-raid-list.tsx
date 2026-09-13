@@ -1,5 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierMediaFallback } from "./dossier-media-fallback";
+
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
 }>;
@@ -42,7 +44,12 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                     loading="lazy"
                     src={raid.imageUrl}
                   />
-                ) : null}
+                ) : (
+                  <DossierMediaFallback
+                    alt={`${raid.raidName} artwork`}
+                    className="dossier-raid-artwork"
+                  />
+                )}
                 <span>{raid.raidName}</span>
               </h3>
               <div className="dossier-boss-list">
@@ -64,7 +71,12 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                             loading="lazy"
                             src={boss.imageUrl}
                           />
-                        ) : null}
+                        ) : (
+                          <DossierMediaFallback
+                            alt={`${boss.bossName} artwork`}
+                            className="dossier-boss-artwork"
+                          />
+                        )}
                         <div>
                           <h4>{boss.bossName}</h4>
                           <p className="dossier-boss-first-kill">

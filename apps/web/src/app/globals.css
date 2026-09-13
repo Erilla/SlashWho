@@ -358,6 +358,13 @@ a {
   gap: 1.75rem;
 }
 
+.dossier-raid {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: linear-gradient(135deg, var(--surface-raised), var(--surface));
+  padding: 1rem;
+}
+
 .dossier-cutting-edge-list {
   display: grid;
   gap: 0.75rem;
@@ -400,6 +407,17 @@ a {
   border: 1px solid #79642b;
   border-radius: 0.3rem;
   object-fit: cover;
+}
+
+.dossier-media-fallback {
+  fill: #1d3850;
+  stroke: #7dd3fc;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.dossier-media-fallback path + path {
+  fill: none;
 }
 
 .dossier-raid-heading {

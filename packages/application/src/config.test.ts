@@ -9,27 +9,15 @@ const required = {
 
 describe("dossier application configuration", () => {
   it("applies bounded dossier defaults", () => {
-    // Break caught: omitted deployment configuration could permit unbounded evidence gathering.
+    // Break caught: omitted deployment configuration could allow too many linked characters per dossier.
     expect(applicationConfigSchema.parse(required)).toMatchObject({
-      DOSSIER_CHARACTER_CAP: 12,
-      DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80,
-      DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15_000,
-      DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: 20,
-      DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: 8_000
+      DOSSIER_CHARACTER_CAP: 12
     });
   });
 
   it.each([
     ["DOSSIER_CHARACTER_CAP", 0],
-    ["DOSSIER_CHARACTER_CAP", 31],
-    ["DOSSIER_WARCRAFT_LOGS_REQUEST_CAP", 0],
-    ["DOSSIER_WARCRAFT_LOGS_REQUEST_CAP", 201],
-    ["DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS", 999],
-    ["DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS", 60_001],
-    ["DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP", 0],
-    ["DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP", 201],
-    ["DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS", 999],
-    ["DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS", 60_001]
+    ["DOSSIER_CHARACTER_CAP", 31]
   ])("rejects invalid %s values", (name, value) => {
     // Break caught: a malformed cap could cause a request to exceed its intended upstream bound.
     expect(() =>
