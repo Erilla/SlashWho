@@ -27,9 +27,9 @@ evidence is full-width and ordered newest tier first with the final boss first.
   disclosure "View kill evidence".
 - Preserve every distinct Mythic WCL fight for each boss across all selected
   characters, with oldest evidence first in the disclosure.
-- Populate historic world rank and first-kill guild from Raider.IO when it
-  publishes those values for the matching earliest boss kill; show an explicit
-  unknown only when neither source supplies it.
+- Populate historic world rank from Raider.IO's historical Mythic boss
+  leaderboard only after it is matched to the verified WCL guild and kill;
+  show an explicit unknown when the rank cannot be verified.
 - Order tiers newest-first and each tier's bosses final-boss-first.
 
 ## Data and ordering
@@ -45,11 +45,18 @@ rather than achievement ID plus completion time. Its completion date is the
 earliest observed date and its character list is the union of qualifying
 characters. Those entries sort by completion date descending.
 
-Raider.IO is the authoritative supplemental source for its published
-`historicWorldRank` and first-defeated guild. Matching is by normalized raid and
-boss identity per character. Warcraft Logs remains authoritative for report
-URLs, participant attribution, and the full kill timeline. A rank is never
-inferred from present-day guild rankings.
+Warcraft Logs remains authoritative for report URLs, participant attribution,
+report guild, and the full kill timeline. Raider.IO's published Mythic
+boss-ranking endpoint is the rank authority. It is queried once per
+catalogue-mapped boss, then a row must match the WCL evidence on normalized
+guild name, region, realm/connected realm, and first-defeat timestamp within a
+two-minute tolerance. The rank on that row is a historical world _boss-kill_
+rank; a generic current guild or zone rank is never substituted.
+
+Raider.IO's guild boss-kill endpoint may corroborate the matched guild and
+timestamp but does not itself return rank. Rank enrichment is cached and capped
+by unique boss to respect the public API's rate limit and to avoid a dossier
+request multiplying calls by character.
 
 Tier recency comes from the static raid catalogue's canonical tier order (not
 alphabetical raid names). Bosses sort final-boss first, then descending
@@ -81,9 +88,12 @@ report, and the participating dossier character(s).
 
 ## Error handling and honesty
 
-- Raider.IO rank/guild absence does not discard valid WCL evidence.
+- Raider.IO rank absence does not discard valid WCL evidence.
 - A mismatch between sources does not fabricate a rank: WCL keeps its report
   evidence and Raider.IO enrichment is omitted.
+- Raider.IO returns only its retained top 50 ranking rows and covers retail
+  raids from Emerald Nightmare onward. Evidence outside that coverage, outside
+  the top 50, or with an ambiguous guild/realm/time match remains unranked.
 - A character without known class gets the standard link colour, not an
   invented class colour.
 - Unknown rank and guild continue to render as `—`.
@@ -93,14 +103,17 @@ report, and the participating dossier character(s).
 This supersedes the statement in
 `2026-09-12-verified-applicant-evidence-design.md` that historic rank must
 always remain null. That restriction correctly rejected _current WCL guild
-rank_ as historical rank. This design instead uses Raider.IO's explicit
-historical rank field, so it does not make that invalid inference.
+rank_ as historical rank. This design instead uses Raider.IO's dated,
+boss-specific world-ranking row, so it does not make that invalid inference.
 
 ## Testing strategy
 
 - Domain tests cover achievement coalescing/earliest dates, all-kill retention,
-  rank enrichment, and tier/boss ordering.
-- Contract and application tests cover class propagation and source matching.
+  rank enrichment, uncertain-match fallback, and tier/boss ordering.
+- Raider.IO client tests cover boss-leaderboard parsing, cache keys, and the
+  top-50/no-coverage unknown result.
+- Contract and application tests cover class propagation and strict
+  guild/realm/time source matching.
 - Component tests cover panel roles/classes, Raider.IO links, class colouring,
   achievement-card icon/fallback rendering, headline metadata, disclosure
   wording, and chronological evidence rows.
