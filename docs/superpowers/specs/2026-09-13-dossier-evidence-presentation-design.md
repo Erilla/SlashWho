@@ -16,6 +16,8 @@ evidence is full-width and ordered newest tier first with the final boss first.
 
 - Show one Cutting Edge row per official achievement, across every dossier
   character, with its earliest completion and all qualifying characters.
+- Render every Cutting Edge row as a modern, game-inspired achievement card
+  with its official Blizzard achievement icon.
 - Put newest Cutting Edge achievements first and make their scrollable body the
   same usable minimum height as Connected characters.
 - Link every connected-character name to its Raider.IO character page and use
@@ -60,6 +62,14 @@ with a shared minimum content height and vertical scrolling when necessary.
 Both the remaining content panels and the full-width Mythic evidence panel use
 the same panel frame.
 
+Each Cutting Edge row is a modern interpretation of the in-game achievement
+tooltip: dark treatment, a gold achievement title, concise description, earned
+date, and qualifying characters. It uses the official Blizzard icon for the
+achievement, not a locally invented emblem. The generated Cutting Edge
+catalogue obtains the nullable icon URL once from Blizzard's static achievement
+media resource and the dossier sends that public Render URL to the card. If an
+official icon is unavailable, the card remains complete without an image.
+
 Each character name is a Raider.IO link with a class-derived colour while its
 source badge and realm remain visible. Class is therefore added to the dossier
 character contract and propagated from stored snapshot character metadata.
@@ -92,6 +102,7 @@ historical rank field, so it does not make that invalid inference.
   rank enrichment, and tier/boss ordering.
 - Contract and application tests cover class propagation and source matching.
 - Component tests cover panel roles/classes, Raider.IO links, class colouring,
-  headline metadata, disclosure wording, and chronological evidence rows.
+  achievement-card icon/fallback rendering, headline metadata, disclosure
+  wording, and chronological evidence rows.
 - Browser tests cover the full-width evidence panel and ordering on a rendered
   dossier.
