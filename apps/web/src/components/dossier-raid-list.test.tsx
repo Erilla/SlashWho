@@ -56,7 +56,7 @@ it("renders official raid and boss artwork when supplied", () => {
   );
 });
 
-it("keeps text evidence intact when official artwork is unavailable", () => {
+it("renders fallback artwork when official raid and boss artwork is unavailable", () => {
   render(
     <DossierRaidList
       raids={
@@ -73,7 +73,12 @@ it("keeps text evidence intact when official artwork is unavailable", () => {
     />
   );
 
-  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("img", { name: "Unmapped raid artwork" })
+  ).toBeVisible();
+  expect(
+    screen.getByRole("img", { name: "Queen Ansurek artwork" })
+  ).toBeVisible();
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
 });
 

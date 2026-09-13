@@ -1,5 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierMediaFallback } from "./dossier-media-fallback";
+
 type DossierCuttingEdgeListProps = Readonly<{
   cuttingEdges: ApplicantDossier["cuttingEdges"];
 }>;
@@ -33,7 +35,12 @@ export function DossierCuttingEdgeList({
                   loading="lazy"
                   src={achievement.iconUrl}
                 />
-              ) : null}
+              ) : (
+                <DossierMediaFallback
+                  alt={`${achievement.achievementName} icon`}
+                  className="dossier-achievement-icon"
+                />
+              )}
               <div>
                 <h3>{achievement.achievementName}</h3>
                 <p>{achievement.description}</p>
