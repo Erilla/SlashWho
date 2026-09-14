@@ -73,6 +73,13 @@ a {
 .header-logo {
   display: inline-flex;
   color: var(--accent);
+  border-radius: 0.4rem;
+}
+
+.header-logo:hover,
+.header-logo:focus-visible,
+.header-logo:active {
+  color: #7dd3fc;
 }
 
 .header-logo-mark {
