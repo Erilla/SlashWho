@@ -456,9 +456,7 @@ describe("applicant dossier service", () => {
             ]
           }
         ],
-        cuttingEdges: [
-          { achievementId: "40254", characters: [root, alt] }
-        ],
+        cuttingEdges: [{ achievementId: "40254", characters: [root, alt] }],
         research: {
           state: "complete",
           message: "Linked-character research is complete."
