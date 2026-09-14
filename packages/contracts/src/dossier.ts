@@ -23,7 +23,8 @@ export const dossierCharacterSchema = z
     displayName: z.string().min(1),
     className: z.string().min(1).nullable(),
     raiderIoUrl: z.url(),
-    source: dossierSourceLabelSchema
+    source: dossierSourceLabelSchema,
+    researchState: z.enum(["complete", "gathering"]).optional()
   })
   .strict();
 
