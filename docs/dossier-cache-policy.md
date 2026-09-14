@@ -24,12 +24,15 @@ URLs.
 
 WCL first discovers retained kill evidence within `EVIDENCE_REQUEST_CAP` (500
 pages by default), then hydrates report-scoped parse groups within the separate
-`EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). The parse cap includes
-the bounded canonical-character lookups needed for exact attribution. A cap or
-upstream failure leaves verified kills intact and marks parse metrics
-`unavailable` with a partial limitation; it does not manufacture a zero or
-silently claim completeness. `not_applicable` is distinct and is used only
-when independent role evidence establishes that a metric does not apply.
+`EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). Ranking payloads are
+filtered to identities matching the requested character before the bounded
+canonical lookup, so unrelated ranked players cannot exhaust attribution
+capacity or invalidate an otherwise usable parse. The cap includes the
+canonical lookup requests. A cap or upstream failure leaves verified kills
+intact and marks parse metrics `unavailable` with a partial limitation; it does
+not manufacture a zero or silently claim completeness. `not_applicable` is
+distinct and is used only when independent role evidence establishes that a
+metric does not apply.
 
 The provider publishes an hourly point budget, not a fixed cost contract for
 `Report.rankings`. The credentialed test probe measured 8 points for one

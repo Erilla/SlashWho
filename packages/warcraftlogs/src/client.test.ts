@@ -107,7 +107,11 @@ function token(): Response {
   return jsonResponse(fixture("token-valid"));
 }
 
-function performanceReport(fightIds = [26], hasMorePages = false): unknown {
+function performanceReport(
+  fightIds = [26],
+  hasMorePages = false,
+  code = "performance-report"
+): unknown {
   return {
     data: {
       characterData: {
@@ -116,7 +120,7 @@ function performanceReport(fightIds = [26], hasMorePages = false): unknown {
           recentReports: {
             data: [
               {
-                code: "performance-report",
+                code,
                 startTime: 1_706_918_400_000,
                 zone: {
                   id: 1047,
@@ -396,6 +400,59 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("ignores unrelated ranking identities before bounded canonical lookup", async () => {
+    // Break caught: Report.rankings can return many unrelated characters. A
+    // payload larger than the identity-lookup bound must not make the
+    // requested character's exact parse unavailable.
+    const rankings = performanceRankings({
+      damage: 40,
+      healing: 41,
+      bossDamage: 42
+    }) as {
+      data: {
+        reportData: {
+          report: {
+            damage: { data: Array<Record<string, unknown>> };
+            healing: { data: Array<Record<string, unknown>> };
+            bossDamage: { data: Array<Record<string, unknown>> };
+          };
+        };
+      };
+    };
+    for (const metric of ["damage", "healing", "bossDamage"] as const) {
+      const characters = (
+        rankings.data.reportData.report[metric].data[0]!.roles as {
+          dps: { characters: Array<Record<string, unknown>> };
+        }
+      ).dps.characters;
+      for (let id = 2200; id < 2260; id++) {
+        characters.push({
+          id,
+          name: `Other${id}`,
+          server: { name: "silvermoon", region: "eu" },
+          rankPercent: 10
+        });
+      }
+    }
+
+    const { client } = performanceClient(rankings);
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          performance: {
+            damage: { state: "available", percentile: 40 },
+            healing: { state: "available", percentile: 41 },
+            bossDamage: { state: "available", percentile: 42 }
+          }
+        }
+      ]
+    });
+  });
+
   it.each([
     ["report", { code: "another-report" }],
     ["fight", { fightId: 27 }],
@@ -530,9 +587,9 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("retains kills with a parse-specific limitation when hydration cap is exhausted", async () => {
-    // Break caught: a ranking budget limit could discard independently proven
-    // kill evidence or falsely make missing parse values look complete.
+  it("counts canonical identity lookup against the parse request cap", async () => {
+    // Break caught: omitting the identity lookup from the budget could exceed
+    // the provider request allowance during a long history scan.
     const { client } = performanceClient(
       performanceRankings({ damage: 40, healing: 41, bossDamage: 42 })
     );
@@ -542,6 +599,66 @@ describe("Warcraft Logs gateway", () => {
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [{ performance: { damage: { state: "unavailable" } } }],
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+  });
+
+  it("leaves later report groups unavailable after the parse cap", async () => {
+    // Break caught: a cap must preserve verified kills while making the
+    // skipped report group's missing parse state explicit.
+    const first = performanceReport([26]) as {
+      data: {
+        characterData: { character: { recentReports: { data: unknown[] } } };
+      };
+    };
+    const second = performanceReport([27], false, "second-report") as {
+      data: {
+        characterData: { character: { recentReports: { data: unknown[] } } };
+      };
+    };
+    first.data.characterData.character.recentReports.data.push(
+      second.data.characterData.character.recentReports.data[0]
+    );
+
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const query = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string };
+      };
+      if (query.query.includes("ReportFightParses")) {
+        const code = query.variables.code ?? "performance-report";
+        return jsonResponse(
+          performanceRankings(
+            { damage: 40, healing: 41, bossDamage: 42 },
+            { code, fightId: code === "second-report" ? 27 : 26 }
+          )
+        );
+      }
+      if (query.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(first);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        { fightId: 26, performance: { damage: { state: "available" } } },
+        { fightId: 27, performance: { damage: { state: "unavailable" } } }
+      ],
       parseLimitation: { kind: "limitation", code: "parse_request_cap" }
     });
   });
@@ -557,9 +674,22 @@ describe("Warcraft Logs gateway", () => {
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
       const query = JSON.parse(String(init?.body)) as { query: string };
-      return query.query.includes("ReportFightParses")
-        ? jsonResponse(rankings)
-        : jsonResponse(performanceReport([26], true));
+      if (query.query.includes("ReportFightParses"))
+        return jsonResponse(rankings);
+      if (query.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26], true));
     });
 
     await expect(
