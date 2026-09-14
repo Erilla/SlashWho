@@ -13,8 +13,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 const invalidUrlMessage = "Enter a Raider.IO or Warcraft Logs character URL.";
-const invalidStructuredMessage =
-  "Enter a character name, realm, and region.";
+const invalidStructuredMessage = "Enter a character name, realm, and region.";
 const invalidStructuredUrlMessage =
   "Enter a valid character URL, or character name, realm, and region.";
 const defaultRegion = supportedRegions[0];
@@ -212,7 +211,9 @@ export function SearchForm() {
               id="character-region"
               name="characterRegion"
               value={region}
-              onChange={(event) => setRegion(event.currentTarget.value as Region)}
+              onChange={(event) =>
+                setRegion(event.currentTarget.value as Region)
+              }
               aria-invalid={error !== null}
               aria-describedby={error ? "character-search-error" : undefined}
               disabled={pending}

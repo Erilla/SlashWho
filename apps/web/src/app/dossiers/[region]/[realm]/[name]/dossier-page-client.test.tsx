@@ -104,8 +104,12 @@ describe("DossierPageClient staged research", () => {
       />
     );
 
-    expect(screen.getByRole("group", { name: "Search mode" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Applicant URL" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Search mode" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Applicant URL" })
+    ).toBeInTheDocument();
   });
 
   it("shows a loading indicator while applicant research is in progress", () => {
