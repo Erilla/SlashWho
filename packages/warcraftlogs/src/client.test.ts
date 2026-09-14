@@ -868,7 +868,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       wipes: [
@@ -942,7 +942,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       wipes: [
@@ -1391,7 +1391,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: expect.arrayContaining([
@@ -1425,7 +1425,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [{ fightUrl: expect.stringContaining("earlyReport#fight=7") }],
@@ -1462,7 +1462,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
   });
 

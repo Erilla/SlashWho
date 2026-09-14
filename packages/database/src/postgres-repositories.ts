@@ -488,7 +488,9 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, historic_world_rank
+            guild_name, guild_realm, historic_world_rank,
+            damage_parse_state, damage_percentile, healing_parse_state,
+            healing_percentile, boss_damage_parse_state, boss_damage_percentile
      FROM character_mythic_kills
      WHERE evidence_run_id = ANY($1::uuid[])
      ORDER BY killed_at, source_fight_key`,

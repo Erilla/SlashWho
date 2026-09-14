@@ -238,6 +238,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(first.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [mythicWipe()],
       completedAt: new Date("2026-08-04T12:00:00.000Z")
@@ -263,6 +264,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(refresh.run.id, {
       state: "partial",
       limitationCode: "schema_drift",
+      parseLimitationCode: null,
       kills: [],
       wipes: [],
       completedAt: new Date("2026-08-04T13:01:00.000Z")
@@ -288,6 +290,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(reserved.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [],
       completedAt: new Date("2026-08-04T12:00:00.000Z")
@@ -342,6 +345,7 @@ describe("PostgreSQL repositories", () => {
       await repositories.evidence.publish(reserved.run.id, {
         ...input,
         kills: [],
+        wipes: [],
         completedAt: new Date("2026-08-04T12:05:00.000Z")
       });
       await expect(
@@ -375,6 +379,7 @@ describe("PostgreSQL repositories", () => {
         repositories.evidence.publish(reserved.run.id, {
           ...input,
           kills: [],
+          wipes: [],
           completedAt: new Date("2026-08-04T12:05:00.000Z")
         })
       ).rejects.toThrow("character_evidence_publication_invalid");
@@ -416,6 +421,7 @@ describe("PostgreSQL repositories", () => {
       limitationCode: null,
       parseLimitationCode: null,
       kills: initialKills,
+      wipes: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -462,6 +468,7 @@ describe("PostgreSQL repositories", () => {
       limitationCode: null,
       parseLimitationCode: null,
       kills: replacementKills,
+      wipes: [],
       completedAt: new Date("2026-08-04T12:10:00.000Z")
     });
 
@@ -494,6 +501,7 @@ describe("PostgreSQL repositories", () => {
             }
           })
         ],
+        wipes: [],
         completedAt: new Date("2026-08-04T12:05:00.000Z")
       })
     ).rejects.toThrow(RangeError);
@@ -524,8 +532,9 @@ describe("PostgreSQL repositories", () => {
             healing: { state: "available", percentile: 0 },
             bossDamage: { state: "available", percentile: 0 }
           }
-        })
+          })
       ],
+      wipes: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
     const completed = await repositories.evidence.getCompleted(rootKey);
