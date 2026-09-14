@@ -157,9 +157,12 @@ export async function seedCharacterEvidence(
                       guild: { name: "Arachnid", realm: "silvermoon" },
                       historicWorldRank: 147,
                       performance: {
-                        damage: { state: "available", percentile: 100 },
-                        healing: { state: "not_applicable" },
-                        bossDamage: { state: "unavailable" }
+                        damage: {
+                          state: "available" as const,
+                          percentile: 100
+                        },
+                        healing: { state: "not_applicable" as const },
+                        bossDamage: { state: "unavailable" as const }
                       }
                     }
                   ]
