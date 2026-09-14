@@ -1,4 +1,5 @@
 import type { DossierCharacter } from "@slashwho/contracts";
+import { useEffect, useRef, useState } from "react";
 
 type DossierCharacterListProps = Readonly<{
   characters: readonly DossierCharacter[];
@@ -38,15 +39,54 @@ function characterLinkClass(className: string | null): string {
 export function DossierCharacterList({
   characters
 }: DossierCharacterListProps) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const [isScrollable, setIsScrollable] = useState(false);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof window.matchMedia !== "function") return;
+
+    const desktop = window.matchMedia("(width > 48rem)");
+    const updateScrollable = () => {
+      setIsScrollable(desktop.matches && list.scrollHeight > list.clientHeight);
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(updateScrollable)
+        : null;
+
+    updateScrollable();
+    resizeObserver?.observe(list);
+    desktop.addEventListener("change", updateScrollable);
+
+    return () => {
+      resizeObserver?.disconnect();
+      desktop.removeEventListener("change", updateScrollable);
+    };
+  }, [characters]);
+
   return (
     <section
       aria-labelledby="dossier-characters-heading"
-      className="dossier-panel"
+      className="dossier-panel dossier-character-panel"
     >
       <h2 className="section-heading" id="dossier-characters-heading">
         Connected characters
       </h2>
-      <ul className="dossier-character-list">
+      {isScrollable ? (
+        <p className="dossier-scroll-hint" id="dossier-characters-scroll-hint">
+          Scroll to see more connected characters when available.
+        </p>
+      ) : null}
+      <ul
+        aria-describedby={
+          isScrollable ? "dossier-characters-scroll-hint" : undefined
+        }
+        aria-labelledby="dossier-characters-heading"
+        className="dossier-character-list"
+        ref={listRef}
+        tabIndex={isScrollable ? 0 : undefined}
+      >
         {characters.map((character) => (
           <li
             className="dossier-character-row"
