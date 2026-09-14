@@ -1,6 +1,7 @@
 import type { DossierCharacter } from "@slashwho/contracts";
 import { useEffect, useRef, useState } from "react";
 
+import { DossierCharacterName } from "./dossier-character-name";
 import { UpstreamIconLink } from "./upstream-icon-link";
 
 type DossierCharacterListProps = Readonly<{
@@ -12,31 +13,6 @@ const sourceLabel: Record<DossierCharacter["source"], string> = {
   raiderio_declared: "Raider.IO declared",
   fingerprint_derived: "Fingerprint-derived"
 };
-
-const classColourClass: Record<string, string> = {
-  "death knight": "death-knight",
-  demonhunter: "demon-hunter",
-  "demon hunter": "demon-hunter",
-  druid: "druid",
-  evoker: "evoker",
-  hunter: "hunter",
-  mage: "mage",
-  monk: "monk",
-  paladin: "paladin",
-  priest: "priest",
-  rogue: "rogue",
-  shaman: "shaman",
-  warlock: "warlock",
-  warrior: "warrior"
-};
-
-function characterNameClass(className: string | null): string {
-  const classKey = className?.trim().toLowerCase();
-  const colourClass = classKey ? classColourClass[classKey] : undefined;
-  return colourClass
-    ? `dossier-character-name dossier-character-link--${colourClass}`
-    : "dossier-character-name";
-}
 
 export function DossierCharacterList({
   characters
@@ -100,9 +76,7 @@ export function DossierCharacterList({
                 label={`View ${character.displayName} on Raider.IO`}
                 source="raiderio"
               >
-                <span className={characterNameClass(character.className)}>
-                  {character.displayName}
-                </span>
+                <DossierCharacterName character={character} />
               </UpstreamIconLink>
               <span className="dossier-location">
                 {character.key.region.toUpperCase()} · {character.key.realm}

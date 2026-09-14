@@ -284,47 +284,48 @@ a {
 }
 
 .dossier-character-name {
-  color: var(--accent);
+  color: var(--text);
   font-weight: 720;
+  white-space: nowrap;
 }
 
-.dossier-character-link--death-knight {
-  color: #c41e3a;
+.dossier-character-name--death-knight {
+  color: #ed405b;
 }
-.dossier-character-link--demon-hunter {
-  color: #a330c9;
+.dossier-character-name--demon-hunter {
+  color: #c653df;
 }
-.dossier-character-link--druid {
+.dossier-character-name--druid {
   color: #ff7c0a;
 }
-.dossier-character-link--evoker {
+.dossier-character-name--evoker {
   color: #33937f;
 }
-.dossier-character-link--hunter {
+.dossier-character-name--hunter {
   color: #aad372;
 }
-.dossier-character-link--mage {
+.dossier-character-name--mage {
   color: #3fc7eb;
 }
-.dossier-character-link--monk {
+.dossier-character-name--monk {
   color: #00ff98;
 }
-.dossier-character-link--paladin {
+.dossier-character-name--paladin {
   color: #f48cba;
 }
-.dossier-character-link--priest {
+.dossier-character-name--priest {
   color: #fff;
 }
-.dossier-character-link--rogue {
+.dossier-character-name--rogue {
   color: #fff468;
 }
-.dossier-character-link--shaman {
-  color: #0070dd;
+.dossier-character-name--shaman {
+  color: #168bff;
 }
-.dossier-character-link--warlock {
+.dossier-character-name--warlock {
   color: #8788ee;
 }
-.dossier-character-link--warrior {
+.dossier-character-name--warrior {
   color: #c69b6d;
 }
 
@@ -665,7 +666,6 @@ a {
 }
 
 .upstream-icon-link--labelled:hover .dossier-character-name {
-  color: #fff;
   text-decoration: underline;
 }
 
