@@ -205,7 +205,8 @@ describe("applicant evidence job handler", () => {
                   bossDamage: { state: "unavailable" as const }
                 }
               }
-            ]
+            ],
+            wipes: []
           };
         }
       },
@@ -248,6 +249,7 @@ describe("applicant evidence job handler", () => {
               }
             }
           ],
+          wipes: [],
           completedAt: new Date("2026-09-13T12:01:00.000Z")
         }
       }

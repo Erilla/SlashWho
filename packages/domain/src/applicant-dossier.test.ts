@@ -183,7 +183,7 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    const boss = dossier.raids[0]!.bosses[0]!;
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
     expect(boss.firstKill.parses).toEqual([
       {
         character: "Ryii",
@@ -262,10 +262,9 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.bestParses[0]?.character).toBe(
-      "Ryii"
-    );
-    expect(dossier.raids[0]!.bosses[0]!.firstKill.characters).toEqual([root]);
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.bestParses[0]?.character).toBe("Ryii");
+    expect(boss.firstKill.characters).toEqual([root]);
   });
 
   it("keeps same-named characters' boss parses independent", () => {
@@ -299,9 +298,9 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(
-      dossier.raids[0]!.bosses[0]!.bestParses.map((parse) => parse.damage)
-    ).toEqual([
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses.map(
+      (parse) => parse.damage
+    )).toEqual([
       {
         state: "available",
         percentile: 90,

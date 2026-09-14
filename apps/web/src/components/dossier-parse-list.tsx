@@ -2,8 +2,11 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { parseColour } from "./parse-colour";
 
-type ApplicantDossierCharacterParses =
-  ApplicantDossier["raids"][number]["bosses"][number]["bestParses"][number];
+type KillBoss = Extract<
+  ApplicantDossier["raids"][number]["bosses"][number],
+  { state: "kill" }
+>;
+type ApplicantDossierCharacterParses = KillBoss["bestParses"][number];
 type ApplicantDossierParseMetric = ApplicantDossierCharacterParses["damage"];
 
 type DossierParseListProps = Readonly<{

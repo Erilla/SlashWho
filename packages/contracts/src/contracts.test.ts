@@ -95,9 +95,8 @@ it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
   // Break caught: loose optional evidence fields could let a negative boss
   // carry stale kill data or a wipe omit its auditable report.
   const boss = validDossier.raids[0]!.bosses[0]!;
-  const { firstKill, firstKills, bestParses, ...metadata } = boss;
+  const { firstKill, bestParses, ...metadata } = boss;
   void firstKill;
-  void firstKills;
   void bestParses;
   const variants = [
     boss,

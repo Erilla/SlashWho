@@ -7,8 +7,11 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { DossierParseList } from "./dossier-parse-list";
 
-type ApplicantDossierCharacterParses =
-  ApplicantDossier["raids"][number]["bosses"][number]["bestParses"][number];
+type KillBoss = Extract<
+  ApplicantDossier["raids"][number]["bosses"][number],
+  { state: "kill" }
+>;
+type ApplicantDossierCharacterParses = KillBoss["bestParses"][number];
 
 const parses = [
   {
