@@ -690,7 +690,9 @@ export function createApplicantDossierService(options: {
     async read(key, signal) {
       const snapshot =
         (await options.repositories.snapshots.getCurrent(key)) ??
-        (await options.repositories.snapshots.getCurrentContainingCharacter?.(key));
+        (await options.repositories.snapshots.getCurrentContainingCharacter?.(
+          key
+        ));
       if (!snapshot) return { kind: "not_ready" };
 
       const seen = new Set(

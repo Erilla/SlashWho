@@ -294,13 +294,17 @@ describe("DossierPageClient staged research", () => {
       }
     };
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {
-      if (input === dossierPath) return Promise.resolve(Response.json(linkedDossier));
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(linkedDossier));
       if (input === "/api/dossiers") {
         expect(JSON.parse(String(init?.body))).toEqual({
           characterUrl: "https://raider.io/characters/eu/silvermoon/root"
         });
         return Promise.resolve(
-          Response.json({ kind: "job", jobId, status: "running" }, { status: 202 })
+          Response.json(
+            { kind: "job", jobId, status: "running" },
+            { status: 202 }
+          )
         );
       }
       if (input === `${dossierPath}?scope=initial`)
@@ -312,7 +316,11 @@ describe("DossierPageClient staged research", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <DossierPageClient identity={identity} initialDossier={null} jobId={null} />
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
     );
 
     expect(await screen.findByText("Expanded evidence")).toBeVisible();

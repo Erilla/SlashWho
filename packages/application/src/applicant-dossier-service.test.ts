@@ -886,9 +886,9 @@ describe("applicant dossier service", () => {
       dossier: { root, characters: expect.arrayContaining([{ key: alt }]) }
     });
     expect(repositories.snapshots.getCurrent).toHaveBeenCalledWith(alt);
-    expect(repositories.snapshots.getCurrentContainingCharacter).toHaveBeenCalledWith(
-      alt
-    );
+    expect(
+      repositories.snapshots.getCurrentContainingCharacter
+    ).toHaveBeenCalledWith(alt);
     expect(repositories.manualConnections.list).toHaveBeenCalledWith(root);
   });
 
