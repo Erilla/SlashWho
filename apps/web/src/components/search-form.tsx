@@ -15,7 +15,7 @@ import { useState, type FormEvent } from "react";
 const invalidUrlMessage = "Enter a Raider.IO or Warcraft Logs character URL.";
 const invalidStructuredUrlMessage =
   "Enter a valid character URL, or character name, realm, and region.";
-const defaultRegion = supportedRegions[0];
+const defaultRegion: Region = "eu";
 
 type SearchMode = "url" | "structured";
 
@@ -160,8 +160,14 @@ export function SearchForm() {
               aria-describedby={error ? "character-search-error" : undefined}
               disabled={pending}
             />
-            <button className="search-button" type="submit" disabled={pending}>
-              {pending ? "Researching…" : "Research applicant"}
+            <button
+              className="search-button"
+              type="submit"
+              aria-label="Research applicant"
+              title="Research applicant"
+              disabled={pending}
+            >
+              {pending ? "…" : "→"}
             </button>
           </div>
         </>
@@ -203,7 +209,7 @@ export function SearchForm() {
               disabled={pending}
             />
           </div>
-          <div className="search-field">
+          <div className="search-field search-region-field">
             <label htmlFor="character-region">Region</label>
             <select
               className="search-select"
@@ -223,8 +229,14 @@ export function SearchForm() {
                 </option>
               ))}
             </select>
-            <button className="search-button" type="submit" disabled={pending}>
-              {pending ? "Researching…" : "Research applicant"}
+            <button
+              className="search-button"
+              type="submit"
+              aria-label="Research applicant"
+              title="Research applicant"
+              disabled={pending}
+            >
+              {pending ? "…" : "→"}
             </button>
           </div>
         </div>
