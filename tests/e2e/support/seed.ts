@@ -72,7 +72,10 @@ export async function seedSnapshot(
 
 export async function seedCharacterEvidence(
   key: CharacterKey,
-  options: Readonly<{ withSampleKills?: boolean }> = {}
+  options: Readonly<{
+    withSampleKills?: boolean;
+    withSecondRaid?: boolean;
+  }> = {}
 ): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl() });
   try {
@@ -124,7 +127,27 @@ export async function seedCharacterEvidence(
                   "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
                 guild: { name: "Arachnid", realm: "silvermoon" },
                 historicWorldRank: 147
-              }
+              },
+              ...(options.withSecondRaid
+                ? [
+                    {
+                      raidId: "43",
+                      raidName: "Vault of the Incarnates",
+                      bossId: "2499",
+                      bossName: "Raszageth the Storm-Eater",
+                      journalBossId: "2499",
+                      bossOrder: 8,
+                      isFinalBoss: true,
+                      killedAt: "2023-01-09T21:31:40.000Z",
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/e2eVaultReport",
+                      fightUrl:
+                        "https://www.warcraftlogs.com/reports/e2eVaultReport#fight=11",
+                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      historicWorldRank: 212
+                    }
+                  ]
+                : [])
             ]
     });
   } finally {

@@ -1,6 +1,24 @@
-import { expect, test } from "playwright/test";
+import { expect, test, type Locator } from "playwright/test";
 
 import { seedCharacterEvidence, seedSnapshot } from "./support/seed";
+
+async function raidBannerGeometry(heading: Locator) {
+  return heading.evaluate((element) => {
+    const image = element.querySelector("img");
+    const bounds = element.getBoundingClientRect();
+    const raid = element.closest<HTMLElement>(".dossier-raid")!;
+    const raidStyle = getComputedStyle(raid);
+    return {
+      width: bounds.width,
+      height: bounds.height,
+      raidContentWidth:
+        raid.clientWidth -
+        Number.parseFloat(raidStyle.paddingLeft) -
+        Number.parseFloat(raidStyle.paddingRight),
+      objectFit: image ? getComputedStyle(image).objectFit : null
+    };
+  });
+}
 
 test("keeps dossier research accessible without horizontal overflow on mobile", async ({
   page
@@ -49,13 +67,27 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   ).toBeVisible();
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await evidence.getByText("View kill evidence").click();
-  await expect(
-    evidence
-      .getByRole("link", {
-        name: "View Warcraft Logs report (opens in a new tab)"
-      })
-      .first()
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+  const reportLinks = evidence.getByRole("link", {
+    name: /View Warcraft Logs report/
+  });
+  await expect(reportLinks).toHaveCount(2);
+  expect(
+    await reportLinks.evaluateAll((links) =>
+      links.map((link) => ({
+        accessibleName: link.getAttribute("aria-label"),
+        href: link.getAttribute("href")
+      }))
+    )
+  ).toEqual([
+    {
+      accessibleName: "View Warcraft Logs report 1 (opens in a new tab)",
+      href: "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
+    },
+    {
+      accessibleName: "View Warcraft Logs report 2 (opens in a new tab)",
+      href: "https://www.warcraftlogs.com/reports/e2eReport#fight=9"
+    }
+  ]);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
@@ -194,6 +226,64 @@ test("does not create a desktop scroll range when connected characters fit", asy
   expect(
     await characterList.evaluate(
       (element) => element.scrollHeight === element.clientHeight
+    )
+  ).toBe(true);
+});
+
+test("separates adjacent raid evidence with responsive artwork banners", async ({
+  page
+}) => {
+  // Break caught: raid sections could collapse back to small icon-and-text rows
+  // or overflow once a dossier contains artwork for multiple raids.
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "banner"
+  } as const;
+  await seedSnapshot({ key, displayName: "Banner", refreshedAt: new Date() });
+  await seedCharacterEvidence(key, { withSecondRaid: true });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  await page
+    .getByLabel("Applicant URL")
+    .fill("https://raider.io/characters/eu/silvermoon/banner");
+  await page.getByRole("button", { name: "Research applicant" }).click();
+
+  const nerubar = page.getByRole("heading", {
+    level: 3,
+    name: "Nerub-ar Palace"
+  });
+  const vault = page.getByRole("heading", {
+    level: 3,
+    name: "Vault of the Incarnates"
+  });
+  await expect(nerubar).toBeVisible();
+  await expect(vault).toBeVisible();
+  await expect(nerubar.getByRole("img")).toHaveCount(0);
+  await expect(vault.getByRole("img")).toHaveCount(0);
+
+  const desktopBanners = await Promise.all([
+    raidBannerGeometry(nerubar),
+    raidBannerGeometry(vault)
+  ]);
+  for (const banner of desktopBanners) {
+    expect(banner.width).toBeGreaterThan(400);
+    expect(Math.abs(banner.width - banner.raidContentWidth)).toBeLessThan(1);
+    expect(banner.height).toBeGreaterThanOrEqual(112);
+    expect(banner.objectFit).toBe("cover");
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const heading of [nerubar, vault]) {
+    const banner = await raidBannerGeometry(heading);
+    expect(Math.abs(banner.width - banner.raidContentWidth)).toBeLessThan(1);
+    expect(banner.width).toBeLessThanOrEqual(390);
+    expect(banner.height).toBeGreaterThanOrEqual(104);
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth
     )
   ).toBe(true);
 });
