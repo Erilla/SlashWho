@@ -688,7 +688,11 @@ export function createApplicantDossierService(options: {
     },
 
     async read(key, signal) {
-      const snapshot = await options.repositories.snapshots.getCurrent(key);
+      const snapshot =
+        (await options.repositories.snapshots.getCurrent(key)) ??
+        (await options.repositories.snapshots.getCurrentContainingCharacter?.(
+          key
+        ));
       if (!snapshot) return { kind: "not_ready" };
 
       const seen = new Set(
@@ -696,7 +700,9 @@ export function createApplicantDossierService(options: {
           canonicalCharacterId(character.key)
         )
       );
-      const manual = (await options.repositories.manualConnections.list(key))
+      const manual = (
+        await options.repositories.manualConnections.list(snapshot.rootKey)
+      )
         .filter((character) => !seen.has(canonicalCharacterId(character.key)))
         .map((character) => ({
           ...character,

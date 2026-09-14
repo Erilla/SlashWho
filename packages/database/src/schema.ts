@@ -154,6 +154,7 @@ export const snapshotCharacters = pgTable(
       table.snapshotId,
       table.characterId
     ),
+    index("snapshot_characters_character_idx").on(table.characterId),
     uniqueIndex("snapshot_characters_display_order_idx").on(
       table.snapshotId,
       table.displayOrder

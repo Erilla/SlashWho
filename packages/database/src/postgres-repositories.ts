@@ -1314,6 +1314,33 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
       },
 
+      async getCurrentContainingCharacter(key) {
+        const result = await pool.query<{ id: string }>(
+          `SELECT snapshot.id
+           FROM snapshots snapshot
+           JOIN snapshot_characters membership
+             ON membership.snapshot_id = snapshot.id
+           JOIN characters character ON character.id = membership.character_id
+           JOIN characters root ON root.id = snapshot.root_character_id
+           JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+           WHERE character.region = $1
+             AND character.realm_slug = $2
+             AND character.normalized_name = $3
+             AND run.status = 'complete'
+             AND NOT EXISTS (
+               SELECT 1 FROM suppressed_characters suppression
+               WHERE suppression.region = root.region
+                 AND suppression.realm_slug = root.realm_slug
+                 AND suppression.normalized_name = root.normalized_name
+                 AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+             )
+           ORDER BY snapshot.refreshed_at DESC, snapshot.id DESC
+           LIMIT 1`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
+      },
+
       async find(id) {
         return loadSnapshot(pool, id);
       },

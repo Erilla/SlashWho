@@ -58,6 +58,7 @@ function storedSnapshot(
 function fixture(
   options: {
     snapshot?: StoredSnapshot | null;
+    containingSnapshot?: StoredSnapshot | null;
     characterCap?: number;
     warcraftLogsRequestCap?: number;
     additionalKills?: readonly StoredCharacterMythicKill[];
@@ -100,6 +101,11 @@ function fixture(
         .fn()
         .mockResolvedValue(
           "snapshot" in options ? options.snapshot : storedSnapshot()
+        ),
+      getCurrentContainingCharacter: vi
+        .fn()
+        .mockResolvedValue(
+          "containingSnapshot" in options ? options.containingSnapshot : null
         ),
       create: vi.fn(),
       createAndFinishFingerprintSweep: vi.fn(),
@@ -866,6 +872,25 @@ describe("applicant dossier service", () => {
 
     await expect(dossiers.read(root)).resolves.toEqual({ kind: "not_ready" });
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("reads the current snapshot containing a linked character", async () => {
+    const snapshot = storedSnapshot();
+    const { dossiers, repositories } = fixture({
+      snapshot: null,
+      containingSnapshot: snapshot
+    });
+
+    const result = await dossiers.read(alt);
+    expect(result).toMatchObject({ kind: "ready", dossier: { root } });
+    expect(result.kind === "ready" ? result.dossier.characters : []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: alt })])
+    );
+    expect(repositories.snapshots.getCurrent).toHaveBeenCalledWith(alt);
+    expect(
+      repositories.snapshots.getCurrentContainingCharacter
+    ).toHaveBeenCalledWith(alt);
+    expect(repositories.manualConnections.list).toHaveBeenCalledWith(root);
   });
 
   it("reads cached root-only evidence without contacting snapshot repositories", async () => {
