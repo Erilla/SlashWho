@@ -192,9 +192,9 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKill.characters).toEqual([
-      sameNamedAlt
-    ]);
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
+    ).toEqual([sameNamedAlt]);
   });
 
   it("coalesces duplicate reports of the same guild kill", () => {
@@ -251,17 +251,19 @@ describe("applicant dossier", () => {
       });
 
     expect(make([...forward].reverse())).toEqual(make(forward));
-    expect(make(forward).raids[0]!.bosses[0]!.firstKills).toEqual([
-      expect.objectContaining({
-        guild: { name: "Alpha Guild", realm: "draenor" },
-        historicWorldRank: null,
-        reportUrls: [
-          "https://www.warcraftlogs.com/reports/a-report#fight=8",
-          "https://www.warcraftlogs.com/reports/z-report#fight=9"
-        ],
-        characters: [root, altKey]
-      })
-    ]);
+    expect(verifiedKill(make(forward).raids[0]!.bosses[0]!).firstKills).toEqual(
+      [
+        expect.objectContaining({
+          guild: { name: "Alpha Guild", realm: "draenor" },
+          historicWorldRank: null,
+          reportUrls: [
+            "https://www.warcraftlogs.com/reports/a-report#fight=8",
+            "https://www.warcraftlogs.com/reports/z-report#fight=9"
+          ],
+          characters: [root, altKey]
+        })
+      ]
+    );
   });
 
   it("uses the available guild when same-date attribution is absent", () => {
@@ -284,7 +286,7 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
         guild: { name: "Example Guild", realm: "silvermoon" },
         characters: [root, altKey]
@@ -315,7 +317,9 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKills).toHaveLength(3);
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toHaveLength(
+      3
+    );
   });
 
   it("keeps different bosses as distinct kill events", () => {
