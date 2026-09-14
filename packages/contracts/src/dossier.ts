@@ -140,7 +140,9 @@ export const dossierLimitationSchema = z
       "parse_rate_limited",
       "parse_request_cap",
       "parse_unavailable",
-      "parse_schema_drift"
+      "parse_schema_drift",
+      "current_content_window_unknown",
+      "current_content_evidence_withheld"
     ]),
     message: z.string().min(1)
   })

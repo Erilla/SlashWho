@@ -879,9 +879,7 @@ describe("applicant dossier", () => {
       limitations: []
     });
     expect(dossier.raids.map((raid) => raid.raidName)).toEqual([
-      "Nerub-ar Palace",
-      "Amirdrassil, the Dream's Hope",
-      "Aberrus, the Shadowed Crucible"
+      "Nerub-ar Palace"
     ]);
     expect(dossier.raids[0]!.bosses.map((boss) => boss.bossName)).toEqual([
       "Queen Ansurek",
@@ -1064,14 +1062,16 @@ describe("applicant dossier", () => {
           raidName: "VS / DR / MQD",
           bossId: "wcl-chimaerus",
           bossName: "Chimaerus the Undreamt God",
-          journalBossId: null
+          journalBossId: null,
+          killedAt: "2026-04-01T20:00:00.000Z"
         }),
         kill(root, {
           raidId: "combined-midnight-zone",
           raidName: "VS / DR / MQD",
           bossId: "wcl-midnight-falls",
           bossName: "Midnight Falls",
-          journalBossId: null
+          journalBossId: null,
+          killedAt: "2026-04-01T20:00:00.000Z"
         })
       ],
       limitations: []

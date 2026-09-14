@@ -5,6 +5,7 @@ import {
   lookupJournalEncounter,
   lookupRaidBossByName,
   lookupRaidByName,
+  lookupRaidCurrentContentWindow,
   lookupUniqueRaidBossByName,
   supportedRaidCatalogue,
   type RaidCatalogueEncounter
@@ -263,6 +264,15 @@ function catalogueEncounter(evidence: {
     : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
 }
 
+function currentness(killedAt: string, raidId: string): boolean | null {
+  const window = lookupRaidCurrentContentWindow(raidId);
+  const at = Date.parse(killedAt);
+  return !window || Number.isNaN(at)
+    ? null
+    : at >= Date.parse(window.startsAt) &&
+        (window.endsAt === null || at < Date.parse(window.endsAt));
+}
+
 function selectParseMetric(
   metrics: readonly ApplicantDossierParseMetric[]
 ): ApplicantDossierParseMetric {
@@ -348,6 +358,7 @@ function aggregateBossParses(
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
+  const limitations = [...input.limitations];
   const characters = input.characters.map((character) => ({
     ...character,
     displayName: formatCharacterDisplayName(character.displayName)
@@ -377,6 +388,18 @@ export function buildApplicantDossier(
     if (metadata === null) continue;
     const raid = lookupRaidByName(suppliedKill.raidName);
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
+    const eligible = currentness(kill.killedAt, kill.raidId);
+    if (eligible !== true) {
+      limitations.push({
+        source: "warcraft_logs",
+        character: kill.character,
+        code:
+          eligible === false
+            ? "current_content_evidence_withheld"
+            : "current_content_window_unknown"
+      });
+      continue;
+    }
     allKills.push(kill);
   }
   const byBoss = new Map<string, DossierKillEvidence[]>();
@@ -589,7 +612,7 @@ export function buildApplicantDossier(
           text(b.completedAt, a.completedAt) ||
           text(a.achievementId, b.achievementId)
       ),
-    limitations: input.limitations,
+    limitations,
     raids: includeCatalogueGaps
       ? catalogueRaids
       : [...raids.entries()]

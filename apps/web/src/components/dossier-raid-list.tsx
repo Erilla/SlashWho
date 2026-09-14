@@ -13,6 +13,7 @@ type WipeEvidence = Extract<Boss, { state: "wipe" }>["wipe"];
 
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
+  limitations?: ApplicantDossier["limitations"];
 }>;
 
 function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
@@ -329,7 +330,16 @@ function RaidArtwork({ raid }: { raid: Raid }) {
   ) : null;
 }
 
-export function DossierRaidList({ raids }: DossierRaidListProps) {
+export function DossierRaidList({
+  raids,
+  limitations = []
+}: DossierRaidListProps) {
+  const unknown = limitations.some(
+    (item) => item.code === "current_content_window_unknown"
+  );
+  const legacy = limitations.some(
+    (item) => item.code === "current_content_evidence_withheld"
+  );
   return (
     <section
       aria-labelledby="historic-mythic-evidence-heading"
@@ -340,7 +350,13 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
       </h2>
       {raids.length === 0 ? (
         <p className="empty-state">
-          No public historic Mythic evidence was found.
+          {legacy
+            ? unknown
+              ? "Some public Mythic evidence is withheld because it falls outside current-content windows or its eligibility has not been reviewed."
+              : "Public Mythic evidence outside current-content windows is withheld."
+            : unknown
+              ? "Some public Mythic evidence is withheld because its current-content eligibility is not established."
+              : "No public historic Mythic evidence was found."}
         </p>
       ) : (
         <div className="dossier-raid-list">

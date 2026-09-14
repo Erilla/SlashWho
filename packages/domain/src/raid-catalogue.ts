@@ -11,6 +11,33 @@ export type RaidCatalogueEncounter = Readonly<{
   imageUrl: string | null;
 }>;
 
+export type RaidCurrentContentWindow = Readonly<{
+  startsAt: string;
+  endsAt: string | null;
+}>;
+
+// Curated from Blizzard's Mythic raid unlock and season announcements. Windows
+// are [start, end) in UTC; an absent entry is unknown, never legacy.
+const currentContentWindows = new Map<string, RaidCurrentContentWindow>([
+  [
+    "1273",
+    { startsAt: "2024-09-17T00:00:00.000Z", endsAt: "2025-03-04T00:00:00.000Z" }
+  ],
+  [
+    "1296",
+    { startsAt: "2025-03-04T00:00:00.000Z", endsAt: "2025-08-12T00:00:00.000Z" }
+  ],
+  [
+    "1302",
+    { startsAt: "2025-08-12T00:00:00.000Z", endsAt: "2026-03-17T00:00:00.000Z" }
+  ],
+  ["1305", { startsAt: "2026-05-20T00:00:00.000Z", endsAt: null }],
+  ["1307", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
+  ["1308", { startsAt: "2026-03-31T00:00:00.000Z", endsAt: null }],
+  ["1314", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
+  ["1320", { startsAt: "2026-08-01T00:00:00.000Z", endsAt: null }]
+]);
+
 const raiderIoRaidSlugs = new Map<string, string>([
   ["768", "the-emerald-nightmare"],
   ["786", "the-nighthold"],
@@ -209,6 +236,12 @@ export function lookupUniqueRaidBossByName(
 
 export function lookupRaidByName(raidName: string): RaidCatalogueRaid | null {
   return raidsByName.get(normalizedName(raidName)) ?? null;
+}
+
+export function lookupRaidCurrentContentWindow(
+  raidId: string
+): RaidCurrentContentWindow | null {
+  return currentContentWindows.get(raidId) ?? null;
 }
 
 function raiderIoBossSlug(bossName: string): string {
