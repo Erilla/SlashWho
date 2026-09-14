@@ -86,23 +86,6 @@ afterEach(() => {
 });
 
 describe("DossierPageClient staged research", () => {
-  it("shows a reusable dossier search form", () => {
-    render(
-      <DossierPageClient
-        identity={identity}
-        initialDossier={expanded}
-        jobId={null}
-      />
-    );
-
-    expect(
-      screen.getByRole("group", { name: "Search mode" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("textbox", { name: "Applicant URL" })
-    ).toBeInTheDocument();
-  });
-
   it("shows a loading indicator while applicant research is in progress", () => {
     // Break caught: an in-progress dossier could show only static text, making
     // it unclear that background research is still active.

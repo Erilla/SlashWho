@@ -264,6 +264,21 @@ describe("DossierPageClient", () => {
     ).toBeVisible();
   });
 
+  it("does not render an applicant-research form in dossier content", () => {
+    render(
+      <DossierPageClient
+        identity={dossier.root}
+        initialDossier={dossier}
+        jobId={null}
+      />
+    );
+
+    expect(screen.queryByLabelText("Applicant URL")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Research applicant" })
+    ).toBeNull();
+  });
+
   it("uses known classes for every visible character-name mention", () => {
     // Break caught: evidence summaries, details, attribution, or limitation copy
     // can bypass the shared character-name renderer and lose class colouring.
