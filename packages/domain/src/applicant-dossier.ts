@@ -459,7 +459,7 @@ export function buildApplicantDossier(
             parses: aggregateEventParses(shared, characters)
           }
         };
-    })
+      })
       .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
     const raid = raids.get(selected.raidId) ?? {
