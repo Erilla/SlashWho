@@ -3,9 +3,46 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
-import type { ApplicantDossier } from "@slashwho/contracts";
+import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
+import type { ReactElement } from "react";
 
+import { DossierCharacterProvider } from "./dossier-character-name";
 import { DossierRaidList } from "./dossier-raid-list";
+
+const ryii: CharacterKey = {
+  region: "eu",
+  realm: "silvermoon",
+  name: "ryii"
+};
+const ryalts: CharacterKey = {
+  region: "eu",
+  realm: "draenor",
+  name: "ryalts"
+};
+const knownCharacters = [
+  {
+    key: ryii,
+    displayName: "Ryii",
+    className: "Mage",
+    raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+    source: "submitted" as const
+  },
+  {
+    key: ryalts,
+    displayName: "Ryalts",
+    className: "Priest",
+    raiderIoUrl: "https://raider.io/characters/eu/draenor/ryalts",
+    source: "fingerprint_derived" as const
+  }
+];
+
+function renderWithDossierCharacters(ui: ReactElement) {
+  return render(
+    <DossierCharacterProvider characters={knownCharacters}>
+      {ui}
+    </DossierCharacterProvider>
+  );
+}
 
 const boss = {
   bossId: "2602",
@@ -16,7 +53,7 @@ const boss = {
     guild: null,
     historicWorldRank: null,
     reportUrl: null,
-    characters: ["Ryii"]
+    characters: [ryii]
   }
 };
 
@@ -27,7 +64,7 @@ it("shows the grouped rank in the summary and retains all distinct report links"
     "https://www.warcraftlogs.com/reports/one#fight=1",
     "https://www.warcraftlogs.com/reports/two#fight=2"
   ];
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={[
         {
@@ -77,7 +114,7 @@ it("shows the grouped rank in the summary and retains all distinct report links"
 it("renders official raid and boss artwork when supplied", () => {
   // Break caught: official catalogue media could reach the dossier but never
   // become visible to a guild reviewer.
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -109,7 +146,7 @@ it("renders official raid and boss artwork when supplied", () => {
 });
 
 it("renders fallback artwork when official raid and boss artwork is unavailable", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -135,7 +172,7 @@ it("renders fallback artwork when official raid and boss artwork is unavailable"
 });
 
 it("shows first-kill metadata and lists every kill in chronological order", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -154,14 +191,14 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                     guild: { name: "Method", realm: "Tarren Mill" },
                     historicWorldRank: 2,
                     reportUrl: "https://www.warcraftlogs.com/reports/first",
-                    characters: ["Ryii"]
+                    characters: [ryii]
                   },
                   {
                     killedAt: "2025-02-14T20:30:00.000Z",
                     guild: { name: "Method", realm: "Tarren Mill" },
                     historicWorldRank: null,
                     reportUrl: "https://www.warcraftlogs.com/reports/second",
-                    characters: ["Ryalts"]
+                    characters: [ryalts]
                   }
                 ]
               }
@@ -172,7 +209,12 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
     />
   );
 
-  expect(screen.getByText("First kill: 14 Jan 2025 · Ryii")).toBeVisible();
+  const firstKillSummary = screen
+    .getByText("Ryii", {
+      selector: ".dossier-boss-first-kill .dossier-character-name"
+    })
+    .closest(".dossier-boss-first-kill");
+  expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();

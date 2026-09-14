@@ -1,5 +1,6 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
 import { UpstreamIconLink } from "./upstream-icon-link";
 
@@ -124,7 +125,9 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                           </h4>
                           <p className="dossier-boss-first-kill">
                             First kill: {displayDate(firstKill.killedAt)} ·{" "}
-                            {firstKill.characters.join(", ") || "—"}
+                            <DossierCharacterNames
+                              characters={firstKill.characters}
+                            />
                           </p>
                           <p className="dossier-boss-rank">
                             {firstKill.historicWorldRank === null
@@ -171,7 +174,11 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
                               </div>
                               <div>
                                 <dt>Characters present</dt>
-                                <dd>{evidence.characters.join(", ") || "—"}</dd>
+                                <dd>
+                                  <DossierCharacterNames
+                                    characters={evidence.characters}
+                                  />
+                                </dd>
                               </div>
                             </dl>
                           ))}

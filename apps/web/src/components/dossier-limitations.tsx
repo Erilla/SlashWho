@@ -1,5 +1,7 @@
 import type { DossierLimitation } from "@slashwho/contracts";
 
+import { DossierCharacterName } from "./dossier-character-name";
+
 type DossierLimitationsProps = Readonly<{
   limitations: readonly DossierLimitation[];
 }>;
@@ -19,9 +21,12 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
         {limitations.map((limitation, index) => (
           <li key={`${limitation.source}-${limitation.code}-${index}`}>
             {limitation.message}
-            {limitation.character
-              ? ` Affected character: ${limitation.character.name}.`
-              : ""}
+            {limitation.character ? (
+              <>
+                {" Affected character: "}
+                <DossierCharacterName character={limitation.character} />.
+              </>
+            ) : null}
           </li>
         ))}
       </ul>
