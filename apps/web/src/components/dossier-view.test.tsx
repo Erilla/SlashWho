@@ -74,8 +74,7 @@ const dossier: ApplicantDossier = {
       achievementName: "Cutting Edge: Queen Ansurek",
       description:
         "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
-      completedAt: "2025-01-14T20:30:00.000Z",
-      characters: ["Ryii", "Ryalts"]
+      completedAt: "2025-01-14T20:30:00.000Z"
     }
   ],
   limitations: [

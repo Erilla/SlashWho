@@ -33,7 +33,6 @@ export type DossierLimitation = Readonly<{
 export type DossierCuttingEdgeEvidence = Readonly<{
   achievementId: string;
   completedAt: string;
-  character: CharacterKey;
 }>;
 export type BuildApplicantDossierInput = Readonly<{
   root: CharacterKey;
@@ -69,7 +68,6 @@ export type ApplicantDossierCuttingEdge = Readonly<{
   achievementName: string;
   description: string;
   completedAt: string;
-  characters: readonly string[];
 }>;
 export type ApplicantDossier = Readonly<{
   root: CharacterKey;
@@ -137,24 +135,15 @@ export function buildApplicantDossier(
     string,
     {
       achievement: NonNullable<ReturnType<typeof lookupCuttingEdgeAchievement>>;
-      characters: Set<string>;
     }
   >();
   for (const evidence of input.cuttingEdges ?? []) {
     const achievement = lookupCuttingEdgeAchievement(evidence.achievementId);
     if (!achievement) continue;
-    const character = input.characters.find(
-      (item) =>
-        canonicalCharacterId(item.key) ===
-        canonicalCharacterId(evidence.character)
-    );
-    if (!character) continue;
     const key = `${achievement.achievementId}\0${evidence.completedAt}`;
     const entry = cuttingEdges.get(key) ?? {
-      achievement,
-      characters: new Set<string>()
+      achievement
     };
-    entry.characters.add(character.displayName);
     cuttingEdges.set(key, entry);
   }
   const earliest = new Map<string, DossierKillEvidence>();
@@ -242,8 +231,7 @@ export function buildApplicantDossier(
           achievementId: entry.achievement.achievementId,
           achievementName: entry.achievement.achievementName,
           description: entry.achievement.description,
-          completedAt: completedAt!,
-          characters: [...entry.characters].sort(text)
+          completedAt: completedAt!
         };
       })
       .sort(

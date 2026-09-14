@@ -34,7 +34,6 @@ export function DossierCuttingEdgeList({
                   }).format(new Date(achievement.completedAt))}
                 </time>
               </p>
-              <p>{achievement.characters.join(", ")}</p>
             </li>
           ))}
         </ul>

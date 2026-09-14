@@ -11,12 +11,14 @@ import {
   type CharacterKey,
   type DossierCuttingEdgeEvidence,
   type DossierKillEvidence,
-  type DossierLimitation
+  type DossierLimitation,
+  isAccountWideCuttingEdgeAchievement
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 
 import type { ApplicationConfig } from "./config";
+import { createBoundedCache } from "./bounded-cache";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -43,6 +45,9 @@ type DossierSubject = Pick<StoredSnapshotCharacter, "key" | "displayName"> & {
 };
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
+  limitations: readonly DossierLimitation[];
+}>;
+type CuttingEdgeEvidenceResult = Readonly<{
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
@@ -98,32 +103,49 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
   );
 }
 
+function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
 async function gatherCharacterEvidence(
   character: DossierSubject,
   options: {
     warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
-    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     requestCap: number;
     signal?: AbortSignal;
   }
 ): Promise<EvidenceResult> {
-  const [warcraftLogs, blizzard] = await Promise.all([
-    options.warcraftLogs
-      .getFirstKillReports(character.key, {
-        requestCap: options.requestCap,
-        signal: options.signal
-      })
-      .catch((error: unknown) => {
-        if (isAbort(error, options.signal)) throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      }),
-    options.blizzard
-      .getCompletedAchievements(character.key, options.signal)
-      .catch((error: unknown) => {
-        if (isAbort(error, options.signal)) throw error;
-        return null;
-      })
-  ]);
+  const warcraftLogs = await options.warcraftLogs
+    .getFirstKillReports(character.key, {
+      requestCap: options.requestCap,
+      signal: options.signal
+    })
+    .catch((error: unknown) => {
+      if (isAbort(error, options.signal)) throw error;
+      return { kind: "limitation" as const, code: "unavailable" as const };
+    });
   const limitations: DossierLimitation[] = [];
   if (warcraftLogs.kind === "evidence" && warcraftLogs.limitation) {
     limitations.push(
@@ -134,9 +156,6 @@ async function gatherCharacterEvidence(
     limitations.push(
       limitation("warcraft_logs", character.key, warcraftLogs.code)
     );
-  }
-  if (blizzard === null) {
-    limitations.push(limitation("blizzard", character.key, "unavailable"));
   }
   return {
     limitations,
@@ -156,13 +175,54 @@ async function gatherCharacterEvidence(
             historicWorldRank: kill.historicWorldRank,
             reportUrl: kill.fightUrl
           }))
-        : [],
-    cuttingEdges:
-      blizzard?.map((achievement) => ({
-        ...achievement,
-        character: character.key
-      })) ?? []
+        : []
   };
+}
+
+async function gatherCuttingEdgeEvidence(
+  subjects: readonly DossierSubject[],
+  options: {
+    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+    signal?: AbortSignal;
+  }
+): Promise<CuttingEdgeEvidenceResult> {
+  const cuttingEdges: DossierCuttingEdgeEvidence[] = [];
+  const limitations: DossierLimitation[] = [];
+  let fingerprintAccountEstablished = false;
+
+  for (const character of subjects) {
+    // Fingerprint-derived subjects are established from identical Blizzard
+    // achievement timestamps. Once one valid account profile has been read,
+    // another such subject cannot alter the allowlisted account-wide result.
+    if (character.source === "fingerprint" && fingerprintAccountEstablished) {
+      continue;
+    }
+
+    let achievements;
+    try {
+      achievements = await options.blizzard.getCompletedAchievements(
+        character.key,
+        options.signal
+      );
+    } catch (error) {
+      if (isAbort(error, options.signal)) throw error;
+      limitations.push(limitation("blizzard", character.key, "unavailable"));
+      continue;
+    }
+
+    const supportedAchievements = achievements.filter((achievement) =>
+      isAccountWideCuttingEdgeAchievement(achievement.achievementId)
+    );
+    cuttingEdges.push(...supportedAchievements);
+    // A successful root or fingerprint profile establishes account-wide
+    // Cutting Edge evidence for the fingerprint-verified account only.
+    // Raider.IO-declared characters are not treated as Blizzard-account proof.
+    if (character.source !== "claimed" && supportedAchievements.length > 0) {
+      fingerprintAccountEstablished = true;
+    }
+  }
+
+  return { cuttingEdges, limitations };
 }
 
 function serializeDossierSubject(character: DossierSubject) {
@@ -192,26 +252,33 @@ async function assembleDossier(options: {
   requestCap: number;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
-  const evidence = await Promise.all(
-    options.subjects.map((character) =>
-      options.requestCap === 0
-        ? Promise.resolve({
-            kills: [],
-            cuttingEdges: [],
-            limitations: [
-              limitation("warcraft_logs", character.key, "request_cap")
-            ]
-          })
-        : gatherCharacterEvidence(character, {
-            warcraftLogs: options.warcraftLogs,
-            blizzard: options.blizzard,
-            requestCap: options.requestCap,
-            signal: options.signal
-          })
-    )
-  );
+  const [evidence, cuttingEdgeEvidence] = await Promise.all([
+    Promise.all(
+      options.subjects.map((character) =>
+        options.requestCap === 0
+          ? Promise.resolve({
+              kills: [],
+              limitations: [
+                limitation("warcraft_logs", character.key, "request_cap")
+              ]
+            })
+          : gatherCharacterEvidence(character, {
+              warcraftLogs: options.warcraftLogs,
+              requestCap: options.requestCap,
+              signal: options.signal
+            })
+      )
+    ),
+    options.requestCap === 0
+      ? Promise.resolve({ cuttingEdges: [], limitations: [] })
+      : gatherCuttingEdgeEvidence(options.subjects, {
+          blizzard: options.blizzard,
+          signal: options.signal
+        })
+  ]);
   const limitations = [
     ...evidence.flatMap((item) => item.limitations),
+    ...cuttingEdgeEvidence.limitations,
     ...options.skippedSubjects.map((character) =>
       limitation("warcraft_logs", character.key, "request_cap")
     )
@@ -223,7 +290,7 @@ async function assembleDossier(options: {
       displayName
     })),
     kills: evidence.flatMap((item) => item.kills),
-    cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
+    cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
     limitations
   });
   return applicantDossierSchema.parse({
@@ -245,6 +312,31 @@ export function createApplicantDossierService(options: {
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   config: ApplicationConfig;
 }): ApplicantDossierService {
+  const achievementCache = createBoundedCache<
+    readonly { achievementId: string; completedAt: string }[]
+  >({
+    ttlMs: 15 * 60_000,
+    maxEntries: 1_000
+  });
+  const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
+    async getCompletedAchievements(key, signal) {
+      signal?.throwIfAborted();
+      const achievements = await awaitWithAbort(
+        achievementCache(`${key.region}/${key.realm}/${key.name}`, async () => {
+          const response = await options.blizzard.getCompletedAchievements(
+            key,
+            AbortSignal.timeout(15_000)
+          );
+          return response.filter((achievement) =>
+            isAccountWideCuttingEdgeAchievement(achievement.achievementId)
+          );
+        }),
+        signal
+      );
+      signal?.throwIfAborted();
+      return achievements;
+    }
+  };
   return {
     async start(input) {
       try {
@@ -275,7 +367,7 @@ export function createApplicantDossierService(options: {
               "Linked-character research is still running; this evidence covers only the submitted character."
           },
           warcraftLogs: options.warcraftLogs,
-          blizzard: options.blizzard,
+          blizzard,
           requestCap: options.config.DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP,
           signal: combineSignals(signal, timeout)
         })
@@ -319,7 +411,7 @@ export function createApplicantDossierService(options: {
                     "Additional linked characters may exist; this dossier is not exhaustive."
                 },
           warcraftLogs: options.warcraftLogs,
-          blizzard: options.blizzard,
+          blizzard,
           requestCap,
           signal: requestSignal
         })

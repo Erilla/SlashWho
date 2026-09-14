@@ -167,9 +167,11 @@ describe("applicant dossier service", () => {
     expect(runsCreate).not.toHaveBeenCalled();
   });
 
-  it("assembles current snapshot evidence without writing a dossier or mutating the snapshot", async () => {
-    // Break caught: evidence reads could persist a dossier or lose the Warcraft Logs link matching a boss and timestamp.
-    const { dossiers, repositories, runsCreate } = fixture();
+  it("assembles account-wide Cutting Edge evidence once for fingerprint-linked characters", async () => {
+    // Break caught: repeated profile reads can waste Blizzard budget, or a
+    // character label can falsely imply that an account-wide achievement
+    // belongs to one specific character.
+    const { dossiers, repositories, runsCreate, blizzard } = fixture();
 
     const result = await dossiers.read(root);
 
@@ -193,9 +195,7 @@ describe("applicant dossier service", () => {
             ]
           }
         ],
-        cuttingEdges: [
-          { achievementId: "40254", characters: ["Ryalts", "Ryii"] }
-        ],
+        cuttingEdges: [{ achievementId: "40254" }],
         research: {
           state: "complete",
           message: "Linked-character research is complete."
@@ -204,6 +204,168 @@ describe("applicant dossier service", () => {
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledWith(
+      root,
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("continues independently for a declared character with a distinct Cutting Edge achievement", async () => {
+    // Break caught: treating a public linked-character declaration as proof of
+    // Blizzard account ownership would silently omit an achievement that only
+    // the declared character establishes.
+    const { dossiers, blizzard } = fixture({
+      snapshot: storedSnapshot([
+        {
+          characterId: "10000000-0000-4000-8000-000000000001",
+          key: root,
+          displayName: "Ryii",
+          className: "Mage",
+          level: 80,
+          raiderIoUrl: raiderUrl,
+          source: "input",
+          displayOrder: 0
+        },
+        {
+          characterId: "10000000-0000-4000-8000-000000000002",
+          key: alt,
+          displayName: "Ryalts",
+          className: "Priest",
+          level: 80,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+          source: "claimed",
+          displayOrder: 1
+        }
+      ])
+    });
+    vi.mocked(blizzard.getCompletedAchievements)
+      .mockResolvedValueOnce([
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z"
+        }
+      ])
+      .mockResolvedValueOnce([
+        {
+          achievementId: "41297",
+          completedAt: "2026-01-14T20:30:00.000Z"
+        }
+      ]);
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        cuttingEdges: [{ achievementId: "40254" }, { achievementId: "41297" }]
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an unavailable fingerprint profile as a limitation until account-wide evidence is established", async () => {
+    // Break caught: skipping a failed account-linked profile could present a
+    // successful sibling read as complete evidence for that character.
+    const { dossiers, blizzard } = fixture();
+    vi.mocked(blizzard.getCompletedAchievements)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("blizzard_transient"), { kind: "transient" })
+      )
+      .mockResolvedValueOnce([
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z"
+        }
+      ]);
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        cuttingEdges: [{ achievementId: "40254" }],
+        limitations: [
+          { source: "blizzard", character: root, code: "unavailable" }
+        ]
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not skip a fingerprint profile after an empty Cutting Edge result", async () => {
+    // Break caught: an empty supported catalogue result does not establish
+    // account-wide Cutting Edge evidence, so a later source failure must not
+    // be silently hidden by deduplication.
+    const { dossiers, blizzard } = fixture();
+    vi.mocked(blizzard.getCompletedAchievements)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("blizzard_offline"));
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        cuttingEdges: [],
+        limitations: [
+          { source: "blizzard", character: alt, code: "unavailable" }
+        ]
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+  });
+
+  it("abandons a cancelled reader without cancelling the shared achievement load", async () => {
+    // Break caught: a cache loader's fixed timeout could make an initial
+    // dossier read ignore its shorter caller deadline.
+    const { dossiers, blizzard } = fixture();
+    let release!: () => void;
+    vi.mocked(blizzard.getCompletedAchievements).mockImplementation(
+      async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return [];
+      }
+    );
+    const controller = new AbortController();
+    let rejected = false;
+    const first = dossiers.readInitial(root, controller.signal).catch(() => {
+      rejected = true;
+    });
+
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    controller.abort(new DOMException("deadline", "AbortError"));
+    await vi.waitFor(() => expect(rejected).toBe(true));
+    release();
+    await first;
+  });
+
+  it("expires cached Cutting Edge evidence and does not present it after a failed refresh", async () => {
+    // Break caught: expired achievement evidence could be displayed as fresh,
+    // concealing a failed source refresh and a newly unknown account state.
+    vi.useFakeTimers();
+    try {
+      const { dossiers, blizzard } = fixture();
+
+      await dossiers.read(root);
+      await dossiers.read(root);
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      vi.mocked(blizzard.getCompletedAchievements).mockRejectedValue(
+        new Error("blizzard_offline")
+      );
+
+      await expect(dossiers.read(root)).resolves.toMatchObject({
+        kind: "ready",
+        dossier: {
+          cuttingEdges: [],
+          limitations: [
+            { source: "blizzard", character: root, code: "unavailable" },
+            { source: "blizzard", character: alt, code: "unavailable" }
+          ]
+        }
+      });
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains Warcraft Logs evidence when Blizzard achievement data is unavailable", async () => {

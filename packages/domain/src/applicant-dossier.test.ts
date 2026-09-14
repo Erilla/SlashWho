@@ -218,7 +218,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]?.raidId).toBe("1273");
   });
 
-  it("groups completed official Cutting Edge achievements by achievement and timestamp", () => {
+  it("groups completed official Cutting Edge achievements without character attribution", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -226,18 +226,15 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: altKey
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "1",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ],
       limitations: []
@@ -247,8 +244,7 @@ describe("applicant dossier", () => {
       expect.objectContaining({
         achievementId: "40254",
         achievementName: "Cutting Edge: Queen Ansurek",
-        completedAt: "2025-01-14T20:30:00.000Z",
-        characters: ["Ryalts", "Ryii"]
+        completedAt: "2025-01-14T20:30:00.000Z"
       })
     ]);
   });
