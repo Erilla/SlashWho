@@ -642,6 +642,10 @@ a {
   color: var(--warning, #f59e0b);
 }
 
+.dossier-evidence-icon--no_logs {
+  color: var(--muted);
+}
+
 .dossier-boss-heading--muted {
   color: var(--muted);
   filter: grayscale(1);

@@ -350,7 +350,12 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
     screen.getByRole("img", { name: "Verified Mythic kill" })
   ).toBeVisible();
   expect(screen.getByRole("img", { name: "Mythic wipe found" })).toBeVisible();
-  expect(screen.getByText("No qualifying public logs found")).toBeVisible();
+  expect(
+    screen.getByRole("img", { name: "No qualifying public logs found" })
+  ).toBeVisible();
+  expect(
+    screen.getByText("No qualifying public logs found", { selector: "p" })
+  ).toBeVisible();
   expect(screen.getByText("Evidence incomplete")).toBeVisible();
   expect(
     screen.getByText("Wipe found: 14 Feb 2025 · Ryii, Ryalts")

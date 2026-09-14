@@ -46,8 +46,13 @@ function displayDate(isoDate: string): string {
   }).format(new Date(isoDate));
 }
 
-function StatusIcon({ state }: { state: "kill" | "wipe" }) {
-  const label = state === "kill" ? "Verified Mythic kill" : "Mythic wipe found";
+function StatusIcon({ state }: { state: "kill" | "wipe" | "no_logs" }) {
+  const label =
+    state === "kill"
+      ? "Verified Mythic kill"
+      : state === "wipe"
+        ? "Mythic wipe found"
+        : "No qualifying public logs found";
   return (
     <svg
       aria-label={label}
@@ -64,10 +69,15 @@ function StatusIcon({ state }: { state: "kill" | "wipe" }) {
           <circle cx="10" cy="10" r="8" />
           <path d="m6 10 3 3 5-6" />
         </>
-      ) : (
+      ) : state === "wipe" ? (
         <>
           <circle cx="10" cy="10" r="8" />
           <path d="M7 5v10M7 6h6l-1.5 2L13 10H7" />
+        </>
+      ) : (
+        <>
+          <circle cx="9" cy="9" r="5" />
+          <path d="m13 13 4 4M4 16 16 4" />
         </>
       )}
     </svg>
@@ -213,7 +223,10 @@ function BossEvidence({ boss }: { boss: Boss }) {
         <div className="dossier-boss-heading dossier-boss-heading--muted">
           <BossArtwork boss={boss} />
           <div>
-            <h4>{boss.bossName}</h4>
+            <h4 className="dossier-boss-title">
+              <StatusIcon state="no_logs" />
+              <span>{boss.bossName}</span>
+            </h4>
             <p className="dossier-boss-state">
               No qualifying public logs found
             </p>
