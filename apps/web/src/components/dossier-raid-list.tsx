@@ -144,7 +144,9 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
         <section aria-label="Kill evidence" className="dossier-evidence-list">
           {firstKills.map((evidence, index) => (
             <dl
-              className="dossier-evidence"
+              className={`dossier-evidence${
+                index === 0 ? " dossier-evidence-first-kill" : ""
+              }`}
               key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
             >
               <div>
