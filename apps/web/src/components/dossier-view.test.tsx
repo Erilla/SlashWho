@@ -53,6 +53,7 @@ const dossier: ApplicantDossier = {
           bossName: "Queen Ansurek",
           bossOrder: 8,
           imageUrl: null,
+          state: "kill",
           firstKill: {
             killedAt: "2025-01-14T20:30:00.000Z",
             guild: { name: "Arachnid", realm: "Silvermoon" },
@@ -69,6 +70,7 @@ const dossier: ApplicantDossier = {
           bossName: "Sikran",
           bossOrder: 5,
           imageUrl: null,
+          state: "kill",
           firstKill: {
             killedAt: "2025-01-10T20:30:00.000Z",
             guild: null,
@@ -119,26 +121,27 @@ const sameNamedDossier: ApplicantDossier = {
   raids: [
     {
       ...dossier.raids[0]!,
-      bosses: [
-        {
-          ...dossier.raids[0]!.bosses[0]!,
+      bosses: dossier.raids[0]!.bosses.slice(0, 1).map((boss) => {
+        if (boss.state !== "kill") return boss;
+        return {
+          ...boss,
           firstKill: {
-            ...dossier.raids[0]!.bosses[0]!.firstKill,
+            ...boss.firstKill,
             characters: [dossier.root]
           },
           firstKills: [
             {
-              ...dossier.raids[0]!.bosses[0]!.firstKill,
+              ...boss.firstKill,
               characters: [dossier.root]
             },
             {
-              ...dossier.raids[0]!.bosses[0]!.firstKill,
+              ...boss.firstKill,
               killedAt: "2025-01-15T20:30:00.000Z",
               characters: [sameNamedPriest.key]
             }
           ]
-        }
-      ]
+        };
+      })
     }
   ],
   cuttingEdges: [

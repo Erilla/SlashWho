@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { CharacterKey } from "./character-key";
 import {
   buildApplicantDossier,
-  type DossierKillEvidence
+  type ApplicantDossierBoss,
+  type DossierKillEvidence,
+  type DossierWipeEvidence
 } from "./applicant-dossier";
 import { lookupRaiderIoBoss } from "./raid-catalogue";
 
@@ -20,6 +22,13 @@ const usAltKey: CharacterKey = {
   name: "ryalts"
 };
 const usAltCharacter = { key: usAltKey, displayName: "Ryalts-US" };
+
+function verifiedKill(
+  boss: ApplicantDossierBoss
+): Extract<ApplicantDossierBoss, { state: "kill" }> {
+  if (boss.state !== "kill") throw new Error("expected_verified_kill");
+  return boss;
+}
 
 function kill(
   character: CharacterKey,
@@ -42,7 +51,79 @@ function kill(
   };
 }
 
+function wipe(
+  character: CharacterKey,
+  overrides: Partial<DossierWipeEvidence> = {}
+): DossierWipeEvidence {
+  return {
+    raidId: "nerubar-palace",
+    raidName: "Nerub-ar Palace",
+    bossId: "sikran",
+    bossName: "Sikran",
+    journalBossId: "2599",
+    bossOrder: 5,
+    character,
+    attemptedAt: "2024-09-01T20:00:00.000Z",
+    reportUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5",
+    ...overrides
+  };
+}
+
 describe("applicant dossier", () => {
+  it("aggregates the full catalogue with kill, wipe, no-log, and incomplete precedence", () => {
+    // Break caught: missing kills must neither erase concrete wipes nor turn a
+    // partial linked-character scan into negative evidence.
+    const complete = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(altKey, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      wipes: [
+        wipe(root),
+        wipe(altKey),
+        wipe(root, {
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8
+        })
+      ],
+      completeWarcraftLogsCharacters: [root, altKey],
+      limitations: []
+    });
+    const nerubar = complete.raids.find(
+      (raid) => raid.raidName === "Nerub-ar Palace"
+    )!;
+    expect(nerubar.bosses.map((boss) => boss.bossOrder)).toEqual(
+      [...nerubar.bosses].map((boss) => boss.bossOrder).sort((a, b) => a - b)
+    );
+    expect(
+      nerubar.bosses.find((boss) => boss.bossName === "Queen Ansurek")
+    ).toMatchObject({ state: "kill" });
+    expect(
+      nerubar.bosses.find(
+        (boss) => boss.bossName === "Sikran, Captain of the Sureki"
+      )
+    ).toMatchObject({
+      state: "wipe",
+      wipe: { characters: [root, altKey] }
+    });
+    expect(nerubar.bosses.find((boss) => boss.bossOrder === 1)).toMatchObject({
+      state: "no_logs"
+    });
+
+    const partial = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [],
+      wipes: [],
+      completeWarcraftLogsCharacters: [root],
+      limitations: [
+        { source: "warcraft_logs", character: altKey, code: "private" }
+      ]
+    });
+    expect(partial.raids[0]?.bosses[0]).toMatchObject({ state: "incomplete" });
+  });
   it("credits shared earliest evidence and propagates limitations", () => {
     const dossier = buildApplicantDossier({
       root,
@@ -57,10 +138,9 @@ describe("applicant dossier", () => {
       ]
     });
     expect(dossier.raids[0].cuttingEdge).toBeNull();
-    expect(dossier.raids[0].bosses[0].firstKill.characters).toEqual([
-      root,
-      altKey
-    ]);
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
+    ).toEqual([root, altKey]);
     expect(dossier.limitations[0].code).toBe("private");
   });
 
@@ -112,9 +192,9 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKill.characters).toEqual([
-      sameNamedAlt
-    ]);
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
+    ).toEqual([sameNamedAlt]);
   });
 
   it("coalesces duplicate reports of the same guild kill", () => {
@@ -136,7 +216,7 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
         killedAt: "2024-10-01T20:00:00.000Z",
         reportUrl: "https://www.warcraftlogs.com/reports/first#fight=8",
@@ -171,17 +251,19 @@ describe("applicant dossier", () => {
       });
 
     expect(make([...forward].reverse())).toEqual(make(forward));
-    expect(make(forward).raids[0]!.bosses[0]!.firstKills).toEqual([
-      expect.objectContaining({
-        guild: { name: "Alpha Guild", realm: "draenor" },
-        historicWorldRank: null,
-        reportUrls: [
-          "https://www.warcraftlogs.com/reports/a-report#fight=8",
-          "https://www.warcraftlogs.com/reports/z-report#fight=9"
-        ],
-        characters: [root, altKey]
-      })
-    ]);
+    expect(verifiedKill(make(forward).raids[0]!.bosses[0]!).firstKills).toEqual(
+      [
+        expect.objectContaining({
+          guild: { name: "Alpha Guild", realm: "draenor" },
+          historicWorldRank: null,
+          reportUrls: [
+            "https://www.warcraftlogs.com/reports/a-report#fight=8",
+            "https://www.warcraftlogs.com/reports/z-report#fight=9"
+          ],
+          characters: [root, altKey]
+        })
+      ]
+    );
   });
 
   it("uses the available guild when same-date attribution is absent", () => {
@@ -204,7 +286,7 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
         guild: { name: "Example Guild", realm: "silvermoon" },
         characters: [root, altKey]
@@ -235,7 +317,9 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0]!.bosses[0]!.firstKills).toHaveLength(3);
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toHaveLength(
+      3
+    );
   });
 
   it("keeps different bosses as distinct kill events", () => {
@@ -302,7 +386,9 @@ describe("applicant dossier", () => {
       kills: [kill(root, { historicWorldRank: null, reportUrl: null })],
       limitations: []
     });
-    expect(dossier.raids[0].bosses[0].firstKill.historicWorldRank).toBeNull();
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.historicWorldRank
+    ).toBeNull();
   });
 
   it("uses generated Journal metadata when Warcraft Logs supplies a Journal encounter", () => {
@@ -411,7 +497,7 @@ describe("applicant dossier", () => {
       ],
       limitations: []
     });
-    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
         killedAt: "2024-10-01T20:00:00.000Z",
         characters: [root, altKey]

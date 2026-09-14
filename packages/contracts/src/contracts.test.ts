@@ -42,6 +42,7 @@ const validDossier = {
           bossName: "Queen Ansurek",
           bossOrder: 8,
           imageUrl: "https://render.example/bosses/ansurek.jpg",
+          state: "kill",
           firstKill: {
             killedAt: "2024-10-01T20:00:00.000Z",
             guild: { name: "Guild", realm: "silvermoon" },
@@ -63,6 +64,47 @@ const validDossier = {
     }
   ]
 };
+
+it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
+  // Break caught: loose optional evidence fields could let a negative boss
+  // carry stale kill data or a wipe omit its auditable report.
+  const boss = validDossier.raids[0]!.bosses[0]!;
+  const { firstKill, ...metadata } = boss;
+  void firstKill;
+  const variants = [
+    boss,
+    {
+      ...metadata,
+      state: "wipe",
+      wipe: {
+        attemptedAt: "2024-09-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5",
+        characters: [validDossier.root]
+      }
+    },
+    { ...metadata, state: "no_logs" },
+    { ...metadata, state: "incomplete" }
+  ];
+  for (const variant of variants) {
+    expect(
+      applicantDossierSchema.safeParse({
+        ...validDossier,
+        raids: [{ ...validDossier.raids[0], bosses: [variant] }]
+      }).success
+    ).toBe(true);
+  }
+  expect(
+    applicantDossierSchema.safeParse({
+      ...validDossier,
+      raids: [
+        {
+          ...validDossier.raids[0],
+          bosses: [{ ...boss, state: "no_logs" }]
+        }
+      ]
+    }).success
+  ).toBe(false);
+});
 
 const character = {
   region: "eu",
@@ -303,8 +345,8 @@ it("retains an unknown historic world rank as null", () => {
   expect(
     validDossier.raids[0].bosses[0].firstKill.historicWorldRank
   ).toBeNull();
-  expect(
-    applicantDossierSchema.parse(validDossier).raids[0]?.bosses[0]?.firstKill
-      .historicWorldRank
-  ).toBeNull();
+  const parsed = applicantDossierSchema.parse(validDossier).raids[0]?.bosses[0];
+  expect(parsed?.state).toBe("kill");
+  if (parsed?.state !== "kill") throw new Error("expected_verified_kill");
+  expect(parsed.firstKill.historicWorldRank).toBeNull();
 });

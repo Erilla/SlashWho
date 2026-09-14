@@ -4,8 +4,25 @@ import {
   lookupJournalEncounter,
   lookupRaidBossByName,
   lookupRaiderIoBoss,
-  lookupRaidByName
+  lookupRaidByName,
+  supportedRaidCatalogue
 } from "./raid-catalogue";
+
+it("exposes supported raids newest-first with bosses in natural order", () => {
+  // Break caught: gap rows cannot be complete or stable when callers must
+  // reconstruct catalogue order from lookup-only APIs.
+  const first = supportedRaidCatalogue();
+  expect(first[0]?.raidName).toBe("The Venomous Abyss");
+  expect(first[0]?.encounters.map((boss) => boss.bossOrder)).toEqual(
+    [...(first[0]?.encounters ?? [])]
+      .map((boss) => boss.bossOrder)
+      .sort((a, b) => a - b)
+  );
+
+  const originalName = first[0]?.raidName;
+  Reflect.set(first[0] ?? {}, "raidName", "Changed");
+  expect(supportedRaidCatalogue()[0]?.raidName).toBe(originalName);
+});
 
 it.each([
   ["Sporefall", "sporefall"],

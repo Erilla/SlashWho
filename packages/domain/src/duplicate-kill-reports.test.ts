@@ -31,12 +31,14 @@ const third: DossierKillEvidence = {
   reportUrl: "https://www.warcraftlogs.com/reports/DAHPxvtd7mjXfRNV#fight=30"
 };
 function events(kills: DossierKillEvidence[]) {
-  return buildApplicantDossier({
+  const boss = buildApplicantDossier({
     root: character,
     characters: [{ key: character, displayName: "Rinn" }],
     kills,
     limitations: []
-  }).raids[0]!.bosses[0]!.firstKills;
+  }).raids[0]!.bosses[0]!;
+  if (boss.state !== "kill") throw new Error("expected_verified_kill");
+  return boss.firstKills;
 }
 it("combines recorded Nekzali timestamps while retaining guild, rank and all reports", () => {
   const kills = [base, second, third];

@@ -135,6 +135,9 @@ export type RaidCatalogueRaid = Readonly<{
   raiderIoRaidSlug: string | null;
 }>;
 
+export type SupportedRaidCatalogueEntry = RaidCatalogueRaid &
+  Readonly<{ encounters: readonly RaidCatalogueEncounter[] }>;
+
 const raidsByName = new Map<string, RaidCatalogueRaid | null>();
 for (const [tierOrdinal, raid] of catalogue.raids.entries()) {
   const key = normalizedName(raid.raidName);
@@ -147,6 +150,34 @@ for (const [tierOrdinal, raid] of catalogue.raids.entries()) {
     raiderIoRaidSlug: raiderIoRaidSlugs.get(raid.journalRaidId) ?? null
   };
   raidsByName.set(key, current === undefined ? candidate : null);
+}
+
+export function supportedRaidCatalogue(): readonly SupportedRaidCatalogueEntry[] {
+  return Object.freeze(
+    catalogue.raids
+      .map((raid, tierOrdinal) => {
+        const metadata = lookupRaidByName(raid.raidName);
+        if (!metadata) throw new Error("invalid_raid_catalogue");
+        return Object.freeze({
+          ...metadata,
+          tierOrdinal:
+            canonicalTierOrdinals.get(raid.journalRaidId) ?? tierOrdinal,
+          encounters: Object.freeze(
+            raid.encounters
+              .map((encounter) =>
+                lookupJournalEncounter(encounter.journalBossId)
+              )
+              .filter(
+                (encounter): encounter is RaidCatalogueEncounter =>
+                  encounter !== null
+              )
+              .sort((a, b) => a.bossOrder - b.bossOrder)
+              .map((encounter) => Object.freeze({ ...encounter }))
+          )
+        });
+      })
+      .sort((a, b) => b.tierOrdinal - a.tierOrdinal)
+  );
 }
 
 export function lookupJournalEncounter(

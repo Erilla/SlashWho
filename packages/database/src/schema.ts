@@ -351,6 +351,7 @@ export const characterEvidenceRuns = pgTable(
     normalizedName: text("normalized_name").notNull(),
     queueJobId: text("queue_job_id"),
     status: characterEvidenceRunStatus("status").default("queued").notNull(),
+    evidenceVersion: integer("evidence_version").default(1).notNull(),
     attempt: integer("attempt").default(0).notNull(),
     limitationCode: text("limitation_code"),
     errorCode: text("error_code"),
@@ -405,5 +406,32 @@ export const characterMythicKills = pgTable(
       "character_mythic_kills_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
     )
+  ]
+);
+
+export const characterMythicWipes = pgTable(
+  "character_mythic_wipes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    evidenceRunId: uuid("evidence_run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    raidId: text("raid_id").notNull(),
+    raidName: text("raid_name").notNull(),
+    bossId: text("boss_id").notNull(),
+    bossName: text("boss_name").notNull(),
+    journalBossId: text("journal_boss_id"),
+    bossOrder: integer("boss_order").notNull(),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull(),
+    reportUrl: text("report_url").notNull(),
+    fightUrl: text("fight_url").notNull()
+  },
+  (table) => [
+    uniqueIndex("character_mythic_wipes_run_boss_idx").on(
+      table.evidenceRunId,
+      table.raidId,
+      table.bossId
+    ),
+    index("character_mythic_wipes_run_idx").on(table.evidenceRunId)
   ]
 );

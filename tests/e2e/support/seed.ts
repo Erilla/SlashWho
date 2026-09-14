@@ -148,7 +148,8 @@ export async function seedCharacterEvidence(
                     }
                   ]
                 : [])
-            ]
+            ],
+      wipes: []
     });
   } finally {
     await pool.end();

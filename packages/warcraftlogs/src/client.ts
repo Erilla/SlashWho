@@ -5,7 +5,8 @@ import type {
   WarcraftLogsGateway,
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
-  WarcraftLogsReportResult
+  WarcraftLogsReportResult,
+  WarcraftLogsWipeEvidence
 } from "./types";
 
 const MYTHIC_DIFFICULTY = 5;
@@ -231,6 +232,16 @@ function firstKillReports(
   }
 
   const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
+  const wipes = new Map<string, WarcraftLogsWipeEvidence>();
+  const schemaDrift = (): WarcraftLogsReportResult =>
+    kills.size > 0 || wipes.size > 0
+      ? {
+          kind: "evidence",
+          kills: [...kills.values()],
+          wipes: [...wipes.values()],
+          limitation: { kind: "limitation", code: "schema_drift" }
+        }
+      : { kind: "limitation", code: "schema_drift" };
   for (const reportValue of reports) {
     const report = record(reportValue);
     const code = report && nonEmptyString(report.code);
@@ -251,7 +262,7 @@ function firstKillReports(
       !Array.isArray(actors) ||
       !Array.isArray(fights)
     ) {
-      return { kind: "limitation", code: "schema_drift" };
+      return schemaDrift();
     }
 
     let guild: WarcraftLogsFirstKillEvidence["guild"] = null;
@@ -261,7 +272,7 @@ function firstKillReports(
       const guildName = guildRecord && nonEmptyString(guildRecord.name);
       const guildRealm = guildServer && nonEmptyString(guildServer.slug);
       if (!guildName || !guildRealm) {
-        return { kind: "limitation", code: "schema_drift" };
+        return schemaDrift();
       }
       guild = { name: guildName, realm: guildRealm };
     }
@@ -304,19 +315,25 @@ function firstKillReports(
       const id = fight && positiveInteger(fight.id);
       const encounterId = fight && nonNegativeInteger(fight.encounterID);
       const bossName = fight && nonEmptyString(fight.name);
+      const fightStartTime =
+        fight && validTimestampMilliseconds(fight.startTime);
       const fightEndTime = fight && validTimestampMilliseconds(fight.endTime);
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
       if (!id || encounterId === null) {
-        return { kind: "limitation", code: "schema_drift" };
+        return schemaDrift();
       }
       // Warcraft Logs represents trash pulls with encounterID 0. They have no
       // boss identity and must not turn an otherwise valid report into schema
       // drift or dossier evidence.
       if (encounterId === 0) continue;
-      if (fightEndTime === null) {
-        return { kind: "limitation", code: "schema_drift" };
+      if (
+        fightStartTime === null ||
+        fightEndTime === null ||
+        fightEndTime < fightStartTime
+      ) {
+        return schemaDrift();
       }
       if (
         typeof killed !== "boolean" ||
@@ -324,25 +341,50 @@ function firstKillReports(
         !Array.isArray(friendlyPlayers) ||
         friendlyPlayers.some((player) => !positiveInteger(player))
       ) {
-        return { kind: "limitation", code: "schema_drift" };
+        return schemaDrift();
       }
-      if (!bossName) return { kind: "limitation", code: "schema_drift" };
+      if (!bossName) return schemaDrift();
       if (
-        !killed ||
         difficulty !== MYTHIC_DIFFICULTY ||
         !friendlyPlayers.some((player) => participantIds.has(player))
       ) {
         continue;
       }
 
-      const killedAtMilliseconds = reportStartTime + fightEndTime;
+      const evidenceAtMilliseconds = reportStartTime + fightEndTime;
       if (
-        !Number.isSafeInteger(killedAtMilliseconds) ||
-        killedAtMilliseconds > MAX_DATE_MILLISECONDS
+        !Number.isSafeInteger(evidenceAtMilliseconds) ||
+        evidenceAtMilliseconds > MAX_DATE_MILLISECONDS
       ) {
-        return { kind: "limitation", code: "schema_drift" };
+        return schemaDrift();
       }
-      const killedAt = new Date(killedAtMilliseconds).toISOString();
+      const evidenceAt = new Date(evidenceAtMilliseconds).toISOString();
+      const reportUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`;
+      const fightUrl = `${reportUrl}#fight=${id}`;
+      if (!killed) {
+        const candidate: WarcraftLogsWipeEvidence = {
+          raidId: String(raidId),
+          raidName,
+          bossId: String(encounterId),
+          bossName,
+          journalBossId: journalBossIds.get(encounterId) ?? null,
+          bossOrder: encounterId,
+          attemptedAt: evidenceAt,
+          reportUrl,
+          fightUrl
+        };
+        const identifier = `${candidate.raidId}\0${candidate.bossId}`;
+        const current = wipes.get(identifier);
+        if (
+          !current ||
+          candidate.attemptedAt > current.attemptedAt ||
+          (candidate.attemptedAt === current.attemptedAt &&
+            candidate.fightUrl < current.fightUrl)
+        ) {
+          wipes.set(identifier, candidate);
+        }
+        continue;
+      }
       const candidate: WarcraftLogsFirstKillEvidence = {
         raidId: String(raidId),
         raidName,
@@ -351,9 +393,9 @@ function firstKillReports(
         journalBossId: journalBossIds.get(encounterId) ?? null,
         bossOrder: encounterId,
         isFinalBoss: false,
-        killedAt,
-        reportUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`,
-        fightUrl: `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}#fight=${id}`,
+        killedAt: evidenceAt,
+        reportUrl,
+        fightUrl,
         guild,
         historicWorldRank: null
       };
@@ -367,6 +409,13 @@ function firstKillReports(
       (a, b) =>
         a.bossOrder - b.bossOrder ||
         a.killedAt.localeCompare(b.killedAt) ||
+        a.fightUrl.localeCompare(b.fightUrl)
+    ),
+    wipes: [...wipes.values()].sort(
+      (a, b) =>
+        a.raidId.localeCompare(b.raidId) ||
+        a.bossOrder - b.bossOrder ||
+        b.attemptedAt.localeCompare(a.attemptedAt) ||
         a.fightUrl.localeCompare(b.fightUrl)
     )
   };
@@ -525,11 +574,17 @@ export function createWarcraftLogsClient(
     }
 
     const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
+    const wipes = new Map<string, WarcraftLogsWipeEvidence>();
     const partial = (
       limitation: WarcraftLogsLimitation
     ): WarcraftLogsReportResult =>
-      kills.size
-        ? { kind: "evidence", kills: [...kills.values()], limitation }
+      kills.size || wipes.size
+        ? {
+            kind: "evidence",
+            kills: [...kills.values()],
+            wipes: [...wipes.values()],
+            limitation
+          }
         : limitation;
     for (let page = 1; page <= options.requestCap; page++) {
       const result = await graphql(
@@ -547,6 +602,19 @@ export function createWarcraftLogsClient(
       for (const kill of normalized.kills) {
         kills.set(kill.fightUrl, kill);
       }
+      for (const wipe of normalized.wipes) {
+        const identifier = `${wipe.raidId}\0${wipe.bossId}`;
+        const current = wipes.get(identifier);
+        if (
+          !current ||
+          wipe.attemptedAt > current.attemptedAt ||
+          (wipe.attemptedAt === current.attemptedAt &&
+            wipe.fightUrl < current.fightUrl)
+        ) {
+          wipes.set(identifier, wipe);
+        }
+      }
+      if (normalized.limitation) return partial(normalized.limitation);
 
       const hasMorePages = hasMoreReportPages(result.value);
       if (hasMorePages === null) {
@@ -560,6 +628,13 @@ export function createWarcraftLogsClient(
               a.raidId.localeCompare(b.raidId) ||
               a.bossOrder - b.bossOrder ||
               a.killedAt.localeCompare(b.killedAt) ||
+              a.fightUrl.localeCompare(b.fightUrl)
+          ),
+          wipes: [...wipes.values()].sort(
+            (a, b) =>
+              a.raidId.localeCompare(b.raidId) ||
+              a.bossOrder - b.bossOrder ||
+              b.attemptedAt.localeCompare(a.attemptedAt) ||
               a.fightUrl.localeCompare(b.fightUrl)
           )
         };

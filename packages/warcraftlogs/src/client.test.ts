@@ -183,6 +183,19 @@ describe("Warcraft Logs gateway", () => {
           guild: null,
           historicWorldRank: null
         }
+      ],
+      wipes: [
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "9999",
+          bossName: "Wipe",
+          journalBossId: null,
+          bossOrder: 9999,
+          attemptedAt: "2024-02-05T03:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/lateReport",
+          fightUrl: "https://www.warcraftlogs.com/reports/lateReport#fight=9"
+        }
       ]
     });
     expect(fetch).toHaveBeenCalledTimes(3);
@@ -288,6 +301,186 @@ describe("Warcraft Logs gateway", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/participantReport",
           fightUrl:
             "https://www.warcraftlogs.com/reports/participantReport#fight=3"
+        }
+      ]
+    });
+  });
+
+  it("emits only participant-attributed Mythic wipes beside verified kills", async () => {
+    // Break caught: treating every unsuccessful fight in a character report as
+    // that character's Mythic wipe would create false applicant evidence.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "wipeReport",
+                        startTime: 1_706_918_400_000,
+                        guild: null,
+                        zone: {
+                          id: 42,
+                          name: "Nerub-ar Palace",
+                          encounters: [
+                            { id: 1234, journalID: 2345 },
+                            { id: 4321, journalID: 5432 }
+                          ]
+                        },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            },
+                            {
+                              id: 8,
+                              name: "Someoneelse",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 1,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 120_000,
+                            endTime: 300_000,
+                            kill: false,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          },
+                          {
+                            id: 2,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 360_000,
+                            endTime: 420_000,
+                            kill: false,
+                            difficulty: 5,
+                            friendlyPlayers: [8]
+                          },
+                          {
+                            id: 3,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 480_000,
+                            endTime: 540_000,
+                            kill: false,
+                            difficulty: 4,
+                            friendlyPlayers: [7]
+                          },
+                          {
+                            id: 4,
+                            encounterID: 4321,
+                            name: "The Silken Court",
+                            startTime: 600_000,
+                            endTime: 660_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      wipes: [
+        {
+          raidId: "42",
+          bossId: "1234",
+          journalBossId: "2345",
+          attemptedAt: "2024-02-03T00:05:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/wipeReport#fight=1"
+        }
+      ],
+      kills: [expect.objectContaining({ bossId: "4321" })]
+    });
+  });
+
+  it("selects the latest wipe with a stable report tie-break", async () => {
+    // Break caught: equal-time wipe selection must not depend on the order in
+    // which Warcraft Logs returns otherwise equivalent reports.
+    const report = (code: string, endTime: number) => ({
+      code,
+      startTime: 1_706_918_400_000,
+      guild: null,
+      zone: {
+        id: 42,
+        name: "Nerub-ar Palace",
+        encounters: [{ id: 1234, journalID: 2345 }]
+      },
+      masterData: {
+        actors: [
+          {
+            id: 7,
+            name: "Sentinel",
+            server: "Silvermoon",
+            type: "Player"
+          }
+        ]
+      },
+      fights: [
+        {
+          id: 1,
+          encounterID: 1234,
+          name: "Queen Ansurek",
+          startTime: endTime - 60_000,
+          endTime,
+          kill: false,
+          difficulty: 5,
+          friendlyPlayers: [7]
+        }
+      ]
+    });
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      report("z-report", 300_000),
+                      report("older-report", 120_000),
+                      report("a-report", 300_000)
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      wipes: [
+        {
+          attemptedAt: "2024-02-03T00:05:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/a-report#fight=1"
         }
       ]
     });
@@ -684,6 +877,101 @@ describe("Warcraft Logs gateway", () => {
     });
     if (result.kind === "evidence")
       expect(result.kills.length).toBeGreaterThan(0);
+  });
+
+  it("retains evidence collected before a malformed report on the same page", async () => {
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: { data: Array<Record<string, unknown>> };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data.push({
+      code: null
+    });
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: expect.arrayContaining([
+        expect.objectContaining({
+          fightUrl: expect.stringContaining("earlyReport#fight=7")
+        })
+      ]),
+      limitation: { code: "schema_drift" }
+    });
+  });
+
+  it("retains evidence collected before a malformed fight in the same report", async () => {
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: {
+              data: Array<{ fights: Array<Record<string, unknown>> }>;
+            };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data[0]!.fights.push({
+      id: null
+    });
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ fightUrl: expect.stringContaining("earlyReport#fight=7") }],
+      limitation: { code: "schema_drift" }
+    });
+  });
+
+  it.each([
+    ["missing start", undefined, 3_600_000],
+    ["reversed interval", 3_600_001, 3_600_000]
+  ])("rejects a fight with a %s", async (_label, startTime, endTime) => {
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: {
+              data: Array<{ fights: Array<Record<string, unknown>> }>;
+            };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data = [
+      page.data.characterData.character.recentReports.data[0]!
+    ];
+    const fight =
+      page.data.characterData.character.recentReports.data[0]!.fights[0]!;
+    fight.startTime = startTime;
+    fight.endTime = endTime;
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
   });
 
   it("retains collected kills when the history deadline expires", async () => {
