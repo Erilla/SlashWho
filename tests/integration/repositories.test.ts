@@ -6,6 +6,7 @@ import {
   runMigrations,
   type Repositories,
   type CharacterMythicKillInput,
+  type CharacterMythicWipeInput,
   type SnapshotCharacterInput,
   type StoredSnapshot
 } from "../../packages/database/src";
@@ -57,6 +58,23 @@ function mythicKill(
   };
 }
 
+function mythicWipe(
+  overrides: Partial<CharacterMythicWipeInput> = {}
+): CharacterMythicWipeInput {
+  return {
+    raidId: "42",
+    raidName: "Nerub-ar Palace",
+    bossId: "1233",
+    bossName: "Nexus-Princess Ky'veza",
+    journalBossId: "2920",
+    bossOrder: 6,
+    attemptedAt: "2026-08-04T11:00:00.000Z",
+    reportUrl: "https://www.warcraftlogs.com/reports/wipe",
+    fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=1",
+    ...overrides
+  };
+}
+
 async function seedCompleteSnapshot(
   repositories: Repositories,
   options: {
@@ -97,6 +115,7 @@ describe("PostgreSQL repositories", () => {
   beforeEach(async () => {
     await pool.query(`TRUNCATE TABLE
       character_mythic_kills,
+      character_mythic_wipes,
       character_evidence_runs,
       snapshot_characters,
       snapshots,
@@ -122,6 +141,7 @@ describe("PostgreSQL repositories", () => {
       state: "complete",
       limitationCode: null,
       kills: [mythicKill()],
+      wipes: [mythicWipe()],
       completedAt
     });
 
@@ -135,14 +155,16 @@ describe("PostgreSQL repositories", () => {
       kind: "reserved",
       completed: {
         run: { id: first.run.id, status: "complete" },
-        kills: [mythicKill()]
+        kills: [mythicKill()],
+        wipes: [mythicWipe()]
       }
     });
     await expect(
       repositories.evidence.getCompleted(rootKey)
     ).resolves.toMatchObject({
       run: { id: first.run.id, status: "complete" },
-      kills: [mythicKill()]
+      kills: [mythicKill()],
+      wipes: [mythicWipe()]
     });
     await expect(
       repositories.evidence.reserve({
@@ -179,7 +201,8 @@ describe("PostgreSQL repositories", () => {
           bossOrder: 7,
           fightUrl: "https://www.warcraftlogs.com/reports/example#fight=2"
         })
-      ]
+      ],
+      wipes: [mythicWipe()]
     });
 
     await expect(repositories.evidence.getCompleted(rootKey)).resolves.toEqual({
@@ -191,7 +214,8 @@ describe("PostgreSQL repositories", () => {
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
-      ]
+      ],
+      wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })]
     });
   });
 

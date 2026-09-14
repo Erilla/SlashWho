@@ -61,6 +61,19 @@ describe("applicant evidence job handler", () => {
           guild: { name: "Guild", realm: "Silvermoon" },
           historicWorldRank: null
         }
+      ],
+      wipes: [
+        {
+          raidId: "42",
+          raidName: "Current Tier",
+          bossId: "6",
+          bossName: "Wiped Boss",
+          journalBossId: "6",
+          bossOrder: 6,
+          attemptedAt: "2026-09-12T19:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/wipe",
+          fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=6"
+        }
       ]
     }));
     const handler = createApplicantEvidenceJobHandler({
@@ -92,6 +105,12 @@ describe("applicant evidence job handler", () => {
           kills: [
             expect.objectContaining({
               bossName: "Final Boss",
+              raidName: "Current Tier"
+            })
+          ],
+          wipes: [
+            expect.objectContaining({
+              bossName: "Wiped Boss",
               raidName: "Current Tier"
             })
           ],
@@ -129,6 +148,7 @@ describe("applicant evidence job handler", () => {
           state: "partial",
           limitationCode: "rate_limited",
           kills: [],
+          wipes: [],
           completedAt: new Date("2026-09-13T12:01:00.000Z")
         }
       }

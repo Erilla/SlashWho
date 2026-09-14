@@ -19,6 +19,7 @@ export type {
   CallerClass,
   CharacterEvidenceRun,
   CharacterMythicKillInput,
+  CharacterMythicWipeInput,
   CompletedCharacterEvidence,
   CreateSnapshotInput,
   DiscoveryRun,
@@ -42,5 +43,6 @@ export type {
   StoredSnapshot,
   StoredSnapshotCharacter,
   StoredCharacterMythicKill,
+  StoredCharacterMythicWipe,
   SuppressionRepository
 } from "./repositories";

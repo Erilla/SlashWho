@@ -13,6 +13,7 @@ import type {
   SnapshotHistoryItem,
   SnapshotHistoryPage,
   StoredCharacterMythicKill,
+  StoredCharacterMythicWipe,
   StoredSnapshot,
   StoredSnapshotCharacter
 } from "./repositories";
@@ -90,6 +91,19 @@ interface CharacterMythicKillRow {
   guild_name: string | null;
   guild_realm: string | null;
   historic_world_rank: number | null;
+}
+
+interface CharacterMythicWipeRow {
+  id: string;
+  raid_id: string;
+  raid_name: string;
+  boss_id: string;
+  boss_name: string;
+  journal_boss_id: string | null;
+  boss_order: number;
+  attempted_at: Date;
+  report_url: string;
+  fight_url: string;
 }
 
 type Queryable = Pick<Pool | PoolClient, "query">;
@@ -303,6 +317,23 @@ function mapCharacterMythicKill(
   };
 }
 
+function mapCharacterMythicWipe(
+  row: CharacterMythicWipeRow
+): StoredCharacterMythicWipe {
+  return {
+    id: row.id,
+    raidId: row.raid_id,
+    raidName: row.raid_name,
+    bossId: row.boss_id,
+    bossName: row.boss_name,
+    journalBossId: row.journal_boss_id,
+    bossOrder: row.boss_order,
+    attemptedAt: row.attempted_at.toISOString(),
+    reportUrl: row.report_url,
+    fightUrl: row.fight_url
+  };
+}
+
 async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
@@ -330,9 +361,18 @@ async function loadCompletedEvidence(
      ORDER BY killed_at, source_fight_key`,
     [run.id]
   );
+  const wipesResult = await client.query<CharacterMythicWipeRow>(
+    `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
+            boss_order, attempted_at, report_url, fight_url
+     FROM character_mythic_wipes
+     WHERE evidence_run_id = $1
+     ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
+    [run.id]
+  );
   return {
     run: mapEvidenceRun(run),
-    kills: killsResult.rows.map(mapCharacterMythicKill)
+    kills: killsResult.rows.map(mapCharacterMythicKill),
+    wipes: wipesResult.rows.map(mapCharacterMythicWipe)
   };
 }
 
@@ -1841,6 +1881,26 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
                 kill.historicWorldRank ?? null
+              ]
+            );
+          }
+          for (const wipe of input.wipes) {
+            await client.query(
+              `INSERT INTO character_mythic_wipes
+                (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
+                 journal_boss_id, boss_order, attempted_at, report_url, fight_url)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+              [
+                runId,
+                wipe.raidId,
+                wipe.raidName,
+                wipe.bossId,
+                wipe.bossName,
+                wipe.journalBossId,
+                wipe.bossOrder,
+                wipe.attemptedAt,
+                wipe.reportUrl,
+                wipe.fightUrl
               ]
             );
           }

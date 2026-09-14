@@ -3,7 +3,8 @@ import type { CharacterKey } from "@slashwho/domain";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
-  WarcraftLogsLimitationCode
+  WarcraftLogsLimitationCode,
+  WarcraftLogsWipeEvidence
 } from "@slashwho/warcraftlogs";
 
 export type ApplicantEvidenceRun = Readonly<{
@@ -22,6 +23,7 @@ export type ApplicantEvidenceStore = {
       state: "complete" | "partial";
       limitationCode: WarcraftLogsLimitationCode | null;
       kills: readonly WarcraftLogsFirstKillEvidence[];
+      wipes: readonly WarcraftLogsWipeEvidence[];
       completedAt: Date;
     }>
   ): Promise<void>;
@@ -69,6 +71,7 @@ export function createApplicantEvidenceJobHandler(
           state: "partial",
           limitationCode: response.code,
           kills: [],
+          wipes: [],
           completedAt: now()
         });
         return;
@@ -78,6 +81,7 @@ export function createApplicantEvidenceJobHandler(
         state: response.limitation ? "partial" : "complete",
         limitationCode: response.limitation?.code ?? null,
         kills: response.kills,
+        wipes: response.wipes,
         completedAt: now()
       });
     }
