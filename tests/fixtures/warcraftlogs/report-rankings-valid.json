@@ -1,0 +1,273 @@
+{
+  "data": {
+    "reportData": {
+      "report": {
+        "code": "fixture-report-1",
+        "archiveStatus": {
+          "isArchived": false,
+          "isAccessible": true,
+          "archiveDate": null
+        },
+        "masterData": {
+          "actors": [
+            {
+              "id": 1001,
+              "gameID": 2001,
+              "name": "fixture-name-1",
+              "server": "fixture-realm-1",
+              "type": "Player"
+            },
+            {
+              "id": 1002,
+              "gameID": 2002,
+              "name": "fixture-name-2",
+              "server": "fixture-realm-2",
+              "type": "Player"
+            },
+            {
+              "id": 1003,
+              "gameID": 2003,
+              "name": "fixture-name-3",
+              "server": "fixture-realm-3",
+              "type": "Player"
+            }
+          ]
+        },
+        "damage": {
+          "data": [
+            {
+              "fightID": 26,
+              "partition": 1002,
+              "zone": 1047,
+              "encounter": { "id": 3306, "name": "fixture-name-4" },
+              "difficulty": 5,
+              "size": 20,
+              "kill": true,
+              "duration": 386654,
+              "roles": {
+                "tanks": {
+                  "name": "fixture-name-5",
+                  "characters": [
+                    {
+                      "id": 2101,
+                      "name": "fixture-name-1",
+                      "server": {
+                        "id": 3001,
+                        "name": "fixture-realm-1",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Monk",
+                      "spec": "Brewmaster",
+                      "amount": 43241.4,
+                      "bracketData": 1268,
+                      "bracket": 1013,
+                      "rank": "~210",
+                      "best": "~43",
+                      "totalParses": 1275,
+                      "bracketPercent": 24,
+                      "rankPercent": 23
+                    }
+                  ]
+                },
+                "healers": {
+                  "name": "fixture-name-6",
+                  "characters": [
+                    {
+                      "id": 2102,
+                      "name": "fixture-name-2",
+                      "server": {
+                        "id": 3002,
+                        "name": "fixture-realm-2",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Druid",
+                      "spec": "Restoration",
+                      "amount": 114524.7,
+                      "bracketData": 1270,
+                      "bracket": 1014,
+                      "rank": "~109",
+                      "best": "~15",
+                      "totalParses": 1200,
+                      "bracketPercent": 49,
+                      "rankPercent": 50
+                    }
+                  ]
+                },
+                "dps": {
+                  "name": "fixture-name-7",
+                  "characters": [
+                    {
+                      "id": 2103,
+                      "name": "fixture-name-3",
+                      "server": {
+                        "id": 3003,
+                        "name": "fixture-realm-3",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Mage",
+                      "spec": "Frost",
+                      "amount": 94691.1,
+                      "bracketData": 1270,
+                      "bracket": 1014,
+                      "rank": "~423",
+                      "best": "~423",
+                      "totalParses": 642,
+                      "bracketPercent": 20,
+                      "rankPercent": 20
+                    }
+                  ]
+                }
+              },
+              "bracket": 1014,
+              "reportsBlacklistForCharacters": []
+            }
+          ]
+        },
+        "healing": {
+          "data": [
+            {
+              "fightID": 26,
+              "partition": 1002,
+              "zone": 1047,
+              "encounter": { "id": 3306, "name": "fixture-name-4" },
+              "difficulty": 5,
+              "size": 20,
+              "kill": true,
+              "duration": 386654,
+              "roles": {
+                "tanks": {
+                  "name": "fixture-name-5",
+                  "characters": [
+                    {
+                      "id": 2101,
+                      "name": "fixture-name-1",
+                      "server": {
+                        "id": 3001,
+                        "name": "fixture-realm-1",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Monk",
+                      "spec": "Brewmaster",
+                      "amount": 31968.1,
+                      "rankPercent": 48
+                    }
+                  ]
+                },
+                "healers": {
+                  "name": "fixture-name-6",
+                  "characters": [
+                    {
+                      "id": 2102,
+                      "name": "fixture-name-2",
+                      "server": {
+                        "id": 3002,
+                        "name": "fixture-realm-2",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Druid",
+                      "spec": "Restoration",
+                      "amount": 114524.7,
+                      "rankPercent": 51
+                    }
+                  ]
+                },
+                "dps": {
+                  "name": "fixture-name-7",
+                  "characters": [
+                    {
+                      "id": 2103,
+                      "name": "fixture-name-3",
+                      "server": {
+                        "id": 3003,
+                        "name": "fixture-realm-3",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Mage",
+                      "spec": "Frost",
+                      "amount": 6607.1,
+                      "rankPercent": 45
+                    }
+                  ]
+                }
+              },
+              "bracket": 1014,
+              "reportsBlacklistForCharacters": []
+            }
+          ]
+        },
+        "bossDamage": {
+          "data": [
+            {
+              "fightID": 26,
+              "partition": 1002,
+              "zone": 1047,
+              "encounter": { "id": 3306, "name": "fixture-name-4" },
+              "difficulty": 5,
+              "size": 20,
+              "kill": true,
+              "duration": 386654,
+              "roles": {
+                "tanks": {
+                  "name": "fixture-name-5",
+                  "characters": [
+                    {
+                      "id": 2101,
+                      "name": "fixture-name-1",
+                      "server": {
+                        "id": 3001,
+                        "name": "fixture-realm-1",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Monk",
+                      "spec": "Brewmaster",
+                      "amount": 25442.9,
+                      "rankPercent": 42
+                    }
+                  ]
+                },
+                "healers": {
+                  "name": "fixture-name-6",
+                  "characters": [
+                    {
+                      "id": 2102,
+                      "name": "fixture-name-2",
+                      "server": {
+                        "id": 3002,
+                        "name": "fixture-realm-2",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Druid",
+                      "spec": "Restoration",
+                      "amount": 2813.2,
+                      "rankPercent": 49
+                    }
+                  ]
+                },
+                "dps": {
+                  "name": "fixture-name-7",
+                  "characters": [
+                    {
+                      "id": 2103,
+                      "name": "fixture-name-3",
+                      "server": {
+                        "id": 3003,
+                        "name": "fixture-realm-3",
+                        "region": "fixture-region-1"
+                      },
+                      "class": "Mage",
+                      "spec": "Frost",
+                      "amount": 45184.8,
+                      "rankPercent": 52
+                    }
+                  ]
+                }
+              },
+              "bracket": 1014,
+              "reportsBlacklistForCharacters": []
+            }
+          ]
+        }
+      }
+    }
+  }
+}

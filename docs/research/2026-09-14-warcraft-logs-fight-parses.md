@@ -304,6 +304,52 @@ by issue #90.
 5. Historical percentiles can change until their daily lock-in; cache/UI text
    should not claim they were immutable at upload time.
 
+## Credentialed probe evidence (2026-09-14)
+
+A read-only probe ran with the Railway `test` worker credentials against a
+public fight selected from the deployed test dossier API. The checked-in
+fixtures are a deterministic sanitization of the observed structural contract;
+they contain no source report code, player name, realm, region, or provider
+character ID.
+
+The scoped `dps`, `hps`, and `bossdps` aliases each returned the same shape:
+`{ data: [{ fightID, encounter: { id, name }, difficulty, roles }] }`.
+`roles` has `tanks`, `healers`, and `dps`; each has `characters`, whose rows
+include `id`, `name`, `server: { id, name, region }`, `class`, `spec`, and a
+numeric `rankPercent`. The sample had one row per alias, exact fight ID 26,
+encounter ID 3306, difficulty 5, and 2/4/14 tank/healer/DPS rows. The query
+envelope supplies the report code, aliases, `compare: Rankings`,
+`timeframe: Historical`, exact fight, encounter, and difficulty dimensions;
+the rows do not repeat every one of those dimensions.
+
+`rankPercent` was numeric (sample values included 20, 23, 42, 50, and 52).
+The public report was not archived (`isArchived: false`) and was accessible.
+An empty but successful `{ data: [] }` response was also observed for a
+separately scoped public selection, so absence is an unavailable upstream
+state rather than a numeric zero or a conclusion about applicability. The
+three-alias request measured an eight-point increase in
+`pointsSpentThisHour` (20 to 28); treat that only as a measured test
+environment sample, not a fixed provider cost.
+
+### Character-identity proof
+
+Ranking-row `characters[].id` is a stable global Character ID, but it is not
+equal to either `ReportActor.id` or `ReportActor.gameID`. A direct ID join to
+`masterData.actors` therefore must be rejected. The schema exposes
+`characterData.character(id: Int)`, which supplies an authoritative canonical
+Character object. The probe proved, without retaining any source identity,
+that the ranking ID equals that Character object's ID; its canonical
+name/server/region equals the requested dossier character; and exactly one
+Player in the report's `masterData.actors` has the same canonical name/server.
+This is the required two-step identity proof, not name-only ranking matching:
+
+`ranking character ID -> Character(id) canonical identity -> unique report actor`.
+
+The report actor has no global Character ID field that equals the ranking ID,
+so later normalization must retain this qualified cross-walk and reject a
+missing or non-unique canonical actor match. It must never fall back to a
+ranking-row name alone.
+
 [api-docs]: https://www.warcraftlogs.com/api/docs
 [archive-status]: https://www.warcraftlogs.com/v2-api-docs/warcraft/reportarchivestatus.doc.html
 [archon-percentile]: https://www.archon.gg/wow/articles/help/archon-disclaimers-and-faq

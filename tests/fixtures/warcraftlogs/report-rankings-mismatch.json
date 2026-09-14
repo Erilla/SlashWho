@@ -1,0 +1,127 @@
+{
+  "data": {
+    "reportData": {
+      "report": {
+        "code": "fixture-report-mismatch-1",
+        "archiveStatus": {
+          "isArchived": false,
+          "isAccessible": true,
+          "archiveDate": null
+        },
+        "masterData": {
+          "actors": [
+            {
+              "id": 1101,
+              "gameID": 2201,
+              "name": "fixture-name-mismatch-1",
+              "server": "fixture-realm-mismatch-1",
+              "type": "Player"
+            }
+          ]
+        },
+        "damage": {
+          "data": [
+            {
+              "fightID": 27,
+              "encounter": { "id": 3307, "name": "fixture-name-mismatch-2" },
+              "difficulty": 4,
+              "roles": {
+                "tanks": {
+                  "name": "fixture-name-mismatch-3",
+                  "characters": [
+                    {
+                      "id": 2301,
+                      "name": "fixture-name-mismatch-1",
+                      "server": {
+                        "id": 3101,
+                        "name": "fixture-realm-mismatch-1",
+                        "region": "fixture-region-mismatch-1"
+                      },
+                      "class": "Warrior",
+                      "spec": "Protection",
+                      "rankPercent": 12
+                    }
+                  ]
+                },
+                "healers": {
+                  "name": "fixture-name-mismatch-4",
+                  "characters": []
+                },
+                "dps": { "name": "fixture-name-mismatch-5", "characters": [] }
+              }
+            }
+          ]
+        },
+        "healing": {
+          "data": [
+            {
+              "fightID": 27,
+              "encounter": { "id": 3307, "name": "fixture-name-mismatch-2" },
+              "difficulty": 4,
+              "roles": {
+                "tanks": {
+                  "name": "fixture-name-mismatch-3",
+                  "characters": []
+                },
+                "healers": {
+                  "name": "fixture-name-mismatch-4",
+                  "characters": [
+                    {
+                      "id": 2301,
+                      "name": "fixture-name-mismatch-1",
+                      "server": {
+                        "id": 3101,
+                        "name": "fixture-realm-mismatch-1",
+                        "region": "fixture-region-mismatch-1"
+                      },
+                      "class": "Warrior",
+                      "spec": "Protection",
+                      "rankPercent": 13
+                    }
+                  ]
+                },
+                "dps": { "name": "fixture-name-mismatch-5", "characters": [] }
+              }
+            }
+          ]
+        },
+        "bossDamage": {
+          "data": [
+            {
+              "fightID": 27,
+              "encounter": { "id": 3307, "name": "fixture-name-mismatch-2" },
+              "difficulty": 4,
+              "roles": {
+                "tanks": {
+                  "name": "fixture-name-mismatch-3",
+                  "characters": []
+                },
+                "healers": {
+                  "name": "fixture-name-mismatch-4",
+                  "characters": []
+                },
+                "dps": {
+                  "name": "fixture-name-mismatch-5",
+                  "characters": [
+                    {
+                      "id": 2301,
+                      "name": "fixture-name-mismatch-1",
+                      "server": {
+                        "id": 3101,
+                        "name": "fixture-realm-mismatch-1",
+                        "region": "fixture-region-mismatch-1"
+                      },
+                      "class": "Warrior",
+                      "spec": "Protection",
+                      "rankPercent": 14
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
