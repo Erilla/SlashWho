@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 type UpstreamIconLinkProps = Readonly<{
   children?: ReactNode;
+  evidenceState?: "kill" | "wipe";
   href: string;
   label: string;
   source: "raiderio" | "warcraft_logs";
@@ -30,6 +31,7 @@ function UpstreamIcon({ source }: Pick<UpstreamIconLinkProps, "source">) {
 
 export function UpstreamIconLink({
   children,
+  evidenceState,
   href,
   label,
   source
@@ -40,7 +42,9 @@ export function UpstreamIconLink({
       aria-label={accessibleLabel}
       className={`upstream-icon-link upstream-icon-link--${
         source === "warcraft_logs" ? "warcraft-logs" : source
-      }${children ? " upstream-icon-link--labelled" : ""}`}
+      }${evidenceState ? ` upstream-icon-link--evidence-${evidenceState}` : ""}${
+        children ? " upstream-icon-link--labelled" : ""
+      }`}
       href={href}
       rel="noopener noreferrer"
       target="_blank"

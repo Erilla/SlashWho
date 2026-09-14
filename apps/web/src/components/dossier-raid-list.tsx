@@ -25,6 +25,7 @@ function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
       {urls.map((url, index) => (
         <li key={url}>
           <UpstreamIconLink
+            evidenceState="kill"
             href={url}
             label={
               urls.length === 1
@@ -113,6 +114,7 @@ function WipeEvidenceList({
               <dt>Report</dt>
               <dd>
                 <UpstreamIconLink
+                  evidenceState="wipe"
                   href={wipe.reportUrl}
                   label="View Warcraft Logs wipe report"
                   source="warcraft_logs"

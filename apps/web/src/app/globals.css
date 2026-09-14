@@ -1026,6 +1026,14 @@ a {
   color: #f97316;
 }
 
+.upstream-icon-link--evidence-kill {
+  color: var(--success);
+}
+
+.upstream-icon-link--evidence-wipe {
+  color: var(--muted);
+}
+
 .upstream-link-icon {
   width: 1rem;
   height: 1rem;
