@@ -149,7 +149,11 @@ function BossArtwork({ boss }: { boss: Boss }) {
 }
 
 function KillEvidence({ boss }: { boss: KillBoss }) {
-  const firstKills = boss.firstKills ?? [boss.firstKill];
+  const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
+    (a, b) =>
+      b.killedAt.localeCompare(a.killedAt) ||
+      (b.reportUrl ?? "").localeCompare(a.reportUrl ?? "")
+  );
   const firstKill = boss.firstKill;
   return (
     <>
