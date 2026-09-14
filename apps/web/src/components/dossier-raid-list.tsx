@@ -10,6 +10,12 @@ type Raid = ApplicantDossier["raids"][number];
 type Boss = Raid["bosses"][number];
 type KillBoss = Extract<Boss, { state: "kill" }>;
 type WipeEvidence = Extract<Boss, { state: "wipe" }>["wipe"];
+type WipeCharacter = WipeEvidence["characters"][number];
+type WipeGroup = Readonly<{
+  attemptedAt: string;
+  reportUrls: readonly string[];
+  characters: readonly WipeCharacter[];
+}>;
 
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
@@ -25,6 +31,7 @@ function ReportLinks({
 }) {
   const urls =
     evidence.reportUrls ?? (evidence.reportUrl ? [evidence.reportUrl] : []);
+  const wipeUrls = groupWipes(wipes).flatMap((wipe) => wipe.reportUrls);
   if (urls.length === 0 && wipes.length === 0) return <>Report: —</>;
   return (
     <ul className="dossier-report-links">
@@ -42,11 +49,11 @@ function ReportLinks({
           />
         </li>
       ))}
-      {wipes.map((wipe) => (
-        <li key={`${wipe.attemptedAt}-${wipe.reportUrl}`}>
+      {wipeUrls.map((url) => (
+        <li key={url}>
           <UpstreamIconLink
             evidenceState="wipe"
-            href={wipe.reportUrl}
+            href={url}
             label="View Warcraft Logs wipe report"
             source="warcraft_logs"
           />
@@ -111,10 +118,10 @@ function WipeEvidenceList({
 }) {
   return (
     <>
-      {(wipes ?? []).map((wipe) => (
+      {groupWipes(wipes ?? []).map((wipe) => (
         <div
           className="dossier-evidence-row"
-          key={`${wipe.attemptedAt}-${wipe.reportUrl}`}
+          key={wipe.attemptedAt.slice(0, 10)}
         >
           <StatusIcon state="wipe" />
           <dl className="dossier-evidence">
@@ -129,12 +136,18 @@ function WipeEvidenceList({
             <div>
               <dt>Report</dt>
               <dd>
-                <UpstreamIconLink
-                  evidenceState="wipe"
-                  href={wipe.reportUrl}
-                  label="View Warcraft Logs wipe report"
-                  source="warcraft_logs"
-                />
+                <ul className="dossier-report-links">
+                  {wipe.reportUrls.map((url) => (
+                    <li key={url}>
+                      <UpstreamIconLink
+                        evidenceState="wipe"
+                        href={url}
+                        label="View Warcraft Logs wipe report"
+                        source="warcraft_logs"
+                      />
+                    </li>
+                  ))}
+                </ul>
               </dd>
             </div>
             <div>
@@ -168,6 +181,50 @@ function sortWipes(wipes: readonly WipeEvidence[]): WipeEvidence[] {
       b.attemptedAt.localeCompare(a.attemptedAt) ||
       b.reportUrl.localeCompare(a.reportUrl)
   );
+}
+
+function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
+  const groups = new Map<
+    string,
+    {
+      attemptedAt: string;
+      reportUrls: string[];
+      characters: WipeCharacter[];
+      characterKeys: Set<string>;
+    }
+  >();
+  const reportKeys = new Set<string>();
+
+  for (const wipe of sortWipes(wipes)) {
+    const date = wipe.attemptedAt.slice(0, 10);
+    const group = groups.get(date) ?? {
+      attemptedAt: wipe.attemptedAt,
+      reportUrls: [],
+      characters: [],
+      characterKeys: new Set<string>()
+    };
+    const wipeReport = reportKey(wipe.reportUrl);
+    if (!reportKeys.has(wipeReport)) {
+      reportKeys.add(wipeReport);
+      group.reportUrls.push(wipe.reportUrl);
+    }
+    for (const character of wipe.characters) {
+      const characterKey = `${character.region}/${character.realm}/${character.name}`;
+      if (!group.characterKeys.has(characterKey)) {
+        group.characterKeys.add(characterKey);
+        group.characters.push(character);
+      }
+    }
+    groups.set(date, group);
+  }
+
+  return [...groups.values()]
+    .sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt))
+    .map(({ attemptedAt, reportUrls, characters }) => ({
+      attemptedAt,
+      reportUrls,
+      characters
+    }));
 }
 
 function BossArtwork({ boss }: { boss: Boss }) {
