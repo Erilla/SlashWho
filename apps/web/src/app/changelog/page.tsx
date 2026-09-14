@@ -6,6 +6,7 @@ import {
 } from "../../server/deployment-changelog";
 
 export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 type ChangelogLink = Readonly<{ href: string; label: string }>;
 
