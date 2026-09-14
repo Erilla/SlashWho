@@ -110,7 +110,8 @@ function token(): Response {
 function performanceReport(
   fightIds = [26],
   hasMorePages = false,
-  code = "performance-report"
+  code = "performance-report",
+  encounterId = 3306
 ): unknown {
   return {
     data: {
@@ -125,7 +126,7 @@ function performanceReport(
                 zone: {
                   id: 1047,
                   name: "Fixture",
-                  encounters: [{ id: 3306, journalID: 3306 }]
+                  encounters: [{ id: encounterId, journalID: encounterId }]
                 },
                 masterData: {
                   actors: [
@@ -139,7 +140,7 @@ function performanceReport(
                 },
                 fights: fightIds.map((id) => ({
                   id,
-                  encounterID: 3306,
+                  encounterID: encounterId,
                   name: "Boss",
                   startTime: 1,
                   endTime: 2,
@@ -997,6 +998,48 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
+  });
+
+  it("bounds concurrent character encounter ranking requests", async () => {
+    let reportPage = 0;
+    let activeRankings = 0;
+    let maximumActiveRankings = 0;
+    const reports = [
+      performanceReport([26], true, "report-one", 3306),
+      performanceReport([27], true, "report-two", 3307),
+      performanceReport([28], false, "report-three", 3308)
+    ];
+    const { client } = clientFor(async (url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("CharacterEncounterRankings")) {
+        activeRankings++;
+        maximumActiveRankings = Math.max(maximumActiveRankings, activeRankings);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        activeRankings--;
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [{ rankPercent: 91 }] },
+                healing: { data: [{ rankPercent: 82 }] },
+                bossDamage: { data: [{ rankPercent: 87 }] }
+              }
+            }
+          }
+        });
+      }
+      const report = reports[reportPage++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 3, parseRequestCap: 1 })
+    ).resolves.toMatchObject({ kind: "evidence" });
+    expect(maximumActiveRankings).toBeLessThanOrEqual(2);
   });
 
   it("paginates public reports and retains every distinct Mythic kill", async () => {
