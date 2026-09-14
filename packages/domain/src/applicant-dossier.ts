@@ -93,9 +93,14 @@ export type ApplicantDossierBoss =
         state: "kill";
         firstKill: ApplicantDossierFirstKill;
         firstKills: readonly ApplicantDossierFirstKill[];
+        wipes?: readonly ApplicantDossierWipe[];
       }>)
   | (ApplicantDossierBossMetadata &
-      Readonly<{ state: "wipe"; wipe: ApplicantDossierWipe }>)
+      Readonly<{
+        state: "wipe";
+        wipe: ApplicantDossierWipe;
+        wipes?: readonly ApplicantDossierWipe[];
+      }>)
   | (ApplicantDossierBossMetadata & Readonly<{ state: "no_logs" }>)
   | (ApplicantDossierBossMetadata & Readonly<{ state: "incomplete" }>);
 export type ApplicantDossierRaid = Readonly<{
@@ -358,6 +363,41 @@ export function buildApplicantDossier(
     const key = `${metadata.raidId}\0${metadata.bossId}`;
     wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
   }
+  const aggregateWipes = (
+    wipes: readonly (DossierWipeEvidence & RaidCatalogueEncounter)[]
+  ): ApplicantDossierWipe[] => {
+    const grouped = new Map<
+      string,
+      (DossierWipeEvidence & RaidCatalogueEncounter)[]
+    >();
+    for (const wipe of wipes) {
+      grouped.set(wipe.reportUrl, [
+        ...(grouped.get(wipe.reportUrl) ?? []),
+        wipe
+      ]);
+    }
+    return [...grouped.values()]
+      .map((shared) => {
+        const selected = [...shared].sort(
+          (a, b) =>
+            text(b.attemptedAt, a.attemptedAt) || text(a.reportUrl, b.reportUrl)
+        )[0]!;
+        const ids = new Set(
+          shared.map((wipe) => canonicalCharacterId(wipe.character))
+        );
+        return {
+          attemptedAt: selected.attemptedAt,
+          reportUrl: selected.reportUrl,
+          characters: input.characters
+            .filter((character) => ids.has(canonicalCharacterId(character.key)))
+            .map((character) => character.key)
+        };
+      })
+      .sort(
+        (a, b) =>
+          text(b.attemptedAt, a.attemptedAt) || text(a.reportUrl, b.reportUrl)
+      );
+  };
   const completeCharacters = new Set(
     (input.completeWarcraftLogsCharacters ?? []).map(canonicalCharacterId)
   );
@@ -382,7 +422,14 @@ export function buildApplicantDossier(
             if (observedKill) {
               const { isFinalBoss, ...boss } = observedKill;
               void isFinalBoss;
-              return boss;
+              return {
+                ...boss,
+                wipes: aggregateWipes(
+                  wipesByBoss.get(
+                    `${catalogueRaid.raidId}\0${encounter.bossId}`
+                  ) ?? []
+                )
+              };
             }
             const wipes = wipesByBoss.get(
               `${catalogueRaid.raidId}\0${encounter.bossId}`
@@ -394,26 +441,12 @@ export function buildApplicantDossier(
               imageUrl: encounter.imageUrl
             };
             if (wipes?.length) {
-              const selected = [...wipes].sort(
-                (a, b) =>
-                  text(b.attemptedAt, a.attemptedAt) ||
-                  text(a.reportUrl, b.reportUrl)
-              )[0]!;
-              const ids = new Set(
-                wipes.map((wipe) => canonicalCharacterId(wipe.character))
-              );
+              const evidence = aggregateWipes(wipes);
               return {
                 ...metadata,
                 state: "wipe" as const,
-                wipe: {
-                  attemptedAt: selected.attemptedAt,
-                  reportUrl: selected.reportUrl,
-                  characters: input.characters
-                    .filter((character) =>
-                      ids.has(canonicalCharacterId(character.key))
-                    )
-                    .map((character) => character.key)
-                }
+                wipe: evidence[0]!,
+                wipes: evidence
               };
             }
             return {
@@ -463,7 +496,12 @@ export function buildApplicantDossier(
               )
               .map(({ isFinalBoss, ...boss }) => {
                 void isFinalBoss;
-                return boss;
+                return {
+                  ...boss,
+                  wipes: aggregateWipes(
+                    wipesByBoss.get(`${raidId}\0${boss.bossId}`) ?? []
+                  )
+                };
               })
           }))
           .sort((a, b) => {

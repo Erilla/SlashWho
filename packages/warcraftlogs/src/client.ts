@@ -385,16 +385,7 @@ function firstKillReports(
           reportUrl,
           fightUrl
         };
-        const identifier = `${candidate.raidId}\0${candidate.bossId}`;
-        const current = wipes.get(identifier);
-        if (
-          !current ||
-          candidate.attemptedAt > current.attemptedAt ||
-          (candidate.attemptedAt === current.attemptedAt &&
-            candidate.fightUrl < current.fightUrl)
-        ) {
-          wipes.set(identifier, candidate);
-        }
+        wipes.set(candidate.fightUrl, candidate);
         continue;
       }
       const candidate: WarcraftLogsFirstKillEvidence = {
@@ -615,16 +606,7 @@ export function createWarcraftLogsClient(
         kills.set(kill.fightUrl, kill);
       }
       for (const wipe of normalized.wipes) {
-        const identifier = `${wipe.raidId}\0${wipe.bossId}`;
-        const current = wipes.get(identifier);
-        if (
-          !current ||
-          wipe.attemptedAt > current.attemptedAt ||
-          (wipe.attemptedAt === current.attemptedAt &&
-            wipe.fightUrl < current.fightUrl)
-        ) {
-          wipes.set(identifier, wipe);
-        }
+        wipes.set(wipe.fightUrl, wipe);
       }
       if (normalized.limitation) return partial(normalized.limitation);
 
