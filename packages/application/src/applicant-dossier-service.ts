@@ -15,6 +15,7 @@ import {
   formatCharacterDisplayName,
   canonicalCharacterId,
   lookupCuttingEdgeAchievement,
+  isAccountWideCuttingEdgeAchievement,
   lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
@@ -47,6 +48,10 @@ export type ReadDossierResult =
 
 export interface ApplicantDossierService {
   start(input: CreateDossierCommand): Promise<CreateDossierResult>;
+  addConnectedCharacter(
+    root: CharacterKey,
+    input: CreateDossierCommand
+  ): Promise<CreateSearchResult | { kind: "linked" | "duplicate" }>;
   readInitial(
     key: CharacterKey,
     signal?: AbortSignal
@@ -60,12 +65,15 @@ type DossierSubject = Readonly<{
   displayName: string;
   className: string | null;
   raiderIoUrl: string;
-  source: StoredSnapshotCharacter["source"] | "submitted";
+  source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
 }>;
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   wipes: readonly DossierWipeEvidence[];
   warcraftLogsComplete: boolean;
+  limitations: readonly DossierLimitation[];
+}>;
+type CuttingEdgeEvidenceResult = Readonly<{
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
@@ -82,6 +90,19 @@ function limitationMessage(
   source: EvidenceSource,
   code: ContractDossierLimitation["code"]
 ): string {
+  if (source === "warcraft_logs" && code.startsWith("parse_")) {
+    const reason =
+      code === "parse_private"
+        ? "the supporting reports are private"
+        : code === "parse_rate_limited"
+          ? "Warcraft Logs is temporarily rate limited"
+          : code === "parse_request_cap"
+            ? "this dossier reached its parse request cap"
+            : code === "parse_schema_drift"
+              ? "Warcraft Logs returned an unexpected ranking response"
+              : "Warcraft Logs could not load the rankings";
+    return `Parse availability is partial because ${reason}. Verified kill evidence is still shown.`;
+  }
   if (source === "raiderio") {
     const reason =
       code === "schema_changed"
@@ -112,6 +133,12 @@ function limitationMessage(
       return `${label} history could not be fully loaded. Shown evidence is partial; other kills or wipes may exist.`;
     case "schema_changed":
       return `${label} returned an unexpected response, so history is incomplete. Shown evidence is partial; other kills or wipes may exist.`;
+    case "current_content_window_unknown":
+      return `${label} evidence could not be shown because this raid's current-content window has not been reviewed.`;
+    case "current_content_evidence_withheld":
+      return `${label} evidence outside this raid's current-content window is not shown.`;
+    default:
+      return `${label} parse availability is partial. Verified kill evidence is still shown.`;
   }
 }
 
@@ -128,6 +155,32 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
     signal?.aborted === true ||
     (error instanceof DOMException && error.name === "AbortError")
   );
+}
+
+function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
 }
 
 function blizzardLimitationCode(
@@ -156,7 +209,8 @@ function cachedKill(
     killedAt: kill.killedAt,
     guild: kill.guild ? { ...kill.guild, region: character.region } : null,
     historicWorldRank: kill.historicWorldRank ?? null,
-    reportUrl: kill.fightUrl
+    reportUrl: kill.fightUrl,
+    performance: kill.performance
   };
 }
 
@@ -182,7 +236,6 @@ async function gatherCharacterEvidence(
   options: {
     repositories: Pick<Repositories, "evidence">;
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     freshnessCutoff: Date;
     signal?: AbortSignal;
   }
@@ -201,16 +254,6 @@ async function gatherCharacterEvidence(
       queueJobId
     );
   }
-  const blizzard = await options.blizzard
-    .getCompletedAchievements(character.key, options.signal)
-    .then((achievements) => ({ kind: "evidence" as const, achievements }))
-    .catch((error: unknown) => {
-      if (isAbort(error, options.signal)) throw error;
-      return {
-        kind: "limitation" as const,
-        code: blizzardLimitationCode(error)
-      };
-    });
   const limitations: DossierLimitation[] = [];
   const completed = reservation.completed;
   if (completed?.run.limitationCode) {
@@ -218,8 +261,14 @@ async function gatherCharacterEvidence(
       limitation("warcraft_logs", character.key, completed.run.limitationCode)
     );
   }
-  if (blizzard.kind === "limitation") {
-    limitations.push(limitation("blizzard", character.key, blizzard.code));
+  if (completed?.run.parseLimitationCode) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        character.key,
+        completed.run.parseLimitationCode
+      )
+    );
   }
   return {
     limitations,
@@ -232,15 +281,43 @@ async function gatherCharacterEvidence(
       completed?.run.status === "complete" &&
       completed.run.limitationCode === null &&
       completed.wipeCapable,
-    cuttingEdges:
-      blizzard.kind === "evidence"
-        ? blizzard.achievements.map((achievement) => ({
-            ...achievement,
-            character: character.key
-          }))
-        : [],
     gathering: reservation.kind !== "fresh"
   };
+}
+
+async function gatherCuttingEdgeEvidence(
+  subjects: readonly DossierSubject[],
+  options: {
+    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+    signal?: AbortSignal;
+  }
+): Promise<CuttingEdgeEvidenceResult> {
+  const cuttingEdges: DossierCuttingEdgeEvidence[] = [];
+  const limitations: DossierLimitation[] = [];
+  let fingerprintAccountEstablished = false;
+  for (const character of subjects) {
+    if (character.source === "fingerprint" && fingerprintAccountEstablished)
+      continue;
+    try {
+      const achievements = await options.blizzard.getCompletedAchievements(
+        character.key,
+        options.signal
+      );
+      const supported = achievements.filter((achievement) =>
+        isAccountWideCuttingEdgeAchievement(achievement.achievementId)
+      );
+      cuttingEdges.push(...supported);
+      if (character.source !== "claimed" && supported.length > 0) {
+        fingerprintAccountEstablished = true;
+      }
+    } catch (error) {
+      if (isAbort(error, options.signal)) throw error;
+      limitations.push(
+        limitation("blizzard", character.key, blizzardLimitationCode(error))
+      );
+    }
+  }
+  return { cuttingEdges, limitations };
 }
 
 function serializeDossierSubject(character: DossierSubject) {
@@ -252,9 +329,11 @@ function serializeDossierSubject(character: DossierSubject) {
     source:
       character.source === "submitted"
         ? ("submitted" as const)
-        : character.source === "fingerprint"
-          ? ("fingerprint_derived" as const)
-          : ("raiderio_declared" as const)
+        : character.source === "manually_added"
+          ? ("manually_added" as const)
+          : character.source === "fingerprint"
+            ? ("fingerprint_derived" as const)
+            : ("raiderio_declared" as const)
   };
 }
 
@@ -374,19 +453,25 @@ async function assembleDossier(options: {
   freshnessCutoff: Date;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
-  const evidence = await Promise.all(
-    options.subjects.map((character) =>
-      gatherCharacterEvidence(character, {
-        repositories: options.repositories,
-        queue: options.queue,
-        blizzard: options.blizzard,
-        freshnessCutoff: options.freshnessCutoff,
-        signal: options.signal
-      })
-    )
-  );
+  const [evidence, cuttingEdgeEvidence] = await Promise.all([
+    Promise.all(
+      options.subjects.map((character) =>
+        gatherCharacterEvidence(character, {
+          repositories: options.repositories,
+          queue: options.queue,
+          freshnessCutoff: options.freshnessCutoff,
+          signal: options.signal
+        })
+      )
+    ),
+    gatherCuttingEdgeEvidence(options.subjects, {
+      blizzard: options.blizzard,
+      signal: options.signal
+    })
+  ]);
   const limitations = [
     ...evidence.flatMap((item) => item.limitations),
+    ...cuttingEdgeEvidence.limitations,
     ...options.skippedSubjects.map((character) =>
       limitation("warcraft_logs", character.key, "request_cap")
     )
@@ -411,7 +496,7 @@ async function assembleDossier(options: {
     completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
       item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
     ),
-    cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
+    cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
     limitations: [...limitations, ...ranked.limitations]
   });
   return applicantDossierSchema.parse({
@@ -441,7 +526,10 @@ class RankingLookupFailure extends Error {
 }
 
 export function createApplicantDossierService(options: {
-  repositories: Pick<Repositories, "snapshots" | "evidence">;
+  repositories: Pick<
+    Repositories,
+    "snapshots" | "evidence" | "manualConnections"
+  >;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
@@ -466,9 +554,8 @@ export function createApplicantDossierService(options: {
   const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
     async getCompletedAchievements(key, signal) {
       signal?.throwIfAborted();
-      const result = await achievements(
-        `${key.region}/${key.realm}/${key.name}`,
-        async () => {
+      const result = await awaitWithAbort(
+        achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
           const rows = await options.blizzard.getCompletedAchievements(
             key,
             AbortSignal.timeout(15_000)
@@ -481,9 +568,9 @@ export function createApplicantDossierService(options: {
               achievementId,
               completedAt
             }));
-        }
+        }),
+        signal
       );
-      signal?.throwIfAborted();
       return result;
     }
   };
@@ -526,6 +613,27 @@ export function createApplicantDossierService(options: {
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
+    },
+
+    async addConnectedCharacter(root, input) {
+      let target: CharacterKey;
+      try {
+        target = parseApplicantCharacterUrl(input.characterUrl);
+      } catch {
+        return { kind: "invalid", code: "invalid_character_url" };
+      }
+      if (canonicalCharacterId(root) === canonicalCharacterId(target))
+        return { kind: "duplicate" };
+      const result = await options.search.create({
+        ...input,
+        characterUrl: toRaiderIoUrl(target)
+      });
+      if (result.kind !== "character") return result;
+      const connection = await options.repositories.manualConnections.add(
+        root,
+        target
+      );
+      return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
     async readInitial(key, signal) {
@@ -583,21 +691,35 @@ export function createApplicantDossierService(options: {
       const snapshot = await options.repositories.snapshots.getCurrent(key);
       if (!snapshot) return { kind: "not_ready" };
 
+      const seen = new Set(
+        snapshot.characters.map((character) =>
+          canonicalCharacterId(character.key)
+        )
+      );
+      const manual = (await options.repositories.manualConnections.list(key))
+        .filter((character) => !seen.has(canonicalCharacterId(character.key)))
+        .map((character) => ({
+          ...character,
+          source: "manually_added" as const
+        }));
+
       const rootId = canonicalCharacterId(snapshot.rootKey);
       // Rank before applying the cap so the displayed list and evidence requests
       // prioritise the same characters without changing the immutable snapshot.
-      const ordered = [...snapshot.characters].sort((left, right) => {
-        const rootOrder =
-          Number(canonicalCharacterId(right.key) === rootId) -
-          Number(canonicalCharacterId(left.key) === rootId);
-        return (
-          rootOrder ||
-          right.level - left.level ||
-          left.key.region.localeCompare(right.key.region, "en") ||
-          left.key.realm.localeCompare(right.key.realm, "en") ||
-          left.key.name.localeCompare(right.key.name, "en")
-        );
-      });
+      const ordered = [...snapshot.characters, ...manual].sort(
+        (left, right) => {
+          const rootOrder =
+            Number(canonicalCharacterId(right.key) === rootId) -
+            Number(canonicalCharacterId(left.key) === rootId);
+          return (
+            rootOrder ||
+            right.level - left.level ||
+            left.key.region.localeCompare(right.key.region, "en") ||
+            left.key.realm.localeCompare(right.key.realm, "en") ||
+            left.key.name.localeCompare(right.key.name, "en")
+          );
+        }
+      );
       const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
       const skipped = ordered.slice(selected.length);
       return {

@@ -73,6 +73,8 @@ export async function seedSnapshot(
 export async function seedCharacterEvidence(
   key: CharacterKey,
   options: Readonly<{
+    withLaterParseEvent?: boolean;
+    laterParseEventOnly?: boolean;
     withSampleKills?: boolean;
     withSecondRaid?: boolean;
   }> = {}
@@ -93,41 +95,92 @@ export async function seedCharacterEvidence(
     await repositories.evidence.publish(reservation.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       completedAt: now,
       kills:
         options.withSampleKills === false
           ? []
           : [
-              {
-                raidId: "42",
-                raidName: "Nerub-ar Palace",
-                bossId: "1234",
-                bossName: "Queen Ansurek",
-                journalBossId: null,
-                bossOrder: 8,
-                isFinalBoss: true,
-                killedAt: "2025-01-13T21:31:40.000Z",
-                reportUrl: "https://www.warcraftlogs.com/reports/e2eReport",
-                fightUrl:
-                  "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
-                guild: { name: "Arachnid", realm: "silvermoon" },
-                historicWorldRank: 147
-              },
-              {
-                raidId: "42",
-                raidName: "Nerub-ar Palace",
-                bossId: "1234",
-                bossName: "Queen Ansurek",
-                journalBossId: null,
-                bossOrder: 8,
-                isFinalBoss: true,
-                killedAt: "2025-01-13T22:31:40.000Z",
-                reportUrl: "https://www.warcraftlogs.com/reports/e2eReport",
-                fightUrl:
-                  "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
-                guild: { name: "Arachnid", realm: "silvermoon" },
-                historicWorldRank: 147
-              },
+              ...(options.laterParseEventOnly
+                ? []
+                : [
+                    {
+                      raidId: "42",
+                      raidName: "Nerub-ar Palace",
+                      bossId: "1234",
+                      bossName: "Queen Ansurek",
+                      journalBossId: null,
+                      bossOrder: 8,
+                      isFinalBoss: true,
+                      killedAt: "2025-01-13T21:31:40.000Z",
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/e2eReport",
+                      fightUrl:
+                        "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
+                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      historicWorldRank: 147,
+                      performance: {
+                        damage: {
+                          state: "available" as const,
+                          percentile: 87.19
+                        },
+                        healing: { state: "not_applicable" as const },
+                        bossDamage: { state: "unavailable" as const }
+                      }
+                    },
+                    {
+                      raidId: "42",
+                      raidName: "Nerub-ar Palace",
+                      bossId: "1234",
+                      bossName: "Queen Ansurek",
+                      journalBossId: null,
+                      bossOrder: 8,
+                      isFinalBoss: true,
+                      killedAt: "2025-01-13T22:31:40.000Z",
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/e2eReport",
+                      fightUrl:
+                        "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
+                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      historicWorldRank: 147,
+                      performance: {
+                        damage: {
+                          state: "available" as const,
+                          percentile: 99.29
+                        },
+                        healing: { state: "not_applicable" as const },
+                        bossDamage: { state: "unavailable" as const }
+                      }
+                    }
+                  ]),
+              ...(options.withLaterParseEvent
+                ? [
+                    {
+                      raidId: "42",
+                      raidName: "Nerub-ar Palace",
+                      bossId: "1234",
+                      bossName: "Queen Ansurek",
+                      journalBossId: null,
+                      bossOrder: 8,
+                      isFinalBoss: true,
+                      killedAt: "2025-01-14T21:31:40.000Z",
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/e2eLaterReport",
+                      fightUrl:
+                        "https://www.warcraftlogs.com/reports/e2eLaterReport#fight=11",
+                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      historicWorldRank: 147,
+                      performance: {
+                        damage: {
+                          state: "available" as const,
+                          percentile: 100
+                        },
+                        healing: { state: "not_applicable" as const },
+                        bossDamage: { state: "unavailable" as const }
+                      }
+                    }
+                  ]
+                : []),
               ...(options.withSecondRaid
                 ? [
                     {
@@ -144,7 +197,12 @@ export async function seedCharacterEvidence(
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eVaultReport#fight=11",
                       guild: { name: "Arachnid", realm: "silvermoon" },
-                      historicWorldRank: 212
+                      historicWorldRank: 212,
+                      performance: {
+                        damage: { state: "unavailable" as const },
+                        healing: { state: "unavailable" as const },
+                        bossDamage: { state: "unavailable" as const }
+                      }
                     }
                   ]
                 : [])

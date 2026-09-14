@@ -1,4 +1,7 @@
-import type { DiscoveryWorkContext } from "@slashwho/database";
+import type {
+  CharacterMythicKillInput,
+  DiscoveryWorkContext
+} from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 import type {
   WarcraftLogsFirstKillEvidence,
@@ -22,7 +25,8 @@ export type ApplicantEvidenceStore = {
     result: Readonly<{
       state: "complete" | "partial";
       limitationCode: WarcraftLogsLimitationCode | null;
-      kills: readonly WarcraftLogsFirstKillEvidence[];
+      parseLimitationCode: WarcraftLogsLimitationCode | null;
+      kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       completedAt: Date;
     }>
@@ -34,8 +38,29 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   evidence: ApplicantEvidenceStore;
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
   requestCap: number;
+  parseRequestCap: number;
   now?: () => Date;
 }>;
+
+function toCharacterMythicKillInput(
+  kill: WarcraftLogsFirstKillEvidence
+): CharacterMythicKillInput {
+  return {
+    raidId: kill.raidId,
+    raidName: kill.raidName,
+    bossId: kill.bossId,
+    bossName: kill.bossName,
+    journalBossId: kill.journalBossId,
+    bossOrder: kill.bossOrder,
+    isFinalBoss: kill.isFinalBoss,
+    killedAt: kill.killedAt,
+    reportUrl: kill.reportUrl,
+    fightUrl: kill.fightUrl,
+    guild: kill.guild,
+    historicWorldRank: kill.historicWorldRank,
+    performance: kill.performance
+  };
+}
 
 /**
  * Collects one character's complete public Warcraft Logs history outside the
@@ -62,6 +87,7 @@ export function createApplicantEvidenceJobHandler(
       activeContext.signal.throwIfAborted();
       const response = await options.warcraftLogs.getFirstKillReports(run.key, {
         requestCap: options.requestCap,
+        parseRequestCap: options.parseRequestCap,
         signal: activeContext.signal
       });
       activeContext.signal.throwIfAborted();
@@ -70,6 +96,7 @@ export function createApplicantEvidenceJobHandler(
         await options.evidence.publish(run.id, {
           state: "partial",
           limitationCode: response.code,
+          parseLimitationCode: null,
           kills: [],
           wipes: [],
           completedAt: now()
@@ -80,7 +107,8 @@ export function createApplicantEvidenceJobHandler(
       await options.evidence.publish(run.id, {
         state: response.limitation ? "partial" : "complete",
         limitationCode: response.limitation?.code ?? null,
-        kills: response.kills,
+        parseLimitationCode: response.parseLimitation?.code ?? null,
+        kills: response.kills.map(toCharacterMythicKillInput),
         wipes: response.wipes,
         completedAt: now()
       });

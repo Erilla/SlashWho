@@ -7,18 +7,34 @@ characters included; shared per-character evidence remains reusable within its
 own freshness window. This preserves the domain rule that dossiers are views,
 not stored records.
 
-| Source                                              | Storage                                 | Freshness and bound                                                                           |
-| --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Warcraft Logs normalized kills and safe limitations | PostgreSQL, per character               | Existing `FRESHNESS_HOURS`; one active scan per character; terminal runs retained for 30 days |
-| Blizzard Cutting Edge completions                   | Web-process memory, per character       | 15 minutes after success; 1,000 entries and at most 1,000 pending loads                       |
-| Raider.IO guild boss rankings                       | Web-process memory, per raid/boss query | 15 minutes after success; 256 entries and at most 256 pending loads                           |
-| Blizzard and Warcraft Logs OAuth tokens             | Owning process memory                   | Provider expiry minus 60 seconds; one shared token refresh                                    |
+| Source                                                             | Storage                                 | Freshness and bound                                                                                        |
+| ------------------------------------------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Warcraft Logs normalized kills, parse states, and safe limitations | PostgreSQL, per character               | `FRESHNESS_HOURS` (24 hours by default); one active scan per character; terminal runs retained for 30 days |
+| Blizzard Cutting Edge completions                                  | Web-process memory, per character       | 15 minutes after success; 1,000 entries and at most 1,000 pending loads                                    |
+| Raider.IO guild boss rankings                                      | Web-process memory, per raid/boss query | 15 minutes after success; 256 entries and at most 256 pending loads                                        |
+| Blizzard and Warcraft Logs OAuth tokens                            | Owning process memory                   | Provider expiry minus 60 seconds; one shared token refresh                                                 |
 
 Only catalogue-recognized Cutting Edge IDs and completion dates enter the
 achievement cache. Full achievement responses and discovery fingerprints are
 not cached or persisted. No raw provider response, OAuth token, credential or
-request URL is persisted by these caches. The existing WCL evidence store holds
-normalized public report/fight links as evidence, not API request URLs.
+request URL is persisted by these caches. The WCL evidence store holds only
+normalized kills, explicit parse states, percentiles when available, and public
+report/fight links as evidence; it never stores ranking JSON or API request
+URLs.
+
+WCL first discovers retained kill evidence within `EVIDENCE_REQUEST_CAP` (500
+pages by default), then hydrates report-scoped parse groups within the separate
+`EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). The parse cap includes
+the bounded canonical-character lookups needed for exact attribution. A cap or
+upstream failure leaves verified kills intact and marks parse metrics
+`unavailable` with a partial limitation; it does not manufacture a zero or
+silently claim completeness. `not_applicable` is distinct and is used only
+when independent role evidence establishes that a metric does not apply.
+
+The provider publishes an hourly point budget, not a fixed cost contract for
+`Report.rankings`. The credentialed test probe measured 8 points for one
+three-metric query and 9 points after bounded canonical lookups; those are
+observations in that environment, not defaults, guarantees, or a cost formula.
 
 Concurrent reads of a key share a promise. Independent browser cancellation
 does not cancel the shared upstream request, which has a 15-second timeout.

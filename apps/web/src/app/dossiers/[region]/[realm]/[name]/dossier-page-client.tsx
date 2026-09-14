@@ -433,7 +433,10 @@ export function DossierPageClient({
               cuttingEdges={dossier.cuttingEdges}
               limitations={dossier.limitations}
             />
-            <DossierRaidList raids={dossier.raids} />
+            <DossierRaidList
+              raids={dossier.raids}
+              limitations={dossier.limitations}
+            />
             <DossierLimitations limitations={dossier.limitations} />
           </div>
         ) : null}

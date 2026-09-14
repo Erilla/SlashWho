@@ -55,8 +55,10 @@ function dossier(
               guild: null,
               historicWorldRank: null,
               reportUrl: null,
-              characters: [identity]
-            }
+              characters: [identity],
+              parses: []
+            },
+            bestParses: []
           }
         ]
       }

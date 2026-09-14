@@ -59,7 +59,15 @@ describe("applicant evidence job handler", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/report",
           fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
           guild: { name: "Guild", region: "eu", realm: "Silvermoon" },
-          historicWorldRank: null
+          historicWorldRank: null,
+          reportCode: "report",
+          fightId: 7,
+          difficulty: 5,
+          performance: {
+            damage: { state: "unavailable" as const },
+            healing: { state: "unavailable" as const },
+            bossDamage: { state: "unavailable" as const }
+          }
         }
       ],
       wipes: [
@@ -83,6 +91,7 @@ describe("applicant evidence job handler", () => {
         "getFirstKillReports"
       >,
       requestCap: 500,
+      parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -94,6 +103,7 @@ describe("applicant evidence job handler", () => {
 
     expect(getFirstKillReports).toHaveBeenCalledWith(key, {
       requestCap: 500,
+      parseRequestCap: 8,
       signal: expect.any(AbortSignal)
     });
     expect(evidence.published).toEqual([
@@ -102,6 +112,7 @@ describe("applicant evidence job handler", () => {
         result: {
           state: "complete",
           limitationCode: null,
+          parseLimitationCode: null,
           kills: [
             expect.objectContaining({
               bossName: "Final Boss",
@@ -132,6 +143,7 @@ describe("applicant evidence job handler", () => {
         }
       },
       requestCap: 500,
+      parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -147,7 +159,96 @@ describe("applicant evidence job handler", () => {
         result: {
           state: "partial",
           limitationCode: "rate_limited",
+          parseLimitationCode: null,
           kills: [],
+          wipes: [],
+          completedAt: new Date("2026-09-13T12:01:00.000Z")
+        }
+      }
+    ]);
+  });
+
+  it("passes normalized parses and parse limitations unchanged to publication", async () => {
+    // Break caught: gateway-only ranking data could leak into persistence, or
+    // a parse-specific partial limitation could be replaced by scan metadata.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        async getFirstKillReports() {
+          return {
+            kind: "evidence" as const,
+            parseLimitation: {
+              kind: "limitation" as const,
+              code: "parse_request_cap" as const
+            },
+            kills: [
+              {
+                raidId: "42",
+                raidName: "Current Tier",
+                bossId: "7",
+                bossName: "Final Boss",
+                journalBossId: "7",
+                bossOrder: 7,
+                isFinalBoss: false as const,
+                killedAt: "2026-09-12T20:00:00.000Z",
+                reportCode: "report",
+                fightId: 7,
+                difficulty: 5,
+                reportUrl: "https://www.warcraftlogs.com/reports/report",
+                fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
+                guild: { name: "Guild", region: "eu", realm: "Silvermoon" },
+                historicWorldRank: null,
+                performance: {
+                  damage: { state: "available" as const, percentile: 0 },
+                  healing: { state: "not_applicable" as const },
+                  bossDamage: { state: "unavailable" as const }
+                }
+              }
+            ],
+            wipes: []
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published).toEqual([
+      {
+        runId: run.id,
+        result: {
+          state: "complete",
+          limitationCode: null,
+          parseLimitationCode: "parse_request_cap",
+          kills: [
+            {
+              raidId: "42",
+              raidName: "Current Tier",
+              bossId: "7",
+              bossName: "Final Boss",
+              journalBossId: "7",
+              bossOrder: 7,
+              isFinalBoss: false,
+              killedAt: "2026-09-12T20:00:00.000Z",
+              reportUrl: "https://www.warcraftlogs.com/reports/report",
+              fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
+              guild: { name: "Guild", region: "eu", realm: "Silvermoon" },
+              historicWorldRank: null,
+              performance: {
+                damage: { state: "available", percentile: 0 },
+                healing: { state: "not_applicable" },
+                bossDamage: { state: "unavailable" }
+              }
+            }
+          ],
           wipes: [],
           completedAt: new Date("2026-09-13T12:01:00.000Z")
         }

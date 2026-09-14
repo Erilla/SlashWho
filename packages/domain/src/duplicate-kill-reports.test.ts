@@ -16,7 +16,12 @@ const base: DossierKillEvidence = {
   killedAt: "2026-08-23T20:50:12.607Z",
   guild: null,
   historicWorldRank: null,
-  reportUrl: "https://www.warcraftlogs.com/reports/dqg8zDNWLA9Rkfca#fight=29"
+  reportUrl: "https://www.warcraftlogs.com/reports/dqg8zDNWLA9Rkfca#fight=29",
+  performance: {
+    damage: { state: "unavailable" },
+    healing: { state: "unavailable" },
+    bossDamage: { state: "unavailable" }
+  }
 };
 const second: DossierKillEvidence = {
   ...base,
@@ -60,8 +65,8 @@ it("groups the full UTC date and starts a new event at midnight", () => {
     { ...third, killedAt: "2026-08-24T00:00:00.000Z" }
   ];
   expect(events(kills).map((k) => k.killedAt)).toEqual([
-    kills[0]!.killedAt,
-    kills[2]!.killedAt
+    kills[2]!.killedAt,
+    kills[0]!.killedAt
   ]);
   expect(events([...kills].reverse())).toEqual(events(kills));
 });
@@ -106,7 +111,7 @@ it("does not lend a verified first-kill rank to a later reclear", () => {
       second,
       { ...third, killedAt: "2026-08-30T20:50:14.238Z" }
     ]).map((k) => k.historicWorldRank)
-  ).toEqual([48, null]);
+  ).toEqual([null, 48]);
 });
 
 it("groups same-date participants without requiring a shared report", () => {

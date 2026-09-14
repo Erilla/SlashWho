@@ -208,7 +208,8 @@ export async function createWorkerRuntime(
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
       warcraftLogs: dependencies.createEvidenceGateway(config),
-      requestCap: config.evidenceRequestCap
+      requestCap: config.evidenceRequestCap,
+      parseRequestCap: config.evidenceParseRequestCap
     });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);

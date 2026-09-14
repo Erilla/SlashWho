@@ -37,6 +37,7 @@ describe("database migrations", () => {
       "fingerprint_sweep_request_events",
       "fingerprint_sweep_reservations",
       "fingerprint_sweep_states",
+      "manual_dossier_connections",
       "negative_character_cache",
       "rate_limit_events",
       "snapshot_characters",
@@ -57,6 +58,47 @@ describe("database migrations", () => {
 
     expect(Number(before.rows[0]?.count)).toBeGreaterThan(0);
     expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+  });
+
+  it("chains wipe-fight and parse snapshots after the historical wipe schema", () => {
+    const directory = new URL(
+      "../../packages/database/drizzle/meta/",
+      import.meta.url
+    );
+    const readSnapshot = (name: string) =>
+      JSON.parse(readFileSync(new URL(name, directory), "utf8")) as {
+        id: string;
+        prevId: string;
+        tables: Record<
+          string,
+          { indexes: Record<string, unknown>; columns: Record<string, unknown> }
+        >;
+      };
+    const historicalWipes = readSnapshot("0007_snapshot.json");
+    const wipeFights = readSnapshot("0008_snapshot.json");
+    const parses = readSnapshot("0009_snapshot.json");
+    const journal = JSON.parse(
+      readFileSync(new URL("_journal.json", directory), "utf8")
+    ) as { entries: Array<{ idx: number; tag: string }> };
+
+    expect(wipeFights.prevId).toBe(historicalWipes.id);
+    expect(parses.prevId).toBe(wipeFights.id);
+    expect(
+      journal.entries.slice(-3).map(({ idx, tag }) => ({ idx, tag }))
+    ).toEqual([
+      { idx: 8, tag: "0008_character_mythic_wipe_fights" },
+      { idx: 9, tag: "0009_character_kill_parses" },
+      { idx: 10, tag: "0010_manual_dossier_connections" }
+    ]);
+    expect(
+      wipeFights.tables["public.character_mythic_wipes"]?.indexes
+    ).toHaveProperty("character_mythic_wipes_run_fight_idx");
+    expect(
+      parses.tables["public.character_mythic_wipes"]?.indexes
+    ).toHaveProperty("character_mythic_wipes_run_fight_idx");
+    expect(
+      parses.tables["public.character_mythic_kills"]?.columns
+    ).toHaveProperty("damage_parse_state");
   });
 
   it("serializes concurrent migration attempts with an advisory lock", async () => {

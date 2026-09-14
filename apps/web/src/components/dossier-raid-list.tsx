@@ -2,15 +2,18 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
+import { DossierParseList } from "./dossier-parse-list";
 import { UpstreamIconLink } from "./upstream-icon-link";
 import { GuildProfileLinks } from "./profile-links";
 
 type Raid = ApplicantDossier["raids"][number];
 type Boss = Raid["bosses"][number];
 type KillBoss = Extract<Boss, { state: "kill" }>;
+type WipeEvidence = Extract<Boss, { state: "wipe" }>["wipe"];
 
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
+  limitations?: ApplicantDossier["limitations"];
 }>;
 
 function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
@@ -98,6 +101,51 @@ function StatusIcon({ state }: { state: "kill" | "wipe" | "no_logs" }) {
   );
 }
 
+function WipeEvidenceList({
+  wipes
+}: {
+  wipes: readonly WipeEvidence[] | undefined;
+}) {
+  return (
+    <>
+      {(wipes ?? []).map((wipe) => (
+        <div
+          className="dossier-evidence-row"
+          key={`${wipe.attemptedAt}-${wipe.reportUrl}`}
+        >
+          <StatusIcon state="wipe" />
+          <dl className="dossier-evidence">
+            <div>
+              <dt>Wipe</dt>
+              <dd>
+                <time dateTime={wipe.attemptedAt}>
+                  {displayDate(wipe.attemptedAt)}
+                </time>
+              </dd>
+            </div>
+            <div>
+              <dt>Report</dt>
+              <dd>
+                <UpstreamIconLink
+                  href={wipe.reportUrl}
+                  label="View Warcraft Logs wipe report"
+                  source="warcraft_logs"
+                />
+              </dd>
+            </div>
+            <div>
+              <dt>Characters present</dt>
+              <dd>
+                <DossierCharacterNames characters={wipe.characters} />
+              </dd>
+            </div>
+          </dl>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function BossArtwork({ boss }: { boss: Boss }) {
   return boss.imageUrl ? (
     <img
@@ -116,7 +164,9 @@ function BossArtwork({ boss }: { boss: Boss }) {
 
 function KillEvidence({ boss }: { boss: KillBoss }) {
   const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
-    compareFirstKillsLatestFirst
+    (a, b) =>
+      b.killedAt.localeCompare(a.killedAt) ||
+      (b.reportUrl ?? "").localeCompare(a.reportUrl ?? "")
   );
   const firstKill = boss.firstKill;
   return (
@@ -139,49 +189,74 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
           </p>
         </div>
       </div>
+      <DossierParseList
+        label="First kill parses"
+        parses={boss.firstKill.parses}
+      />
+      <DossierParseList label="Best shown parses" parses={boss.bestParses} />
       <details>
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
-          {firstKills.map((evidence, index) => (
-            <dl
-              className="dossier-evidence"
-              key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
-            >
-              <div>
-                <dt>{index === 0 ? "First kill" : "Kill"}</dt>
-                <dd>
-                  <time dateTime={evidence.killedAt}>
-                    {displayDate(evidence.killedAt)}
-                  </time>
-                </dd>
+          {firstKills.map((evidence, index) => {
+            const isChronologicalFirst = index === firstKills.length - 1;
+            return (
+              <div
+                className="dossier-evidence-row"
+                key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
+              >
+                <StatusIcon state="kill" />
+                <dl
+                  className={`dossier-evidence${
+                    isChronologicalFirst ? " dossier-evidence-first-kill" : ""
+                  }`}
+                >
+                  <div>
+                    <dt>{isChronologicalFirst ? "First kill" : "Kill"}</dt>
+                    <dd>
+                      <time dateTime={evidence.killedAt}>
+                        {displayDate(evidence.killedAt)}
+                      </time>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Guild</dt>
+                    <dd>
+                      Guild: {displayGuild(evidence.guild)}
+                      {evidence.guild ? (
+                        <GuildProfileLinks guild={evidence.guild} />
+                      ) : null}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>World rank</dt>
+                    <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>Reports</dt>
+                    <dd>
+                      <ReportLinks evidence={evidence} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Characters present</dt>
+                    <dd>
+                      <DossierCharacterNames characters={evidence.characters} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Parses</dt>
+                    <dd>
+                      <DossierParseList
+                        label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
+                        parses={evidence.parses}
+                      />
+                    </dd>
+                  </div>
+                </dl>
               </div>
-              <div>
-                <dt>Guild</dt>
-                <dd>
-                  Guild: {displayGuild(evidence.guild)}
-                  {evidence.guild ? (
-                    <GuildProfileLinks guild={evidence.guild} />
-                  ) : null}
-                </dd>
-              </div>
-              <div>
-                <dt>World rank</dt>
-                <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>Reports</dt>
-                <dd>
-                  <ReportLinks evidence={evidence} />
-                </dd>
-              </div>
-              <div>
-                <dt>Characters present</dt>
-                <dd>
-                  <DossierCharacterNames characters={evidence.characters} />
-                </dd>
-              </div>
-            </dl>
-          ))}
+            );
+          })}
+          <WipeEvidenceList wipes={boss.wipes} />
         </section>
       </details>
     </>
@@ -210,32 +285,12 @@ function BossEvidence({ boss }: { boss: Boss }) {
           </div>
           <details>
             <summary>View wipe evidence</summary>
-            <dl className="dossier-evidence">
-              <div>
-                <dt>Attempt</dt>
-                <dd>
-                  <time dateTime={boss.wipe.attemptedAt}>
-                    {displayDate(boss.wipe.attemptedAt)}
-                  </time>
-                </dd>
-              </div>
-              <div>
-                <dt>Report</dt>
-                <dd>
-                  <UpstreamIconLink
-                    href={boss.wipe.reportUrl}
-                    label="View Warcraft Logs wipe report"
-                    source="warcraft_logs"
-                  />
-                </dd>
-              </div>
-              <div>
-                <dt>Characters present</dt>
-                <dd>
-                  <DossierCharacterNames characters={boss.wipe.characters} />
-                </dd>
-              </div>
-            </dl>
+            <section
+              aria-label="Wipe evidence"
+              className="dossier-evidence-list"
+            >
+              <WipeEvidenceList wipes={boss.wipes ?? [boss.wipe]} />
+            </section>
           </details>
         </>
       );
@@ -288,7 +343,16 @@ function RaidArtwork({ raid }: { raid: Raid }) {
   ) : null;
 }
 
-export function DossierRaidList({ raids }: DossierRaidListProps) {
+export function DossierRaidList({
+  raids,
+  limitations = []
+}: DossierRaidListProps) {
+  const unknown = limitations.some(
+    (item) => item.code === "current_content_window_unknown"
+  );
+  const legacy = limitations.some(
+    (item) => item.code === "current_content_evidence_withheld"
+  );
   return (
     <section
       aria-labelledby="historic-mythic-evidence-heading"
@@ -299,7 +363,13 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
       </h2>
       {raids.length === 0 ? (
         <p className="empty-state">
-          No public historic Mythic evidence was found.
+          {legacy
+            ? unknown
+              ? "Some public Mythic evidence is withheld because it falls outside current-content windows or its eligibility has not been reviewed."
+              : "Public Mythic evidence outside current-content windows is withheld."
+            : unknown
+              ? "Some public Mythic evidence is withheld because its current-content eligibility is not established."
+              : "No public historic Mythic evidence was found."}
         </p>
       ) : (
         <div className="dossier-raid-list">

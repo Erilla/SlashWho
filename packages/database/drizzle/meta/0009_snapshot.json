@@ -1,6 +1,6 @@
 {
-  "id": "7749a9ca-4ef4-4f13-8959-15abee520fa1",
-  "prevId": "0d59feab-1e0b-42df-b2d6-1d9b0e67f1cb",
+  "id": "9e8d143b-8144-47f9-88d0-d53a95fd1ebc",
+  "prevId": "45f46485-6c2f-4d8d-a1ce-e5628fb1358d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -47,6 +47,13 @@
           "notNull": true,
           "default": "'queued'"
         },
+        "evidence_version": {
+          "name": "evidence_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "attempt": {
           "name": "attempt",
           "type": "integer",
@@ -56,6 +63,12 @@
         },
         "limitation_code": {
           "name": "limitation_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parse_limitation_code": {
+          "name": "parse_limitation_code",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -153,7 +166,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "character_evidence_runs_completion_limitations_check": {
+          "name": "character_evidence_runs_completion_limitations_check",
+          "value": "(\"character_evidence_runs\".\"status\" = 'complete' AND \"character_evidence_runs\".\"limitation_code\" IS NULL) OR (\"character_evidence_runs\".\"status\" = 'partial' AND \"character_evidence_runs\".\"limitation_code\" IS NOT NULL) OR \"character_evidence_runs\".\"status\" NOT IN ('complete', 'partial')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.character_mythic_kills": {
@@ -256,6 +274,45 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": false
+        },
+        "damage_parse_state": {
+          "name": "damage_parse_state",
+          "type": "character_mythic_kill_parse_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "damage_percentile": {
+          "name": "damage_percentile",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "healing_parse_state": {
+          "name": "healing_parse_state",
+          "type": "character_mythic_kill_parse_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "healing_percentile": {
+          "name": "healing_percentile",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "boss_damage_parse_state": {
+          "name": "boss_damage_parse_state",
+          "type": "character_mythic_kill_parse_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "boss_damage_percentile": {
+          "name": "boss_damage_percentile",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -318,6 +375,18 @@
         "character_mythic_kills_guild_identity_check": {
           "name": "character_mythic_kills_guild_identity_check",
           "value": "(\"character_mythic_kills\".\"guild_name\" IS NULL AND \"character_mythic_kills\".\"guild_realm\" IS NULL) OR (\"character_mythic_kills\".\"guild_name\" IS NOT NULL AND \"character_mythic_kills\".\"guild_realm\" IS NOT NULL)"
+        },
+        "character_mythic_kills_damage_parse_check": {
+          "name": "character_mythic_kills_damage_parse_check",
+          "value": "(\"character_mythic_kills\".\"damage_parse_state\" = 'available' AND \"character_mythic_kills\".\"damage_percentile\" IS NOT NULL AND \"character_mythic_kills\".\"damage_percentile\" >= 0 AND \"character_mythic_kills\".\"damage_percentile\" <= 100) OR (\"character_mythic_kills\".\"damage_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"damage_percentile\" IS NULL)"
+        },
+        "character_mythic_kills_healing_parse_check": {
+          "name": "character_mythic_kills_healing_parse_check",
+          "value": "(\"character_mythic_kills\".\"healing_parse_state\" = 'available' AND \"character_mythic_kills\".\"healing_percentile\" IS NOT NULL AND \"character_mythic_kills\".\"healing_percentile\" >= 0 AND \"character_mythic_kills\".\"healing_percentile\" <= 100) OR (\"character_mythic_kills\".\"healing_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"healing_percentile\" IS NULL)"
+        },
+        "character_mythic_kills_boss_damage_parse_check": {
+          "name": "character_mythic_kills_boss_damage_parse_check",
+          "value": "(\"character_mythic_kills\".\"boss_damage_parse_state\" = 'available' AND \"character_mythic_kills\".\"boss_damage_percentile\" IS NOT NULL AND \"character_mythic_kills\".\"boss_damage_percentile\" >= 0 AND \"character_mythic_kills\".\"boss_damage_percentile\" <= 100) OR (\"character_mythic_kills\".\"boss_damage_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"boss_damage_percentile\" IS NULL)"
         }
       },
       "isRLSEnabled": false
@@ -395,8 +464,8 @@
         }
       },
       "indexes": {
-        "character_mythic_wipes_run_boss_idx": {
-          "name": "character_mythic_wipes_run_boss_idx",
+        "character_mythic_wipes_run_fight_idx": {
+          "name": "character_mythic_wipes_run_fight_idx",
           "columns": [
             {
               "expression": "evidence_run_id",
@@ -405,13 +474,7 @@
               "nulls": "last"
             },
             {
-              "expression": "raid_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "boss_id",
+              "expression": "fight_url",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1701,6 +1764,15 @@
         "complete",
         "partial",
         "failed"
+      ]
+    },
+    "public.character_mythic_kill_parse_state": {
+      "name": "character_mythic_kill_parse_state",
+      "schema": "public",
+      "values": [
+        "available",
+        "not_applicable",
+        "unavailable"
       ]
     },
     "public.discovery_run_status": {
