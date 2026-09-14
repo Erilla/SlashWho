@@ -786,6 +786,84 @@ describe("Warcraft Logs gateway", () => {
     );
   });
 
+  it("fills capped report groups from character encounter rankings", async () => {
+    // Break caught: a character with more report groups than the cap still
+    // needs best-shown ranking values even when exact later fights are skipped.
+    let reportCalls = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string; fightIDs?: number[] };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        return jsonResponse(
+          performanceRankings(
+            { damage: 0, healing: 0, bossDamage: 0 },
+            {
+              code: body.variables?.code,
+              fightId: body.variables?.fightIDs?.[0]
+            }
+          )
+        );
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [{ rankPercent: 91 }] },
+                healing: { data: [{ rankPercent: 82 }] },
+                bossDamage: { data: [{ rankPercent: 87 }] }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      reportCalls++;
+      return jsonResponse(
+        performanceReport(
+          [26 + reportCalls],
+          reportCalls < 2,
+          `report-${reportCalls}`
+        )
+      );
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 2,
+      parseRequestCap: 2
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(
+      result.kills.some(
+        (kill) =>
+          kill.performance.damage.state === "available" &&
+          kill.performance.damage.percentile === 91 &&
+          kill.performance.healing.state === "available" &&
+          kill.performance.healing.percentile === 82 &&
+          kill.performance.bossDamage.state === "available" &&
+          kill.performance.bossDamage.percentile === 87
+      )
+    ).toBe(true);
+  });
+
   it("paginates public reports and retains every distinct Mythic kill", async () => {
     // Break caught: collapsing report pages to one kill per encounter hid the
     // complete chronological evidence needed by an applicant dossier.
