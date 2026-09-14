@@ -1,6 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 import { buildBoundedCuttingEdgeSequence } from "@slashwho/domain";
 
+import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
 
 type DossierCuttingEdgeListProps = Readonly<{
@@ -85,7 +86,11 @@ export function DossierCuttingEdgeList({
                         }).format(new Date(entry.achievement.completedAt))}
                       </time>
                     </p>
-                    <p>{entry.achievement.characters.join(", ")}</p>
+                    <p>
+                      <DossierCharacterNames
+                        characters={entry.achievement.characters}
+                      />
+                    </p>
                   </>
                 )}
               </div>

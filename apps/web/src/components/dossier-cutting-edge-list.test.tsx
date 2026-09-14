@@ -3,8 +3,58 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
+import type { CharacterKey } from "@slashwho/contracts";
+import type { ReactElement } from "react";
 
+import { DossierCharacterProvider } from "./dossier-character-name";
 import { DossierCuttingEdgeList } from "./dossier-cutting-edge-list";
+
+const ryii: CharacterKey = {
+  region: "eu",
+  realm: "silvermoon",
+  name: "ryii"
+};
+const ryalts: CharacterKey = {
+  region: "eu",
+  realm: "draenor",
+  name: "ryalts"
+};
+const anotheralt: CharacterKey = {
+  region: "eu",
+  realm: "silvermoon",
+  name: "anotheralt"
+};
+const knownCharacters = [
+  {
+    key: ryii,
+    displayName: "Ryii",
+    className: "Mage",
+    raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+    source: "submitted" as const
+  },
+  {
+    key: ryalts,
+    displayName: "Ryalts",
+    className: "Priest",
+    raiderIoUrl: "https://raider.io/characters/eu/draenor/ryalts",
+    source: "fingerprint_derived" as const
+  },
+  {
+    key: anotheralt,
+    displayName: "Anotheralt",
+    className: "Warrior",
+    raiderIoUrl: "https://raider.io/characters/eu/silvermoon/anotheralt",
+    source: "fingerprint_derived" as const
+  }
+];
+
+function renderWithDossierCharacters(ui: ReactElement) {
+  return render(
+    <DossierCharacterProvider characters={knownCharacters}>
+      {ui}
+    </DossierCharacterProvider>
+  );
+}
 
 afterEach(cleanup);
 
@@ -15,7 +65,7 @@ it.each([
 ])(
   "labels the count of $count achievements, regardless of linked characters",
   ({ count, label }) => {
-    render(
+    renderWithDossierCharacters(
       <DossierCuttingEdgeList
         cuttingEdges={[
           {
@@ -24,7 +74,7 @@ it.each([
             description: "Defeat Queen Ansurek on Mythic Difficulty.",
             iconUrl: null,
             completedAt: "2025-01-14T20:30:00.000Z",
-            characters: ["Ryii", "Ryalts", "Anotheralt"]
+            characters: [ryii, ryalts, anotheralt]
           },
           {
             achievementId: "19350",
@@ -32,7 +82,7 @@ it.each([
             description: "Defeat Fyrakk on Mythic Difficulty.",
             iconUrl: null,
             completedAt: "2024-03-14T20:30:00.000Z",
-            characters: ["Ryii"]
+            characters: [ryii]
           }
         ].slice(0, count)}
         limitations={[]}
@@ -54,7 +104,7 @@ it.each([
 );
 
 it("renders an official Cutting Edge achievement with its completion date and characters", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierCuttingEdgeList
       cuttingEdges={[
         {
@@ -64,7 +114,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
             "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
           iconUrl: "https://render.example/40254.jpg",
           completedAt: "2025-01-14T20:30:00.000Z",
-          characters: ["Ryii", "Ryalts"]
+          characters: [ryii, ryalts]
         }
       ]}
       limitations={[]}
@@ -75,14 +125,16 @@ it("renders an official Cutting Edge achievement with its completion date and ch
     screen.getByRole("heading", { name: "Historic Cutting Edge" })
   ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
-  expect(screen.getByText("Ryii, Ryalts")).toBeVisible();
+  expect(screen.getByText("Ryii").parentElement).toHaveTextContent(
+    "Ryii, Ryalts"
+  );
   expect(
     screen.getByAltText("Cutting Edge: Queen Ansurek icon")
   ).toHaveAttribute("src", "https://render.example/40254.jpg");
 });
 
 it("renders fallback artwork when an official achievement icon is unavailable", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierCuttingEdgeList
       cuttingEdges={[
         {
@@ -91,7 +143,7 @@ it("renders fallback artwork when an official achievement icon is unavailable", 
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
           completedAt: "2025-01-14T20:30:00.000Z",
-          characters: ["Ryii"]
+          characters: [ryii]
         }
       ]}
       limitations={[]}
@@ -105,7 +157,7 @@ it("renders fallback artwork when an official achievement icon is unavailable", 
 });
 
 it("renders catalogue-ordered gaps as not recorded between earned achievements", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierCuttingEdgeList
       cuttingEdges={[
         {
@@ -114,7 +166,7 @@ it("renders catalogue-ordered gaps as not recorded between earned achievements",
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
           completedAt: "2025-01-14T20:30:00.000Z",
-          characters: ["Ryii"]
+          characters: [ryii]
         },
         {
           achievementId: "41625",
@@ -122,7 +174,7 @@ it("renders catalogue-ordered gaps as not recorded between earned achievements",
           description: "Defeat Dimensius on Mythic Difficulty.",
           iconUrl: null,
           completedAt: "2025-10-14T20:30:00.000Z",
-          characters: ["Ryii"]
+          characters: [ryii]
         }
       ]}
       limitations={[]}
@@ -145,7 +197,7 @@ it("renders catalogue-ordered gaps as not recorded between earned achievements",
 });
 
 it("does not infer a missing achievement when Blizzard evidence is limited", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierCuttingEdgeList
       cuttingEdges={[
         {
@@ -154,7 +206,7 @@ it("does not infer a missing achievement when Blizzard evidence is limited", () 
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
           completedAt: "2025-01-14T20:30:00.000Z",
-          characters: ["Ryii"]
+          characters: [ryii]
         },
         {
           achievementId: "41625",
@@ -162,7 +214,7 @@ it("does not infer a missing achievement when Blizzard evidence is limited", () 
           description: "Defeat Dimensius on Mythic Difficulty.",
           iconUrl: null,
           completedAt: "2025-10-14T20:30:00.000Z",
-          characters: ["Ryii"]
+          characters: [ryii]
         }
       ]}
       limitations={[

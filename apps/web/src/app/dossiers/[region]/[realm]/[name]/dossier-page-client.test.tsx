@@ -54,7 +54,7 @@ function dossier(
               guild: null,
               historicWorldRank: null,
               reportUrl: null,
-              characters: ["Ryii"]
+              characters: [identity]
             }
           }
         ]

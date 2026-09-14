@@ -57,7 +57,7 @@ it("shows a safe accessible Raider.IO icon link beside a class-coloured characte
   expect(link).toHaveAttribute("target", "_blank");
   expect(link).toHaveAttribute("rel", "noopener noreferrer");
   expect(link).toHaveTextContent("Ryii");
-  expect(screen.getByText("Ryii")).toHaveClass("dossier-character-link--mage");
+  expect(screen.getByText("Ryii")).toHaveClass("dossier-character-name--mage");
   expect(link.querySelector(".upstream-link-icon--raiderio")).toBeVisible();
 });
 

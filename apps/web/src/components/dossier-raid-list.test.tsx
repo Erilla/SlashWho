@@ -3,9 +3,46 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
-import type { ApplicantDossier } from "@slashwho/contracts";
+import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
+import type { ReactElement } from "react";
 
+import { DossierCharacterProvider } from "./dossier-character-name";
 import { DossierRaidList } from "./dossier-raid-list";
+
+const ryii: CharacterKey = {
+  region: "eu",
+  realm: "silvermoon",
+  name: "ryii"
+};
+const ryalts: CharacterKey = {
+  region: "eu",
+  realm: "draenor",
+  name: "ryalts"
+};
+const knownCharacters = [
+  {
+    key: ryii,
+    displayName: "Ryii",
+    className: "Mage",
+    raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+    source: "submitted" as const
+  },
+  {
+    key: ryalts,
+    displayName: "Ryalts",
+    className: "Priest",
+    raiderIoUrl: "https://raider.io/characters/eu/draenor/ryalts",
+    source: "fingerprint_derived" as const
+  }
+];
+
+function renderWithDossierCharacters(ui: ReactElement) {
+  return render(
+    <DossierCharacterProvider characters={knownCharacters}>
+      {ui}
+    </DossierCharacterProvider>
+  );
+}
 
 const boss = {
   bossId: "2602",
@@ -16,7 +53,7 @@ const boss = {
     guild: null,
     historicWorldRank: null,
     reportUrl: null,
-    characters: ["Ryii"]
+    characters: [ryii]
   }
 };
 
@@ -27,7 +64,7 @@ it("shows the grouped rank in the summary and retains all distinct report links"
     "https://www.warcraftlogs.com/reports/one#fight=1",
     "https://www.warcraftlogs.com/reports/two#fight=2"
   ];
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={[
         {
@@ -77,7 +114,7 @@ it("shows the grouped rank in the summary and retains all distinct report links"
 it("renders raid artwork as a decorative banner behind the real heading", () => {
   // Break caught: raid artwork could be announced as a duplicate identifier
   // or regress to a thumbnail that does not frame the section heading.
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -119,7 +156,7 @@ it("renders raid artwork as a decorative banner behind the real heading", () => 
 it("keeps the raid heading visible when its banner artwork fails to load", () => {
   // Break caught: a failed Blizzard image request could leave a broken-image
   // marker over the raid name instead of the text-first fallback.
-  const view = render(
+  const view = renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -147,19 +184,21 @@ it("keeps the raid heading visible when its banner artwork fails to load", () =>
   expect(heading).toBeVisible();
 
   view.rerender(
-    <DossierRaidList
-      raids={
-        [
-          {
-            raidId: "1273",
-            raidName: "Nerub-ar Palace",
-            imageUrl: "https://render.example/raids/recovered.jpg",
-            cuttingEdge: null,
-            bosses: [{ ...boss, imageUrl: null }]
-          }
-        ] satisfies ApplicantDossier["raids"]
-      }
-    />
+    <DossierCharacterProvider characters={knownCharacters}>
+      <DossierRaidList
+        raids={
+          [
+            {
+              raidId: "1273",
+              raidName: "Nerub-ar Palace",
+              imageUrl: "https://render.example/raids/recovered.jpg",
+              cuttingEdge: null,
+              bosses: [{ ...boss, imageUrl: null }]
+            }
+          ] satisfies ApplicantDossier["raids"]
+        }
+      />
+    </DossierCharacterProvider>
   );
   const recoveredArtwork = heading.querySelector("img");
   fireEvent.load(recoveredArtwork!);
@@ -167,7 +206,7 @@ it("keeps the raid heading visible when its banner artwork fails to load", () =>
 });
 
 it("keeps a text-first raid heading when official artwork is unavailable", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -196,7 +235,7 @@ it("keeps a text-first raid heading when official artwork is unavailable", () =>
 });
 
 it("shows first-kill metadata and lists every kill in chronological order", () => {
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={
         [
@@ -215,14 +254,14 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                     guild: { name: "Method", realm: "Tarren Mill" },
                     historicWorldRank: 2,
                     reportUrl: "https://www.warcraftlogs.com/reports/first",
-                    characters: ["Ryii"]
+                    characters: [ryii]
                   },
                   {
                     killedAt: "2025-02-14T20:30:00.000Z",
                     guild: { name: "Method", realm: "Tarren Mill" },
                     historicWorldRank: null,
                     reportUrl: "https://www.warcraftlogs.com/reports/second",
-                    characters: ["Ryalts"]
+                    characters: [ryalts]
                   }
                 ]
               }
@@ -233,7 +272,12 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
     />
   );
 
-  expect(screen.getByText("First kill: 14 Jan 2025 · Ryii")).toBeVisible();
+  const firstKillSummary = screen
+    .getByText("Ryii", {
+      selector: ".dossier-boss-first-kill .dossier-character-name"
+    })
+    .closest(".dossier-boss-first-kill");
+  expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();

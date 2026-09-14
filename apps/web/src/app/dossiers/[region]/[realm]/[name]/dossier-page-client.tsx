@@ -10,6 +10,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
+import {
+  DossierCharacterName,
+  DossierCharacterProvider
+} from "../../../../../components/dossier-character-name";
 import { DossierCuttingEdgeList } from "../../../../../components/dossier-cutting-edge-list";
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
@@ -268,50 +272,54 @@ export function DossierPageClient({
       : research;
 
   return (
-    <main className="page-shell dossier-page">
-      <div className="dossier-search">
-        <SearchForm />
-      </div>
-      <header className="dossier-heading">
-        <p className="eyebrow">Applicant dossier</p>
-        <h1>{identity.name}</h1>
-        <p className="identity-meta">
-          {identity.region.toUpperCase()} · {identity.realm}
-        </p>
-      </header>
-
-      {visibleResearch ? (
-        <DossierResearchState research={visibleResearch} />
-      ) : null}
-      {status && !dossier ? (
-        <p className="dossier-status" role="status">
-          <svg
-            aria-hidden="true"
-            className="dossier-loading-spinner"
-            viewBox="0 0 24 24"
-          >
-            <circle cx="12" cy="12" r="8" />
-          </svg>
-          <span>{status}</span>
-        </p>
-      ) : null}
-      {visibleError ? (
-        <p className="view-error" role="alert">
-          {visibleError}
-        </p>
-      ) : null}
-
-      {dossier ? (
-        <div className="dossier-layout">
-          <DossierCharacterList characters={dossier.characters} />
-          <DossierCuttingEdgeList
-            cuttingEdges={dossier.cuttingEdges}
-            limitations={dossier.limitations}
-          />
-          <DossierRaidList raids={dossier.raids} />
-          <DossierLimitations limitations={dossier.limitations} />
+    <DossierCharacterProvider characters={dossier?.characters ?? []}>
+      <main className="page-shell dossier-page">
+        <div className="dossier-search">
+          <SearchForm />
         </div>
-      ) : null}
-    </main>
+        <header className="dossier-heading">
+          <p className="eyebrow">Applicant dossier</p>
+          <h1>
+            <DossierCharacterName character={identity} />
+          </h1>
+          <p className="identity-meta">
+            {identity.region.toUpperCase()} · {identity.realm}
+          </p>
+        </header>
+
+        {visibleResearch ? (
+          <DossierResearchState research={visibleResearch} />
+        ) : null}
+        {status && !dossier ? (
+          <p className="dossier-status" role="status">
+            <svg
+              aria-hidden="true"
+              className="dossier-loading-spinner"
+              viewBox="0 0 24 24"
+            >
+              <circle cx="12" cy="12" r="8" />
+            </svg>
+            <span>{status}</span>
+          </p>
+        ) : null}
+        {visibleError ? (
+          <p className="view-error" role="alert">
+            {visibleError}
+          </p>
+        ) : null}
+
+        {dossier ? (
+          <div className="dossier-layout">
+            <DossierCharacterList characters={dossier.characters} />
+            <DossierCuttingEdgeList
+              cuttingEdges={dossier.cuttingEdges}
+              limitations={dossier.limitations}
+            />
+            <DossierRaidList raids={dossier.raids} />
+            <DossierLimitations limitations={dossier.limitations} />
+          </div>
+        ) : null}
+      </main>
+    </DossierCharacterProvider>
   );
 }

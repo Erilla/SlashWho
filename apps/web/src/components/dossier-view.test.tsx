@@ -58,7 +58,10 @@ const dossier: ApplicantDossier = {
             guild: { name: "Arachnid", realm: "Silvermoon" },
             historicWorldRank: 147,
             reportUrl: "https://www.warcraftlogs.com/reports/abc123",
-            characters: ["Ryii", "Ryalts"]
+            characters: [
+              { region: "eu", realm: "silvermoon", name: "ryii" },
+              { region: "eu", realm: "draenor", name: "ryalts" }
+            ]
           }
         },
         {
@@ -71,7 +74,7 @@ const dossier: ApplicantDossier = {
             guild: null,
             historicWorldRank: null,
             reportUrl: null,
-            characters: ["Ryii"]
+            characters: [{ region: "eu", realm: "silvermoon", name: "ryii" }]
           }
         }
       ]
@@ -85,7 +88,10 @@ const dossier: ApplicantDossier = {
         "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
       iconUrl: null,
       completedAt: "2025-01-14T20:30:00.000Z",
-      characters: ["Ryii", "Ryalts"]
+      characters: [
+        { region: "eu", realm: "silvermoon", name: "ryii" },
+        { region: "eu", realm: "draenor", name: "ryalts" }
+      ]
     }
   ],
   limitations: [
@@ -95,6 +101,56 @@ const dossier: ApplicantDossier = {
       code: "unavailable",
       message:
         "Warcraft Logs evidence is incomplete because the source is temporarily unavailable."
+    }
+  ]
+};
+
+const sameNamedPriest: ApplicantDossier["characters"][number] = {
+  key: { region: "us", realm: "illidan", name: "ryii" },
+  displayName: "Ryii",
+  className: "Priest",
+  raiderIoUrl: "https://raider.io/characters/us/illidan/ryii",
+  source: "fingerprint_derived" as const
+};
+
+const sameNamedDossier: ApplicantDossier = {
+  ...dossier,
+  characters: [dossier.characters[0]!, sameNamedPriest],
+  raids: [
+    {
+      ...dossier.raids[0]!,
+      bosses: [
+        {
+          ...dossier.raids[0]!.bosses[0]!,
+          firstKill: {
+            ...dossier.raids[0]!.bosses[0]!.firstKill,
+            characters: [dossier.root]
+          },
+          firstKills: [
+            {
+              ...dossier.raids[0]!.bosses[0]!.firstKill,
+              characters: [dossier.root]
+            },
+            {
+              ...dossier.raids[0]!.bosses[0]!.firstKill,
+              killedAt: "2025-01-15T20:30:00.000Z",
+              characters: [sameNamedPriest.key]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  cuttingEdges: [
+    {
+      ...dossier.cuttingEdges[0]!,
+      characters: [sameNamedPriest.key]
+    }
+  ],
+  limitations: [
+    {
+      ...dossier.limitations[0]!,
+      character: sameNamedPriest.key
     }
   ]
 };
@@ -127,9 +183,12 @@ describe("DossierPageClient", () => {
     expect(screen.getByText("World #147")).toBeVisible();
     expect(screen.getByText("Raider.IO declared")).toBeVisible();
     expect(screen.getByText("Fingerprint-derived")).toBeVisible();
-    expect(
-      screen.getByText(/Warcraft Logs evidence is incomplete.*Ryalts/i)
-    ).toBeVisible();
+    const limitation = screen
+      .getAllByRole("listitem")
+      .find((item) => item.textContent?.includes("Warcraft Logs evidence"));
+    expect(limitation).toHaveTextContent(
+      /Warcraft Logs evidence is incomplete.*Affected character: Ryalts\./i
+    );
 
     const evidence = screen.getByRole("group", {
       name: "Queen Ansurek evidence"
@@ -161,6 +220,80 @@ describe("DossierPageClient", () => {
         "Report: —"
       )
     ).toBeVisible();
+  });
+
+  it("uses known classes for every visible character-name mention", () => {
+    // Break caught: evidence summaries, details, attribution, or limitation copy
+    // can bypass the shared character-name renderer and lose class colouring.
+    render(
+      <DossierPageClient
+        identity={dossier.root}
+        initialDossier={dossier}
+        jobId={null}
+      />
+    );
+
+    const mageMentions = screen.getAllByText("Ryii");
+    const priestMentions = screen.getAllByText("Ryalts");
+
+    expect(mageMentions).toHaveLength(7);
+    expect(priestMentions).toHaveLength(5);
+    for (const mention of mageMentions) {
+      expect(mention).toHaveClass("dossier-character-name--mage");
+    }
+    for (const mention of priestMentions) {
+      expect(mention).toHaveClass("dossier-character-name--priest");
+    }
+  });
+
+  it("resolves each dossier character mention by canonical key", () => {
+    // Break caught: duplicate display names can cause a participant reference to
+    // borrow a different connected character's class instead of using its key.
+    render(
+      <DossierPageClient
+        identity={sameNamedDossier.root}
+        initialDossier={sameNamedDossier}
+        jobId={null}
+      />
+    );
+
+    expect(
+      within(screen.getByRole("heading", { level: 1 })).getByText("Ryii")
+    ).toHaveClass("dossier-character-name--mage");
+
+    const connectedCharacters = screen.getByRole("region", {
+      name: "Connected characters"
+    });
+    const connectedMentions = within(connectedCharacters).getAllByText("Ryii");
+    expect(connectedMentions[0]).toHaveClass("dossier-character-name--mage");
+    expect(connectedMentions[1]).toHaveClass("dossier-character-name--priest");
+
+    const cuttingEdgeCard = screen
+      .getByRole("heading", { name: "Cutting Edge: Queen Ansurek" })
+      .closest("li") as HTMLLIElement;
+    expect(within(cuttingEdgeCard).getByText("Ryii")).toHaveClass(
+      "dossier-character-name--priest"
+    );
+
+    const firstKill = document.querySelector<HTMLParagraphElement>(
+      ".dossier-boss-first-kill"
+    )!;
+    expect(within(firstKill).getByText("Ryii")).toHaveClass(
+      "dossier-character-name--mage"
+    );
+
+    const evidenceDefinitions =
+      document.querySelectorAll<HTMLDListElement>(".dossier-evidence");
+    expect(within(evidenceDefinitions[1]!).getByText("Ryii")).toHaveClass(
+      "dossier-character-name--priest"
+    );
+
+    const limitation = screen
+      .getAllByRole("listitem")
+      .find((item) => item.textContent?.includes("Warcraft Logs evidence"))!;
+    expect(within(limitation).getByText("Ryii")).toHaveClass(
+      "dossier-character-name--priest"
+    );
   });
 
   it("polls the dossier-scoped research status endpoint", async () => {

@@ -46,7 +46,7 @@ it("combines recorded Nekzali timestamps while retaining guild, rank and all rep
       guild: second.guild,
       historicWorldRank: 48,
       reportUrls: expect.arrayContaining(kills.map((k) => k.reportUrl)),
-      characters: ["Rinn"]
+      characters: [character]
     })
   ]);
   expect(events([...kills].reverse())).toEqual(events(kills));
