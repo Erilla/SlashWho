@@ -239,7 +239,10 @@ export function DossierPageClient({
       {dossier ? (
         <div className="dossier-layout">
           <DossierCharacterList characters={dossier.characters} />
-          <DossierCuttingEdgeList cuttingEdges={dossier.cuttingEdges} />
+          <DossierCuttingEdgeList
+            cuttingEdges={dossier.cuttingEdges}
+            limitations={dossier.limitations}
+          />
           <DossierRaidList raids={dossier.raids} />
           <DossierLimitations limitations={dossier.limitations} />
         </div>

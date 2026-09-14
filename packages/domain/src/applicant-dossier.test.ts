@@ -253,6 +253,71 @@ describe("applicant dossier", () => {
     ]);
   });
 
+  it("orders completed Cutting Edge achievements newest first with stable ties", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [],
+      cuttingEdges: [
+        {
+          achievementId: "40254",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          character: root
+        },
+        {
+          achievementId: "41625",
+          completedAt: "2025-10-14T20:30:00.000Z",
+          character: root
+        },
+        {
+          achievementId: "41297",
+          completedAt: "2025-10-14T20:30:00.000Z",
+          character: root
+        }
+      ],
+      limitations: []
+    });
+
+    expect(
+      dossier.cuttingEdges.map((achievement) => achievement.achievementId)
+    ).toEqual(["41297", "41625", "40254"]);
+  });
+
+  it("keeps Cutting Edge ordering stable when evidence input is reversed", () => {
+    const cuttingEdges = [
+      {
+        achievementId: "40254",
+        completedAt: "2025-01-14T20:30:00.000Z",
+        character: root
+      },
+      {
+        achievementId: "41625",
+        completedAt: "2025-10-14T20:30:00.000Z",
+        character: root
+      },
+      {
+        achievementId: "41297",
+        completedAt: "2025-10-14T20:30:00.000Z",
+        character: root
+      }
+    ];
+    const input = {
+      root,
+      characters: [rootCharacter],
+      kills: [],
+      limitations: []
+    };
+
+    expect(
+      buildApplicantDossier({ ...input, cuttingEdges }).cuttingEdges
+    ).toEqual(
+      buildApplicantDossier({
+        ...input,
+        cuttingEdges: [...cuttingEdges].reverse()
+      }).cuttingEdges
+    );
+  });
+
   it("excludes Mythic+ season zones from raid boss evidence", () => {
     const dossier = buildApplicantDossier({
       root,

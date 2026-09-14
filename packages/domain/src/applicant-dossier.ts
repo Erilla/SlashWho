@@ -248,7 +248,7 @@ export function buildApplicantDossier(
       })
       .sort(
         (a, b) =>
-          text(a.completedAt, b.completedAt) ||
+          text(b.completedAt, a.completedAt) ||
           text(a.achievementId, b.achievementId)
       ),
     limitations: input.limitations,
