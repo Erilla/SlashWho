@@ -106,6 +106,10 @@ function fixture(
       find: vi.fn(),
       listHistory: vi.fn()
     },
+    manualConnections: {
+      add: vi.fn().mockResolvedValue("added"),
+      list: vi.fn().mockResolvedValue([])
+    },
     runs: { create: runsCreate },
     evidence: {
       reserve: vi.fn().mockImplementation(async ({ key }) => ({
