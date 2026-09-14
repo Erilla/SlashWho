@@ -1,5 +1,8 @@
 import type { DossierLimitation } from "@slashwho/contracts";
 
+import { DossierCharacterName } from "./dossier-character-name";
+import { CharacterProfileLinks } from "./profile-links";
+
 type DossierLimitationsProps = Readonly<{
   limitations: readonly DossierLimitation[];
 }>;
@@ -9,7 +12,7 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
 
   return (
     <section
-      className="dossier-limitations"
+      className="dossier-panel dossier-limitations"
       aria-labelledby="limitations-heading"
     >
       <h2 className="section-heading" id="limitations-heading">
@@ -19,9 +22,18 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
         {limitations.map((limitation, index) => (
           <li key={`${limitation.source}-${limitation.code}-${index}`}>
             {limitation.message}
-            {limitation.character
-              ? ` Affected character: ${limitation.character.name}.`
-              : ""}
+            {limitation.character ? (
+              <>
+                {" Affected character: "}
+                <DossierCharacterName character={limitation.character} />.
+                <CharacterProfileLinks
+                  character={{
+                    key: limitation.character,
+                    displayName: limitation.character.name
+                  }}
+                />
+              </>
+            ) : null}
           </li>
         ))}
       </ul>

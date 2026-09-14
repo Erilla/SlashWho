@@ -1,0 +1,62 @@
+{
+  "bossRankings": [
+    {
+      "guild": {
+        "realm": {
+          "slug": "illidan"
+        },
+        "region": {
+          "slug": "us"
+        },
+        "name": "Liquid"
+      },
+      "rank": 1,
+      "encountersDefeated": [
+        {
+          "slug": "queen-ansurek",
+          "lastDefeated": "2024-09-29T07:02:27Z",
+          "firstDefeated": "2024-09-29T07:02:27Z"
+        },
+        {
+          "slug": "queen-ansurek",
+          "lastDefeated": "2024-09-29T07:02:28Z",
+          "firstDefeated": "2024-09-29T07:02:28Z"
+        },
+        {
+          "slug": "queen-ansurek",
+          "lastDefeated": "2024-10-21T22:19:34Z",
+          "firstDefeated": "2024-10-21T22:19:34Z"
+        }
+      ]
+    },
+    {
+      "guild": {
+        "realm": {
+          "slug": "tarren-mill"
+        },
+        "region": {
+          "slug": "eu"
+        },
+        "name": "Echo"
+      },
+      "rank": 2,
+      "encountersDefeated": [
+        {
+          "slug": "queen-ansurek",
+          "lastDefeated": "2024-09-30T12:07:25Z",
+          "firstDefeated": "2024-09-30T12:07:25Z"
+        },
+        {
+          "slug": "queen-ansurek",
+          "lastDefeated": "2024-09-30T12:07:26Z",
+          "firstDefeated": "2024-09-30T12:07:26Z"
+        },
+        {
+          "slug": "queen-ansurek",
+          "lastDefeated": "2024-11-11T17:41:29Z",
+          "firstDefeated": "2024-11-11T17:41:29Z"
+        }
+      ]
+    }
+  ]
+}

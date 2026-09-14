@@ -19,6 +19,8 @@ const dossier = applicantDossierSchema.parse({
     {
       key: { region: "eu", realm: "silvermoon", name: "ryii" },
       displayName: "Ryii",
+      className: "Mage",
+      raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
       source: "raiderio_declared"
     }
   ],

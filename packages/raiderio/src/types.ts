@@ -8,6 +8,8 @@ export interface RaiderIoCharacter {
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;
+  /** Explicit upstream tournament evidence; never infer this from a realm name. */
+  readonly isTournamentProfile?: boolean;
   /**
    * True when the upstream payload named at least one related character this
    * system cannot represent, so anything derived from it is knowingly incomplete.
@@ -57,6 +59,30 @@ export type HistoricMythicKillOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
+export type MythicBossRanking = Readonly<{
+  bossSlug?: string;
+  rank: number;
+  guildName: string;
+  guildRealm: string;
+  guildRegion: string;
+  firstDefeated: string;
+}>;
+
+export type MythicBossRankingsOptions = Readonly<{
+  raidSlug: string;
+  bossSlug: string;
+  /** When supplied, returns all confirmed boss ranks for this guild and raid. */
+  guild?: Readonly<{ name: string; realm: string; region: string }>;
+}>;
+
+export type MythicBossRankingsResult =
+  | { kind: "rankings"; rows: readonly MythicBossRanking[] }
+  | {
+      kind: "limitation";
+      code: RaiderIoEvidenceLimitation;
+      retryAfterMs?: number;
+    };
+
 export interface RaiderIoGateway {
   getCharacter(
     key: CharacterKey,
@@ -75,4 +101,8 @@ export interface RaiderIoGateway {
     key: CharacterKey,
     options: HistoricMythicKillOptions
   ): Promise<HistoricMythicKillResult>;
+  getMythicBossRankings(
+    options: MythicBossRankingsOptions,
+    signal?: AbortSignal
+  ): Promise<MythicBossRankingsResult>;
 }

@@ -39,6 +39,23 @@ function tokenResponse(): Response {
 }
 
 describe("Blizzard gateway", () => {
+  it("shares OAuth refresh across concurrent character reads", async () => {
+    let tokens = 0;
+    const { gateway } = clientFor((url) => {
+      if (url.pathname === "/token") {
+        tokens++;
+        return tokenResponse();
+      }
+      return Response.json({ achievements: [] });
+    });
+    await Promise.all([
+      gateway.getCompletedAchievements(key),
+      gateway.getCompletedAchievements({ ...key, name: "alt" })
+    ]);
+    expect(tokens).toBe(1);
+    expect(await gateway.getCompletedAchievements(key)).toEqual([]);
+    expect(tokens).toBe(1);
+  });
   it("uses an explicitly configured endpoint for local integration fixtures", async () => {
     // Break caught: e2e sweeps could send test credentials to the public
     // Blizzard endpoints even when the test suite provides a local fixture.
@@ -202,9 +219,7 @@ describe("Blizzard gateway", () => {
             id: 40254,
             completed_timestamp: 1_737_232_200_000,
             criteria: { is_completed: false }
-          },
-          { id: "2", completed_timestamp: 200 },
-          { id: 3, completed_timestamp: "300" }
+          }
         ]
       });
     });
@@ -215,6 +230,62 @@ describe("Blizzard gateway", () => {
         completedAt: "2025-01-18T20:30:00.000Z"
       }
     ]);
+  });
+
+  it("keeps completed achievements when other achievements are unfinished", async () => {
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      return Response.json({
+        achievements: [
+          { id: 40254, completed_timestamp: 1_737_232_200_000 },
+          { id: 41297 }
+        ]
+      });
+    });
+
+    await expect(gateway.getCompletedAchievements(key)).resolves.toEqual([
+      {
+        achievementId: "40254",
+        completedAt: "2025-01-18T20:30:00.000Z"
+      }
+    ]);
+  });
+
+  it("reports schema drift when any completed achievement row is malformed", async () => {
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      return Response.json({
+        achievements: [
+          { id: 40254, completed_timestamp: 1_737_232_200_000 },
+          { id: 41297, completed_timestamp: "malformed" },
+          { id: 41625, completed_timestamp: 1_760_473_800_000 }
+        ]
+      });
+    });
+
+    await expect(gateway.getCompletedAchievements(key)).rejects.toMatchObject({
+      kind: "schema_drift"
+    });
+  });
+
+  it.each([
+    ["zero achievement ID", { id: 0, completed_timestamp: 1_737_232_200_000 }],
+    [
+      "negative achievement ID",
+      { id: -1, completed_timestamp: 1_737_232_200_000 }
+    ],
+    ["zero completion timestamp", { id: 40254, completed_timestamp: 0 }],
+    ["negative completion timestamp", { id: 40254, completed_timestamp: -1 }],
+    ["fractional completion timestamp", { id: 40254, completed_timestamp: 1.5 }]
+  ])("reports schema drift for a %s", async (_description, achievement) => {
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      return Response.json({ achievements: [achievement] });
+    });
+
+    await expect(gateway.getCompletedAchievements(key)).rejects.toMatchObject({
+      kind: "schema_drift"
+    });
   });
 
   it("passes the abort signal and never includes an upstream body in its error", async () => {

@@ -24,8 +24,12 @@ it("migrates and initializes the durable queue before serving searches", async (
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async enqueueCharacterEvidence() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
     async work() {},
     async workFingerprintAdmissions() {},
+    async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async stop() {},
     isReady() {
@@ -44,17 +48,11 @@ it("migrates and initializes the durable queue before serving searches", async (
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
-        DOSSIER_CHARACTER_CAP: 12,
-        DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80,
-        DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15000,
-        DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: 20,
-        DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: 8000
+        DOSSIER_CHARACTER_CAP: 12
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
-        warcraftLogsClientId: "warcraft-logs-client-id",
-        warcraftLogsClientSecret: "warcraft-logs-client-secret",
         blizzardClientId: "blizzard-client-id",
         blizzardClientSecret: "blizzard-client-secret"
       }
@@ -78,9 +76,6 @@ it("migrates and initializes the durable queue before serving searches", async (
         return {} as never;
       },
       createRaiderIoGateway() {
-        return {} as never;
-      },
-      createWarcraftLogsGateway() {
         return {} as never;
       },
       createBlizzardGateway() {
@@ -109,8 +104,12 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async enqueueCharacterEvidence() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
     async work() {},
     async workFingerprintAdmissions() {},
+    async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async stop() {},
     isReady() {
@@ -142,17 +141,11 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
-        DOSSIER_CHARACTER_CAP: 12,
-        DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: 80,
-        DOSSIER_WARCRAFT_LOGS_TIMEOUT_MS: 15000,
-        DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP: 20,
-        DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS: 8000
+        DOSSIER_CHARACTER_CAP: 12
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
-        warcraftLogsClientId: "warcraft-logs-client-id",
-        warcraftLogsClientSecret: "warcraft-logs-client-secret",
         blizzardClientId: "blizzard-client-id",
         blizzardClientSecret: "blizzard-client-secret"
       }
@@ -172,9 +165,6 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         return {} as never;
       },
       createRaiderIoGateway() {
-        return {} as never;
-      },
-      createWarcraftLogsGateway() {
         return {} as never;
       },
       createBlizzardGateway() {
