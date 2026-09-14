@@ -298,9 +298,11 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses.map(
-      (parse) => parse.damage
-    )).toEqual([
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses.map(
+        (parse) => parse.damage
+      )
+    ).toEqual([
       {
         state: "available",
         percentile: 90,

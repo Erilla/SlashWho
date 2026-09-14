@@ -132,9 +132,7 @@ function fixture(
             attempt: 1,
             limitationCode:
               options.evidenceLimitationCode ??
-              (options.evidenceStatus === "partial"
-                ? "request_cap"
-                : null),
+              (options.evidenceStatus === "partial" ? "request_cap" : null),
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),

@@ -423,8 +423,8 @@ async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
 ): Promise<CompletedCharacterEvidence | null> {
-    const runResult = await client.query<EvidenceRunRow>(
-      `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+  const runResult = await client.query<EvidenceRunRow>(
+    `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
             evidence_version, attempt, limitation_code, parse_limitation_code,
             error_code, created_at, started_at,
             completed_at
@@ -2020,10 +2020,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                   name: activeRun.normalized_name
                 })
               : null;
-          const kills = new Map<
-            string,
-            (typeof incomingKills)[number]
-          >(
+          const kills = new Map<string, (typeof incomingKills)[number]>(
             previous?.kills.map((kill) => [
               kill.fightUrl,
               { kill, performance: parsePerformanceValues(kill.performance) }

@@ -532,7 +532,7 @@ describe("PostgreSQL repositories", () => {
             healing: { state: "available", percentile: 0 },
             bossDamage: { state: "available", percentile: 0 }
           }
-          })
+        })
       ],
       wipes: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")

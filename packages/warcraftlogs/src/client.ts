@@ -1106,7 +1106,7 @@ export function createWarcraftLogsClient(
           ...(parseLimitation ? { parseLimitation } : {})
         }
       : (scanLimitation ??
-        parseLimitation ?? { kind: "evidence", kills: [], wipes: [] });
+          parseLimitation ?? { kind: "evidence", kills: [], wipes: [] });
   }
 
   return { resolveCharacter, getFirstKillReports };
