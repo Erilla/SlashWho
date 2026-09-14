@@ -71,18 +71,51 @@ export function DossierCharacterProvider({
 }
 
 export function DossierCharacterName({
-  character
-}: Readonly<{ character: CharacterReference }>) {
+  character,
+  className: additionalClassName
+}: Readonly<{
+  character: CharacterReference;
+  className?: string;
+}>) {
   const characters = useContext(DossierCharactersContext);
   const resolved = resolveCharacter(character, characters);
   const modifier = colourClass(resolved.className);
-  const className = modifier
-    ? `dossier-character-name dossier-character-name--${modifier}`
-    : "dossier-character-name";
+  const className = [
+    modifier
+      ? `dossier-character-name dossier-character-name--${modifier}`
+      : "dossier-character-name",
+    additionalClassName
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <span className={className}>
       {formatCharacterDisplayName(resolved.displayName)}
+    </span>
+  );
+}
+
+export function DossierCharacterNameByName({
+  name
+}: Readonly<{ name: string }>) {
+  const characters = useContext(DossierCharactersContext);
+  const normalizedName = name.trim().toLowerCase();
+  const matches = characters.filter(
+    (character) =>
+      character.displayName.trim().toLowerCase() === normalizedName ||
+      character.key.name.trim().toLowerCase() === normalizedName
+  );
+  const character = matches.length === 1 ? matches[0] : null;
+
+  return character ? (
+    <DossierCharacterName
+      character={character}
+      className="dossier-parse-character"
+    />
+  ) : (
+    <span className="dossier-character-name dossier-parse-character">
+      {formatCharacterDisplayName(name)}
     </span>
   );
 }
