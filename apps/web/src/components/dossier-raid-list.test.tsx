@@ -526,14 +526,15 @@ it("keeps the chronological first-kill summary coherent while listing events old
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"
   );
-  expect(within(firstKillParses).getByText("Ryii")).toHaveClass(
-    "dossier-character-name--mage"
-  );
   expect(
-    within(screen.getByRole("region", { name: "Best shown parses" })).getByText(
-      "Ryalts"
+    within(firstKillParses).getByRole("group", { name: "Ryii parses" })
+  ).toBeVisible();
+  expect(
+    within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
+      "group",
+      { name: "Ryalts parses" }
     )
-  ).toHaveClass("dossier-character-name--priest");
+  ).toBeVisible();
   expect(
     within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
       "link",
@@ -547,10 +548,8 @@ it("keeps the chronological first-kill summary coherent while listing events old
   await userEvent.setup().click(screen.getByText("View kill evidence"));
   const killEvidence = screen.getByRole("region", { name: "Kill evidence" });
   expect(
-    within(killEvidence)
-      .getAllByText("Ryii")
-      .find((name) => name.classList.contains("dossier-parse-character"))
-  ).toHaveClass("dossier-character-name--mage");
+    within(killEvidence).getByRole("group", { name: "Ryii parses" })
+  ).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();
   const evidenceRows = screen.getAllByText(/^(First kill|Kill)$/, {
@@ -1082,18 +1081,18 @@ it("shows first-kill and best parse summaries before evidence details are opened
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"
   );
-  expect(within(firstKillParses).getByText("Ryii")).toHaveClass(
-    "dossier-character-name--mage"
-  );
+  expect(
+    within(firstKillParses).getByRole("group", { name: "Ryii parses" })
+  ).toBeVisible();
   expect(
     within(bestParses).getByRole("link", { name: "Damage 99.2 percentile" })
   ).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/reports/best#fight=9"
   );
-  expect(within(bestParses).getByText("Ryii")).toHaveClass(
-    "dossier-character-name--mage"
-  );
+  expect(
+    within(bestParses).getByRole("group", { name: "Ryii parses" })
+  ).toBeVisible();
   expect(
     screen.getByText("View kill evidence").closest("details")
   ).not.toHaveAttribute("open");
@@ -1107,7 +1106,7 @@ it("shows first-kill and best parse summaries before evidence details are opened
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"
   );
-  expect(within(eventParses).getByText("Ryii")).toHaveClass(
-    "dossier-character-name--mage"
-  );
+  expect(
+    within(eventParses).getByRole("group", { name: "Ryii parses" })
+  ).toBeVisible();
 });
