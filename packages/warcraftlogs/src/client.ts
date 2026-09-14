@@ -1097,7 +1097,10 @@ export function createWarcraftLogsClient(
         b.attemptedAt.localeCompare(a.attemptedAt) ||
         a.fightUrl.localeCompare(b.fightUrl)
     );
-    const limitation = scanLimitation ?? parseLimitation;
+    // Evidence has one persisted limitation. Hydration runs after scanning, so
+    // its parse-specific condition best explains any unavailable metrics and
+    // takes deterministic precedence when scanning was already partial.
+    const limitation = parseLimitation ?? scanLimitation;
     return sortedKills.length || sortedWipes.length
       ? {
           kind: "evidence",

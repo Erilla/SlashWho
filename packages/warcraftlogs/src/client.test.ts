@@ -107,7 +107,7 @@ function token(): Response {
   return jsonResponse(fixture("token-valid"));
 }
 
-function performanceReport(fightIds = [26]): unknown {
+function performanceReport(fightIds = [26], hasMorePages = false): unknown {
   return {
     data: {
       characterData: {
@@ -145,7 +145,7 @@ function performanceReport(fightIds = [26]): unknown {
                 }))
               }
             ],
-            has_more_pages: false
+            has_more_pages: hasMorePages
           }
         }
       }
@@ -474,6 +474,31 @@ describe("Warcraft Logs gateway", () => {
     const { client } = performanceClient(
       performanceRankings({ damage: 40, healing: 41, bossDamage: 42 })
     );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ performance: { damage: { state: "unavailable" } } }],
+      limitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+  });
+
+  it("prefers a parse limitation when scan and parse caps are both exhausted", async () => {
+    // Break caught: a scan cap could hide the reason parse metrics remain
+    // unavailable, causing downstream storage to report the wrong limitation.
+    const rankings = performanceRankings({
+      damage: 40,
+      healing: 41,
+      bossDamage: 42
+    });
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const query = JSON.parse(String(init?.body)) as { query: string };
+      return query.query.includes("ReportFightParses")
+        ? jsonResponse(rankings)
+        : jsonResponse(performanceReport([26], true));
+    });
 
     await expect(
       client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 1 })
@@ -1425,7 +1450,7 @@ describe("Warcraft Logs gateway", () => {
     });
     expect(result).toMatchObject({
       kind: "evidence",
-      limitation: { code: "unavailable" }
+      limitation: { code: "parse_unavailable" }
     });
     if (result.kind === "evidence")
       expect(result.kills.length).toBeGreaterThan(0);
