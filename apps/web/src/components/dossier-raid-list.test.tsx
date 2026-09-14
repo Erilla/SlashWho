@@ -709,7 +709,7 @@ it("groups multiple wipes after each corresponding kill report", async () => {
     within(evidence).getAllByRole("link", {
       name: "View Warcraft Logs wipe report (opens in a new tab)"
     })
-  ).toHaveLength(3);
+  ).toHaveLength(2);
   const evidenceRows = Array.from(
     evidence.querySelectorAll<HTMLElement>(".dossier-evidence-row")
   );
@@ -729,8 +729,7 @@ it("groups multiple wipes after each corresponding kill report", async () => {
       .map((link) => link.getAttribute("href"))
   ).toEqual([
     "https://www.warcraftlogs.com/reports/second#fight=9",
-    "https://www.warcraftlogs.com/reports/progression#fight=8",
-    "https://www.warcraftlogs.com/reports/progression#fight=7"
+    "https://www.warcraftlogs.com/reports/progression#fight=8"
   ]);
   expect(
     within(evidence).getAllByRole("link", {
@@ -741,7 +740,7 @@ it("groups multiple wipes after each corresponding kill report", async () => {
     within(evidence).getAllByRole("link", {
       name: "View Warcraft Logs wipe report (opens in a new tab)"
     })
-  ).toHaveLength(3);
+  ).toHaveLength(2);
   expect(
     within(evidence).getAllByRole("img", { name: "Verified Mythic kill" })
   ).toHaveLength(2);
@@ -897,6 +896,73 @@ it("orders wipe-only evidence newest first with a stable tie-break", async () =>
     "https://www.warcraftlogs.com/reports/tie-a#fight=1",
     "https://www.warcraftlogs.com/reports/older#fight=2"
   ]);
+});
+
+it("merges wipe rows on the same date and deduplicates reports", async () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "merged-wipes",
+            raidName: "Merged Wipes Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                bossId: "merged-wipe-boss",
+                bossName: "Merged Wipe Boss",
+                bossOrder: 1,
+                imageUrl: null,
+                state: "wipe",
+                wipe: {
+                  attemptedAt: "2025-02-14T20:30:00.000Z",
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/shared#fight=1",
+                  characters: [ryii]
+                },
+                wipes: [
+                  {
+                    attemptedAt: "2025-02-14T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/shared#fight=1",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-02-14T21:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/shared#fight=2",
+                    characters: [ryalts]
+                  },
+                  {
+                    attemptedAt: "2025-02-14T22:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/other#fight=3",
+                    characters: [ryii]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View wipe evidence"));
+  const evidence = screen.getByRole("region", { name: "Wipe evidence" });
+  expect(evidence.querySelectorAll(".dossier-evidence-row")).toHaveLength(1);
+  expect(within(evidence).getByText("14 Feb 2025")).toBeVisible();
+  const reportLinks = within(evidence)
+    .getAllByRole("link")
+    .filter((link) => link.classList.contains("upstream-icon-link"));
+  expect(reportLinks).toHaveLength(2);
+  expect(reportLinks.map((link) => link.getAttribute("href"))).toEqual([
+    "https://www.warcraftlogs.com/reports/other#fight=3",
+    "https://www.warcraftlogs.com/reports/shared#fight=2"
+  ]);
+  expect(within(evidence).getByText("Ryii")).toBeVisible();
+  expect(within(evidence).getByText("Ryalts")).toBeVisible();
 });
 
 it("greys out an entire no-log tier as a single explanatory row", () => {
