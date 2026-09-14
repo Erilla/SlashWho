@@ -247,7 +247,7 @@ it("keeps a text-first raid heading when official artwork is unavailable", () =>
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
 });
 
-it("shows first-kill metadata and lists every kill in chronological order", () => {
+it("shows latest-kill metadata and lists every kill latest first", () => {
   renderWithDossierCharacters(
     <DossierRaidList
       raids={
@@ -263,17 +263,6 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                 imageUrl: null,
                 firstKills: [
                   {
-                    killedAt: "2025-01-14T20:30:00.000Z",
-                    guild: {
-                      name: "Method",
-                      region: "eu",
-                      realm: "Tarren Mill"
-                    },
-                    historicWorldRank: 2,
-                    reportUrl: "https://www.warcraftlogs.com/reports/first",
-                    characters: [ryii]
-                  },
-                  {
                     killedAt: "2025-02-14T20:30:00.000Z",
                     guild: {
                       name: "Method",
@@ -283,6 +272,17 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                     historicWorldRank: null,
                     reportUrl: "https://www.warcraftlogs.com/reports/second",
                     characters: [ryalts]
+                  },
+                  {
+                    killedAt: "2025-01-14T20:30:00.000Z",
+                    guild: {
+                      name: "Method",
+                      region: "eu",
+                      realm: "Tarren Mill"
+                    },
+                    historicWorldRank: 2,
+                    reportUrl: "https://www.warcraftlogs.com/reports/first",
+                    characters: [ryii]
                   }
                 ]
               }
@@ -294,11 +294,13 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
   );
 
   const firstKillSummary = screen
-    .getByText("Ryii", {
+    .getByText("Ryalts", {
       selector: ".dossier-boss-first-kill .dossier-character-name"
     })
     .closest(".dossier-boss-first-kill");
-  expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
+  expect(firstKillSummary).toHaveTextContent(
+    "First kill: 14 Feb 2025 · Ryalts"
+  );
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();
