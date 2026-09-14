@@ -140,3 +140,30 @@ test("discloses that a partial snapshot may omit linked characters", async ({
     )
   ).toBeVisible();
 });
+
+test("shows a grey no-log row when an entire supported tier has no evidence", async ({
+  page
+}) => {
+  const key = { region: "eu", realm: "silvermoon", name: "no-logs" } as const;
+  await seedSnapshot({
+    key,
+    displayName: "No Logs",
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z")
+  });
+  await seedCharacterEvidence(key, { withSampleKills: false });
+
+  await page.goto("/dossiers/eu/silvermoon/no-logs");
+
+  const tier = page.getByRole("group", {
+    name: "The Venomous Abyss evidence"
+  });
+  await expect(tier).toHaveClass(/dossier-raid-no-logs/);
+  await expect(tier.getByText("No logs found", { exact: true })).toBeVisible();
+  await expect(
+    tier.getByText(
+      "No qualifying public logs found; this does not prove no attempt.",
+      { exact: true }
+    )
+  ).toBeVisible();
+  await expect(tier.getByRole("article")).toHaveCount(0);
+});

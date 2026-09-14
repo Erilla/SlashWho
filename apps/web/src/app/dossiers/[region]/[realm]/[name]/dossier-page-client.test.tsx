@@ -49,6 +49,7 @@ function dossier(
             bossName: `${raidName} boss`,
             bossOrder: 1,
             imageUrl: null,
+            state: "kill",
             firstKill: {
               killedAt: "2025-01-14T20:30:00.000Z",
               guild: null,

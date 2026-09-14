@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 import type { ReactElement } from "react";
@@ -48,6 +55,8 @@ const boss = {
   bossId: "2602",
   bossName: "Queen Ansurek",
   bossOrder: 8,
+  imageUrl: null,
+  state: "kill" as const,
   firstKill: {
     killedAt: "2025-01-14T20:30:00.000Z",
     guild: null,
@@ -292,4 +301,114 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
     "14 Jan 2025",
     "14 Feb 2025"
   ]);
+});
+
+it("renders kill, wipe, no-log, and incomplete states with accessible labels", async () => {
+  render(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "mixed",
+          raidName: "Mixed Evidence Raid",
+          imageUrl: null,
+          cuttingEdge: null,
+          bosses: [
+            { ...boss, bossId: "kill", bossOrder: 1 },
+            {
+              bossId: "wipe",
+              bossName: "Wipe Boss",
+              bossOrder: 2,
+              imageUrl: null,
+              state: "wipe",
+              wipe: {
+                attemptedAt: "2025-02-14T20:30:00.000Z",
+                reportUrl: "https://www.warcraftlogs.com/reports/wipe#fight=12",
+                characters: ["Ryii", "Ryalts"]
+              }
+            },
+            {
+              bossId: "no-logs",
+              bossName: "No Logs Boss",
+              bossOrder: 3,
+              imageUrl: null,
+              state: "no_logs"
+            },
+            {
+              bossId: "incomplete",
+              bossName: "Incomplete Boss",
+              bossOrder: 4,
+              imageUrl: null,
+              state: "incomplete"
+            }
+          ]
+        }
+      ]}
+    />
+  );
+
+  expect(
+    screen.getByRole("img", { name: "Verified Mythic kill" })
+  ).toBeVisible();
+  expect(screen.getByRole("img", { name: "Mythic wipe found" })).toBeVisible();
+  expect(screen.getByText("No qualifying public logs found")).toBeVisible();
+  expect(screen.getByText("Evidence incomplete")).toBeVisible();
+  expect(
+    screen.getByText("Wipe found: 14 Feb 2025 · Ryii, Ryalts")
+  ).toBeVisible();
+  await userEvent.setup().click(screen.getByText("View wipe evidence"));
+  expect(
+    screen.getByRole("link", {
+      name: "View Warcraft Logs wipe report (opens in a new tab)"
+    })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/wipe#fight=12"
+  );
+});
+
+it("greys out an entire no-log tier as a single explanatory row", () => {
+  render(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "empty-tier",
+          raidName: "Empty Tier",
+          imageUrl: "https://render.example/raids/empty.jpg",
+          cuttingEdge: null,
+          bosses: [
+            {
+              bossId: "one",
+              bossName: "First Boss",
+              bossOrder: 1,
+              imageUrl: null,
+              state: "no_logs"
+            },
+            {
+              bossId: "two",
+              bossName: "Second Boss",
+              bossOrder: 2,
+              imageUrl: null,
+              state: "no_logs"
+            }
+          ]
+        }
+      ]}
+    />
+  );
+
+  const row = screen.getByRole("group", { name: "Empty Tier evidence" });
+  expect(row).toHaveClass("dossier-raid-no-logs");
+  expect(
+    within(row).getByRole("heading", { name: "Empty Tier" })
+  ).toBeVisible();
+  expect(within(row).getByText("No logs found")).toBeVisible();
+  expect(
+    within(row).getByText(
+      "No qualifying public logs found; this does not prove no attempt."
+    )
+  ).toBeVisible();
+  expect(within(row).queryByRole("article")).not.toBeInTheDocument();
+  expect(
+    within(row).queryByAltText("Empty Tier artwork")
+  ).not.toBeInTheDocument();
 });

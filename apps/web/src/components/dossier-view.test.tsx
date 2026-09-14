@@ -53,6 +53,7 @@ const dossier: ApplicantDossier = {
           bossName: "Queen Ansurek",
           bossOrder: 8,
           imageUrl: null,
+          state: "kill",
           firstKill: {
             killedAt: "2025-01-14T20:30:00.000Z",
             guild: { name: "Arachnid", realm: "Silvermoon" },
@@ -69,6 +70,7 @@ const dossier: ApplicantDossier = {
           bossName: "Sikran",
           bossOrder: 5,
           imageUrl: null,
+          state: "kill",
           firstKill: {
             killedAt: "2025-01-10T20:30:00.000Z",
             guild: null,
