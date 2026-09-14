@@ -39,6 +39,35 @@ test("keeps the fixed header visible and offset-safe while dossier scrolling", a
     /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
   );
 
+  const profileLinks = page.locator(".dossier-heading .upstream-icon-link");
+  await expect(profileLinks).toHaveCount(2);
+  await expect(profileLinks.nth(0)).toHaveAccessibleName(
+    "View Ryii on Raider.IO (opens in a new tab)"
+  );
+  await expect(profileLinks.nth(1)).toHaveAccessibleName(
+    "View Ryii on Warcraft Logs (opens in a new tab)"
+  );
+  const profileLinkDetails = await profileLinks.evaluateAll((links) =>
+    links.map((link) => {
+      const bounds = link.getBoundingClientRect();
+      return {
+        width: bounds.width,
+        height: bounds.height,
+        hasIcon: Boolean(link.querySelector("svg")),
+        target: link.getAttribute("target"),
+        rel: link.getAttribute("rel")
+      };
+    })
+  );
+  for (const details of profileLinkDetails) {
+    expect(details.width).toBeGreaterThanOrEqual(24);
+    expect(details.width).toBeLessThanOrEqual(28);
+    expect(details.height).toBe(details.width);
+    expect(details.hasIcon).toBe(true);
+    expect(details.target).toBe("_blank");
+    expect(details.rel).toBe("noopener noreferrer");
+  }
+
   const header = page.locator(".site-header");
   await expect(header).toHaveCSS("position", "fixed");
   await expect(header.getByLabel("Applicant URL")).toBeVisible();

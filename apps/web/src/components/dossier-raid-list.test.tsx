@@ -617,7 +617,9 @@ it("lists kill reports before inline wipe reports ordered newest to oldest", asy
   expect(rows.map((row) => row.textContent)).toEqual(["First kill"]);
   const reportLinks = screen
     .getByRole("region", { name: "Kill evidence" })
-    .querySelectorAll<HTMLAnchorElement>("a.upstream-icon-link");
+    .querySelectorAll<HTMLAnchorElement>(
+      ".dossier-report-links a.upstream-icon-link"
+    );
   expect(Array.from(reportLinks).map((link) => link.href)).toEqual([
     "https://www.warcraftlogs.com/reports/latest#fight=4",
     "https://www.warcraftlogs.com/reports/older#fight=2"
@@ -714,19 +716,21 @@ it("groups multiple wipes after each corresponding kill report", async () => {
     evidence.querySelectorAll<HTMLElement>(".dossier-evidence-row")
   );
   expect(
-    within(evidenceRows[0]!)
-      .getAllByRole("link")
-      .filter((link) => link.classList.contains("upstream-icon-link"))
-      .map((link) => link.getAttribute("href"))
+    Array.from(
+      evidenceRows[0]!.querySelectorAll<HTMLAnchorElement>(
+        ".dossier-report-links a.upstream-icon-link"
+      )
+    ).map((link) => link.getAttribute("href"))
   ).toEqual([
     "https://www.warcraftlogs.com/reports/first#fight=8",
     "https://www.warcraftlogs.com/reports/early#fight=6"
   ]);
   expect(
-    within(evidenceRows[1]!)
-      .getAllByRole("link")
-      .filter((link) => link.classList.contains("upstream-icon-link"))
-      .map((link) => link.getAttribute("href"))
+    Array.from(
+      evidenceRows[1]!.querySelectorAll<HTMLAnchorElement>(
+        ".dossier-report-links a.upstream-icon-link"
+      )
+    ).map((link) => link.getAttribute("href"))
   ).toEqual([
     "https://www.warcraftlogs.com/reports/second#fight=9",
     "https://www.warcraftlogs.com/reports/progression#fight=8"
@@ -953,9 +957,11 @@ it("merges wipe rows on the same date and deduplicates reports", async () => {
   const evidence = screen.getByRole("region", { name: "Wipe evidence" });
   expect(evidence.querySelectorAll(".dossier-evidence-row")).toHaveLength(1);
   expect(within(evidence).getByText("14 Feb 2025")).toBeVisible();
-  const reportLinks = within(evidence)
-    .getAllByRole("link")
-    .filter((link) => link.classList.contains("upstream-icon-link"));
+  const reportLinks = Array.from(
+    evidence.querySelectorAll<HTMLAnchorElement>(
+      ".dossier-report-links a.upstream-icon-link"
+    )
+  );
   expect(reportLinks).toHaveLength(2);
   expect(reportLinks.map((link) => link.getAttribute("href"))).toEqual([
     "https://www.warcraftlogs.com/reports/other#fight=3",

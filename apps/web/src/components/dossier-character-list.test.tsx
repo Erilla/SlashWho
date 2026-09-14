@@ -60,19 +60,29 @@ it("keeps submitted-character links in the dossier header and shows both profile
       name: "View Ryii on Raider.IO (opens in a new tab)"
     })
   ).not.toBeInTheDocument();
+  const raiderIoLink = screen.getByRole("link", {
+    name: "View Ryalts on Raider.IO (opens in a new tab)"
+  });
+  expect(raiderIoLink).toHaveAttribute(
+    "href",
+    "https://raider.io/characters/eu/draenor/ryalts"
+  );
+  expect(raiderIoLink).toHaveClass("upstream-icon-link");
   expect(
-    screen.getByRole("link", {
-      name: "View Ryalts on Raider.IO (opens in a new tab)"
-    })
-  ).toHaveAttribute("href", "https://raider.io/characters/eu/draenor/ryalts");
-  expect(
-    screen.getByRole("link", {
-      name: "View Ryalts on Warcraft Logs (opens in a new tab)"
-    })
-  ).toHaveAttribute(
+    raiderIoLink.querySelector(".upstream-link-icon--raiderio")
+  ).toBeInTheDocument();
+
+  const warcraftLogsLink = screen.getByRole("link", {
+    name: "View Ryalts on Warcraft Logs (opens in a new tab)"
+  });
+  expect(warcraftLogsLink).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/character/eu/draenor/ryalts"
   );
+  expect(warcraftLogsLink).toHaveClass("upstream-icon-link");
+  expect(
+    warcraftLogsLink.querySelector(".upstream-link-icon--warcraft-logs")
+  ).toBeInTheDocument();
   expect(screen.getByText("Ryii")).toHaveClass("dossier-character-name--mage");
 });
 
