@@ -126,6 +126,70 @@ it("shows the grouped rank in the summary and retains all distinct report links"
   expect(screen.getAllByText("First kill")).toHaveLength(1);
 });
 
+it("colours kill report controls green and wipe report controls grey", async () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "report-colours",
+            raidName: "Report Colours Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                firstKill: {
+                  ...boss.firstKill,
+                  reportUrl: "https://www.warcraftlogs.com/reports/kill#fight=1"
+                },
+                firstKills: [
+                  {
+                    ...boss.firstKill,
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/kill#fight=1"
+                  },
+                  {
+                    ...boss.firstKill,
+                    killedAt: "2025-02-14T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/kill-later#fight=3"
+                  }
+                ],
+                wipes: [
+                  {
+                    attemptedAt: "2025-01-13T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/wipe#fight=2",
+                    characters: [ryii]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View kill evidence"));
+
+  expect(
+    screen
+      .getAllByRole("link", {
+        name: "View Warcraft Logs report (opens in a new tab)"
+      })
+      .every((link) =>
+        link.classList.contains("upstream-icon-link--evidence-kill")
+      )
+  ).toBe(true);
+  expect(
+    screen.getByRole("link", {
+      name: "View Warcraft Logs wipe report (opens in a new tab)"
+    })
+  ).toHaveClass("upstream-icon-link--evidence-wipe");
+});
+
 it("renders raid artwork as a decorative banner behind the real heading", () => {
   // Break caught: raid artwork could be announced as a duplicate identifier
   // or regress to a thumbnail that does not frame the section heading.
