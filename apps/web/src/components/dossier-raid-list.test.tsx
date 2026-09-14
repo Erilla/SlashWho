@@ -89,7 +89,7 @@ it("shows the grouped rank in the summary and retains all distinct report links"
               firstKill: {
                 ...boss.firstKill,
                 historicWorldRank: 48,
-                guild: { name: "Rancour", realm: "draenor" },
+                guild: { name: "Rancour", region: "eu", realm: "draenor" },
                 reportUrl: reportUrls[0]!,
                 reportUrls
               }
@@ -104,9 +104,13 @@ it("shows the grouped rank in the summary and retains all distinct report links"
     screen
       .getAllByRole("link", { hidden: true })
       .map((link) => link.getAttribute("href"))
+      .filter((href) => href?.includes("/reports/"))
   ).toEqual(reportUrls);
   for (const [index, link] of screen
-    .getAllByRole("link", { hidden: true })
+    .getAllByRole("link", {
+      hidden: true,
+      name: /View Warcraft Logs report \d+ \(opens in a new tab\)/
+    })
     .entries()) {
     expect(link).toHaveAccessibleName(
       `View Warcraft Logs report ${index + 1} (opens in a new tab)`
@@ -260,14 +264,22 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                 firstKills: [
                   {
                     killedAt: "2025-01-14T20:30:00.000Z",
-                    guild: { name: "Method", realm: "Tarren Mill" },
+                    guild: {
+                      name: "Method",
+                      region: "eu",
+                      realm: "Tarren Mill"
+                    },
                     historicWorldRank: 2,
                     reportUrl: "https://www.warcraftlogs.com/reports/first",
                     characters: [ryii]
                   },
                   {
                     killedAt: "2025-02-14T20:30:00.000Z",
-                    guild: { name: "Method", realm: "Tarren Mill" },
+                    guild: {
+                      name: "Method",
+                      region: "eu",
+                      realm: "Tarren Mill"
+                    },
                     historicWorldRank: null,
                     reportUrl: "https://www.warcraftlogs.com/reports/second",
                     characters: [ryalts]
@@ -364,7 +376,7 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
     screen.getByText(
       (_, element) =>
         element?.tagName === "P" &&
-        element.textContent === "Wipe found: 14 Feb 2025 · Ryii, Ryalts"
+        /Wipe found: 14 Feb 2025 · Ryii.*Ryalts/.test(element.textContent ?? "")
     )
   ).toBeVisible();
   await userEvent.setup().click(screen.getByText("View wipe evidence"));

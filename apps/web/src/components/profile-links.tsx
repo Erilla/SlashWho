@@ -7,7 +7,7 @@ type ProfileCharacter = Readonly<{
 
 type ProfileGuild = Readonly<{
   name: string;
-  region: string;
+  region: CharacterKey["region"];
   realm: string;
 }>;
 

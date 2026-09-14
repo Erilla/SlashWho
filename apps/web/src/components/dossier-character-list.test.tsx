@@ -32,7 +32,7 @@ function mockScrollViewport(desktop: boolean) {
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
 }
 
-it("shows a safe accessible Raider.IO icon link beside a class-coloured character", () => {
+it("keeps submitted-character links in the dossier header and shows both profiles for alts", () => {
   render(
     <DossierCharacterList
       characters={[
@@ -42,23 +42,32 @@ it("shows a safe accessible Raider.IO icon link beside a class-coloured characte
           className: "MAGE",
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
           source: "submitted"
+        },
+        {
+          key: { region: "eu", realm: "draenor", name: "ryalts" },
+          displayName: "Ryalts",
+          className: "Priest",
+          raiderIoUrl: "https://raider.io/characters/eu/draenor/ryalts",
+          source: "fingerprint_derived"
         }
       ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
     />
   );
 
-  const link = screen.getByRole("link", {
-    name: "View Ryii on Raider.IO (opens in a new tab)"
-  });
-  expect(link).toHaveAttribute(
+  expect(
+    screen.queryByRole("link", { name: "View Ryii on Raider.IO" })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("link", { name: "View Ryalts on Raider.IO" })
+  ).toHaveAttribute("href", "https://raider.io/characters/eu/draenor/ryalts");
+  expect(
+    screen.getByRole("link", { name: "View Ryalts on Warcraft Logs" })
+  ).toHaveAttribute(
     "href",
-    "https://raider.io/characters/eu/silvermoon/ryii"
+    "https://www.warcraftlogs.com/character/eu/draenor/ryalts"
   );
-  expect(link).toHaveAttribute("target", "_blank");
-  expect(link).toHaveAttribute("rel", "noopener noreferrer");
-  expect(link).toHaveTextContent("Ryii");
   expect(screen.getByText("Ryii")).toHaveClass("dossier-character-name--mage");
-  expect(link.querySelector(".upstream-link-icon--raiderio")).toBeVisible();
 });
 
 it("exposes overflowing desktop rows as a labelled keyboard-scrollable region", async () => {
@@ -76,6 +85,7 @@ it("exposes overflowing desktop rows as a labelled keyboard-scrollable region", 
           source: "submitted"
         }
       ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
     />
   );
 
@@ -103,6 +113,7 @@ it("does not describe naturally flowing narrow rows as scrollable", () => {
           source: "submitted"
         }
       ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
     />
   );
 

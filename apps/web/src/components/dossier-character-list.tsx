@@ -1,10 +1,7 @@
 import type { DossierCharacter } from "@slashwho/contracts";
-import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
 import { DossierCharacterName } from "./dossier-character-name";
-import { UpstreamIconLink } from "./upstream-icon-link";
-
 import { CharacterProfileLinks } from "./profile-links";
 
 type DossierCharacterListProps = Readonly<{
@@ -87,13 +84,7 @@ export function DossierCharacterList({
             key={`${character.key.region}/${character.key.realm}/${character.key.name}`}
           >
             <div>
-              <UpstreamIconLink
-                href={character.raiderIoUrl}
-                label={`View ${formatCharacterDisplayName(character.displayName)} on Raider.IO`}
-                source="raiderio"
-              >
-                <DossierCharacterName character={character} />
-              </UpstreamIconLink>
+              <DossierCharacterName character={character} />
               <span className="dossier-location">
                 {character.key.region.toUpperCase()} · {character.key.realm}
               </span>

@@ -29,6 +29,7 @@ export const dossierCharacterSchema = z
 export const dossierGuildSchema = z
   .object({
     name: z.string().min(1),
+    region: regionSchema,
     realm: z.string().min(1)
   })
   .strict();

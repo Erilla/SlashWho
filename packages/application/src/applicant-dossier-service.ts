@@ -154,7 +154,7 @@ function cachedKill(
     isFinalBoss: kill.isFinalBoss,
     character,
     killedAt: kill.killedAt,
-    guild: kill.guild,
+    guild: kill.guild ? { ...kill.guild, region: character.region } : null,
     historicWorldRank: kill.historicWorldRank ?? null,
     reportUrl: kill.fightUrl
   };
