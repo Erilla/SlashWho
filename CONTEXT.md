@@ -32,6 +32,18 @@ _Avoid_: Officer mode, admin view, Applicant Intel API
 The reviewer-surface report about a searched character and every character linked to it, carrying evidence attributed per character. It is never stored, so it is always a view of the moment rather than a citable record.
 _Avoid_: Intel report, applicant snapshot, saved dossier
 
+**Fight parse**:
+One Warcraft Logs percentile for damage, healing, or boss damage, attributed to one canonical character on one exact public Mythic fight. Its evidence must agree on report, fight, encounter, difficulty, region, and realm; available values link back to that supporting fight. Rankings use Warcraft Logs' historical comparison, not a current or character-wide lifetime comparison.
+_Avoid_: Character parse, lifetime best, report parse
+
+**First-kill parse**:
+The fight parses summarized from the earliest displayed kill event for a boss. It is a summary of that event's supporting reports, not a claim about every historical kill.
+_Avoid_: First-ever parse, initial character parse
+
+**Best shown parse**:
+The highest available fight parse for each displayed character and metric across the kill events currently shown for a boss. It retains the winning exact-fight link and never reaches into unrelated character history.
+_Avoid_: Best parse, all-time best, character-wide best
+
 **Source label**:
 The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown only on the reviewer surface; the public alt list still shows one undifferentiated list, and no confidence value is retained alongside it.
 _Avoid_: Confidence, provenance score, match strength

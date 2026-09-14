@@ -39,17 +39,17 @@
 - Consumes: worker-scoped `WARCRAFT_LOGS_CLIENT_ID` and `WARCRAFT_LOGS_CLIENT_SECRET`, plus CLI arguments `--report-code`, `--fight-id`, `--encounter-id`, and `--difficulty`.
 - Produces: sanitized fixtures that preserve structural keys, actor/fight/role/metric relationships, and numeric percentiles while replacing report codes, names, realms, regions, and character IDs with deterministic fixture values.
 
-- [ ] **Step 1: Add a failing argument/redaction test beside the prototype**
+- [x] **Step 1: Add a failing argument/redaction test beside the prototype**
 
 Create `scripts/prototypes/wcl-fight-rankings-contract.test.mts` with tests proving missing scope arguments throw and a sample payload is sanitized without retaining the original report code, character name, realm, region, or numeric character ID.
 
-- [ ] **Step 2: Run the prototype test and verify RED**
+- [x] **Step 2: Run the prototype test and verify RED**
 
 Run: `corepack pnpm vitest run --project unit scripts/prototypes/wcl-fight-rankings-contract.test.mts`
 
 Expected: FAIL because `parseContractProbeOptions` and `sanitizeRankingsFixture` do not exist.
 
-- [ ] **Step 3: Implement the read-only contract probe**
+- [x] **Step 3: Implement the read-only contract probe**
 
 Export these exact helpers:
 
@@ -61,7 +61,9 @@ export type RankingsProbeOptions = Readonly<{
   difficulty: number;
 }>;
 
-export function parseContractProbeOptions(argv: readonly string[]): RankingsProbeOptions;
+export function parseContractProbeOptions(
+  argv: readonly string[]
+): RankingsProbeOptions;
 export function sanitizeRankingsFixture(value: unknown): unknown;
 ```
 
@@ -71,7 +73,7 @@ The executable path obtains a client-credentials token, samples
 only the sanitized result plus point delta. It must not print credentials or
 the unsanitized response.
 
-- [ ] **Step 4: Run the probe against one public test-environment report**
+- [x] **Step 4: Run the probe against one public test-environment report**
 
 Obtain an existing public report/fight URL from the test dossier API, then run
 the script with Railway's worker environment:
@@ -87,7 +89,7 @@ research note. If the payload does not expose enough identity to distinguish
 same-named cross-realm characters, stop implementation and keep #90 blocked
 rather than weakening the matching rule.
 
-- [ ] **Step 5: Build deterministic valid and mismatch fixtures**
+- [x] **Step 5: Build deterministic valid and mismatch fixtures**
 
 The valid fixture must contain at least one DPS, healer, and tank from the same
 fight, including all three metric aliases and the provider's real nested key
@@ -95,7 +97,7 @@ shape. The mismatch fixture changes report/fight/encounter/difficulty and
 character identity independently so later tests can prove every rejection
 boundary.
 
-- [ ] **Step 6: Verify and commit the contract evidence**
+- [x] **Step 6: Verify and commit the contract evidence**
 
 Run:
 
@@ -149,26 +151,26 @@ Readonly<{
   requestCap: number;
   parseRequestCap: number;
   signal?: AbortSignal;
-}>
+}>;
 ```
 
-- [ ] **Step 1: Read `test-driven-development/writing-good-tests.md` completely**
+- [x] **Step 1: Read `test-driven-development/writing-good-tests.md` completely**
 
 Apply its break-caught comments and real-behaviour assertions to every test changed in this task.
 
-- [ ] **Step 2: Add one failing client test for valid exact-fight normalization**
+- [x] **Step 2: Add one failing client test for valid exact-fight normalization**
 
 Feed the sanitized valid fixture through the real client fetch boundary and
 expect the exact character's damage, healing, and boss-damage states plus
 `reportCode`, `fightId`, and `difficulty` on the returned kill.
 
-- [ ] **Step 3: Run the focused client test and verify RED**
+- [x] **Step 3: Run the focused client test and verify RED**
 
 Run: `corepack pnpm vitest run --project unit packages/warcraftlogs/src/client.test.ts -t "normalizes exact-fight performance parses"`
 
 Expected: FAIL because kill evidence has no performance contract.
 
-- [ ] **Step 4: Implement the strict decoder and report-batched query**
+- [x] **Step 4: Implement the strict decoder and report-batched query**
 
 Add a pure decoder that follows only Task 1's observed fixture keys. Reject
 non-finite/out-of-range values. Query one report at a time, group retained
@@ -177,27 +179,27 @@ rows back using every identity field established by the probe. Initialize all
 metrics as `unavailable`; use `not_applicable` only for the documented
 fight-role policy when role identity is independently established.
 
-- [ ] **Step 5: Verify GREEN, then add RED mismatch/zero/missing/cap tests**
+- [x] **Step 5: Verify GREEN, then add RED mismatch/zero/missing/cap tests**
 
 Add tests proving each mismatched identity is rejected, numeric zero remains
 available, null/string/NaN/out-of-range values are unavailable, a parse cap
 retains kills with a parse-specific limitation, and one report with several
 fight IDs consumes one ranking request.
 
-- [ ] **Step 6: Implement minimal limitation and budget handling**
+- [x] **Step 6: Implement minimal limitation and budget handling**
 
 Extend `WarcraftLogsLimitationCode` with `parse_private`,
 `parse_rate_limited`, `parse_request_cap`, `parse_unavailable`, and
 `parse_schema_drift`. Preserve successfully normalized kills and metrics when
 later ranking batches fail.
 
-- [ ] **Step 7: Add worker configuration RED/GREEN coverage**
+- [x] **Step 7: Add worker configuration RED/GREEN coverage**
 
 Add positive integer `EVIDENCE_PARSE_REQUEST_CAP` with a measured default from
 Task 1. Pass it from worker config through runtime to `getFirstKillReports`.
 Update every test gateway call explicitly so request budgets remain visible.
 
-- [ ] **Step 8: Run focused verification and commit**
+- [x] **Step 8: Run focused verification and commit**
 
 Run:
 
@@ -230,7 +232,7 @@ Commit: `feat: normalize Warcraft Logs fight parses`
 - Consumes: `WarcraftLogsPerformance` from Task 2.
 - Produces: `CharacterMythicKillInput.performance` and `StoredCharacterMythicKill.performance` with the same discriminated metric states.
 
-- [ ] **Step 1: Add a failing integration round-trip test**
+- [x] **Step 1: Add a failing integration round-trip test**
 
 Publish one kill containing available `0`, available `99.25`,
 `not_applicable`, and `unavailable` states; read it through
@@ -238,13 +240,13 @@ Publish one kill containing available `0`, available `99.25`,
 and prove readers see the old complete run before publication and only the
 whole new performance set afterward.
 
-- [ ] **Step 2: Run the focused integration test and verify RED**
+- [x] **Step 2: Run the focused integration test and verify RED**
 
 Run: `corepack pnpm vitest run --project integration tests/integration/repositories.test.ts -t "round-trips normalized kill parses"`
 
 Expected: FAIL because the repository input has no performance fields.
 
-- [ ] **Step 3: Add state/value columns and database checks**
+- [x] **Step 3: Add state/value columns and database checks**
 
 Add three state columns (`damage_parse_state`, `healing_parse_state`,
 `boss_damage_parse_state`) and three nullable double-precision percentile
@@ -258,19 +260,19 @@ OR (state IN ('not_applicable', 'unavailable') AND percentile IS NULL)
 Use a shared PostgreSQL enum for the three state columns. Existing rows migrate
 to `unavailable` with null percentile values.
 
-- [ ] **Step 4: Implement repository mapping and publication**
+- [x] **Step 4: Implement repository mapping and publication**
 
 Validate the discriminated states before SQL execution, insert all six values
 inside the existing transaction, and reconstruct the exact union in
 `mapCharacterMythicKill`.
 
-- [ ] **Step 5: Extend the evidence job handler test and implementation**
+- [x] **Step 5: Extend the evidence job handler test and implementation**
 
 Prove normalized metrics and parse-specific partial limitations pass unchanged
 from the gateway to atomic publication. No raw ranking payload is accepted by
 the store interface.
 
-- [ ] **Step 6: Verify migration and repository GREEN, then commit**
+- [x] **Step 6: Verify migration and repository GREEN, then commit**
 
 Run:
 
@@ -319,7 +321,7 @@ export type ApplicantDossierCharacterParses = Readonly<{
 `ApplicantDossierFirstKill` gains `parses: readonly ApplicantDossierCharacterParses[]`.
 `ApplicantDossierBoss` gains `bestParses: readonly ApplicantDossierCharacterParses[]`.
 
-- [ ] **Step 1: Add failing domain tests for event and boss selection**
+- [x] **Step 1: Add failing domain tests for event and boss selection**
 
 Build two characters, two displayed kill events, and multiple supporting
 reports. Assert each event selects the highest available percentile per
@@ -327,13 +329,13 @@ character/metric only from its own reports; `firstKill.parses` comes from the
 earliest event; `bestParses` selects across displayed events; every available
 value retains the winning fight URL; ties use lexical fight URL ordering.
 
-- [ ] **Step 2: Run the domain tests and verify RED**
+- [x] **Step 2: Run the domain tests and verify RED**
 
 Run: `corepack pnpm vitest run --project unit packages/domain/src/applicant-dossier.test.ts -t "aggregates fight parses"`
 
 Expected: FAIL because event and boss parse fields do not exist.
 
-- [ ] **Step 3: Implement pure deterministic aggregation**
+- [x] **Step 3: Implement pure deterministic aggregation**
 
 Map cached performance onto `DossierKillEvidence`. For each grouped event,
 group by canonical character and metric, choose `available` by descending
@@ -341,19 +343,19 @@ percentile then ascending fight URL, otherwise prefer `not_applicable` over
 `unavailable`. Compute `bestParses` from the event summaries using the same
 selector. Preserve dossier character display order.
 
-- [ ] **Step 4: Add failing strict-contract tests**
+- [x] **Step 4: Add failing strict-contract tests**
 
 Assert valid available/not-applicable/unavailable unions parse; percentile
 without an available state, available without report URL, extra raw provider
 fields, and out-of-range percentiles fail.
 
-- [ ] **Step 5: Implement Zod discriminated unions and limitation copy**
+- [x] **Step 5: Implement Zod discriminated unions and limitation copy**
 
 Add the exact types above to `packages/contracts/src/dossier.ts`. Map the five
 parse-specific WCL limitation codes to clear reviewer-surface messages without
 claiming verified kill history is missing.
 
-- [ ] **Step 6: Run focused verification and commit**
+- [x] **Step 6: Run focused verification and commit**
 
 Run:
 
@@ -386,19 +388,19 @@ Commit: `feat: aggregate displayed fight parses`
 - Consumes: `ApplicantDossierCharacterParses` from Task 4.
 - Produces: `parseColour(percentile: number): "grey" | "green" | "blue" | "purple" | "orange" | "pink" | "gold"` and `<DossierParseList label parses />`.
 
-- [ ] **Step 1: Add failing pure colour-boundary tests**
+- [x] **Step 1: Add failing pure colour-boundary tests**
 
 Cover `0`, `24.999`, `25`, `49.999`, `50`, `74.999`, `75`, `94.999`,
 `95`, `98.999`, `99`, `99.999`, and `100`. Assert negative, over-100,
 NaN, and infinities throw rather than clamp.
 
-- [ ] **Step 2: Run the colour test and verify RED**
+- [x] **Step 2: Run the colour test and verify RED**
 
 Run: `corepack pnpm vitest run --project unit apps/web/src/components/parse-colour.test.ts`
 
 Expected: FAIL because `parseColour` does not exist.
 
-- [ ] **Step 3: Implement the pure mapping and exact CSS variables**
+- [x] **Step 3: Implement the pure mapping and exact CSS variables**
 
 Map the continuous intervals from the spec and declare:
 
@@ -412,7 +414,7 @@ Map the continuous intervals from the spec and declare:
 --parse-gold: #e5cc80;
 ```
 
-- [ ] **Step 4: Add failing component tests**
+- [x] **Step 4: Add failing component tests**
 
 Expect per-character groups with full accessible labels (`Damage 87th
 percentile`, `Healing not applicable`, `Boss damage unavailable`), available
@@ -420,20 +422,20 @@ values linked to their exact fight URLs, neutral unavailable states, and the
 correct colour class. Expect the collapsed boss card to expose "First kill
 parses" and "Best shown parses" before details are opened.
 
-- [ ] **Step 5: Implement the focused parse component and integrate it**
+- [x] **Step 5: Implement the focused parse component and integrate it**
 
 Keep formatting and colour selection inside `DossierParseList`; keep
 aggregation out of React. Render concise metric labels and truncate to at most
 one decimal place so presentation never rounds across a colour boundary. Add responsive wrapping that
 does not create horizontal scrolling at the existing mobile viewport.
 
-- [ ] **Step 6: Add and pass browser regression coverage**
+- [x] **Step 6: Add and pass browser regression coverage**
 
 Seed one boss with first/best/event parses, open the dossier at desktop and
 mobile widths, and assert the visible labels, source links, details content,
 and absence of horizontal overflow.
 
-- [ ] **Step 7: Run focused verification and commit**
+- [x] **Step 7: Run focused verification and commit**
 
 Run:
 
@@ -462,14 +464,14 @@ Commit: `feat: show Warcraft Logs fight parses`
 - Consumes: all prior tasks.
 - Produces: reviewer-facing terminology and operational cache/request-budget documentation.
 
-- [ ] **Step 1: Document the shipped semantics**
+- [x] **Step 1: Document the shipped semantics**
 
 Add `Fight parse` and `Best shown parse` to `CONTEXT.md`. Document historical
 ranking comparison, exact-fight attribution, partial parse limitations,
 request caps, evidence-cache freshness, 30-day retention, and `no-store` HTTP
 policy. Mark every completed plan checkbox.
 
-- [ ] **Step 2: Run fresh full verification**
+- [x] **Step 2: Run fresh full verification**
 
 Run each command and require exit code 0:
 
@@ -488,7 +490,7 @@ Review from commit `9678581` through branch HEAD against issue #90 and the
 approved spec. Fix all Critical and Important findings with a regression test,
 then repeat the affected verification.
 
-- [ ] **Step 4: Rebase onto current `origin/main` and re-verify**
+- [x] **Step 4: Rebase onto current `origin/main` and re-verify**
 
 Fetch, rebase, and rerun the full commands from Step 2. If issue #93 has
 changed kill grouping, preserve its event identity while retaining parse

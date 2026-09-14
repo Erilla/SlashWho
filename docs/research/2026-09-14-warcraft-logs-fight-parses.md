@@ -127,8 +127,8 @@ the winning report code and fight ID for the link.
 
 ## What the percentile means
 
-Warcraft Logs distinguishes a *parse* (any scored performance) from a
-*ranking* (that player's best parse). `compare: Rankings` compares the selected
+Warcraft Logs distinguishes a _parse_ (any scored performance) from a
+_ranking_ (that player's best parse). `compare: Rankings` compares the selected
 fight's score against players' best scores across the tier; `compare: Parses`
 compares it against all parses in a typical two-week window. The selected fight
 is still a parse in either case—the `compare` value chooses the comparison
@@ -257,15 +257,15 @@ The first-party [RPGLogs rankings guide][rpglogs-ranks] gives both thresholds
 and exact colors, and the [RPGLogs branding page][rpglogs-branding] independently
 lists the same seven hex codes:
 
-| Percentile shown | Continuous implementation interval | Hex |
-| --- | --- | --- |
-| 0–24 | `0 <= p < 25` | `#666666` |
-| 25–49 | `25 <= p < 50` | `#1eff00` |
-| 50–74 | `50 <= p < 75` | `#0070ff` |
-| 75–94 | `75 <= p < 95` | `#a335ee` |
-| 95–98 | `95 <= p < 99` | `#ff8000` |
-| 99 | `99 <= p < 100` | `#e268a8` |
-| 100 | `p == 100` | `#e5cc80` |
+| Percentile shown | Continuous implementation interval | Hex       |
+| ---------------- | ---------------------------------- | --------- |
+| 0–24             | `0 <= p < 25`                      | `#666666` |
+| 25–49            | `25 <= p < 50`                     | `#1eff00` |
+| 50–74            | `50 <= p < 75`                     | `#0070ff` |
+| 75–94            | `75 <= p < 95`                     | `#a335ee` |
+| 95–98            | `95 <= p < 99`                     | `#ff8000` |
+| 99               | `99 <= p < 100`                    | `#e268a8` |
+| 100              | `p == 100`                         | `#e5cc80` |
 
 The continuous intervals are the unrounded implementation of the guide's
 integer labels and its wording “99+”; they prevent rounding a value across a
@@ -369,6 +369,39 @@ mismatched/non-unique Character-to-actor bridge is rejected as schema drift;
 private, inaccessible, archived, or otherwise unavailable ranking responses
 produce an unavailable metric state. None of those states may become zero or
 `not_applicable` without independent role evidence.
+
+## Shipped operational semantics
+
+The release performs `Report.rankings` with `compare: Rankings` and
+`timeframe: Historical` only after retaining public Mythic kill references. A
+ranking is accepted only when its query scope and canonical identity prove the
+same report, fight, encounter, difficulty, region, realm, and character as the
+evidence row. The canonical proof remains `ranking character ID ->
+Character(id) canonical identity -> unique report actor`; a raw ranking name
+is never attribution evidence. Each available percentile retains its exact
+public fight URL.
+
+The worker has independent positive request limits: `EVIDENCE_REQUEST_CAP`
+defaults to 500 report-list pages, while `EVIDENCE_PARSE_REQUEST_CAP` defaults
+to 8 parse-hydration requests (ranking batches and the bounded canonical
+lookups they require). This protects the hourly provider budget. The observed
+8-point three-alias query and 9-point post-validation probe are live test
+measurements, not a fixed cost, provider commitment, or safe extrapolation.
+
+Only normalized kill and parse-state evidence is retained. It follows the
+existing `FRESHNESS_HOURS` window (24 hours by default); terminal evidence
+runs and their cascading kill rows are removed after 30 days. The assembled
+dossier remains a current, uncached view with `Cache-Control: no-store`.
+Unavailable parse data, a cap, or a partial upstream result never weakens an
+otherwise verified kill. A supplied numeric `0` remains an available result;
+`unavailable` and `not_applicable` remain distinct nonnumeric states.
+
+On the reviewer surface, **First kill parses** summarize the earliest displayed
+event, and **Best shown parses** select only among the displayed events for the
+boss. Neither is an all-history best. The exact percentile bands are grey
+`#666666` (0–<25), green `#1eff00` (25–<50), blue `#0070ff` (50–<75), purple
+`#a335ee` (75–<95), orange `#ff8000` (95–<99), pink `#e268a8` (99–<100), and
+gold `#e5cc80` (100); colour supplements the metric's text label and link.
 
 [api-docs]: https://www.warcraftlogs.com/api/docs
 [archive-status]: https://www.warcraftlogs.com/v2-api-docs/warcraft/reportarchivestatus.doc.html

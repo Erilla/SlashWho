@@ -144,15 +144,15 @@ cannot cross a colour boundary.
 
 SlashWho will use the Warcraft Logs ranking palette exactly:
 
-| Percentile | Colour |
-| --- | --- |
-| 0-24 | `#666666` |
-| 25-49 | `#1eff00` |
-| 50-74 | `#0070ff` |
-| 75-94 | `#a335ee` |
-| 95-98 | `#ff8000` |
+| Percentile               | Colour    |
+| ------------------------ | --------- |
+| 0-24                     | `#666666` |
+| 25-49                    | `#1eff00` |
+| 50-74                    | `#0070ff` |
+| 75-94                    | `#a335ee` |
+| 95-98                    | `#ff8000` |
 | 99 through less than 100 | `#e268a8` |
-| 100 | `#e5cc80` |
+| 100                      | `#e5cc80` |
 
 Neutral unavailable states do not receive a performance colour. The palette
 is centralized in a pure mapping helper and CSS custom properties so boundary
