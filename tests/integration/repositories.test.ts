@@ -146,6 +146,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(first.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [mythicWipe()],
       completedAt
@@ -198,6 +199,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(reserved.run.id, {
       state: "partial",
       limitationCode: "request_cap",
+      parseLimitationCode: null,
       completedAt: new Date("2026-08-04T12:05:00.000Z"),
       kills: [
         mythicKill(),
@@ -303,6 +305,82 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("validates independent history and parse limitation publication states", async () => {
+    // Break caught: adding a second limitation channel could reject valid
+    // complete/partial states or permit an ambiguous partial publication.
+    const cases = [
+      {
+        state: "complete" as const,
+        limitationCode: null,
+        parseLimitationCode: null
+      },
+      {
+        state: "partial" as const,
+        limitationCode: "request_cap",
+        parseLimitationCode: null
+      },
+      {
+        state: "partial" as const,
+        limitationCode: null,
+        parseLimitationCode: "parse_request_cap"
+      },
+      {
+        state: "partial" as const,
+        limitationCode: "request_cap",
+        parseLimitationCode: "parse_request_cap"
+      }
+    ];
+    for (const [index, input] of cases.entries()) {
+      const key = { ...rootKey, name: `limitation-${index}` };
+      const reserved = await repositories.evidence.reserve({
+        key,
+        freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+        at: new Date("2026-08-04T12:00:00.000Z")
+      });
+      if (reserved.kind !== "reserved")
+        throw new Error("evidence_not_reserved");
+      await repositories.evidence.publish(reserved.run.id, {
+        ...input,
+        kills: [],
+        completedAt: new Date("2026-08-04T12:05:00.000Z")
+      });
+      await expect(
+        repositories.evidence.find(reserved.run.id)
+      ).resolves.toMatchObject({
+        status: input.state,
+        limitationCode: input.limitationCode,
+        parseLimitationCode: input.parseLimitationCode
+      });
+    }
+    for (const [index, input] of [
+      {
+        state: "complete" as const,
+        limitationCode: "request_cap",
+        parseLimitationCode: null
+      },
+      {
+        state: "partial" as const,
+        limitationCode: null,
+        parseLimitationCode: null
+      }
+    ].entries()) {
+      const reserved = await repositories.evidence.reserve({
+        key: { ...rootKey, name: `invalid-limitation-${index}` },
+        freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+        at: new Date("2026-08-04T12:00:00.000Z")
+      });
+      if (reserved.kind !== "reserved")
+        throw new Error("evidence_not_reserved");
+      await expect(
+        repositories.evidence.publish(reserved.run.id, {
+          ...input,
+          kills: [],
+          completedAt: new Date("2026-08-04T12:05:00.000Z")
+        })
+      ).rejects.toThrow("character_evidence_publication_invalid");
+    }
+  });
+
   it("round-trips normalized kill parses", async () => {
     // Break caught: storage could lose a normalized parse state or percentile,
     // including a valid zero, while replacing a completed evidence scan.
@@ -336,6 +414,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(initial.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       kills: initialKills,
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
@@ -381,6 +460,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(replacement.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       kills: replacementKills,
       completedAt: new Date("2026-08-04T12:10:00.000Z")
     });
@@ -404,6 +484,7 @@ describe("PostgreSQL repositories", () => {
       repositories.evidence.publish(reserved.run.id, {
         state: "complete",
         limitationCode: null,
+        parseLimitationCode: null,
         kills: [
           mythicKill({
             performance: {
@@ -435,6 +516,7 @@ describe("PostgreSQL repositories", () => {
     await repositories.evidence.publish(reserved.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       kills: [
         mythicKill({
           performance: {

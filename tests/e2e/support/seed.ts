@@ -94,6 +94,7 @@ export async function seedCharacterEvidence(
     await repositories.evidence.publish(reservation.run.id, {
       state: "complete",
       limitationCode: null,
+      parseLimitationCode: null,
       completedAt: now,
       kills:
         options.withSampleKills === false
