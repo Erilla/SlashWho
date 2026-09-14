@@ -16,10 +16,16 @@ type DossierRaidListProps = Readonly<{
   limitations?: ApplicantDossier["limitations"];
 }>;
 
-function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
+function ReportLinks({
+  evidence,
+  wipes = []
+}: {
+  evidence: KillBoss["firstKill"];
+  wipes?: readonly WipeEvidence[];
+}) {
   const urls =
     evidence.reportUrls ?? (evidence.reportUrl ? [evidence.reportUrl] : []);
-  if (urls.length === 0) return <>Report: —</>;
+  if (urls.length === 0 && wipes.length === 0) return <>Report: —</>;
   return (
     <ul className="dossier-report-links">
       {urls.map((url, index) => (
@@ -32,6 +38,16 @@ function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
                 ? "View Warcraft Logs report"
                 : `View Warcraft Logs report ${index + 1}`
             }
+            source="warcraft_logs"
+          />
+        </li>
+      ))}
+      {wipes.map((wipe) => (
+        <li key={`${wipe.attemptedAt}-${wipe.reportUrl}`}>
+          <UpstreamIconLink
+            evidenceState="wipe"
+            href={wipe.reportUrl}
+            label="View Warcraft Logs wipe report"
             source="warcraft_logs"
           />
         </li>
@@ -260,7 +276,7 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
                     <div>
                       <dt>Reports</dt>
                       <dd>
-                        <ReportLinks evidence={evidence} />
+                        <ReportLinks evidence={evidence} wipes={wipes} />
                       </dd>
                     </div>
                     <div>
@@ -282,7 +298,6 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
                     </div>
                   </dl>
                 </div>
-                <WipeEvidenceList wipes={wipes} />
               </div>
             );
           })}

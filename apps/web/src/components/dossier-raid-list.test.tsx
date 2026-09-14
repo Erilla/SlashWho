@@ -577,7 +577,7 @@ it("keeps the chronological first-kill summary coherent while listing events old
   ]);
 });
 
-it("lists green kill rows before grey wipes ordered newest to oldest", async () => {
+it("lists kill reports before inline wipe reports ordered newest to oldest", async () => {
   renderWithDossierCharacters(
     <DossierRaidList
       raids={
@@ -614,25 +614,22 @@ it("lists green kill rows before grey wipes ordered newest to oldest", async () 
 
   await userEvent.setup().click(screen.getByText("View kill evidence"));
   const rows = screen.getAllByText(/First kill|Wipe/, { selector: "dt" });
-  expect(rows.map((row) => row.textContent)).toEqual([
-    "First kill",
-    "Wipe",
-    "Wipe"
+  expect(rows.map((row) => row.textContent)).toEqual(["First kill"]);
+  const reportLinks = screen
+    .getByRole("region", { name: "Kill evidence" })
+    .querySelectorAll<HTMLAnchorElement>("a.upstream-icon-link");
+  expect(Array.from(reportLinks).map((link) => link.href)).toEqual([
+    "https://www.warcraftlogs.com/reports/latest#fight=4",
+    "https://www.warcraftlogs.com/reports/older#fight=2"
   ]);
+  expect(reportLinks[0]).toHaveClass("upstream-icon-link--evidence-wipe");
+  expect(reportLinks[1]).toHaveClass("upstream-icon-link--evidence-wipe");
   expect(
     screen.getAllByRole("img", { name: "Verified Mythic kill" })
   ).not.toHaveLength(0);
-  expect(
-    screen.getAllByRole("img", { name: "Mythic wipe found" })
-  ).toHaveLength(2);
-  const dates = screen.getAllByText(/12|13 Jan 2025/, { selector: "time" });
-  expect(dates.map((date) => date.textContent)).toEqual([
-    "13 Jan 2025",
-    "12 Jan 2025"
-  ]);
 });
 
-it("groups each wipe beneath its nearest subsequent kill", async () => {
+it("groups multiple wipes after each corresponding kill report", async () => {
   renderWithDossierCharacters(
     <DossierRaidList
       raids={
@@ -707,13 +704,39 @@ it("groups each wipe beneath its nearest subsequent kill", async () => {
     selector: "dt"
   });
 
-  expect(rows.map((row) => row.textContent)).toEqual([
-    "First kill",
-    "Wipe",
-    "Kill",
-    "Wipe",
-    "Wipe"
+  expect(rows.map((row) => row.textContent)).toEqual(["First kill", "Kill"]);
+  expect(
+    within(evidence).getAllByRole("link", {
+      name: "View Warcraft Logs wipe report (opens in a new tab)"
+    })
+  ).toHaveLength(3);
+  const evidenceRows = Array.from(
+    evidence.querySelectorAll<HTMLElement>(".dossier-evidence-row")
+  );
+  expect(
+    within(evidenceRows[0]!)
+      .getAllByRole("link")
+      .filter((link) => link.classList.contains("upstream-icon-link"))
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([
+    "https://www.warcraftlogs.com/reports/first#fight=8",
+    "https://www.warcraftlogs.com/reports/early#fight=6"
   ]);
+  expect(
+    within(evidenceRows[1]!)
+      .getAllByRole("link")
+      .filter((link) => link.classList.contains("upstream-icon-link"))
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([
+    "https://www.warcraftlogs.com/reports/second#fight=9",
+    "https://www.warcraftlogs.com/reports/progression#fight=8",
+    "https://www.warcraftlogs.com/reports/progression#fight=7"
+  ]);
+  expect(
+    within(evidence).getAllByRole("link", {
+      name: "View Warcraft Logs report (opens in a new tab)"
+    })
+  ).toHaveLength(2);
   expect(
     within(evidence).getAllByRole("link", {
       name: "View Warcraft Logs wipe report (opens in a new tab)"
@@ -722,9 +745,6 @@ it("groups each wipe beneath its nearest subsequent kill", async () => {
   expect(
     within(evidence).getAllByRole("img", { name: "Verified Mythic kill" })
   ).toHaveLength(2);
-  expect(
-    within(evidence).getAllByRole("img", { name: "Mythic wipe found" })
-  ).toHaveLength(3);
 });
 
 it("renders kill, wipe, no-log, and incomplete states with accessible labels", async () => {
