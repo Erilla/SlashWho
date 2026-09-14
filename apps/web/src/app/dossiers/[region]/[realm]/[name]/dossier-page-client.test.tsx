@@ -75,18 +75,6 @@ const expanded = dossier(
   "Linked-character research is complete.",
   "Expanded evidence"
 );
-const gatheringEvidence = {
-  ...dossier(
-    "partial",
-    "Gathering historic Mythic evidence for this applicant.",
-    "Cached evidence"
-  ),
-  research: {
-    state: "gathering",
-    message: "Gathering historic Mythic evidence for this applicant."
-  }
-} as unknown as ApplicantDossier;
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();

@@ -13,7 +13,6 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 const invalidUrlMessage = "Enter a Raider.IO or Warcraft Logs character URL.";
-const invalidStructuredMessage = "Enter a character name, realm, and region.";
 const invalidStructuredUrlMessage =
   "Enter a valid character URL, or character name, realm, and region.";
 const defaultRegion = supportedRegions[0];
