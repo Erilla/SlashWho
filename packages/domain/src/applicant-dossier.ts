@@ -460,10 +460,7 @@ export function buildApplicantDossier(
         lookupJournalEncounter(selected.bossId)?.imageUrl ??
         lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
         null,
-      firstKill: {
-        ...firstKills[0]!.firstKill,
-        parses: firstKills.at(-1)!.firstKill.parses
-      },
+      firstKill: firstKills.at(-1)!.firstKill,
       firstKills: firstKills.map((entry) => entry.firstKill),
       bestParses: aggregateBossParses(
         firstKills.map((entry) => entry.shared),

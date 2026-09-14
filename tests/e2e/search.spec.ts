@@ -179,12 +179,30 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
     realm: "silvermoon",
     name: "parsecheck"
   } as const;
+  const laterKey = {
+    region: "eu",
+    realm: "draenor",
+    name: "laterparse"
+  } as const;
   await seedSnapshot({
     key,
     displayName: "Parsecheck",
-    refreshedAt: new Date("2026-09-11T00:00:00.000Z")
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z"),
+    characters: [
+      { key, displayName: "Parsecheck", className: "Mage", level: 80 },
+      {
+        key: laterKey,
+        displayName: "Laterparse",
+        className: "Priest",
+        level: 80
+      }
+    ]
   });
-  await seedCharacterEvidence(key, { withLaterParseEvent: true });
+  await seedCharacterEvidence(key);
+  await seedCharacterEvidence(laterKey, {
+    withLaterParseEvent: true,
+    laterParseEventOnly: true
+  });
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/parsecheck");
@@ -211,18 +229,26 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await boss.getByText("View kill evidence").click();
   const evidence = boss.getByRole("region", { name: "Kill evidence" });
   const latestEventParses = evidence.getByRole("region", {
-    name: "First kill parses"
-  });
-  const earlierEventParses = evidence.getByRole("region", {
     name: "Kill parses",
     exact: true
+  });
+  const firstEventParses = evidence.getByRole("region", {
+    name: "First kill parses"
   });
   await expect(
     latestEventParses.getByRole("link", { name: "Damage 100th percentile" })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
   await expect(
-    earlierEventParses.getByRole("link", { name: "Damage 99.2 percentile" })
+    firstEventParses.getByRole("link", { name: "Damage 99.2 percentile" })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
+  await expect(latestEventParses).toContainText("Laterparse");
+  await expect(firstEventParses).toContainText("Parsecheck");
+  await expect(latestEventParses.locator("xpath=ancestor::dl")).not.toHaveClass(
+    /dossier-evidence-first-kill/
+  );
+  await expect(firstEventParses.locator("xpath=ancestor::dl")).toHaveClass(
+    /dossier-evidence-first-kill/
+  );
 
   await page.setViewportSize({ width: 390, height: 844 });
   await firstKillParses.scrollIntoViewIfNeeded();
@@ -247,11 +273,11 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
       name: "Damage 100th percentile"
     })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
-  await earlierEventParses.scrollIntoViewIfNeeded();
-  await expect(earlierEventParses).toBeVisible();
-  await expect(earlierEventParses).toBeInViewport();
+  await firstEventParses.scrollIntoViewIfNeeded();
+  await expect(firstEventParses).toBeVisible();
+  await expect(firstEventParses).toBeInViewport();
   await expect(
-    earlierEventParses.getByRole("link", {
+    firstEventParses.getByRole("link", {
       name: "Damage 99.2 percentile"
     })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
