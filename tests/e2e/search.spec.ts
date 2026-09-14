@@ -55,14 +55,21 @@ for (const applicantUrl of applicantUrls) {
             times.map((time) => time.getAttribute("datetime"))
           )
       )
-      .toEqual(["2025-01-13T21:31:40.000Z", "2025-01-13T22:31:40.000Z"]);
-    await expect(
-      evidence
-        .getByRole("link", {
-          name: "View Warcraft Logs report (opens in a new tab)"
-        })
-        .first()
-    ).toBeVisible();
+      .toEqual(["2025-01-13T21:31:40.000Z"]);
+    const reportLinks = evidence.getByRole("link", {
+      name: /View Warcraft Logs report/
+    });
+    await expect(reportLinks).toHaveCount(2);
+    expect(
+      await reportLinks.evaluateAll((links) =>
+        links.map((link) => link.getAttribute("href"))
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
+        "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
+      ])
+    );
   });
 }
 
@@ -97,13 +104,20 @@ test("shows submitted-character evidence while queued discovery is held", async 
   ).toBeVisible();
   await expect(initialDisclosure).not.toBeVisible();
   await evidence.getByText("View kill evidence").click();
-  await expect(
-    evidence
-      .getByRole("link", {
-        name: "View Warcraft Logs report (opens in a new tab)"
-      })
-      .first()
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+  const reportLinks = evidence.getByRole("link", {
+    name: /View Warcraft Logs report/
+  });
+  await expect(reportLinks).toHaveCount(2);
+  expect(
+    await reportLinks.evaluateAll((links) =>
+      links.map((link) => link.getAttribute("href"))
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
+      "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
+    ])
+  );
 });
 
 test("discloses that a partial snapshot may omit linked characters", async ({

@@ -14,6 +14,12 @@ const altKey: CharacterKey = {
 };
 const rootCharacter = { key: root, displayName: "Ryii" };
 const altCharacter = { key: altKey, displayName: "Ryalts" };
+const usAltKey: CharacterKey = {
+  region: "us",
+  realm: "illidan",
+  name: "ryalts"
+};
+const usAltCharacter = { key: usAltKey, displayName: "Ryalts-US" };
 
 function kill(
   character: CharacterKey,
@@ -42,7 +48,7 @@ describe("applicant dossier", () => {
       root,
       characters: [rootCharacter, altCharacter],
       kills: [
-        kill(root, { killedAt: "2024-10-03T20:00:00.000Z" }),
+        kill(root, { killedAt: "2024-10-01T21:00:00.000Z" }),
         kill(altKey),
         kill(altKey, { killedAt: "2024-10-02T20:00:00.000Z" })
       ],
@@ -117,6 +123,119 @@ describe("applicant dossier", () => {
         characters: ["Ryii", "Ryalts"]
       })
     ]);
+  });
+
+  it("merges same-date reports despite conflicting guild attribution", () => {
+    // Break caught: guild disagreement or uploader clock differences split one
+    // same-date boss event and hid its complete report and participant evidence.
+    const forward = [
+      kill(root, {
+        killedAt: "2024-10-01T23:59:00.000Z",
+        guild: { name: "Zeta Guild", realm: "silvermoon" },
+        historicWorldRank: 5,
+        reportUrl: "https://www.warcraftlogs.com/reports/a-report#fight=8"
+      }),
+      kill(altKey, {
+        killedAt: "2024-10-01T00:01:00.000Z",
+        guild: { name: "Alpha Guild", realm: "draenor" },
+        historicWorldRank: null,
+        reportUrl: "https://www.warcraftlogs.com/reports/z-report#fight=9"
+      })
+    ];
+    const make = (kills: readonly DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, altCharacter],
+        kills,
+        limitations: []
+      });
+
+    expect(make([...forward].reverse())).toEqual(make(forward));
+    expect(make(forward).raids[0]!.bosses[0]!.firstKills).toEqual([
+      expect.objectContaining({
+        guild: { name: "Alpha Guild", realm: "draenor" },
+        historicWorldRank: null,
+        reportUrls: [
+          "https://www.warcraftlogs.com/reports/a-report#fight=8",
+          "https://www.warcraftlogs.com/reports/z-report#fight=9"
+        ],
+        characters: ["Ryii", "Ryalts"]
+      })
+    ]);
+  });
+
+  it("uses the available guild when same-date attribution is absent", () => {
+    // Break caught: a null guild prevented same-date reports from being merged
+    // even when another report supplied the display attribution.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, {
+          killedAt: "2024-10-01T01:00:00.000Z",
+          guild: null,
+          reportUrl: "https://www.warcraftlogs.com/reports/unguilded#fight=8"
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-01T22:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/attributed#fight=8"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
+      expect.objectContaining({
+        guild: { name: "Example Guild", realm: "silvermoon" },
+        characters: ["Ryii", "Ryalts"]
+      })
+    ]);
+  });
+
+  it("keeps different UTC dates and regions as distinct kill events", () => {
+    // Break caught: broad same-boss grouping could merge events across either
+    // the UTC calendar boundary or the Warcraft Logs region boundary.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter, usAltCharacter],
+      kills: [
+        kill(root, {
+          killedAt: "2024-10-01T23:59:59.999Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/eu-first#fight=8"
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-02T00:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/eu-second#fight=8"
+        }),
+        kill(usAltKey, {
+          killedAt: "2024-10-01T12:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/us#fight=8"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses[0]!.firstKills).toHaveLength(3);
+  });
+
+  it("keeps different bosses as distinct kill events", () => {
+    // Break caught: date-based grouping must remain scoped by the normalized
+    // raid and boss identity established before evidence aggregation.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, { journalBossId: "2602" }),
+        kill(altKey, {
+          bossName: "Sikran",
+          journalBossId: "2599",
+          reportUrl: "https://www.warcraftlogs.com/reports/sikran#fight=2"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses).toHaveLength(2);
   });
 
   it("uses the same result when tied evidence input is reversed", () => {
@@ -254,7 +373,7 @@ describe("applicant dossier", () => {
     ]);
   });
 
-  it("retains distinct reports and timestamp fallbacks, credits shared reports, and sorts oldest first", () => {
+  it("groups same-date timestamp fallbacks, retains reports, and sorts oldest first", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -283,11 +402,7 @@ describe("applicant dossier", () => {
       }),
       expect.objectContaining({
         killedAt: "2024-10-03T20:00:00.000Z",
-        characters: ["Ryalts"]
-      }),
-      expect.objectContaining({
-        killedAt: "2024-10-03T20:00:00.000Z",
-        characters: ["Ryii"]
+        characters: ["Ryii", "Ryalts"]
       }),
       expect.objectContaining({
         killedAt: "2024-10-04T20:00:00.000Z",
