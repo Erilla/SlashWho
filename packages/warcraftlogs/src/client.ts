@@ -422,18 +422,18 @@ function firstKillReports(
       const reportUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`;
       const fightUrl = `${reportUrl}#fight=${id}`;
       if (!killed) {
-      const candidate: WarcraftLogsWipeEvidence = {
-        raidId: String(raidId),
-        raidName,
-        bossId: String(encounterId),
-        bossName,
+        const candidate: WarcraftLogsWipeEvidence = {
+          raidId: String(raidId),
+          raidName,
+          bossId: String(encounterId),
+          bossName,
           journalBossId: journalBossIds.get(encounterId) ?? null,
           bossOrder: encounterId,
           attemptedAt: evidenceAt,
-        reportUrl,
-        fightUrl
-      };
-      wipes.set(candidate.fightUrl, candidate);
+          reportUrl,
+          fightUrl
+        };
+        wipes.set(candidate.fightUrl, candidate);
         continue;
       }
       const candidate: WarcraftLogsFirstKillEvidence = {

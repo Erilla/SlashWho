@@ -480,9 +480,9 @@ describe("applicant dossier", () => {
       raid.bosses.find((candidate) => candidate.bossId === "queen-ansurek")!
     );
     expect(queen.wipes).toEqual([]);
-    expect(raid.bosses.find((candidate) => candidate.bossId === "sikran")).toMatchObject(
-      { state: "wipe" }
-    );
+    expect(
+      raid.bosses.find((candidate) => candidate.bossId === "sikran")
+    ).toMatchObject({ state: "wipe" });
   });
 
   it("keeps each character's distinct first kill for the same boss", () => {
