@@ -419,6 +419,54 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("rejects null percentiles for available parse states", async () => {
+    // Break caught: PostgreSQL CHECK treats a null available percentile as
+    // unknown unless the available branch requires a concrete value.
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: [
+        mythicKill({
+          performance: {
+            damage: { state: "available", percentile: 0 },
+            healing: { state: "available", percentile: 0 },
+            bossDamage: { state: "available", percentile: 0 }
+          }
+        })
+      ],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    const kill = completed?.kills[0];
+    if (!kill) throw new Error("published_kill_missing");
+    expect(kill.performance).toEqual({
+      damage: { state: "available", percentile: 0 },
+      healing: { state: "available", percentile: 0 },
+      bossDamage: { state: "available", percentile: 0 }
+    });
+
+    for (const percentileColumn of [
+      "damage_percentile",
+      "healing_percentile",
+      "boss_damage_percentile"
+    ]) {
+      await expect(
+        pool.query(
+          `UPDATE character_mythic_kills
+           SET ${percentileColumn} = NULL
+           WHERE id = $1`,
+          [kill.id]
+        )
+      ).rejects.toMatchObject({ code: "23514" });
+    }
+  });
+
   afterAll(async () => {
     await stop();
   });

@@ -1,5 +1,5 @@
 {
-  "id": "51a6004e-0926-4578-9e74-b9fce887ed68",
+  "id": "06388c32-0b89-4534-93aa-50ab29fd7f19",
   "prevId": "c9a6b43d-8d1a-4974-98f4-e124100ab01d",
   "version": "7",
   "dialect": "postgresql",
@@ -367,15 +367,15 @@
         },
         "character_mythic_kills_damage_parse_check": {
           "name": "character_mythic_kills_damage_parse_check",
-          "value": "(\"character_mythic_kills\".\"damage_parse_state\" = 'available' AND \"character_mythic_kills\".\"damage_percentile\" >= 0 AND \"character_mythic_kills\".\"damage_percentile\" <= 100) OR (\"character_mythic_kills\".\"damage_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"damage_percentile\" IS NULL)"
+          "value": "(\"character_mythic_kills\".\"damage_parse_state\" = 'available' AND \"character_mythic_kills\".\"damage_percentile\" IS NOT NULL AND \"character_mythic_kills\".\"damage_percentile\" >= 0 AND \"character_mythic_kills\".\"damage_percentile\" <= 100) OR (\"character_mythic_kills\".\"damage_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"damage_percentile\" IS NULL)"
         },
         "character_mythic_kills_healing_parse_check": {
           "name": "character_mythic_kills_healing_parse_check",
-          "value": "(\"character_mythic_kills\".\"healing_parse_state\" = 'available' AND \"character_mythic_kills\".\"healing_percentile\" >= 0 AND \"character_mythic_kills\".\"healing_percentile\" <= 100) OR (\"character_mythic_kills\".\"healing_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"healing_percentile\" IS NULL)"
+          "value": "(\"character_mythic_kills\".\"healing_parse_state\" = 'available' AND \"character_mythic_kills\".\"healing_percentile\" IS NOT NULL AND \"character_mythic_kills\".\"healing_percentile\" >= 0 AND \"character_mythic_kills\".\"healing_percentile\" <= 100) OR (\"character_mythic_kills\".\"healing_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"healing_percentile\" IS NULL)"
         },
         "character_mythic_kills_boss_damage_parse_check": {
           "name": "character_mythic_kills_boss_damage_parse_check",
-          "value": "(\"character_mythic_kills\".\"boss_damage_parse_state\" = 'available' AND \"character_mythic_kills\".\"boss_damage_percentile\" >= 0 AND \"character_mythic_kills\".\"boss_damage_percentile\" <= 100) OR (\"character_mythic_kills\".\"boss_damage_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"boss_damage_percentile\" IS NULL)"
+          "value": "(\"character_mythic_kills\".\"boss_damage_parse_state\" = 'available' AND \"character_mythic_kills\".\"boss_damage_percentile\" IS NOT NULL AND \"character_mythic_kills\".\"boss_damage_percentile\" >= 0 AND \"character_mythic_kills\".\"boss_damage_percentile\" <= 100) OR (\"character_mythic_kills\".\"boss_damage_parse_state\" IN ('not_applicable', 'unavailable') AND \"character_mythic_kills\".\"boss_damage_percentile\" IS NULL)"
         }
       },
       "isRLSEnabled": false
