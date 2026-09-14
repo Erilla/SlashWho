@@ -73,24 +73,30 @@ test("matches dossier summary panels and confines character scrolling to desktop
     realm: "silvermoon",
     name: "longlist"
   } as const;
+  const characters = Array.from({ length: 12 }, (_, index) => ({
+    key:
+      index === 0
+        ? key
+        : {
+            region: "eu" as const,
+            realm: "silvermoon",
+            name: `ryalt${index}`
+          },
+    displayName: index === 0 ? "Longlist" : `Ryalt${index}`,
+    className: "Mage",
+    level: 80 - index
+  }));
   await seedSnapshot({
     key,
     displayName: "Longlist",
     refreshedAt: new Date(),
-    characters: Array.from({ length: 12 }, (_, index) => ({
-      key:
-        index === 0
-          ? key
-          : {
-              region: "eu" as const,
-              realm: "silvermoon",
-              name: `ryalt${index}`
-            },
-      displayName: index === 0 ? "Longlist" : `Ryalt${index}`,
-      className: "Mage",
-      level: 80 - index
-    }))
+    characters
   });
+  await Promise.all(
+    characters.map((character) =>
+      seedCharacterEvidence(character.key, { withSampleKills: false })
+    )
+  );
 
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/longlist");
@@ -177,6 +183,7 @@ test("does not create a desktop scroll range when connected characters fit", asy
     displayName: "Shortlist",
     refreshedAt: new Date()
   });
+  await seedCharacterEvidence(key, { withSampleKills: false });
 
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/shortlist");
