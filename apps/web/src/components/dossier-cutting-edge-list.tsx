@@ -13,14 +13,22 @@ export function DossierCuttingEdgeList({
   cuttingEdges,
   limitations
 }: DossierCuttingEdgeListProps) {
+  const orderedCuttingEdges = [...cuttingEdges].sort(
+    (a, b) =>
+      (a.completedAt < b.completedAt
+        ? 1
+        : a.completedAt > b.completedAt
+          ? -1
+          : 0) || a.achievementId.localeCompare(b.achievementId)
+  );
   const sequence = limitations.some(
     (limitation) => limitation.source === "blizzard"
   )
-    ? cuttingEdges.map((achievement) => ({
+    ? orderedCuttingEdges.map((achievement) => ({
         status: "recorded" as const,
         achievement
       }))
-    : buildBoundedCuttingEdgeSequence(cuttingEdges);
+    : buildBoundedCuttingEdgeSequence(orderedCuttingEdges);
 
   return (
     <section
