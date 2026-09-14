@@ -1228,9 +1228,10 @@ export function createWarcraftLogsClient(
       }
     }
 
-    // Character-level rankings fill the best-shown view when the bounded
-    // report scan could not hydrate every historical report group.
-    if (parseLimitation?.code === "parse_request_cap") {
+    // Character-level rankings are the complete best-shown source. Report
+    // rankings remain reserved for exact fight evidence and may be empty for
+    // archived or otherwise unranked reports.
+    if (kills.size > 0) {
       const bosses = new Map<string, { bossId: string; difficulty: number }>();
       for (const kill of kills.values()) {
         bosses.set(`${kill.bossId}:${kill.difficulty}`, {

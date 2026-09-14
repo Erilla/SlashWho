@@ -955,6 +955,50 @@ describe("Warcraft Logs gateway", () => {
     ).toBe(true);
   });
 
+  it("fills best rankings when a report ranking response has no rows", async () => {
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [{ rankPercent: 91 }] },
+                healing: { data: [{ rankPercent: 82 }] },
+                bossDamage: { data: [{ rankPercent: 87 }] }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 3 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          performance: {
+            damage: { state: "available", percentile: 91 },
+            healing: { state: "available", percentile: 82 },
+            bossDamage: { state: "available", percentile: 87 }
+          }
+        }
+      ]
+    });
+  });
+
   it("paginates public reports and retains every distinct Mythic kill", async () => {
     // Break caught: collapsing report pages to one kill per encounter hid the
     // complete chronological evidence needed by an applicant dossier.
@@ -1053,7 +1097,7 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch).toHaveBeenCalledTimes(8);
   });
 
   it("emits only participant-attributed boss kills and ignores trash fights", async () => {
@@ -1673,7 +1717,7 @@ describe("Warcraft Logs gateway", () => {
       client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 10 })
     ).resolves.toMatchObject({ kind: "evidence" });
 
-    expect(fetch).toHaveBeenCalledTimes(7);
+    expect(fetch).toHaveBeenCalledTimes(11);
   });
 
   it("refreshes the OAuth token sixty seconds before its reported expiry", async () => {
@@ -1716,17 +1760,10 @@ describe("Warcraft Logs gateway", () => {
         parseRequestCap: 10
       });
 
-      expect(fetch).toHaveBeenCalledTimes(11);
+      expect(fetch).toHaveBeenCalledTimes(17);
       expect(authorizations).toEqual([
-        "Bearer token-1",
-        "Bearer token-1",
-        "Bearer token-1",
-        "Bearer token-1",
-        "Bearer token-1",
-        "Bearer token-1",
-        "Bearer token-2",
-        "Bearer token-2",
-        "Bearer token-2"
+        ...Array.from({ length: 10 }, () => "Bearer token-1"),
+        ...Array.from({ length: 5 }, () => "Bearer token-2")
       ]);
     } finally {
       vi.useRealTimers();
@@ -1838,7 +1875,7 @@ describe("Warcraft Logs gateway", () => {
       kills: expect.any(Array),
       limitation: { kind: "limitation", code: "request_cap" }
     });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 
   it("retains collected kills if a later report page is malformed", async () => {
