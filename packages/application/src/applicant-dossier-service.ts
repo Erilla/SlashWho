@@ -331,9 +331,9 @@ function serializeDossierSubject(character: DossierSubject) {
         ? ("submitted" as const)
         : character.source === "manually_added"
           ? ("manually_added" as const)
-        : character.source === "fingerprint"
-          ? ("fingerprint_derived" as const)
-          : ("raiderio_declared" as const)
+          : character.source === "fingerprint"
+            ? ("fingerprint_derived" as const)
+            : ("raiderio_declared" as const)
   };
 }
 
@@ -526,7 +526,10 @@ class RankingLookupFailure extends Error {
 }
 
 export function createApplicantDossierService(options: {
-  repositories: Pick<Repositories, "snapshots" | "evidence" | "manualConnections">;
+  repositories: Pick<
+    Repositories,
+    "snapshots" | "evidence" | "manualConnections"
+  >;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
@@ -614,11 +617,22 @@ export function createApplicantDossierService(options: {
 
     async addConnectedCharacter(root, input) {
       let target: CharacterKey;
-      try { target = parseApplicantCharacterUrl(input.characterUrl); } catch { return { kind: "invalid", code: "invalid_character_url" }; }
-      if (canonicalCharacterId(root) === canonicalCharacterId(target)) return { kind: "duplicate" };
-      const result = await options.search.create({ ...input, characterUrl: toRaiderIoUrl(target) });
+      try {
+        target = parseApplicantCharacterUrl(input.characterUrl);
+      } catch {
+        return { kind: "invalid", code: "invalid_character_url" };
+      }
+      if (canonicalCharacterId(root) === canonicalCharacterId(target))
+        return { kind: "duplicate" };
+      const result = await options.search.create({
+        ...input,
+        characterUrl: toRaiderIoUrl(target)
+      });
       if (result.kind !== "character") return result;
-      const connection = await options.repositories.manualConnections.add(root, target);
+      const connection = await options.repositories.manualConnections.add(
+        root,
+        target
+      );
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
@@ -677,26 +691,35 @@ export function createApplicantDossierService(options: {
       const snapshot = await options.repositories.snapshots.getCurrent(key);
       if (!snapshot) return { kind: "not_ready" };
 
-      const seen = new Set(snapshot.characters.map((character) => canonicalCharacterId(character.key)));
+      const seen = new Set(
+        snapshot.characters.map((character) =>
+          canonicalCharacterId(character.key)
+        )
+      );
       const manual = (await options.repositories.manualConnections.list(key))
         .filter((character) => !seen.has(canonicalCharacterId(character.key)))
-        .map((character) => ({ ...character, source: "manually_added" as const }));
+        .map((character) => ({
+          ...character,
+          source: "manually_added" as const
+        }));
 
       const rootId = canonicalCharacterId(snapshot.rootKey);
       // Rank before applying the cap so the displayed list and evidence requests
       // prioritise the same characters without changing the immutable snapshot.
-      const ordered = [...snapshot.characters, ...manual].sort((left, right) => {
-        const rootOrder =
-          Number(canonicalCharacterId(right.key) === rootId) -
-          Number(canonicalCharacterId(left.key) === rootId);
-        return (
-          rootOrder ||
-          right.level - left.level ||
-          left.key.region.localeCompare(right.key.region, "en") ||
-          left.key.realm.localeCompare(right.key.realm, "en") ||
-          left.key.name.localeCompare(right.key.name, "en")
-        );
-      });
+      const ordered = [...snapshot.characters, ...manual].sort(
+        (left, right) => {
+          const rootOrder =
+            Number(canonicalCharacterId(right.key) === rootId) -
+            Number(canonicalCharacterId(left.key) === rootId);
+          return (
+            rootOrder ||
+            right.level - left.level ||
+            left.key.region.localeCompare(right.key.region, "en") ||
+            left.key.realm.localeCompare(right.key.realm, "en") ||
+            left.key.name.localeCompare(right.key.name, "en")
+          );
+        }
+      );
       const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
       const skipped = ordered.slice(selected.length);
       return {
