@@ -95,6 +95,47 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   ).toBe(true);
 });
 
+test("keeps landing search modes compact and usable at desktop and mobile widths", async ({
+  page
+}) => {
+  // Break caught: equal flexible tracks made the character-name and realm
+  // controls dominate the structured desktop form, while constrained tracks
+  // must still collapse without overflowing on small screens.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+
+  const urlInput = page.getByLabel("Applicant URL");
+  await expect(urlInput).toBeVisible();
+  await page.getByRole("radio", { name: "Character name + realm" }).check();
+
+  const [nameWidth, realmWidth, regionWidth] = await Promise.all([
+    page
+      .getByRole("textbox", { name: "Character name" })
+      .evaluate((element) => element.getBoundingClientRect().width),
+    page
+      .getByRole("textbox", { name: "Realm" })
+      .evaluate((element) => element.getBoundingClientRect().width),
+    page
+      .getByLabel("Region")
+      .evaluate((element) => element.getBoundingClientRect().width)
+  ]);
+  expect(nameWidth).toBeLessThanOrEqual(192);
+  expect(realmWidth).toBeLessThanOrEqual(192);
+  expect(regionWidth).toBeLessThanOrEqual(160);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("textbox", { name: "Character name" }).fill("Ryii");
+  await page.getByRole("textbox", { name: "Realm" }).fill("the-shatar");
+  await page.getByRole("textbox", { name: "Character name" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("textbox", { name: "Realm" })).toBeFocused();
+  await expect(
+    page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth
+    )
+  ).resolves.toBe(true);
+});
+
 test("matches dossier summary panels and confines character scrolling to desktop", async ({
   page
 }) => {
