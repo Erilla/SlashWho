@@ -234,6 +234,15 @@ async function gatherCharacterEvidence(
       limitation("warcraft_logs", character.key, completed.run.limitationCode)
     );
   }
+  if (completed?.run.parseLimitationCode) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        character.key,
+        completed.run.parseLimitationCode
+      )
+    );
+  }
   if (blizzard.kind === "limitation") {
     limitations.push(limitation("blizzard", character.key, blizzard.code));
   }

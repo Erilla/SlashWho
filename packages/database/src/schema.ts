@@ -360,6 +360,7 @@ export const characterEvidenceRuns = pgTable(
     evidenceVersion: integer("evidence_version").default(1).notNull(),
     attempt: integer("attempt").default(0).notNull(),
     limitationCode: text("limitation_code"),
+    parseLimitationCode: text("parse_limitation_code"),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -376,6 +377,10 @@ export const characterEvidenceRuns = pgTable(
       table.realmSlug,
       table.normalizedName,
       table.completedAt
+    ),
+    check(
+      "character_evidence_runs_completion_limitations_check",
+      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL AND ${table.parseLimitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
     )
   ]
 );

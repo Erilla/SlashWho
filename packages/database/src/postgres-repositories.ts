@@ -74,6 +74,7 @@ interface EvidenceRunRow {
   evidence_version: number;
   attempt: number;
   limitation_code: string | null;
+  parse_limitation_code: string | null;
   error_code: string | null;
   created_at: Date;
   started_at: Date | null;
@@ -297,6 +298,7 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     status: row.status,
     attempt: row.attempt,
     limitationCode: row.limitation_code,
+    parseLimitationCode: row.parse_limitation_code,
     errorCode: row.error_code,
     createdAt: row.created_at,
     startedAt: row.started_at,
@@ -421,9 +423,10 @@ async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
 ): Promise<CompletedCharacterEvidence | null> {
-  const runResult = await client.query<EvidenceRunRow>(
-    `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-            evidence_version, attempt, limitation_code, error_code, created_at, started_at,
+    const runResult = await client.query<EvidenceRunRow>(
+      `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+            evidence_version, attempt, limitation_code, parse_limitation_code,
+            error_code, created_at, started_at,
             completed_at
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -1876,7 +1879,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const active = await client.query<EvidenceRunRow>(
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                    attempt, limitation_code, error_code, created_at, started_at,
+                    attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
                     completed_at
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -1899,7 +1902,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               (region, realm_slug, normalized_name)
              VALUES ($1, $2, $3)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
-                       attempt, limitation_code, error_code, created_at, started_at,
+                       attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
                        completed_at`,
             [key.region, key.realm, key.name]
           );
@@ -1920,7 +1923,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async find(id) {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                  attempt, limitation_code, error_code, created_at, started_at,
+                  attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
                   completed_at
            FROM character_evidence_runs WHERE id = $1`,
           [id]
@@ -1940,7 +1943,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              AND attempt < $2
              AND status IN ('queued', 'running', 'retrying')
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
-                     attempt, limitation_code, error_code, created_at, started_at,
+                     attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
                      completed_at`,
           [id, attempt]
         );
@@ -1964,8 +1967,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async publish(runId, input) {
         if (
           Number.isNaN(input.completedAt.valueOf()) ||
-          (input.state === "complete" && input.limitationCode !== null) ||
-          (input.state === "partial" && input.limitationCode === null)
+          (input.state === "complete" &&
+            (input.limitationCode !== null ||
+              input.parseLimitationCode !== null)) ||
+          (input.state === "partial" &&
+            input.limitationCode === null &&
+            input.parseLimitationCode === null)
         ) {
           throw new RangeError("character_evidence_publication_invalid");
         }
@@ -2092,10 +2099,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           }
           const publication = await client.query(
             `UPDATE character_evidence_runs
-             SET status = $2, limitation_code = $3, error_code = NULL,
-                 completed_at = $4, evidence_version = 2
+             SET status = $2, limitation_code = $3, parse_limitation_code = $4,
+                 error_code = NULL, completed_at = $5, evidence_version = 2
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
-            [runId, input.state, input.limitationCode, input.completedAt]
+            [
+              runId,
+              input.state,
+              input.limitationCode,
+              input.parseLimitationCode,
+              input.completedAt
+            ]
           );
           if (publication.rowCount !== 1) {
             throw new Error("character_evidence_run_not_active");
@@ -2133,6 +2146,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           `SELECT DISTINCT ON (run.region, run.realm_slug, run.normalized_name)
              run.id, run.region, run.realm_slug, run.normalized_name,
              run.queue_job_id, run.status, run.attempt, run.limitation_code,
+             run.parse_limitation_code,
              run.error_code, run.created_at, run.started_at, run.completed_at
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])

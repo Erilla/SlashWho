@@ -447,6 +447,40 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("selects the highest duplicate eligible ranking percentile", async () => {
+    // Break caught: duplicate provider rows could turn a valid exact parse into
+    // schema drift or retain an arbitrary lower percentile.
+    const rankings = performanceRankings({
+      damage: 40,
+      healing: 41,
+      bossDamage: 42
+    }) as {
+      data: {
+        reportData: {
+          report: { damage: { data: Array<Record<string, unknown>> } };
+        };
+      };
+    };
+    const duplicate = structuredClone(
+      rankings.data.reportData.report.damage.data[0]!
+    );
+    const roles = duplicate.roles as {
+      dps: { characters: Array<{ rankPercent: number }> };
+    };
+    roles.dps.characters[0]!.rankPercent = 87;
+    rankings.data.reportData.report.damage.data.push(duplicate);
+    const { client } = performanceClient(rankings);
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        { performance: { damage: { state: "available", percentile: 87 } } }
+      ]
+    });
+  });
+
   it.each([
     ["NaN", Number.NaN],
     ["negative", -1],
@@ -480,11 +514,11 @@ describe("Warcraft Logs gateway", () => {
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [{ performance: { damage: { state: "unavailable" } } }],
-      limitation: { kind: "limitation", code: "parse_request_cap" }
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
     });
   });
 
-  it("prefers a parse limitation when scan and parse caps are both exhausted", async () => {
+  it("retains scan and parse limitations when both caps are exhausted", async () => {
     // Break caught: a scan cap could hide the reason parse metrics remain
     // unavailable, causing downstream storage to report the wrong limitation.
     const rankings = performanceRankings({
@@ -505,7 +539,8 @@ describe("Warcraft Logs gateway", () => {
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [{ performance: { damage: { state: "unavailable" } } }],
-      limitation: { kind: "limitation", code: "parse_request_cap" }
+      limitation: { kind: "limitation", code: "request_cap" },
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
     });
   });
 
@@ -1450,7 +1485,8 @@ describe("Warcraft Logs gateway", () => {
     });
     expect(result).toMatchObject({
       kind: "evidence",
-      limitation: { code: "parse_unavailable" }
+      limitation: { code: "unavailable" },
+      parseLimitation: { code: "parse_unavailable" }
     });
     if (result.kind === "evidence")
       expect(result.kills.length).toBeGreaterThan(0);

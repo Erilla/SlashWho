@@ -25,6 +25,7 @@ export type ApplicantEvidenceStore = {
     result: Readonly<{
       state: "complete" | "partial";
       limitationCode: WarcraftLogsLimitationCode | null;
+      parseLimitationCode: WarcraftLogsLimitationCode | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       completedAt: Date;
@@ -95,6 +96,7 @@ export function createApplicantEvidenceJobHandler(
         await options.evidence.publish(run.id, {
           state: "partial",
           limitationCode: response.code,
+          parseLimitationCode: null,
           kills: [],
           wipes: [],
           completedAt: now()
@@ -103,8 +105,12 @@ export function createApplicantEvidenceJobHandler(
       }
 
       await options.evidence.publish(run.id, {
-        state: response.limitation ? "partial" : "complete",
+        state:
+          response.limitation || response.parseLimitation
+            ? "partial"
+            : "complete",
         limitationCode: response.limitation?.code ?? null,
+        parseLimitationCode: response.parseLimitation?.code ?? null,
         kills: response.kills.map(toCharacterMythicKillInput),
         wipes: response.wipes,
         completedAt: now()

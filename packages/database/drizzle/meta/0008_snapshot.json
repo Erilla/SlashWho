@@ -1,5 +1,5 @@
 {
-  "id": "06388c32-0b89-4534-93aa-50ab29fd7f19",
+  "id": "9e8d143b-8144-47f9-88d0-d53a95fd1ebc",
   "prevId": "c9a6b43d-8d1a-4974-98f4-e124100ab01d",
   "version": "7",
   "dialect": "postgresql",
@@ -63,6 +63,12 @@
         },
         "limitation_code": {
           "name": "limitation_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parse_limitation_code": {
+          "name": "parse_limitation_code",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -160,7 +166,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "character_evidence_runs_completion_limitations_check": {
+          "name": "character_evidence_runs_completion_limitations_check",
+          "value": "(\"character_evidence_runs\".\"status\" = 'complete' AND \"character_evidence_runs\".\"limitation_code\" IS NULL AND \"character_evidence_runs\".\"parse_limitation_code\" IS NULL) OR (\"character_evidence_runs\".\"status\" = 'partial' AND (\"character_evidence_runs\".\"limitation_code\" IS NOT NULL OR \"character_evidence_runs\".\"parse_limitation_code\" IS NOT NULL)) OR \"character_evidence_runs\".\"status\" NOT IN ('complete', 'partial')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.character_mythic_kills": {

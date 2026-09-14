@@ -78,6 +78,7 @@ export type WarcraftLogsReportResult =
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       limitation?: WarcraftLogsLimitation;
+      parseLimitation?: WarcraftLogsLimitation;
     }>
   | WarcraftLogsLimitation;
 

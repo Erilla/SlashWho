@@ -744,10 +744,10 @@ function normalizedPerformance(
       continue;
     }
     const key = `${row.fightId}:${row.metric}`;
-    if (values.has(key)) {
-      return { kind: "limitation", code: "parse_schema_drift" };
-    }
-    values.set(key, row.percentile);
+    values.set(
+      key,
+      Math.max(values.get(key) ?? row.percentile, row.percentile)
+    );
   }
   for (const [fightId, initial] of performance) {
     performance.set(fightId, {
@@ -1097,18 +1097,16 @@ export function createWarcraftLogsClient(
         b.attemptedAt.localeCompare(a.attemptedAt) ||
         a.fightUrl.localeCompare(b.fightUrl)
     );
-    // Evidence has one persisted limitation. Hydration runs after scanning, so
-    // its parse-specific condition best explains any unavailable metrics and
-    // takes deterministic precedence when scanning was already partial.
-    const limitation = parseLimitation ?? scanLimitation;
     return sortedKills.length || sortedWipes.length
       ? {
           kind: "evidence",
           kills: sortedKills,
           wipes: sortedWipes,
-          ...(limitation ? { limitation } : {})
+          ...(scanLimitation ? { limitation: scanLimitation } : {}),
+          ...(parseLimitation ? { parseLimitation } : {})
         }
-      : (limitation ?? { kind: "evidence", kills: [], wipes: [] });
+      : (scanLimitation ??
+        parseLimitation ?? { kind: "evidence", kills: [], wipes: [] });
   }
 
   return { resolveCharacter, getFirstKillReports };

@@ -112,6 +112,7 @@ describe("applicant evidence job handler", () => {
         result: {
           state: "complete",
           limitationCode: null,
+          parseLimitationCode: null,
           kills: [
             expect.objectContaining({
               bossName: "Final Boss",
@@ -158,6 +159,7 @@ describe("applicant evidence job handler", () => {
         result: {
           state: "partial",
           limitationCode: "rate_limited",
+          parseLimitationCode: null,
           kills: [],
           wipes: [],
           completedAt: new Date("2026-09-13T12:01:00.000Z")
@@ -176,7 +178,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
-            limitation: {
+            parseLimitation: {
               kind: "limitation" as const,
               code: "parse_request_cap" as const
             },
@@ -223,7 +225,8 @@ describe("applicant evidence job handler", () => {
         runId: run.id,
         result: {
           state: "partial",
-          limitationCode: "parse_request_cap",
+          limitationCode: null,
+          parseLimitationCode: "parse_request_cap",
           kills: [
             {
               raidId: "42",
