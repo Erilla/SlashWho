@@ -1,5 +1,5 @@
 import Link from "next/link";
-
+import { SearchForm } from "./search-form";
 import { Logo } from "./logo";
 
 export function SiteHeader() {
@@ -13,6 +13,9 @@ export function SiteHeader() {
           Changelog
         </Link>
       </nav>
+      <div className="header-search">
+        <SearchForm />
+      </div>
     </header>
   );
 }

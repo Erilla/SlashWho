@@ -20,6 +20,50 @@ async function raidBannerGeometry(heading: Locator) {
   });
 }
 
+test("keeps the fixed header visible and offset-safe while dossier scrolling", async ({
+  page
+}) => {
+  await seedSnapshot({
+    key: { region: "eu", realm: "silvermoon", name: "ryii" },
+    displayName: "Ryii",
+    refreshedAt: new Date()
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page
+    .getByLabel("Applicant URL")
+    .fill("https://raider.io/characters/eu/silvermoon/ryii");
+  await page.getByRole("button", { name: "Research applicant" }).click();
+  await expect(page).toHaveURL(
+    /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
+  );
+
+  const header = page.locator(".site-header");
+  await expect(header).toHaveCSS("position", "fixed");
+  await expect(header.getByLabel("Applicant URL")).toBeVisible();
+  const headline = page.getByRole("heading", { name: "Historic Cutting Edge" });
+  const headerRectBeforeScroll = await header.evaluate((element) =>
+    element.getBoundingClientRect()
+  );
+  const headlineRectBeforeScroll = await headline.evaluate((element) =>
+    element.getBoundingClientRect()
+  );
+  expect(headerRectBeforeScroll.bottom).toBeGreaterThan(0);
+  expect(headlineRectBeforeScroll.top).toBeGreaterThan(
+    headerRectBeforeScroll.bottom + 2
+  );
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await expect(header).toBeVisible();
+  const headerRect = await header.evaluate((element) =>
+    element.getBoundingClientRect()
+  );
+  const headerTop = headerRect.top;
+  const headerBottom = headerRect.bottom;
+  expect(headerTop).toBeLessThanOrEqual(1);
+  expect(headerBottom).toBeGreaterThan(1);
+});
+
 test("keeps dossier research accessible without horizontal overflow on mobile", async ({
   page
 }) => {

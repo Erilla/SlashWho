@@ -1,5 +1,4 @@
 import { Logo } from "../components/logo";
-import { SearchForm } from "../components/search-form";
 
 export default function Home() {
   return (
@@ -13,7 +12,6 @@ export default function Home() {
           Research a World of Warcraft applicant from a Raider.IO or Warcraft
           Logs character URL, or by character name and realm.
         </p>
-        <SearchForm />
       </section>
     </main>
   );
