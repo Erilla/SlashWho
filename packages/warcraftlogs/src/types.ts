@@ -37,14 +37,31 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   killedAt: string;
   reportUrl: string;
   fightUrl: string;
-  guild: Readonly<{ name: string; realm: string }> | null;
+  guild: Readonly<{
+    name: string;
+    region: CharacterKey["region"];
+    realm: string;
+  }> | null;
   historicWorldRank: null;
+}>;
+
+export type WarcraftLogsWipeEvidence = Readonly<{
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  journalBossId: string | null;
+  bossOrder: number;
+  attemptedAt: string;
+  reportUrl: string;
+  fightUrl: string;
 }>;
 
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
       kills: readonly WarcraftLogsFirstKillEvidence[];
+      wipes: readonly WarcraftLogsWipeEvidence[];
       limitation?: WarcraftLogsLimitation;
     }>
   | WarcraftLogsLimitation;

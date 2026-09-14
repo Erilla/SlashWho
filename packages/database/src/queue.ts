@@ -4,6 +4,7 @@ import { PgBoss } from "pg-boss";
 export const discoverCharacterQueueName = "discover-character";
 export const maintenanceCleanupQueueName = "maintenance-cleanup";
 export const fingerprintAdmissionQueueName = "fingerprint-admission";
+export const collectCharacterEvidenceQueueName = "collect-character-evidence";
 
 export type DiscoverCharacterJob = {
   runId: string;
@@ -11,6 +12,10 @@ export type DiscoverCharacterJob = {
 };
 
 type FingerprintAdmissionJob = {
+  runId: string;
+};
+
+export type CollectCharacterEvidenceJob = {
   runId: string;
 };
 
@@ -33,6 +38,7 @@ export interface DiscoveryQueue {
   start(): Promise<void>;
   enqueue(payload: DiscoverCharacterJob): Promise<string>;
   enqueueFingerprintAdmission(runId: string): Promise<string>;
+  enqueueCharacterEvidence(runId: string): Promise<string>;
   work(
     handler: (
       payload: DiscoverCharacterJob,
@@ -41,6 +47,12 @@ export interface DiscoveryQueue {
   ): Promise<void>;
   workFingerprintAdmissions(
     handler: (runId: string) => Promise<void>
+  ): Promise<void>;
+  workCharacterEvidence(
+    handler: (
+      payload: CollectCharacterEvidenceJob,
+      context: DiscoveryWorkContext
+    ) => Promise<void>
   ): Promise<void>;
   scheduleMaintenanceCleanup(handler: () => Promise<void>): Promise<void>;
   stop(options: { graceful: boolean; timeoutMs: number }): Promise<void>;
@@ -72,7 +84,7 @@ BEGIN
         ORDER BY (state = 'active') DESC, created_on, id
       ) AS position
     FROM pgboss.job
-    WHERE name IN ('discover-character', 'fingerprint-admission')
+    WHERE name IN ('discover-character', 'fingerprint-admission', 'collect-character-evidence')
       AND state < 'completed'
   )
   UPDATE pgboss.job AS job
@@ -84,13 +96,13 @@ BEGIN
 
   UPDATE pgboss.job
   SET policy = 'exclusive'
-  WHERE name IN ('discover-character', 'fingerprint-admission')
+  WHERE name IN ('discover-character', 'fingerprint-admission', 'collect-character-evidence')
     AND state < 'completed'
     AND policy <> 'exclusive';
 
   UPDATE pgboss.queue
   SET policy = 'exclusive', updated_on = now()
-  WHERE name IN ('discover-character', 'fingerprint-admission')
+  WHERE name IN ('discover-character', 'fingerprint-admission', 'collect-character-evidence')
     AND policy <> 'exclusive';
 END
 $slashwho_queue_upgrade$;
@@ -153,6 +165,7 @@ export function createDiscoveryQueue(
   let ready = false;
   let maintenanceRegistered = false;
   let fingerprintAdmissionsRegistered = false;
+  let characterEvidenceRegistered = false;
   let acceptingFingerprintAdmissions = false;
 
   async function settleInFlight(timeoutMs: number): Promise<void> {
@@ -205,6 +218,10 @@ export function createDiscoveryQueue(
         retryDelay: 60,
         expireInSeconds: 300
       });
+      await boss.createQueue(collectCharacterEvidenceQueueName, {
+        ...queueOptions,
+        policy: "exclusive"
+      });
       // pg-boss deliberately makes createQueue idempotent and forbids changing
       // policy through updateQueue. Migrate deployed queues and their runnable
       // jobs atomically before this worker accepts sends or registers work.
@@ -214,6 +231,7 @@ export function createDiscoveryQueue(
         retryDelay: 60,
         expireInSeconds: 300
       });
+      await boss.updateQueue(collectCharacterEvidenceQueueName, queueOptions);
       acceptingFingerprintAdmissions = true;
       ready = true;
     },
@@ -249,6 +267,25 @@ export function createDiscoveryQueue(
         (await existingSingletonJobId(fingerprintAdmissionQueueName, runId)) ??
         (() => {
           throw new Error("fingerprint_admission_enqueue_not_created");
+        })()
+      );
+    },
+
+    async enqueueCharacterEvidence(runId) {
+      if (!ready) throw new Error("discovery_queue_not_ready");
+      const id = await boss.send(
+        collectCharacterEvidenceQueueName,
+        { runId },
+        { singletonKey: runId }
+      );
+      return (
+        id ??
+        (await existingSingletonJobId(
+          collectCharacterEvidenceQueueName,
+          runId
+        )) ??
+        (() => {
+          throw new Error("character_evidence_enqueue_not_created");
         })()
       );
     },
@@ -335,6 +372,36 @@ export function createDiscoveryQueue(
       fingerprintAdmissionsRegistered = true;
     },
 
+    async workCharacterEvidence(handler) {
+      if (!ready) throw new Error("discovery_queue_not_ready");
+      if (characterEvidenceRegistered) return;
+      await boss.work<
+        CollectCharacterEvidenceJob,
+        void,
+        { pollingIntervalSeconds: number; includeMetadata: true }
+      >(
+        collectCharacterEvidenceQueueName,
+        { pollingIntervalSeconds: 0.5, includeMetadata: true },
+        async ([job]) => {
+          if (!job) return;
+          const execution = (async () => {
+            await handler(job.data, {
+              attempt: job.retryCount + 1,
+              maxAttempts: job.retryLimit + 1,
+              signal: job.signal
+            });
+          })();
+          inFlight.add(execution);
+          try {
+            await execution;
+          } finally {
+            inFlight.delete(execution);
+          }
+        }
+      );
+      characterEvidenceRegistered = true;
+    },
+
     async scheduleMaintenanceCleanup(handler) {
       if (!ready) throw new Error("discovery_queue_not_ready");
       if (maintenanceRegistered) return;
@@ -374,6 +441,7 @@ export function createDiscoveryQueue(
       ready = false;
       maintenanceRegistered = false;
       fingerprintAdmissionsRegistered = false;
+      characterEvidenceRegistered = false;
       acceptingFingerprintAdmissions = false;
       let stopError: unknown;
       try {

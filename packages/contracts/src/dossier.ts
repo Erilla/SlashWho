@@ -20,6 +20,8 @@ export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
     displayName: z.string().min(1),
+    className: z.string().min(1).nullable(),
+    raiderIoUrl: z.url(),
     source: dossierSourceLabelSchema
   })
   .strict();
@@ -27,6 +29,7 @@ export const dossierCharacterSchema = z
 export const dossierGuildSchema = z
   .object({
     name: z.string().min(1),
+    region: regionSchema,
     realm: z.string().min(1)
   })
   .strict();
@@ -37,20 +40,43 @@ export const dossierFirstKillSchema = z
     guild: dossierGuildSchema.nullable(),
     historicWorldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable(),
-    characters: z.array(z.string().min(1))
+    reportUrls: z.array(z.url()).optional(),
+    characters: z.array(characterKeySchema)
   })
   .strict();
 
-export const dossierBossSchema = z
-  .object({
-    bossId: z.string().min(1),
-    bossName: z.string().min(1),
-    bossOrder: z.number().int().nonnegative(),
-    imageUrl: z.url().nullable(),
-    firstKill: dossierFirstKillSchema,
-    firstKills: z.array(dossierFirstKillSchema).min(1).optional()
-  })
-  .strict();
+const dossierBossMetadata = {
+  bossId: z.string().min(1),
+  bossName: z.string().min(1),
+  bossOrder: z.number().int().nonnegative(),
+  imageUrl: z.url().nullable()
+};
+
+export const dossierBossSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      ...dossierBossMetadata,
+      state: z.literal("kill"),
+      firstKill: dossierFirstKillSchema,
+      firstKills: z.array(dossierFirstKillSchema).min(1).optional()
+    })
+    .strict(),
+  z
+    .object({
+      ...dossierBossMetadata,
+      state: z.literal("wipe"),
+      wipe: z
+        .object({
+          attemptedAt: z.iso.datetime(),
+          reportUrl: z.url(),
+          characters: z.array(characterKeySchema).min(1)
+        })
+        .strict()
+    })
+    .strict(),
+  z.object({ ...dossierBossMetadata, state: z.literal("no_logs") }).strict(),
+  z.object({ ...dossierBossMetadata, state: z.literal("incomplete") }).strict()
+]);
 
 export const dossierRaidSchema = z
   .object({
@@ -67,8 +93,9 @@ export const dossierCuttingEdgeSchema = z
     achievementId: z.string().regex(/^\d+$/),
     achievementName: z.string().min(1),
     description: z.string().min(1),
+    iconUrl: z.url().nullable(),
     completedAt: z.iso.datetime(),
-    characters: z.array(z.string().min(1)).min(1)
+    characters: z.array(characterKeySchema).min(1)
   })
   .strict();
 
@@ -90,7 +117,7 @@ export const dossierLimitationSchema = z
 
 export const dossierResearchSchema = z
   .object({
-    state: z.enum(["initial", "complete", "partial"]),
+    state: z.enum(["initial", "gathering", "complete", "partial"]),
     message: z.string().min(1)
   })
   .strict();

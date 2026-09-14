@@ -6,7 +6,9 @@ const environment = {
   DATABASE_URL: "postgresql://slashwho:test@db/slashwho",
   BLIZZARD_CLIENT_ID: "worker-client-id",
   BLIZZARD_CLIENT_SECRET: "worker-client-secret",
-  BLIZZARD_SWEEP_REQUEST_CAP: "300"
+  BLIZZARD_SWEEP_REQUEST_CAP: "300",
+  WARCRAFT_LOGS_CLIENT_ID: "warcraft-logs-client-id",
+  WARCRAFT_LOGS_CLIENT_SECRET: "warcraft-logs-client-secret"
 };
 
 it("rejects missing Blizzard credentials and invalid sweep bounds", () => {
@@ -44,6 +46,32 @@ it("loads private Blizzard sweep defaults only for the worker", () => {
     fingerprintMinimumCommon: 200,
     fingerprintMinimumIdenticalPercent: 20,
     fingerprintSweepCadenceHours: 168
+  });
+});
+
+it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", () => {
+  // Break caught: complete history collection could start without its private
+  // credentials, or silently turn into an unbounded upstream scan.
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      WARCRAFT_LOGS_CLIENT_ID: undefined
+    })
+  ).toThrow("warcraft_logs_client_id_required");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      WARCRAFT_LOGS_CLIENT_SECRET: undefined
+    })
+  ).toThrow("warcraft_logs_client_secret_required");
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_REQUEST_CAP: "0" })
+  ).toThrow("invalid_evidence_request_cap");
+
+  expect(loadWorkerConfig(environment)).toMatchObject({
+    warcraftLogsClientId: environment.WARCRAFT_LOGS_CLIENT_ID,
+    warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
+    evidenceRequestCap: 500
   });
 });
 

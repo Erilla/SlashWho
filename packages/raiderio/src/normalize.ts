@@ -13,7 +13,10 @@ const upstreamCharacterSchema = z.object({
   name: z.string().min(1),
   level: z.number().int().nonnegative(),
   class: z.object({ name: z.string().min(1) }),
-  realm: z.object({ slug: z.string().min(1) }),
+  realm: z.object({
+    slug: z.string().min(1),
+    realmType: z.string().optional()
+  }),
   region: z.object({ slug: z.string().min(1) })
 });
 
@@ -27,6 +30,7 @@ const declaredMainSchema = z.object({
 const characterResponseSchema = z.object({
   characterDetails: z.object({
     character: upstreamCharacterSchema,
+    isTournamentProfile: z.boolean().optional(),
     user: z
       .object({ name: z.string().min(1) })
       .nullable()
@@ -108,6 +112,10 @@ function normalizedCharacter(
     displayName: character.name,
     className: character.class.name,
     level: character.level,
+    // Profile lists omit the detail flag, but carry the explicit realm type.
+    ...(character.realm.realmType === "tr"
+      ? { isTournamentProfile: true }
+      : {}),
     ownerId: null,
     profileGuess: null,
     declaredMain: null
@@ -149,6 +157,9 @@ export function normalizeCharacterResponse(
 
   return {
     ...character,
+    ...(details.isTournamentProfile === true
+      ? { isTournamentProfile: true }
+      : {}),
     ownerId: details.user?.name ?? null,
     profileGuess: customizations?.discord_profile?.trim() || null,
     declaredMain,

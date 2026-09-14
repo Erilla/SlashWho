@@ -1,4 +1,11 @@
 export { createDiscoveryJobHandler } from "./discovery-job-handler";
+export { createApplicantEvidenceJobHandler } from "./applicant-evidence-job-handler";
+export type {
+  ApplicantEvidenceJobHandler,
+  ApplicantEvidenceJobHandlerOptions,
+  ApplicantEvidenceRun,
+  ApplicantEvidenceStore
+} from "./applicant-evidence-job-handler";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export type {
   DiscoveryJobHandler,

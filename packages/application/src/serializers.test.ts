@@ -102,6 +102,25 @@ describe("public serializers", () => {
     );
   });
 
+  it("formats persisted character names for public display without changing identity URLs", () => {
+    // Break caught: raw upstream casing could leak into public character labels,
+    // or presentation formatting could accidentally alter canonical URLs.
+    const resource = serializeCharacterResource({
+      ...snapshot,
+      characters: [
+        {
+          ...snapshot.characters[0]!,
+          displayName: "rYiI"
+        }
+      ]
+    });
+
+    expect(resource.character).toMatchObject({
+      name: "Ryii",
+      raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii"
+    });
+  });
+
   it("never exposes fingerprint source, score, queue, or reservation fields", () => {
     // Break caught: private sweep evidence could turn a public alt list into a
     // disclosure of how its links were discovered.
