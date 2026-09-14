@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { fetchCuttingEdgeAchievements } from "./cutting-edge-catalogue.mts";
+import {
+  fetchCuttingEdgeAchievements,
+  sortCuttingEdgeAchievementsChronologically,
+  type GeneratedCuttingEdgeAchievement
+} from "./cutting-edge-catalogue.mts";
 
 function options(parentCategoryId = 81) {
   const fetch = async (input: string | URL) => {
@@ -73,6 +77,26 @@ function options(parentCategoryId = 81) {
 }
 
 describe("Blizzard Cutting Edge catalogue", () => {
+  it("orders Trial of Valor between Emerald Nightmare and Nighthold", () => {
+    const achievement = (
+      achievementId: string
+    ): GeneratedCuttingEdgeAchievement => ({
+      achievementId,
+      achievementName: `Cutting Edge: ${achievementId}`,
+      description: `Description for ${achievementId}`,
+      iconUrl: null,
+      categoryId: "15271"
+    });
+
+    expect(
+      sortCuttingEdgeAchievementsChronologically([
+        achievement("11192"),
+        achievement("11580"),
+        achievement("11191")
+      ]).map((item) => item.achievementId)
+    ).toEqual(["11191", "11580", "11192"]);
+  });
+
   it("keeps only unique Feats of Strength Raid achievements whose names begin Cutting Edge:", async () => {
     await expect(fetchCuttingEdgeAchievements(options())).resolves.toEqual([
       {

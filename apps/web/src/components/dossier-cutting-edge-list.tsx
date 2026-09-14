@@ -1,14 +1,26 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
+import { buildBoundedCuttingEdgeSequence } from "@slashwho/domain";
 
 import { DossierMediaFallback } from "./dossier-media-fallback";
 
 type DossierCuttingEdgeListProps = Readonly<{
   cuttingEdges: ApplicantDossier["cuttingEdges"];
+  limitations: ApplicantDossier["limitations"];
 }>;
 
 export function DossierCuttingEdgeList({
-  cuttingEdges
+  cuttingEdges,
+  limitations
 }: DossierCuttingEdgeListProps) {
+  const sequence = limitations.some(
+    (limitation) => limitation.source === "blizzard"
+  )
+    ? cuttingEdges.map((achievement) => ({
+        status: "recorded" as const,
+        achievement
+      }))
+    : buildBoundedCuttingEdgeSequence(cuttingEdges);
+
   return (
     <section
       aria-labelledby="historic-cutting-edge-heading"
@@ -35,37 +47,47 @@ export function DossierCuttingEdgeList({
         </p>
       ) : (
         <ul className="dossier-cutting-edge-list">
-          {cuttingEdges.map((achievement) => (
+          {sequence.map((entry) => (
             <li
-              className="dossier-achievement-card"
-              key={achievement.achievementId}
+              className={`dossier-achievement-card${entry.status === "not_recorded" ? " dossier-achievement-card--not-recorded" : ""}`}
+              key={
+                entry.status === "recorded"
+                  ? `${entry.achievement.achievementId}-${entry.achievement.completedAt}`
+                  : `${entry.achievement.achievementId}-not-recorded`
+              }
             >
-              {achievement.iconUrl ? (
+              {entry.achievement.iconUrl ? (
                 <img
-                  alt={`${achievement.achievementName} icon`}
+                  alt={`${entry.achievement.achievementName} icon`}
                   className="dossier-achievement-icon"
                   loading="lazy"
-                  src={achievement.iconUrl}
+                  src={entry.achievement.iconUrl}
                 />
               ) : (
                 <DossierMediaFallback
-                  alt={`${achievement.achievementName} icon`}
+                  alt={`${entry.achievement.achievementName} icon`}
                   className="dossier-achievement-icon"
                 />
               )}
               <div>
-                <h3>{achievement.achievementName}</h3>
-                <p>{achievement.description}</p>
-                <p>
-                  Achieved:{" "}
-                  <time dateTime={achievement.completedAt}>
-                    {new Intl.DateTimeFormat("en-GB", {
-                      dateStyle: "medium",
-                      timeZone: "UTC"
-                    }).format(new Date(achievement.completedAt))}
-                  </time>
-                </p>
-                <p>{achievement.characters.join(", ")}</p>
+                <h3>{entry.achievement.achievementName}</h3>
+                <p>{entry.achievement.description}</p>
+                {entry.status === "not_recorded" ? (
+                  <p className="dossier-achievement-status">Not recorded</p>
+                ) : (
+                  <>
+                    <p>
+                      Achieved:{" "}
+                      <time dateTime={entry.achievement.completedAt}>
+                        {new Intl.DateTimeFormat("en-GB", {
+                          dateStyle: "medium",
+                          timeZone: "UTC"
+                        }).format(new Date(entry.achievement.completedAt))}
+                      </time>
+                    </p>
+                    <p>{entry.achievement.characters.join(", ")}</p>
+                  </>
+                )}
               </div>
             </li>
           ))}

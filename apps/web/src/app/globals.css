@@ -386,6 +386,31 @@ a {
   margin: 0;
 }
 
+.dossier-achievement-card--not-recorded {
+  border-color: var(--border);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.dossier-achievement-card--not-recorded .dossier-achievement-icon {
+  border-color: var(--border-strong);
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.dossier-achievement-card--not-recorded h3,
+.dossier-achievement-card--not-recorded p {
+  color: var(--muted);
+}
+
+.dossier-achievement-status {
+  font-size: 0.75rem;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .dossier-achievement-card h3 {
   color: #ffd100;
   font-size: 0.95rem;

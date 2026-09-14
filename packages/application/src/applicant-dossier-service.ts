@@ -125,6 +125,16 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
   );
 }
 
+function blizzardLimitationCode(
+  error: unknown
+): "not_found" | "schema_drift" | "unavailable" {
+  if (typeof error !== "object" || error === null || !("kind" in error))
+    return "unavailable";
+  if (error.kind === "not_found" || error.kind === "schema_drift")
+    return error.kind;
+  return "unavailable";
+}
+
 function cachedKill(
   kill: StoredCharacterMythicKill,
   character: CharacterKey
@@ -171,9 +181,13 @@ async function gatherCharacterEvidence(
   }
   const blizzard = await options.blizzard
     .getCompletedAchievements(character.key, options.signal)
+    .then((achievements) => ({ kind: "evidence" as const, achievements }))
     .catch((error: unknown) => {
       if (isAbort(error, options.signal)) throw error;
-      return null;
+      return {
+        kind: "limitation" as const,
+        code: blizzardLimitationCode(error)
+      };
     });
   const limitations: DossierLimitation[] = [];
   const completed = reservation.completed;
@@ -182,18 +196,20 @@ async function gatherCharacterEvidence(
       limitation("warcraft_logs", character.key, completed.run.limitationCode)
     );
   }
-  if (blizzard === null) {
-    limitations.push(limitation("blizzard", character.key, "unavailable"));
+  if (blizzard.kind === "limitation") {
+    limitations.push(limitation("blizzard", character.key, blizzard.code));
   }
   return {
     limitations,
     kills:
       completed?.kills.map((kill) => cachedKill(kill, character.key)) ?? [],
     cuttingEdges:
-      blizzard?.map((achievement) => ({
-        ...achievement,
-        character: character.key
-      })) ?? [],
+      blizzard.kind === "evidence"
+        ? blizzard.achievements.map((achievement) => ({
+            ...achievement,
+            character: character.key
+          }))
+        : [],
     gathering: reservation.kind !== "fresh"
   };
 }

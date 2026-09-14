@@ -686,6 +686,24 @@ describe("applicant dossier service", () => {
     });
   });
 
+  it("marks malformed Blizzard achievement data as a schema limitation", async () => {
+    const { dossiers, blizzard } = fixture();
+    vi.mocked(blizzard.getCompletedAchievements).mockRejectedValueOnce(
+      Object.assign(new Error("blizzard_schema_drift"), {
+        kind: "schema_drift"
+      })
+    );
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        limitations: [
+          { source: "blizzard", character: root, code: "schema_changed" }
+        ]
+      }
+    });
+  });
+
   it("returns not_ready without contacting evidence sources when no snapshot exists", async () => {
     // Break caught: a missing discovery result could trigger unbounded third-party requests.
     const { dossiers, warcraftLogs } = fixture({ snapshot: null });

@@ -82,17 +82,17 @@
       "categoryId": "15271"
     },
     {
-      "achievementId": "11192",
-      "achievementName": "Cutting Edge: Gul'dan",
-      "description": "Defeat Gul'dan in The Nighthold on Mythic difficulty, before the opening of the Tomb of Sargeras.",
-      "iconUrl": "https://render.worldofwarcraft.com/eu/icons/56/1413856.jpg",
-      "categoryId": "15271"
-    },
-    {
       "achievementId": "11580",
       "achievementName": "Cutting Edge: Helya",
       "description": "Defeat Helya in Trial of Valor on Mythic difficulty, before the opening of the Tomb of Sargeras.",
       "iconUrl": "https://render.worldofwarcraft.com/eu/icons/56/1530370.jpg",
+      "categoryId": "15271"
+    },
+    {
+      "achievementId": "11192",
+      "achievementName": "Cutting Edge: Gul'dan",
+      "description": "Defeat Gul'dan in The Nighthold on Mythic difficulty, before the opening of the Tomb of Sargeras.",
+      "iconUrl": "https://render.worldofwarcraft.com/eu/icons/56/1413856.jpg",
       "categoryId": "15271"
     },
     {

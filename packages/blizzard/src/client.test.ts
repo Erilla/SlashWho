@@ -219,9 +219,7 @@ describe("Blizzard gateway", () => {
             id: 40254,
             completed_timestamp: 1_737_232_200_000,
             criteria: { is_completed: false }
-          },
-          { id: "2", completed_timestamp: 200 },
-          { id: 3, completed_timestamp: "300" }
+          }
         ]
       });
     });
@@ -232,6 +230,23 @@ describe("Blizzard gateway", () => {
         completedAt: "2025-01-18T20:30:00.000Z"
       }
     ]);
+  });
+
+  it("reports schema drift when any completed achievement row is malformed", async () => {
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      return Response.json({
+        achievements: [
+          { id: 40254, completed_timestamp: 1_737_232_200_000 },
+          { id: 41297, completed_timestamp: "malformed" },
+          { id: 41625, completed_timestamp: 1_760_473_800_000 }
+        ]
+      });
+    });
+
+    await expect(gateway.getCompletedAchievements(key)).rejects.toMatchObject({
+      kind: "schema_drift"
+    });
   });
 
   it("passes the abort signal and never includes an upstream body in its error", async () => {
