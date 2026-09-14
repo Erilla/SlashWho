@@ -16,6 +16,62 @@ export type FetchCuttingEdgeAchievementsOptions = Readonly<{
   locale?: string;
 }>;
 
+const historicalAchievementIds = [
+  "7485",
+  "7486",
+  "7487",
+  "8238",
+  "8260",
+  "8400",
+  "8401",
+  "9442",
+  "9443",
+  "10045",
+  "11191",
+  "11580",
+  "11192",
+  "11875",
+  "12111",
+  "12535",
+  "13323",
+  "13419",
+  "13785",
+  "14069",
+  "14461",
+  "15135",
+  "15471",
+  "17108",
+  "18254",
+  "19351",
+  "40254",
+  "41297",
+  "41625",
+  "61492",
+  "61625",
+  "61627",
+  "63651"
+] as const;
+const historicalOrder = new Map<string, number>(
+  historicalAchievementIds.map((achievementId, index) => [achievementId, index])
+);
+
+export function sortCuttingEdgeAchievementsChronologically(
+  achievements: readonly GeneratedCuttingEdgeAchievement[]
+): readonly GeneratedCuttingEdgeAchievement[] {
+  for (const achievement of achievements) {
+    if (!historicalOrder.has(achievement.achievementId)) {
+      throw new Error(
+        `cutting_edge_chronology_missing_${achievement.achievementId}`
+      );
+    }
+  }
+  return [...achievements].sort(
+    (a, b) =>
+      historicalOrder.get(a.achievementId)! -
+      historicalOrder.get(b.achievementId)!
+  );
+}
+
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
@@ -122,7 +178,6 @@ export async function fetchCuttingEdgeAchievements(
     })
   );
   return Promise.all([...ids].map((id) => fetchDefinition(options, id))).then(
-    (items) =>
-      items.sort((a, b) => Number(a.achievementId) - Number(b.achievementId))
+    sortCuttingEdgeAchievementsChronologically
   );
 }

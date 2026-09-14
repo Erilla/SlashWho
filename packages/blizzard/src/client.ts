@@ -149,9 +149,9 @@ function completedAchievementsFromResponse(
     const id = entry && finiteNumber(entry.id);
     const timestamp = entry && finiteNumber(entry.completed_timestamp);
     if (id === null || timestamp === null || !Number.isSafeInteger(id))
-      continue;
+      return null;
     const completedAt = new Date(timestamp).toISOString();
-    if (Number.isNaN(Date.parse(completedAt))) continue;
+    if (Number.isNaN(Date.parse(completedAt))) return null;
     achievements.push({ achievementId: String(id), completedAt });
   }
   return achievements;

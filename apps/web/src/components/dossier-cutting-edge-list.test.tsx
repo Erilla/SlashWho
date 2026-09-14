@@ -35,6 +35,7 @@ it.each([
             characters: ["Ryii"]
           }
         ].slice(0, count)}
+        limitations={[]}
       />
     );
 
@@ -66,6 +67,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
           characters: ["Ryii", "Ryalts"]
         }
       ]}
+      limitations={[]}
     />
   );
 
@@ -92,6 +94,7 @@ it("renders fallback artwork when an official achievement icon is unavailable", 
           characters: ["Ryii"]
         }
       ]}
+      limitations={[]}
     />
   );
 
@@ -99,4 +102,82 @@ it("renders fallback artwork when an official achievement icon is unavailable", 
     screen.getByRole("img", { name: "Cutting Edge: Queen Ansurek icon" })
   ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
+});
+
+it("renders catalogue-ordered gaps as not recorded between earned achievements", () => {
+  render(
+    <DossierCuttingEdgeList
+      cuttingEdges={[
+        {
+          achievementId: "40254",
+          achievementName: "Cutting Edge: Queen Ansurek",
+          description: "Defeat Queen Ansurek on Mythic Difficulty.",
+          iconUrl: null,
+          completedAt: "2025-01-14T20:30:00.000Z",
+          characters: ["Ryii"]
+        },
+        {
+          achievementId: "41625",
+          achievementName: "Cutting Edge: Dimensius, the All-Devouring",
+          description: "Defeat Dimensius on Mythic Difficulty.",
+          iconUrl: null,
+          completedAt: "2025-10-14T20:30:00.000Z",
+          characters: ["Ryii"]
+        }
+      ]}
+      limitations={[]}
+    />
+  );
+
+  expect(
+    screen
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent)
+  ).toEqual([
+    "Cutting Edge: Queen Ansurek",
+    "Cutting Edge: Chrome King Gallywix",
+    "Cutting Edge: Dimensius, the All-Devouring"
+  ]);
+  expect(screen.getByText("Not recorded")).toBeVisible();
+  expect(
+    screen.getByRole("img", { name: "2 Cutting Edge achievements" })
+  ).toHaveTextContent("2");
+});
+
+it("does not infer a missing achievement when Blizzard evidence is limited", () => {
+  render(
+    <DossierCuttingEdgeList
+      cuttingEdges={[
+        {
+          achievementId: "40254",
+          achievementName: "Cutting Edge: Queen Ansurek",
+          description: "Defeat Queen Ansurek on Mythic Difficulty.",
+          iconUrl: null,
+          completedAt: "2025-01-14T20:30:00.000Z",
+          characters: ["Ryii"]
+        },
+        {
+          achievementId: "41625",
+          achievementName: "Cutting Edge: Dimensius, the All-Devouring",
+          description: "Defeat Dimensius on Mythic Difficulty.",
+          iconUrl: null,
+          completedAt: "2025-10-14T20:30:00.000Z",
+          characters: ["Ryii"]
+        }
+      ]}
+      limitations={[
+        {
+          source: "blizzard",
+          character: { region: "eu", realm: "silvermoon", name: "ryalts" },
+          code: "unavailable",
+          message: "Blizzard achievement data could not be read."
+        }
+      ]}
+    />
+  );
+
+  expect(
+    screen.queryByText("Cutting Edge: Chrome King Gallywix")
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("Not recorded")).not.toBeInTheDocument();
 });
