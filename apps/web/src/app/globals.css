@@ -266,11 +266,8 @@ a {
   list-style: none;
 }
 
-.dossier-character-list,
-.dossier-cutting-edge-list {
-  min-height: 22rem;
-  max-height: 32rem;
-  overflow-y: auto;
+.dossier-scroll-hint {
+  display: none;
 }
 
 .dossier-character-row {
@@ -913,6 +910,37 @@ a {
   color: var(--text);
   padding: 0.65rem 1rem;
   cursor: pointer;
+}
+
+@media (width > 48rem) {
+  .dossier-layout {
+    align-items: stretch;
+  }
+
+  .dossier-character-panel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dossier-character-list,
+  .dossier-cutting-edge-list {
+    min-height: 22rem;
+    max-height: 32rem;
+    overflow-y: auto;
+  }
+
+  .dossier-character-list {
+    flex: 1 1 auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .dossier-scroll-hint {
+    display: block;
+    margin: -0.45rem 0 0.75rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
 }
 
 @media (max-width: 48rem) {
