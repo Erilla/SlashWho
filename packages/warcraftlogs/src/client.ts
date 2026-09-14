@@ -685,8 +685,8 @@ function rankingCharacterIdentityQuery(
   return `query RankingCharacterIdentities(${variables}) { characterData { ${selections} } }`;
 }
 
-function canonicalRankingCharacterIds(
-  value: unknown,
+function canonicalRankingCharacterIdsByIdentity(
+  canonicalIds: ReadonlySet<number>,
   identities: readonly RankingIdentity[],
   actors: unknown,
   requestedKey: CharacterKey
@@ -694,12 +694,48 @@ function canonicalRankingCharacterIds(
   if (!Array.isArray(actors)) {
     return { kind: "limitation", code: "parse_schema_drift" };
   }
+  const requestedIds: number[] = [];
+  for (const identity of identities) {
+    if (!canonicalIds.has(identity.id)) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    const matchingActors = actors.filter((actorValue) => {
+      const actor = record(actorValue);
+      return (
+        actor?.type === "Player" &&
+        typeof actor.name === "string" &&
+        typeof actor.server === "string" &&
+        normalizedIdentity(actor.name) === normalizedIdentity(identity.name) &&
+        normalizedRealm(actor.server) === normalizedRealm(identity.realm)
+      );
+    });
+    if (matchingActors.length !== 1) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    if (
+      normalizedIdentity(identity.name) ===
+        normalizedIdentity(requestedKey.name) &&
+      normalizedRealm(identity.realm) === normalizedRealm(requestedKey.realm) &&
+      normalizedIdentity(identity.region) ===
+        normalizedIdentity(requestedKey.region)
+    ) {
+      requestedIds.push(identity.id);
+    }
+  }
+  return requestedIds.length === 1
+    ? requestedIds
+    : { kind: "limitation", code: "parse_schema_drift" };
+}
+
+function decodeCanonicalIdentityIds(
+  value: unknown,
+  identities: readonly RankingIdentity[]
+): ReadonlySet<number> | WarcraftLogsLimitation {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
   const characterData = data && record(data.characterData);
   if (!characterData) return { kind: "limitation", code: "parse_schema_drift" };
-
-  const requestedIds: number[] = [];
+  const ids = new Set<number>();
   for (const [index, identity] of identities.entries()) {
     const character = record(characterData[`character${index}`]);
     const server = character && record(character.server);
@@ -719,30 +755,9 @@ function canonicalRankingCharacterIds(
     ) {
       return { kind: "limitation", code: "parse_schema_drift" };
     }
-    const matchingActors = actors.filter((actorValue) => {
-      const actor = record(actorValue);
-      return (
-        actor?.type === "Player" &&
-        typeof actor.name === "string" &&
-        typeof actor.server === "string" &&
-        normalizedIdentity(actor.name) === normalizedIdentity(name) &&
-        normalizedRealm(actor.server) === normalizedRealm(realm)
-      );
-    });
-    if (matchingActors.length !== 1) {
-      return { kind: "limitation", code: "parse_schema_drift" };
-    }
-    if (
-      normalizedIdentity(name) === requestedKey.name &&
-      normalizedRealm(realm) === normalizedRealm(requestedKey.realm) &&
-      normalizedIdentity(regionSlug) === requestedKey.region
-    ) {
-      requestedIds.push(identity.id);
-    }
+    ids.add(id);
   }
-  return requestedIds.length === 1
-    ? requestedIds
-    : { kind: "limitation", code: "parse_schema_drift" };
+  return ids;
 }
 
 function normalizedPerformance(
@@ -1007,8 +1022,17 @@ export function createWarcraftLogsClient(
       );
     }
     let parseRequests = 0;
+    const decodedGroups: Array<{
+      group: RankingScope;
+      decoded: Extract<
+        ReturnType<typeof decodeRankingRows>,
+        { identities: readonly RankingIdentity[] }
+      >;
+    }> = [];
+    const identities = new Map<number, RankingIdentity>();
     for (const group of groups.values()) {
-      if (parseRequests >= options.parseRequestCap) {
+      // Reserve one request for the shared canonical identity lookup.
+      if (parseRequests + 1 >= options.parseRequestCap) {
         parseLimitation = { kind: "limitation", code: "parse_request_cap" };
         break;
       }
@@ -1035,56 +1059,69 @@ export function createWarcraftLogsClient(
         parseLimitation = decoded;
         break;
       }
-      if (decoded.identities.length === 0) continue;
+      decodedGroups.push({ group, decoded });
+      for (const identity of decoded.identities)
+        identities.set(identity.id, identity);
+    }
+
+    if (identities.size > 0) {
       if (parseRequests >= options.parseRequestCap) {
-        parseLimitation = { kind: "limitation", code: "parse_request_cap" };
-        break;
-      }
-      parseRequests += 1;
-      const canonical = await graphql(
-        rankingCharacterIdentityQuery(decoded.identities),
-        Object.fromEntries(
-          decoded.identities.map((identity, index) => [
-            `character${index}`,
-            identity.id
-          ])
-        ),
-        options.signal
-      ).catch((error: unknown) => {
-        if (options.signal?.reason?.name !== "TimeoutError") throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      });
-      if (canonical.kind !== "success") {
-        parseLimitation = toParseLimitation(canonical);
-        break;
-      }
-      const requestedIds = canonicalRankingCharacterIds(
-        canonical.value,
-        decoded.identities,
-        decoded.actors,
-        key
-      );
-      if (isLimitation(requestedIds)) {
-        parseLimitation = requestedIds;
-        break;
-      }
-      const performance = normalizedPerformance(
-        decoded.rows,
-        requestedIds,
-        group.fightIds
-      );
-      if (isLimitation(performance)) {
-        parseLimitation = performance;
-        break;
-      }
-      for (const [fightId, value] of performance) {
-        for (const [fightUrl, kill] of kills) {
-          if (
-            kill.reportCode === group.reportCode &&
-            kill.fightId === fightId
-          ) {
-            kills.set(fightUrl, { ...kill, performance: value });
-          }
+        parseLimitation ??= { kind: "limitation", code: "parse_request_cap" };
+      } else {
+        const canonicalIdentities = [...identities.values()];
+        const canonical = await graphql(
+          rankingCharacterIdentityQuery(canonicalIdentities),
+          Object.fromEntries(
+            canonicalIdentities.map((identity, index) => [
+              `character${index}`,
+              identity.id
+            ])
+          ),
+          options.signal
+        ).catch((error: unknown) => {
+          if (options.signal?.reason?.name !== "TimeoutError") throw error;
+          return { kind: "limitation" as const, code: "unavailable" as const };
+        });
+        if (canonical.kind !== "success") {
+          parseLimitation = toParseLimitation(canonical);
+        } else {
+          const canonicalIds = decodeCanonicalIdentityIds(
+            canonical.value,
+            canonicalIdentities
+          );
+          if (isLimitation(canonicalIds)) parseLimitation = canonicalIds;
+          else
+            for (const { group, decoded } of decodedGroups) {
+              const requestedIds = canonicalRankingCharacterIdsByIdentity(
+                canonicalIds,
+                decoded.identities,
+                decoded.actors,
+                key
+              );
+              if (isLimitation(requestedIds)) {
+                parseLimitation = requestedIds;
+                break;
+              }
+              const performance = normalizedPerformance(
+                decoded.rows,
+                requestedIds,
+                group.fightIds
+              );
+              if (isLimitation(performance)) {
+                parseLimitation = performance;
+                break;
+              }
+              for (const [fightId, value] of performance) {
+                for (const [fightUrl, kill] of kills) {
+                  if (
+                    kill.reportCode === group.reportCode &&
+                    kill.fightId === fightId
+                  ) {
+                    kills.set(fightUrl, { ...kill, performance: value });
+                  }
+                }
+              }
+            }
         }
       }
     }

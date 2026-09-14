@@ -723,6 +723,69 @@ describe("Warcraft Logs gateway", () => {
     expect(rankingCalls).toHaveLength(1);
   });
 
+  it("hydrates every report group before the parse cap is exhausted", async () => {
+    // Break caught: one canonical identity lookup per report group consumed
+    // the budget before later displayed kills could receive their parses.
+    const reports = [
+      performanceReport([26], true, "report-one"),
+      performanceReport([27], true, "report-two"),
+      performanceReport([28], false, "report-three")
+    ];
+    let reportPage = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string; fightIDs?: number[] };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        const fightId = body.variables.fightIDs?.[0] ?? 26;
+        return jsonResponse(
+          performanceRankings(
+            { damage: fightId, healing: fightId, bossDamage: fightId },
+            { code: body.variables.code, fightId }
+          )
+        );
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      const page = reports[reportPage++]!;
+      return jsonResponse(page);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 4
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(
+      new Map(
+        result.kills.map((kill) => [
+          kill.fightId,
+          kill.performance.damage.state
+        ])
+      )
+    ).toEqual(
+      new Map([
+        [26, "available"],
+        [27, "available"],
+        [28, "available"]
+      ])
+    );
+  });
+
   it("paginates public reports and retains every distinct Mythic kill", async () => {
     // Break caught: collapsing report pages to one kill per encounter hid the
     // complete chronological evidence needed by an applicant dossier.
