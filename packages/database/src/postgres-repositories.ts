@@ -138,6 +138,7 @@ interface CharacterMythicWipeRow {
 
 type Queryable = Pick<Pool | PoolClient, "query">;
 
+const CURRENT_EVIDENCE_VERSION = 3;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -478,6 +479,7 @@ async function loadCompletedEvidence(
   );
   return {
     run: mapEvidenceRun(run),
+    evidenceVersion: run.evidence_version,
     kills: killsResult.rows.map(mapCharacterMythicKill),
     wipes: wipesResult.rows.map(mapCharacterMythicWipe),
     wipeCapable: run.evidence_version >= 2
@@ -1959,6 +1961,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const completed = await loadCompletedEvidence(client, key);
           if (
             completed !== null &&
+            completed.evidenceVersion !== undefined &&
+            completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION &&
             completed.run.completedAt !== null &&
             completed.run.completedAt >= freshnessCutoff
           ) {
@@ -2177,14 +2181,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
-                 error_code = NULL, completed_at = $5, evidence_version = 2
+                 error_code = NULL, completed_at = $5, evidence_version = $6
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
               runId,
               input.state,
               input.limitationCode,
               input.parseLimitationCode,
-              input.completedAt
+              input.completedAt,
+              CURRENT_EVIDENCE_VERSION
             ]
           );
           if (publication.rowCount !== 1) {

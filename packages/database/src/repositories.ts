@@ -207,6 +207,8 @@ export interface StoredCharacterMythicWipe extends CharacterMythicWipeInput {
 
 export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
+  /** Internal cache generation used to invalidate evidence after a parser fix. */
+  evidenceVersion?: number;
   kills: readonly StoredCharacterMythicKill[];
   wipes: readonly StoredCharacterMythicWipe[];
   wipeCapable: boolean;

@@ -51,6 +51,13 @@ Missing/stale WCL evidence queues a scan and displays the gathering state;
 cached kills shown during refresh are explicitly described as cached. Settled
 partial results retain their provider limitation.
 
+Evidence also carries an internal cache generation. Deployments that change
+Warcraft Logs normalization advance that generation, so previously completed
+rows are re-collected even when their timestamp is still within the freshness
+window. The prior completed evidence remains readable while the replacement
+scan runs; a successful publication atomically replaces its normalized kills,
+parse states, and limitations.
+
 The worker's scheduled maintenance deletes terminal WCL evidence runs older
 than 30 days, with their kill rows removed by the existing cascading foreign
 key. Active jobs are excluded. A later request re-collects expired history.
