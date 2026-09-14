@@ -1,4 +1,4 @@
-import { parseApplicantCharacterUrl } from "@slashwho/domain";
+import { parseCharacterRoute } from "../../../../../server/http";
 import { notFound, permanentRedirect } from "next/navigation";
 
 import { DossierPageClient } from "./dossier-page-client";
@@ -10,9 +10,7 @@ type DossierPageProps = Readonly<{
 
 function parseRoute(params: { region: string; realm: string; name: string }) {
   try {
-    return parseApplicantCharacterUrl(
-      `https://www.warcraftlogs.com/character/${encodeURIComponent(params.region)}/${encodeURIComponent(params.realm)}/${encodeURIComponent(params.name)}`
-    );
+    return parseCharacterRoute(params);
   } catch {
     notFound();
   }
@@ -23,12 +21,13 @@ export default async function DossierPage({
   searchParams
 }: DossierPageProps) {
   const raw = await params;
-  const identity = parseRoute(raw);
+  const parsed = parseRoute(raw);
+  const identity = parsed.key;
   const jobParam = (await searchParams).job;
   const jobId = typeof jobParam === "string" ? jobParam : null;
   const canonicalPath = `/dossiers/${identity.region}/${identity.realm}/${identity.name}`;
 
-  if (`/dossiers/${raw.region}/${raw.realm}/${raw.name}` !== canonicalPath) {
+  if (!parsed.canonical) {
     permanentRedirect(jobId ? `${canonicalPath}?job=${jobId}` : canonicalPath);
   }
 

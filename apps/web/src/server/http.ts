@@ -43,15 +43,25 @@ export function parseCharacterRoute(params: {
   realm: string;
   name: string;
 }): { key: CharacterKey; canonical: boolean } {
+  let decoded: { region: string; realm: string; name: string };
+  try {
+    decoded = {
+      region: decodeURIComponent(params.region),
+      realm: decodeURIComponent(params.realm),
+      name: decodeURIComponent(params.name)
+    };
+  } catch {
+    throw new Error("invalid_character_url");
+  }
   const key = parseRaiderIoCharacterUrl(
-    `https://raider.io/characters/${encodeURIComponent(params.region)}/${encodeURIComponent(params.realm)}/${encodeURIComponent(params.name)}`
+    `https://raider.io/characters/${encodeURIComponent(decoded.region)}/${encodeURIComponent(decoded.realm)}/${encodeURIComponent(decoded.name)}`
   );
   return {
     key,
     canonical:
-      params.region === key.region &&
-      params.realm === key.realm &&
-      params.name === key.name
+      decoded.region === key.region &&
+      decoded.realm === key.realm &&
+      decoded.name === key.name
   };
 }
 
