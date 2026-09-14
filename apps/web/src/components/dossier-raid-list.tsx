@@ -53,9 +53,10 @@ function compareFirstKillsLatestFirst(
   return (
     b.killedAt.localeCompare(a.killedAt) ||
     (a.reportUrl ?? "").localeCompare(b.reportUrl ?? "") ||
-    a.characters.map((character) => character.name).join("\0").localeCompare(
-      b.characters.map((character) => character.name).join("\0")
-    )
+    a.characters
+      .map((character) => character.name)
+      .join("\0")
+      .localeCompare(b.characters.map((character) => character.name).join("\0"))
   );
 }
 
