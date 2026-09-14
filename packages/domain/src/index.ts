@@ -6,7 +6,7 @@ export {
   toRaiderIoUrl
 } from "./character-key";
 export type { CharacterKey, Region } from "./character-key";
-export { lookupRaiderIoBoss } from "./raid-catalogue";
+export { lookupRaiderIoBoss, supportedRaidCatalogue } from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,
@@ -14,12 +14,19 @@ export type {
   ApplicantDossierCuttingEdge,
   ApplicantDossierFirstKill,
   ApplicantDossierRaid,
+  ApplicantDossierWipe,
   BuildApplicantDossierInput,
   DossierCharacter,
   DossierCuttingEdgeEvidence,
   DossierKillEvidence,
-  DossierLimitation
+  DossierLimitation,
+  DossierWipeEvidence
 } from "./applicant-dossier";
+export type {
+  RaidCatalogueEncounter,
+  RaidCatalogueRaid,
+  SupportedRaidCatalogueEntry
+} from "./raid-catalogue";
 export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
 export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
 export { discoverCharacter } from "./discovery";
