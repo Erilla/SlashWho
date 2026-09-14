@@ -249,7 +249,88 @@ it("keeps a text-first raid heading when official artwork is unavailable", () =>
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
 });
 
-it("keeps the chronological first-kill summary coherent while listing events latest first", () => {
+it("orders equal-timestamp kill evidence by report URL", async () => {
+  const tieB = {
+    ...boss.firstKill,
+    killedAt: "2025-01-14T20:30:00.000Z",
+    reportUrl: "https://www.warcraftlogs.com/reports/tie-b#fight=1"
+  };
+  const tieA = {
+    ...boss.firstKill,
+    killedAt: "2025-01-14T20:30:00.000Z",
+    reportUrl: "https://www.warcraftlogs.com/reports/tie-a#fight=1"
+  };
+
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "tie-order",
+            raidName: "Tie Order Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [{ ...boss, firstKill: tieB, firstKills: [tieB, tieA] }]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View kill evidence"));
+  expect(
+    within(screen.getByRole("region", { name: "Kill evidence" }))
+      .getAllByRole("link", { name: /View Warcraft Logs report/ })
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([
+    "https://www.warcraftlogs.com/reports/tie-a#fight=1",
+    "https://www.warcraftlogs.com/reports/tie-b#fight=1"
+  ]);
+});
+
+it("uses the earliest sorted kill for the boss summary", () => {
+  const earliest = {
+    ...boss.firstKill,
+    killedAt: "2025-01-14T20:30:00.000Z",
+    historicWorldRank: 2,
+    reportUrl: "https://www.warcraftlogs.com/reports/earliest#fight=1"
+  };
+  const latest = {
+    ...boss.firstKill,
+    killedAt: "2025-02-14T20:30:00.000Z",
+    historicWorldRank: 99,
+    reportUrl: "https://www.warcraftlogs.com/reports/latest#fight=2"
+  };
+
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "summary-order",
+            raidName: "Summary Order Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              { ...boss, firstKill: latest, firstKills: [latest, earliest] }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  expect(
+    screen.getByText(
+      (_, element) =>
+        !!element?.classList.contains("dossier-boss-first-kill") &&
+        !!element.textContent?.includes("14 Jan 2025")
+    )
+  ).toBeVisible();
+  expect(screen.getByText("World #2")).toBeVisible();
+});
+
+it("keeps the chronological first-kill summary coherent while listing events oldest first", async () => {
   renderWithDossierCharacters(
     <DossierRaidList
       raids={
@@ -368,9 +449,11 @@ it("keeps the chronological first-kill summary coherent while listing events lat
     .closest(".dossier-boss-first-kill");
   expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
   expect(screen.getByText("World #2")).toBeVisible();
-  const firstKillParses = screen.getAllByRole("region", {
-    name: "First kill parses"
-  })[0]!;
+  const firstKillParses = screen
+    .getAllByRole("region", { name: "First kill parses" })
+    .find((region) =>
+      within(region).queryByRole("link", { name: "Damage 77th percentile" })
+    )!;
   expect(
     within(firstKillParses).getByRole("link", {
       name: "Damage 77th percentile"
@@ -379,6 +462,14 @@ it("keeps the chronological first-kill summary coherent while listing events lat
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"
   );
+  expect(within(firstKillParses).getByText("Ryii")).toHaveClass(
+    "dossier-character-name--mage"
+  );
+  expect(
+    within(screen.getByRole("region", { name: "Best shown parses" })).getByText(
+      "Ryalts"
+    )
+  ).toHaveClass("dossier-character-name--priest");
   expect(
     within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
       "link",
@@ -389,17 +480,24 @@ it("keeps the chronological first-kill summary coherent while listing events lat
     "https://www.warcraftlogs.com/reports/second#fight=9"
   );
   expect(screen.getByText("View kill evidence")).toBeVisible();
+  await userEvent.setup().click(screen.getByText("View kill evidence"));
+  const killEvidence = screen.getByRole("region", { name: "Kill evidence" });
+  expect(
+    within(killEvidence)
+      .getAllByText("Ryii")
+      .find((name) => name.classList.contains("dossier-parse-character"))
+  ).toHaveClass("dossier-character-name--mage");
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();
   const evidenceRows = screen.getAllByText(/^(First kill|Kill)$/, {
     selector: "dt"
   });
-  expect(evidenceRows[0]).toHaveTextContent("Kill");
-  expect(evidenceRows[0]?.closest(".dossier-evidence")).not.toHaveClass(
+  expect(evidenceRows[0]).toHaveTextContent("First kill");
+  expect(evidenceRows[0]?.closest(".dossier-evidence")).toHaveClass(
     "dossier-evidence-first-kill"
   );
-  expect(evidenceRows[1]).toHaveTextContent("First kill");
-  expect(evidenceRows[1]?.closest(".dossier-evidence")).toHaveClass(
+  expect(evidenceRows[1]).toHaveTextContent("Kill");
+  expect(evidenceRows[1]?.closest(".dossier-evidence")).not.toHaveClass(
     "dossier-evidence-first-kill"
   );
   expect(
@@ -410,8 +508,8 @@ it("keeps the chronological first-kill summary coherent while listing events lat
     .getAllByText(/14 (Jan|Feb) 2025/)
     .filter((date) => date.tagName === "TIME");
   expect(dates.map((date) => date.textContent)).toEqual([
-    "14 Feb 2025",
-    "14 Jan 2025"
+    "14 Jan 2025",
+    "14 Feb 2025"
   ]);
 });
 
@@ -430,13 +528,13 @@ it("lists green kill rows before grey wipes ordered newest to oldest", async () 
                 ...boss,
                 wipes: [
                   {
-                    attemptedAt: "2025-02-14T20:30:00.000Z",
+                    attemptedAt: "2025-01-13T20:30:00.000Z",
                     reportUrl:
                       "https://www.warcraftlogs.com/reports/latest#fight=4",
                     characters: [ryii]
                   },
                   {
-                    attemptedAt: "2025-02-12T20:30:00.000Z",
+                    attemptedAt: "2025-01-12T20:30:00.000Z",
                     reportUrl:
                       "https://www.warcraftlogs.com/reports/older#fight=2",
                     characters: [ryii]
@@ -463,11 +561,106 @@ it("lists green kill rows before grey wipes ordered newest to oldest", async () 
   expect(
     screen.getAllByRole("img", { name: "Mythic wipe found" })
   ).toHaveLength(2);
-  const dates = screen.getAllByText(/12|14 Feb 2025/, { selector: "time" });
+  const dates = screen.getAllByText(/12|13 Jan 2025/, { selector: "time" });
   expect(dates.map((date) => date.textContent)).toEqual([
-    "14 Feb 2025",
-    "12 Feb 2025"
+    "13 Jan 2025",
+    "12 Jan 2025"
   ]);
+});
+
+it("groups each wipe beneath its nearest subsequent kill", async () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "grouped-wipes",
+            raidName: "Grouped Wipes Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                firstKill: {
+                  ...boss.firstKill,
+                  killedAt: "2025-01-10T20:30:00.000Z",
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/first#fight=8"
+                },
+                firstKills: [
+                  {
+                    ...boss.firstKill,
+                    killedAt: "2025-01-10T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/first#fight=8"
+                  },
+                  {
+                    ...boss.firstKill,
+                    killedAt: "2025-01-20T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/second#fight=9"
+                  }
+                ],
+                wipes: [
+                  {
+                    attemptedAt: "2025-01-19T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/progression#fight=7",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-01-05T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/early#fight=6",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-01-19T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/progression#fight=8",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-01-20T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/second#fight=10",
+                    characters: [ryii]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View kill evidence"));
+  const evidence = screen.getByRole("region", {
+    name: "Kill evidence"
+  });
+  const rows = within(evidence).getAllByText(/First kill|Kill|Wipe/, {
+    selector: "dt"
+  });
+
+  expect(rows.map((row) => row.textContent)).toEqual([
+    "First kill",
+    "Wipe",
+    "Kill",
+    "Wipe",
+    "Wipe"
+  ]);
+  expect(
+    within(evidence).getAllByRole("link", {
+      name: "View Warcraft Logs wipe report (opens in a new tab)"
+    })
+  ).toHaveLength(3);
+  expect(
+    within(evidence).getAllByRole("img", { name: "Verified Mythic kill" })
+  ).toHaveLength(2);
+  expect(
+    within(evidence).getAllByRole("img", { name: "Mythic wipe found" })
+  ).toHaveLength(3);
 });
 
 it("renders kill, wipe, no-log, and incomplete states with accessible labels", async () => {
@@ -556,6 +749,70 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
     "href",
     "https://www.warcraftlogs.com/reports/wipe#fight=12"
   );
+});
+
+it("orders wipe-only evidence newest first with a stable tie-break", async () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "wipe-only-order",
+            raidName: "Wipe Only Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                bossId: "wipe-only",
+                bossName: "Wipe Only Boss",
+                bossOrder: 1,
+                imageUrl: null,
+                state: "wipe",
+                wipe: {
+                  attemptedAt: "2025-02-10T20:30:00.000Z",
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/tie-a#fight=1",
+                  characters: [ryii]
+                },
+                wipes: [
+                  {
+                    attemptedAt: "2025-02-09T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/older#fight=2",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-02-10T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/tie-b#fight=1",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-02-10T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/tie-a#fight=1",
+                    characters: [ryii]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View wipe evidence"));
+  const evidence = screen.getByRole("region", { name: "Wipe evidence" });
+  expect(
+    within(evidence)
+      .getAllByRole("link", { name: /View Warcraft Logs wipe report/ })
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([
+    "https://www.warcraftlogs.com/reports/tie-b#fight=1",
+    "https://www.warcraftlogs.com/reports/tie-a#fight=1",
+    "https://www.warcraftlogs.com/reports/older#fight=2"
+  ]);
 });
 
 it("greys out an entire no-log tier as a single explanatory row", () => {
