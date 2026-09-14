@@ -803,7 +803,7 @@ describe("applicant dossier service", () => {
         characters: [
           {
             key: root,
-            displayName: "ryii",
+            displayName: "Ryii",
             source: "submitted"
           }
         ],

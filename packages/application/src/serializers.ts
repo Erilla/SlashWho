@@ -18,13 +18,17 @@ import type {
   StoredSnapshot,
   StoredSnapshotCharacter
 } from "@slashwho/database";
-import { toCharacterPath, type CharacterKey } from "@slashwho/domain";
+import {
+  formatCharacterDisplayName,
+  toCharacterPath,
+  type CharacterKey
+} from "@slashwho/domain";
 
 function serializeCharacter(character: StoredSnapshotCharacter): Character {
   return {
     region: character.key.region,
     realm: character.key.realm,
-    name: character.displayName,
+    name: formatCharacterDisplayName(character.displayName),
     className: character.className,
     level: character.level,
     raiderIoUrl: character.raiderIoUrl
@@ -45,7 +49,7 @@ export function serializeDossierCharacter(
 ): DossierCharacter {
   return {
     key: character.key,
-    displayName: character.displayName,
+    displayName: formatCharacterDisplayName(character.displayName),
     className: character.className,
     raiderIoUrl: character.raiderIoUrl,
     source: dossierSourceLabels[character.source]

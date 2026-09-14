@@ -1,5 +1,6 @@
 import { canonicalCharacterId } from "./deduplicate";
 import type { CharacterKey } from "./character-key";
+import { formatCharacterDisplayName } from "./display-name";
 import {
   lookupJournalEncounter,
   lookupRaidBossByName,
@@ -224,6 +225,10 @@ function catalogueEncounter(evidence: {
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
+  const characters = input.characters.map((character) => ({
+    ...character,
+    displayName: formatCharacterDisplayName(character.displayName)
+  }));
   const cuttingEdges = new Map<
     string,
     {
@@ -420,7 +425,7 @@ export function buildApplicantDossier(
     : [];
   return {
     root: input.root,
-    characters: input.characters,
+    characters,
     cuttingEdges: [...cuttingEdges.entries()]
       .map(([, entry]) => {
         return {

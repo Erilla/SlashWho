@@ -1,6 +1,7 @@
 "use client";
 
 import type { CharacterKey, DossierCharacter } from "@slashwho/contracts";
+import { formatCharacterDisplayName } from "@slashwho/domain";
 import { createContext, Fragment, type ReactNode, useContext } from "react";
 
 type CharacterReference = DossierCharacter | CharacterKey;
@@ -77,7 +78,11 @@ export function DossierCharacterName({
     ? `dossier-character-name dossier-character-name--${modifier}`
     : "dossier-character-name";
 
-  return <span className={className}>{resolved.displayName}</span>;
+  return (
+    <span className={className}>
+      {formatCharacterDisplayName(resolved.displayName)}
+    </span>
+  );
 }
 
 export function DossierCharacterNames({
