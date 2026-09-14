@@ -88,6 +88,9 @@ export interface SnapshotRepository {
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
+  getCurrentContainingCharacter?(
+    key: CharacterKey
+  ): Promise<StoredSnapshot | null>;
   find(id: string): Promise<StoredSnapshot | null>;
   listHistory(
     key: CharacterKey,

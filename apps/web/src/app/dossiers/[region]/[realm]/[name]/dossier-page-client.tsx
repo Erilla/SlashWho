@@ -135,13 +135,13 @@ export function DossierPageClient({
       setStatus(null);
     }
 
-    async function startResearch() {
+    async function startResearch(researchRoot = identity) {
       try {
         const response = await fetch("/api/dossiers", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            characterUrl: `https://raider.io/characters/${identity.region}/${identity.realm}/${identity.name}`
+            characterUrl: `https://raider.io/characters/${researchRoot.region}/${researchRoot.realm}/${researchRoot.name}`
           }),
           cache: "no-store",
           signal: controller.signal
@@ -190,6 +190,14 @@ export function DossierPageClient({
             setDossier(parsed.data);
             setInitialError(null);
             setError(null);
+            if (
+              parsed.data.root.region !== identity.region ||
+              parsed.data.root.realm !== identity.realm ||
+              parsed.data.root.name !== identity.name
+            ) {
+              await startResearch(parsed.data.root);
+              return;
+            }
           }
           setStatus(null);
           return;
