@@ -71,12 +71,10 @@ export function DossierPageClient({
     }
 
     async function readInitialDossier() {
-      const response = await fetch(`${dossierPath}?scope=initial`,
-        {
-          cache: "no-store",
-          signal: controller.signal
-        }
-      );
+      const response = await fetch(`${dossierPath}?scope=initial`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
       const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
       if (!response.ok) {

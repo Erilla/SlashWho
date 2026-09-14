@@ -125,7 +125,10 @@ describe("DossierPageClient staged research", () => {
     vi.stubGlobal("fetch", (input: string) => {
       if (input === "/api/dossiers") {
         return Promise.resolve(
-          Response.json({ kind: "job", jobId, status: "queued" }, { status: 202 })
+          Response.json(
+            { kind: "job", jobId, status: "queued" },
+            { status: 202 }
+          )
         );
       }
       if (input === `${dossierPath}?scope=initial`) {
