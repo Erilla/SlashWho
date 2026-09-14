@@ -3,6 +3,7 @@ import {
   bigserial,
   boolean,
   check,
+  doublePrecision,
   index,
   integer,
   pgEnum,
@@ -47,6 +48,11 @@ export const discoverySource = pgEnum("discovery_source", [
 export const characterEvidenceRunStatus = pgEnum(
   "character_evidence_run_status",
   ["queued", "running", "retrying", "complete", "partial", "failed"]
+);
+
+export const characterMythicKillParseState = pgEnum(
+  "character_mythic_kill_parse_state",
+  ["available", "not_applicable", "unavailable"]
 );
 
 export const characters = pgTable(
@@ -394,7 +400,18 @@ export const characterMythicKills = pgTable(
     fightUrl: text("fight_url").notNull(),
     guildName: text("guild_name"),
     guildRealm: text("guild_realm"),
-    historicWorldRank: integer("historic_world_rank")
+    historicWorldRank: integer("historic_world_rank"),
+    damageParseState:
+      characterMythicKillParseState("damage_parse_state").notNull(),
+    damagePercentile: doublePrecision("damage_percentile"),
+    healingParseState: characterMythicKillParseState(
+      "healing_parse_state"
+    ).notNull(),
+    healingPercentile: doublePrecision("healing_percentile"),
+    bossDamageParseState: characterMythicKillParseState(
+      "boss_damage_parse_state"
+    ).notNull(),
+    bossDamagePercentile: doublePrecision("boss_damage_percentile")
   },
   (table) => [
     uniqueIndex("character_mythic_kills_source_fight_idx").on(
@@ -405,6 +422,18 @@ export const characterMythicKills = pgTable(
     check(
       "character_mythic_kills_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
+    ),
+    check(
+      "character_mythic_kills_damage_parse_check",
+      sql`(${table.damageParseState} = 'available' AND ${table.damagePercentile} >= 0 AND ${table.damagePercentile} <= 100) OR (${table.damageParseState} IN ('not_applicable', 'unavailable') AND ${table.damagePercentile} IS NULL)`
+    ),
+    check(
+      "character_mythic_kills_healing_parse_check",
+      sql`(${table.healingParseState} = 'available' AND ${table.healingPercentile} >= 0 AND ${table.healingPercentile} <= 100) OR (${table.healingParseState} IN ('not_applicable', 'unavailable') AND ${table.healingPercentile} IS NULL)`
+    ),
+    check(
+      "character_mythic_kills_boss_damage_parse_check",
+      sql`(${table.bossDamageParseState} = 'available' AND ${table.bossDamagePercentile} >= 0 AND ${table.bossDamagePercentile} <= 100) OR (${table.bossDamageParseState} IN ('not_applicable', 'unavailable') AND ${table.bossDamagePercentile} IS NULL)`
     )
   ]
 );

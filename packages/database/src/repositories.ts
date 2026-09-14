@@ -147,6 +147,16 @@ export interface CharacterEvidenceRun {
   completedAt: Date | null;
 }
 
+export type CharacterMythicKillParseMetric =
+  | Readonly<{ state: "available"; percentile: number }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+
+export type CharacterMythicKillPerformance = Readonly<{
+  damage: CharacterMythicKillParseMetric;
+  healing: CharacterMythicKillParseMetric;
+  bossDamage: CharacterMythicKillParseMetric;
+}>;
+
 export interface CharacterMythicKillInput {
   raidId: string;
   raidName: string;
@@ -160,6 +170,7 @@ export interface CharacterMythicKillInput {
   fightUrl: string;
   guild: { name: string; realm: string } | null;
   historicWorldRank?: number | null;
+  performance: CharacterMythicKillPerformance;
 }
 
 export interface StoredCharacterMythicKill extends CharacterMythicKillInput {

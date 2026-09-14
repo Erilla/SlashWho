@@ -54,6 +54,12 @@ function mythicKill(
     reportUrl: "https://www.warcraftlogs.com/reports/example",
     fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
     guild: { name: "Example Guild", realm: "silvermoon" },
+    historicWorldRank: null,
+    performance: {
+      damage: { state: "unavailable" },
+      healing: { state: "unavailable" },
+      bossDamage: { state: "unavailable" }
+    },
     ...overrides
   };
 }
@@ -294,6 +300,122 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({
       wipeCapable: false,
       kills: [mythicKill()]
+    });
+  });
+
+  it("round-trips normalized kill parses", async () => {
+    // Break caught: storage could lose a normalized parse state or percentile,
+    // including a valid zero, while replacing a completed evidence scan.
+    const initial = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (initial.kind !== "reserved") throw new Error("evidence_not_reserved");
+
+    const initialKills = [
+      mythicKill({
+        performance: {
+          damage: { state: "available", percentile: 0 },
+          healing: { state: "not_applicable" },
+          bossDamage: { state: "unavailable" }
+        }
+      }),
+      mythicKill({
+        bossId: "1235",
+        bossName: "Silken Court",
+        bossOrder: 7,
+        fightUrl: "https://www.warcraftlogs.com/reports/example#fight=2",
+        performance: {
+          damage: { state: "available", percentile: 99.25 },
+          healing: { state: "unavailable" },
+          bossDamage: { state: "not_applicable" }
+        }
+      })
+    ];
+    await repositories.evidence.publish(initial.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: initialKills,
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    const replacement = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:06:00.000Z"),
+      at: new Date("2026-08-04T12:06:00.000Z")
+    });
+    if (replacement.kind !== "reserved") {
+      throw new Error("replacement_not_reserved");
+    }
+
+    const withoutIds = (kills: readonly { id: string }[]) =>
+      kills.map(({ id: _id, ...kill }) => kill);
+    await expect(
+      repositories.evidence.getCompleted(rootKey)
+    ).resolves.toMatchObject({
+      run: { id: initial.run.id },
+      kills: initialKills
+    });
+    expect(
+      withoutIds((await repositories.evidence.getCompleted(rootKey))!.kills)
+    ).toEqual(initialKills);
+
+    const replacementKills = [
+      mythicKill({
+        bossId: "1236",
+        bossName: "The Bloodbound Horror",
+        bossOrder: 1,
+        fightUrl: "https://www.warcraftlogs.com/reports/example#fight=3",
+        performance: {
+          damage: { state: "not_applicable" },
+          healing: { state: "available", percentile: 99.25 },
+          bossDamage: { state: "available", percentile: 0 }
+        }
+      })
+    ];
+    await repositories.evidence.publish(replacement.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: replacementKills,
+      completedAt: new Date("2026-08-04T12:10:00.000Z")
+    });
+
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    expect(completed?.run.id).toBe(replacement.run.id);
+    expect(withoutIds(completed!.kills)).toEqual(replacementKills);
+  });
+
+  it("rejects an invalid normalized parse before publication", async () => {
+    // Break caught: an out-of-range parse percentile could reach persistence
+    // and violate the normalized state/value contract.
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+
+    await expect(
+      repositories.evidence.publish(reserved.run.id, {
+        state: "complete",
+        limitationCode: null,
+        kills: [
+          mythicKill({
+            performance: {
+              damage: { state: "available", percentile: 100.01 },
+              healing: { state: "unavailable" },
+              bossDamage: { state: "unavailable" }
+            }
+          })
+        ],
+        completedAt: new Date("2026-08-04T12:05:00.000Z")
+      })
+    ).rejects.toThrow(RangeError);
+    await expect(
+      repositories.evidence.find(reserved.run.id)
+    ).resolves.toMatchObject({
+      status: "queued"
     });
   });
 

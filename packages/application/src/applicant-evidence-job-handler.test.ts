@@ -165,4 +165,89 @@ describe("applicant evidence job handler", () => {
       }
     ]);
   });
+
+  it("passes normalized parses and parse limitations unchanged to publication", async () => {
+    // Break caught: gateway-only ranking data could leak into persistence, or
+    // a parse-specific partial limitation could be replaced by scan metadata.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        async getFirstKillReports() {
+          return {
+            kind: "evidence" as const,
+            limitation: {
+              kind: "limitation" as const,
+              code: "parse_request_cap" as const
+            },
+            kills: [
+              {
+                raidId: "42",
+                raidName: "Current Tier",
+                bossId: "7",
+                bossName: "Final Boss",
+                journalBossId: "7",
+                bossOrder: 7,
+                isFinalBoss: false as const,
+                killedAt: "2026-09-12T20:00:00.000Z",
+                reportCode: "report",
+                fightId: 7,
+                difficulty: 5,
+                reportUrl: "https://www.warcraftlogs.com/reports/report",
+                fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
+                guild: { name: "Guild", realm: "Silvermoon" },
+                historicWorldRank: null,
+                performance: {
+                  damage: { state: "available" as const, percentile: 0 },
+                  healing: { state: "not_applicable" as const },
+                  bossDamage: { state: "unavailable" as const }
+                }
+              }
+            ]
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published).toEqual([
+      {
+        runId: run.id,
+        result: {
+          state: "partial",
+          limitationCode: "parse_request_cap",
+          kills: [
+            {
+              raidId: "42",
+              raidName: "Current Tier",
+              bossId: "7",
+              bossName: "Final Boss",
+              journalBossId: "7",
+              bossOrder: 7,
+              isFinalBoss: false,
+              killedAt: "2026-09-12T20:00:00.000Z",
+              reportUrl: "https://www.warcraftlogs.com/reports/report",
+              fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
+              guild: { name: "Guild", realm: "Silvermoon" },
+              historicWorldRank: null,
+              performance: {
+                damage: { state: "available", percentile: 0 },
+                healing: { state: "not_applicable" },
+                bossDamage: { state: "unavailable" }
+              }
+            }
+          ],
+          completedAt: new Date("2026-09-13T12:01:00.000Z")
+        }
+      }
+    ]);
+  });
 });

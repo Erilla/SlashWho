@@ -4,6 +4,8 @@ import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
   CharacterEvidenceRun,
+  CharacterMythicKillParseMetric,
+  CharacterMythicKillPerformance,
   CharacterMythicKillInput,
   CompletedCharacterEvidence,
   EvidenceReservationResult,
@@ -93,6 +95,12 @@ interface CharacterMythicKillRow {
   guild_name: string | null;
   guild_realm: string | null;
   historic_world_rank: number | null;
+  damage_parse_state: CharacterMythicKillParseMetric["state"];
+  damage_percentile: number | null;
+  healing_parse_state: CharacterMythicKillParseMetric["state"];
+  healing_percentile: number | null;
+  boss_damage_parse_state: CharacterMythicKillParseMetric["state"];
+  boss_damage_percentile: number | null;
 }
 
 interface CharacterMythicWipeRow {
@@ -315,7 +323,80 @@ function mapCharacterMythicKill(
       row.guild_name === null
         ? null
         : { name: row.guild_name, realm: row.guild_realm! },
-    historicWorldRank: row.historic_world_rank
+    historicWorldRank: row.historic_world_rank,
+    performance: {
+      damage: mapParseMetric(row.damage_parse_state, row.damage_percentile),
+      healing: mapParseMetric(row.healing_parse_state, row.healing_percentile),
+      bossDamage: mapParseMetric(
+        row.boss_damage_parse_state,
+        row.boss_damage_percentile
+      )
+    }
+  };
+}
+
+function mapParseMetric(
+  state: CharacterMythicKillParseMetric["state"],
+  percentile: number | null
+): CharacterMythicKillParseMetric {
+  if (
+    state === "available" &&
+    typeof percentile === "number" &&
+    Number.isFinite(percentile) &&
+    percentile >= 0 &&
+    percentile <= 100
+  ) {
+    return { state, percentile };
+  }
+  if (
+    (state === "not_applicable" || state === "unavailable") &&
+    percentile === null
+  ) {
+    return { state };
+  }
+  throw new Error("character_mythic_kill_parse_invalid");
+}
+
+function parseMetricValues(metric: unknown): {
+  state: CharacterMythicKillParseMetric["state"];
+  percentile: number | null;
+} {
+  if (typeof metric !== "object" || metric === null) {
+    throw new RangeError("character_mythic_kill_parse_invalid");
+  }
+  const candidate = metric as { state?: unknown; percentile?: unknown };
+  if (
+    candidate.state === "available" &&
+    typeof candidate.percentile === "number" &&
+    Number.isFinite(candidate.percentile) &&
+    candidate.percentile >= 0 &&
+    candidate.percentile <= 100
+  ) {
+    return { state: candidate.state, percentile: candidate.percentile };
+  }
+  if (
+    (candidate.state === "not_applicable" ||
+      candidate.state === "unavailable") &&
+    candidate.percentile === undefined
+  ) {
+    return { state: candidate.state, percentile: null };
+  }
+  throw new RangeError("character_mythic_kill_parse_invalid");
+}
+
+function parsePerformanceValues(performance: unknown): {
+  damage: ReturnType<typeof parseMetricValues>;
+  healing: ReturnType<typeof parseMetricValues>;
+  bossDamage: ReturnType<typeof parseMetricValues>;
+} {
+  if (typeof performance !== "object" || performance === null) {
+    throw new RangeError("character_mythic_kill_performance_invalid");
+  }
+  const candidate = performance as Partial<CharacterMythicKillPerformance>;
+  return {
+    damage: parseMetricValues(candidate.damage),
+    healing: parseMetricValues(candidate.healing),
+    bossDamage: parseMetricValues(candidate.bossDamage)
   };
 }
 
@@ -357,7 +438,9 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, historic_world_rank
+            guild_name, guild_realm, historic_world_rank, damage_parse_state,
+            damage_percentile, healing_parse_state, healing_percentile,
+            boss_damage_parse_state, boss_damage_percentile
      FROM character_mythic_kills
      WHERE evidence_run_id = $1
      ORDER BY killed_at, source_fight_key`,
@@ -1886,6 +1969,21 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         ) {
           throw new RangeError("character_evidence_publication_invalid");
         }
+        const incomingKills: Array<{
+          kill: CharacterMythicKillInput;
+          performance: ReturnType<typeof parsePerformanceValues>;
+        }> = input.kills.map((kill) => {
+          if (
+            kill.guild !== null &&
+            (kill.guild.name.length === 0 || kill.guild.realm.length === 0)
+          ) {
+            throw new RangeError("character_evidence_guild_invalid");
+          }
+          return {
+            kill,
+            performance: parsePerformanceValues(kill.performance)
+          };
+        });
         const client = await pool.connect();
         try {
           await client.query("BEGIN");
@@ -1913,10 +2011,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                   name: activeRun.normalized_name
                 })
               : null;
-          const kills = new Map<string, CharacterMythicKillInput>(
-            previous?.kills.map((kill) => [kill.fightUrl, kill]) ?? []
+          const kills = new Map<
+            string,
+            (typeof incomingKills)[number]
+          >(
+            previous?.kills.map((kill) => [
+              kill.fightUrl,
+              { kill, performance: parsePerformanceValues(kill.performance) }
+            ]) ?? []
           );
-          for (const kill of input.kills) kills.set(kill.fightUrl, kill);
+          for (const kill of incomingKills) {
+            kills.set(kill.kill.fightUrl, kill);
+          }
           const wipes = new Map<string, (typeof input.wipes)[number]>();
           for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
             const identifier = `${wipe.raidId}\0${wipe.bossId}`;
@@ -1930,19 +2036,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               wipes.set(identifier, wipe);
             }
           }
-          for (const kill of kills.values()) {
-            if (
-              kill.guild !== null &&
-              (kill.guild.name.length === 0 || kill.guild.realm.length === 0)
-            ) {
-              throw new RangeError("character_evidence_guild_invalid");
-            }
+          for (const { kill, performance } of kills.values()) {
             await client.query(
               `INSERT INTO character_mythic_kills
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
-                 report_url, fight_url, guild_name, guild_realm, historic_world_rank)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+                 report_url, fight_url, guild_name, guild_realm, historic_world_rank,
+                 damage_parse_state, damage_percentile, healing_parse_state,
+                 healing_percentile, boss_damage_parse_state, boss_damage_percentile)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
               [
                 runId,
                 kill.fightUrl,
@@ -1958,7 +2060,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.fightUrl,
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
-                kill.historicWorldRank ?? null
+                kill.historicWorldRank ?? null,
+                performance.damage.state,
+                performance.damage.percentile,
+                performance.healing.state,
+                performance.healing.percentile,
+                performance.bossDamage.state,
+                performance.bossDamage.percentile
               ]
             );
           }

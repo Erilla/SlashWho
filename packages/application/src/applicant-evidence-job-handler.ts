@@ -1,4 +1,7 @@
-import type { DiscoveryWorkContext } from "@slashwho/database";
+import type {
+  CharacterMythicKillInput,
+  DiscoveryWorkContext
+} from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 import type {
   WarcraftLogsFirstKillEvidence,
@@ -22,7 +25,7 @@ export type ApplicantEvidenceStore = {
     result: Readonly<{
       state: "complete" | "partial";
       limitationCode: WarcraftLogsLimitationCode | null;
-      kills: readonly WarcraftLogsFirstKillEvidence[];
+      kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       completedAt: Date;
     }>
@@ -37,6 +40,18 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   parseRequestCap: number;
   now?: () => Date;
 }>;
+
+function toCharacterMythicKillInput(
+  kill: WarcraftLogsFirstKillEvidence
+): CharacterMythicKillInput {
+  const {
+    reportCode: _reportCode,
+    fightId: _fightId,
+    difficulty: _difficulty,
+    ...normalizedKill
+  } = kill;
+  return normalizedKill;
+}
 
 /**
  * Collects one character's complete public Warcraft Logs history outside the
@@ -82,7 +97,7 @@ export function createApplicantEvidenceJobHandler(
       await options.evidence.publish(run.id, {
         state: response.limitation ? "partial" : "complete",
         limitationCode: response.limitation?.code ?? null,
-        kills: response.kills,
+        kills: response.kills.map(toCharacterMythicKillInput),
         wipes: response.wipes,
         completedAt: now()
       });

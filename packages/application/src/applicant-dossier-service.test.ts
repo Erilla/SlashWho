@@ -84,7 +84,12 @@ function fixture(
       reportUrl: "https://www.warcraftlogs.com/reports/example",
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
       guild: { name: "Example Guild", realm: "silvermoon" },
-      historicWorldRank: null
+      historicWorldRank: null,
+      performance: {
+        damage: { state: "unavailable" },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
     }
   ];
   const repositories = {
@@ -557,7 +562,12 @@ describe("applicant dossier service", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/court",
           fightUrl: "https://www.warcraftlogs.com/reports/court#fight=1",
           guild: { name: "Example Guild", realm: "silvermoon" },
-          historicWorldRank: null
+          historicWorldRank: null,
+          performance: {
+            damage: { state: "unavailable" },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
         },
         {
           id: "10000000-0000-4000-8000-000000000022",
@@ -572,7 +582,12 @@ describe("applicant dossier service", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/ulgrax",
           fightUrl: "https://www.warcraftlogs.com/reports/ulgrax#fight=1",
           guild: { name: "Other Guild", realm: "silvermoon" },
-          historicWorldRank: null
+          historicWorldRank: null,
+          performance: {
+            damage: { state: "unavailable" },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
         }
       ]
     });
