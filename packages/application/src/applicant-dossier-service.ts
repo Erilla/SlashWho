@@ -129,6 +129,10 @@ function limitationMessage(
       return `${label} history could not be fully loaded. Shown evidence is partial; other kills or wipes may exist.`;
     case "schema_changed":
       return `${label} returned an unexpected response, so history is incomplete. Shown evidence is partial; other kills or wipes may exist.`;
+    case "current_content_window_unknown":
+      return `${label} evidence could not be shown because this raid's current-content window has not been reviewed.`;
+    case "current_content_evidence_withheld":
+      return `${label} evidence outside this raid's current-content window is not shown.`;
     default:
       return `${label} parse availability is partial. Verified kill evidence is still shown.`;
   }
