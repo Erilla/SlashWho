@@ -14,6 +14,7 @@ import { DossierCuttingEdgeList } from "../../../../../components/dossier-cuttin
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
+import { SearchForm } from "../../../../../components/search-form";
 
 type DossierPageClientProps = Readonly<{
   identity: CharacterKey;
@@ -268,6 +269,9 @@ export function DossierPageClient({
 
   return (
     <main className="page-shell dossier-page">
+      <div className="dossier-search">
+        <SearchForm />
+      </div>
       <header className="dossier-heading">
         <p className="eyebrow">Applicant dossier</p>
         <h1>{identity.name}</h1>

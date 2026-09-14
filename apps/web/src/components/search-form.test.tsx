@@ -74,6 +74,58 @@ describe("SearchForm", () => {
     );
   });
 
+  it("supports structured character lookup and starts dossier research", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            kind: "job",
+            jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+            status: "queued"
+          }),
+          { status: 202, headers: { "content-type": "application/json" } }
+        )
+      )
+    );
+    render(<SearchForm />);
+
+    await user.click(screen.getByRole("radio", { name: "Character name + realm" }));
+    await user.type(screen.getByRole("textbox", { name: "Character name" }), "Ryii");
+    await user.type(screen.getByRole("textbox", { name: "Realm" }), "Silvermoon");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Region" }), [
+      "EU"
+    ]);
+    await user.click(screen.getByRole("button", { name: "Research applicant" }));
+
+    expect(push).toHaveBeenCalledWith(
+      "/dossiers/eu/silvermoon/ryii?job=ca3ccfdf-1e8b-49b1-9729-459f42a104c0"
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/dossiers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          characterUrl: "https://www.warcraftlogs.com/character/eu/silvermoon/ryii"
+        })
+      })
+    );
+  });
+
+  it("rejects structured lookup when required fields are missing", async () => {
+    const user = userEvent.setup();
+    render(<SearchForm />);
+
+    await user.click(screen.getByRole("radio", { name: "Character name + realm" }));
+    await user.type(screen.getByRole("textbox", { name: "Character name" }), "Ryii");
+    await user.click(screen.getByRole("button", { name: "Research applicant" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Enter a valid character URL, or character name, realm, and region."
+    );
+  });
+
   it("submits a Warcraft Logs applicant URL and navigates to its dossier", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(

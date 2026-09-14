@@ -12,6 +12,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+const push = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push })
+}));
+
 import { DossierPageClient } from "../app/dossiers/[region]/[realm]/[name]/dossier-page-client";
 
 const dossier: ApplicantDossier = {
@@ -98,6 +103,7 @@ describe("DossierPageClient", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    push.mockReset();
   });
 
   it("renders source-labelled characters, historic evidence, and every limitation", async () => {

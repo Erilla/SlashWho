@@ -145,12 +145,67 @@ a {
 
 .search-form {
   width: 100%;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.search-mode {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.search-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #b9b9c7;
+  font-size: 0.9rem;
 }
 
 .search-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.625rem;
+}
+
+.search-structured-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.search-field label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #b9b9c7;
+  font-size: 0.8rem;
+}
+
+.search-field {
+  display: grid;
+}
+
+.search-select {
+  min-height: 3.35rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 1rem;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.search-select:hover {
+  border-color: #414152;
+}
+
+.search-select[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 
 .search-input {
@@ -1176,6 +1231,10 @@ a {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .search-structured-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .search-button {
     width: 100%;
   }
@@ -1206,4 +1265,8 @@ a {
   .dossier-raid-heading {
     min-height: 6.5rem;
   }
+}
+
+.dossier-search {
+  margin-bottom: 1.5rem;
 }
