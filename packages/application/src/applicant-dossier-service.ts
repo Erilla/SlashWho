@@ -12,6 +12,7 @@ import type {
 } from "@slashwho/database";
 import {
   buildApplicantDossier,
+  formatCharacterDisplayName,
   canonicalCharacterId,
   lookupCuttingEdgeAchievement,
   lookupRaiderIoBoss,
@@ -245,7 +246,7 @@ async function gatherCharacterEvidence(
 function serializeDossierSubject(character: DossierSubject) {
   return {
     key: character.key,
-    displayName: character.displayName,
+    displayName: formatCharacterDisplayName(character.displayName),
     className: character.className,
     raiderIoUrl: character.raiderIoUrl,
     source:

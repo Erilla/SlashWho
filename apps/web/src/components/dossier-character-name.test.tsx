@@ -106,7 +106,7 @@ it("uses a neutral visible fallback for an unresolved key", () => {
     </DossierCharacterProvider>
   );
 
-  const name = screen.getByText("missing");
+  const name = screen.getByText("Missing");
   expect(name).toHaveClass("dossier-character-name");
   expect(name.className).toBe("dossier-character-name");
 });

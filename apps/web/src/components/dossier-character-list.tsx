@@ -1,4 +1,5 @@
 import type { DossierCharacter } from "@slashwho/contracts";
+import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
 import { DossierCharacterName } from "./dossier-character-name";
@@ -73,7 +74,7 @@ export function DossierCharacterList({
             <div>
               <UpstreamIconLink
                 href={character.raiderIoUrl}
-                label={`View ${character.displayName} on Raider.IO`}
+                label={`View ${formatCharacterDisplayName(character.displayName)} on Raider.IO`}
                 source="raiderio"
               >
                 <DossierCharacterName character={character} />
