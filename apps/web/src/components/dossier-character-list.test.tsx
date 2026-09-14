@@ -56,13 +56,19 @@ it("keeps submitted-character links in the dossier header and shows both profile
   );
 
   expect(
-    screen.queryByRole("link", { name: "View Ryii on Raider.IO" })
+    screen.queryByRole("link", {
+      name: "View Ryii on Raider.IO (opens in a new tab)"
+    })
   ).not.toBeInTheDocument();
   expect(
-    screen.getByRole("link", { name: "View Ryalts on Raider.IO" })
+    screen.getByRole("link", {
+      name: "View Ryalts on Raider.IO (opens in a new tab)"
+    })
   ).toHaveAttribute("href", "https://raider.io/characters/eu/draenor/ryalts");
   expect(
-    screen.getByRole("link", { name: "View Ryalts on Warcraft Logs" })
+    screen.getByRole("link", {
+      name: "View Ryalts on Warcraft Logs (opens in a new tab)"
+    })
   ).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/character/eu/draenor/ryalts"

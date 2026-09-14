@@ -27,16 +27,20 @@ export function CharacterProfileLinks({
   return (
     <span className="profile-links">
       <a
-        aria-label={`View ${displayName} on Raider.IO`}
+        aria-label={`View ${displayName} on Raider.IO (opens in a new tab)`}
         className="profile-link profile-link-raiderio"
         href={`https://raider.io/characters/${path}`}
+        rel="noopener noreferrer"
+        target="_blank"
       >
         {icon("RIO")}
       </a>
       <a
-        aria-label={`View ${displayName} on Warcraft Logs`}
+        aria-label={`View ${displayName} on Warcraft Logs (opens in a new tab)`}
         className="profile-link profile-link-warcraft-logs"
         href={`https://www.warcraftlogs.com/character/${path}`}
+        rel="noopener noreferrer"
+        target="_blank"
       >
         {icon("WCL")}
       </a>
@@ -51,16 +55,20 @@ export function GuildProfileLinks({
   return (
     <span className="profile-links">
       <a
-        aria-label={`View ${guild.name} on Raider.IO`}
+        aria-label={`View ${guild.name} on Raider.IO (opens in a new tab)`}
         className="profile-link profile-link-raiderio"
         href={`https://raider.io/guilds/${path}`}
+        rel="noopener noreferrer"
+        target="_blank"
       >
         {icon("RIO")}
       </a>
       <a
-        aria-label={`View ${guild.name} on Warcraft Logs`}
+        aria-label={`View ${guild.name} on Warcraft Logs (opens in a new tab)`}
         className="profile-link profile-link-warcraft-logs"
         href={`https://www.warcraftlogs.com/guild/${path}`}
+        rel="noopener noreferrer"
+        target="_blank"
       >
         {icon("WCL")}
       </a>

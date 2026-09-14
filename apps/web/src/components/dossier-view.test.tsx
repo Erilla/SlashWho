@@ -191,7 +191,7 @@ describe("DossierPageClient", () => {
       .closest("header")!;
     expect(
       within(dossierHeader).getByRole("link", {
-        name: "View Ryii on Raider.IO"
+        name: "View Ryii on Raider.IO (opens in a new tab)"
       })
     ).toHaveAttribute(
       "href",
@@ -199,7 +199,7 @@ describe("DossierPageClient", () => {
     );
     expect(
       within(dossierHeader).getByRole("link", {
-        name: "View Ryii on Warcraft Logs"
+        name: "View Ryii on Warcraft Logs (opens in a new tab)"
       })
     ).toHaveAttribute(
       "href",
@@ -210,12 +210,12 @@ describe("DossierPageClient", () => {
     });
     expect(
       within(connectedCharacters).queryByRole("link", {
-        name: "View Ryii on Raider.IO"
+        name: "View Ryii on Raider.IO (opens in a new tab)"
       })
     ).not.toBeInTheDocument();
     expect(
       within(connectedCharacters).getByRole("link", {
-        name: "View Ryalts on Raider.IO"
+        name: "View Ryalts on Raider.IO (opens in a new tab)"
       })
     ).toHaveAttribute("href", "https://raider.io/characters/eu/draenor/ryalts");
     const limitation = screen
@@ -235,7 +235,7 @@ describe("DossierPageClient", () => {
     ).toHaveAttribute("href", "https://www.warcraftlogs.com/reports/abc123");
     expect(
       within(evidence).getByRole("link", {
-        name: "View Arachnid on Warcraft Logs"
+        name: "View Arachnid on Warcraft Logs (opens in a new tab)"
       })
     ).toHaveAttribute(
       "href",
