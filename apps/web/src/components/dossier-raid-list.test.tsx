@@ -675,11 +675,17 @@ it("shows first-kill and best parse summaries before evidence details are opened
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"
   );
+  expect(within(firstKillParses).getByText("Ryii")).toHaveClass(
+    "dossier-character-name--mage"
+  );
   expect(
     within(bestParses).getByRole("link", { name: "Damage 99.2 percentile" })
   ).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/reports/best#fight=9"
+  );
+  expect(within(bestParses).getByText("Ryii")).toHaveClass(
+    "dossier-character-name--mage"
   );
   expect(
     screen.getByText("View kill evidence").closest("details")
@@ -693,5 +699,8 @@ it("shows first-kill and best parse summaries before evidence details are opened
   ).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"
+  );
+  expect(within(eventParses).getByText("Ryii")).toHaveClass(
+    "dossier-character-name--mage"
   );
 });

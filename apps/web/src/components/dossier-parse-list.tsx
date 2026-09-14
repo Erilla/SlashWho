@@ -1,5 +1,6 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierCharacterNameByName } from "./dossier-character-name";
 import { parseColour } from "./parse-colour";
 
 type KillBoss = Extract<
@@ -83,7 +84,7 @@ export function DossierParseList({ label, parses }: DossierParseListProps) {
               key={parse.character}
               role="group"
             >
-              <span className="dossier-parse-character">{parse.character}</span>
+              <DossierCharacterNameByName name={parse.character} />
               <span className="dossier-parse-metrics">
                 <ParseMetric metric={parse.damage} name="Damage" />
                 <ParseMetric metric={parse.healing} name="Healing" />

@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierCharacterProvider } from "./dossier-character-name";
 import { DossierParseList } from "./dossier-parse-list";
 
 type KillBoss = Extract<
@@ -52,6 +53,39 @@ it("presents every character metric with source links and accessible unavailable
   expect(
     screen.queryByRole("link", { name: "Boss damage unavailable" })
   ).not.toBeInTheDocument();
+});
+
+it("colours known parse characters and leaves unknown names neutral", () => {
+  render(
+    <DossierCharacterProvider
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: "Mage",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted"
+        }
+      ]}
+    >
+      <DossierParseList
+        label="Best shown parses"
+        parses={[
+          parses[0]!,
+          {
+            ...parses[0]!,
+            character: "Unknown"
+          }
+        ]}
+      />
+    </DossierCharacterProvider>
+  );
+
+  expect(screen.getByText("Ryii")).toHaveClass("dossier-character-name--mage");
+  expect(screen.getByText("Unknown")).toHaveClass("dossier-character-name");
+  expect(screen.getByText("Unknown")).not.toHaveClass(
+    "dossier-character-name--mage"
+  );
 });
 
 it("uses ordinal percentile labels for whole-number parse values", () => {
