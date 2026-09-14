@@ -129,7 +129,6 @@ test("matches dossier summary panels and confines character scrolling to desktop
       seedCharacterEvidence(character.key, { withSampleKills: false })
     )
   );
-
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/longlist");
 
@@ -228,6 +227,67 @@ test("does not create a desktop scroll range when connected characters fit", asy
       (element) => element.scrollHeight === element.clientHeight
     )
   ).toBe(true);
+  expect(
+    await characterList.evaluate((element) => ({
+      paddingInlineEnd: getComputedStyle(element).paddingInlineEnd,
+      scrollbarGutter: getComputedStyle(element).scrollbarGutter
+    }))
+  ).toEqual({ paddingInlineEnd: "0px", scrollbarGutter: "auto" });
+});
+
+test("keeps overflowing connected characters clear of classic and overlay scrollbars", async ({
+  page
+}) => {
+  // Break caught: scrollbar tracks could cover achievement cards or character
+  // badges and icon links when either summary list became scrollable.
+  const key = { region: "eu", realm: "silvermoon", name: "clearance" } as const;
+  const characters = Array.from({ length: 12 }, (_, index) => ({
+    key:
+      index === 0
+        ? key
+        : {
+            region: "eu" as const,
+            realm: "silvermoon",
+            name: `clearancealt${index}`
+          },
+    displayName: index === 0 ? "Clearance" : `Clearancealt${index}`,
+    className: "Mage",
+    level: 80 - index
+  }));
+  await seedSnapshot({
+    key,
+    displayName: "Clearance",
+    refreshedAt: new Date(),
+    characters
+  });
+  await Promise.all(
+    characters.map((character) =>
+      seedCharacterEvidence(character.key, { withSampleKills: false })
+    )
+  );
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/dossiers/eu/silvermoon/clearance");
+  await page.addStyleTag({
+    content: `
+      .dossier-character-list { max-height: 3rem; min-height: 0; }
+    `
+  });
+
+  const list = page.getByRole("list", { name: "Connected characters" });
+  await expect(list).toHaveAttribute("tabindex", "0");
+  expect(
+    await list.evaluate((element) => ({
+      paddingInlineEnd: Number.parseFloat(
+        getComputedStyle(element).paddingInlineEnd
+      ),
+      scrollbarGutter: getComputedStyle(element).scrollbarGutter
+    }))
+  ).toEqual({ paddingInlineEnd: 16, scrollbarGutter: "stable" });
+  await list.focus();
+  await page.keyboard.press("PageDown");
+  await expect
+    .poll(() => list.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
 });
 
 test("separates adjacent raid evidence with responsive artwork banners", async ({

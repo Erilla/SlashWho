@@ -1221,7 +1221,13 @@ a {
   .dossier-character-list {
     flex: 1 1 auto;
     overscroll-behavior: contain;
+  }
+
+  .dossier-scrollable {
     scrollbar-gutter: stable;
+    /* This is content clearance, not an assumed scrollbar width: it keeps
+       overlay scrollbars clear of cards, badges, and focused icon links. */
+    padding-inline-end: clamp(0.75rem, 1.5vw, 1rem);
   }
 
   .dossier-scroll-hint {

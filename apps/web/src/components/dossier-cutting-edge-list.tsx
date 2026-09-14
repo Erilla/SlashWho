@@ -1,5 +1,6 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 import { buildBoundedCuttingEdgeSequence } from "@slashwho/domain";
+import { useEffect, useRef, useState } from "react";
 
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
@@ -13,6 +14,8 @@ export function DossierCuttingEdgeList({
   cuttingEdges,
   limitations
 }: DossierCuttingEdgeListProps) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const [isScrollable, setIsScrollable] = useState(false);
   const orderedCuttingEdges = [...cuttingEdges].sort(
     (a, b) =>
       (a.completedAt < b.completedAt
@@ -29,6 +32,29 @@ export function DossierCuttingEdgeList({
         achievement
       }))
     : buildBoundedCuttingEdgeSequence(orderedCuttingEdges);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof window.matchMedia !== "function") return;
+
+    const desktop = window.matchMedia("(width > 48rem)");
+    const updateScrollable = () => {
+      setIsScrollable(desktop.matches && list.scrollHeight > list.clientHeight);
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(updateScrollable)
+        : null;
+
+    updateScrollable();
+    resizeObserver?.observe(list);
+    desktop.addEventListener("change", updateScrollable);
+
+    return () => {
+      resizeObserver?.disconnect();
+      desktop.removeEventListener("change", updateScrollable);
+    };
+  }, [cuttingEdges]);
 
   return (
     <section
@@ -55,7 +81,12 @@ export function DossierCuttingEdgeList({
           No public Cutting Edge achievements were found.
         </p>
       ) : (
-        <ul className="dossier-cutting-edge-list">
+        <ul
+          aria-labelledby="historic-cutting-edge-heading"
+          className={`dossier-cutting-edge-list${isScrollable ? " dossier-scrollable" : ""}`}
+          ref={listRef}
+          tabIndex={isScrollable ? 0 : undefined}
+        >
           {sequence.map((entry) => (
             <li
               className={`dossier-achievement-card${entry.status === "not_recorded" ? " dossier-achievement-card--not-recorded" : ""}`}
