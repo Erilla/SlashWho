@@ -45,11 +45,3 @@ export type {
   FingerprintGateway,
   FingerprintSweepOutcome
 } from "./fingerprint-discovery";
-export {
-  buildBoundedCuttingEdgeSequence,
-  lookupCuttingEdgeAchievement
-} from "./cutting-edge-catalogue";
-export type {
-  CuttingEdgeCatalogueAchievement,
-  CuttingEdgeSequenceEntry
-} from "./cutting-edge-catalogue";
