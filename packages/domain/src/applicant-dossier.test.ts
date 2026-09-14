@@ -140,7 +140,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].cuttingEdge).toBeNull();
     expect(
       verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
-    ).toEqual([altKey]);
+    ).toEqual([root, altKey]);
     expect(dossier.limitations[0].code).toBe("private");
   });
 

@@ -294,7 +294,7 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
   );
 
   const firstKillSummary = screen
-    .getByText("Ryalts", {
+    .getByText("Ryii", {
       selector: ".dossier-boss-first-kill .dossier-character-name"
     })
     .closest(".dossier-boss-first-kill");

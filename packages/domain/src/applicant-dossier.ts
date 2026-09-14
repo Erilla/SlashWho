@@ -163,7 +163,7 @@ function compareEvidenceLatestFirst(
   a: DossierKillEvidence,
   b: DossierKillEvidence
 ): number {
-  return text(b.killedAt, a.killedAt) || compareEvidence(a, b);
+  return compareEvidence(b, a);
 }
 function sharedEvidenceKey(k: DossierKillEvidence): string {
   // Preserve the narrow legacy identity only when a malformed timestamp cannot
