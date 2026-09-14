@@ -11,6 +11,9 @@ export type WorkerConfig = {
   raiderIoTimeoutMs: number;
   blizzardClientId: string;
   blizzardClientSecret: string;
+  warcraftLogsClientId: string;
+  warcraftLogsClientSecret: string;
+  evidenceRequestCap: number;
   blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
@@ -81,6 +84,14 @@ export function loadWorkerConfig(
     environment.BLIZZARD_CLIENT_SECRET,
     "blizzard_client_secret_required"
   );
+  const warcraftLogsClientId = requiredString(
+    environment.WARCRAFT_LOGS_CLIENT_ID,
+    "warcraft_logs_client_id_required"
+  );
+  const warcraftLogsClientSecret = requiredString(
+    environment.WARCRAFT_LOGS_CLIENT_SECRET,
+    "warcraft_logs_client_secret_required"
+  );
   const blizzardSweepRequestCap = positiveInteger(
     environment.BLIZZARD_SWEEP_REQUEST_CAP,
     0,
@@ -133,6 +144,13 @@ export function loadWorkerConfig(
     ),
     blizzardClientId,
     blizzardClientSecret,
+    warcraftLogsClientId,
+    warcraftLogsClientSecret,
+    evidenceRequestCap: positiveInteger(
+      environment.EVIDENCE_REQUEST_CAP,
+      500,
+      "invalid_evidence_request_cap"
+    ),
     blizzardBaseUrl: optionalHttpUrl(
       environment.BLIZZARD_BASE_URL,
       "invalid_blizzard_base_url"

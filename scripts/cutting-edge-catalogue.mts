@@ -4,6 +4,7 @@ export type GeneratedCuttingEdgeAchievement = Readonly<{
   achievementId: string;
   achievementName: string;
   description: string;
+  iconUrl: string | null;
   categoryId: "15271";
 }>;
 
@@ -14,6 +15,62 @@ export type FetchCuttingEdgeAchievementsOptions = Readonly<{
   region?: string;
   locale?: string;
 }>;
+
+const historicalAchievementIds = [
+  "7485",
+  "7486",
+  "7487",
+  "8238",
+  "8260",
+  "8400",
+  "8401",
+  "9442",
+  "9443",
+  "10045",
+  "11191",
+  "11580",
+  "11192",
+  "11875",
+  "12111",
+  "12535",
+  "13323",
+  "13419",
+  "13785",
+  "14069",
+  "14461",
+  "15135",
+  "15471",
+  "17108",
+  "18254",
+  "19351",
+  "40254",
+  "41297",
+  "41625",
+  "61492",
+  "61625",
+  "61627",
+  "63651"
+] as const;
+const historicalOrder = new Map<string, number>(
+  historicalAchievementIds.map((achievementId, index) => [achievementId, index])
+);
+
+export function sortCuttingEdgeAchievementsChronologically(
+  achievements: readonly GeneratedCuttingEdgeAchievement[]
+): readonly GeneratedCuttingEdgeAchievement[] {
+  for (const achievement of achievements) {
+    if (!historicalOrder.has(achievement.achievementId)) {
+      throw new Error(
+        `cutting_edge_chronology_missing_${achievement.achievementId}`
+      );
+    }
+  }
+  return [...achievements].sort(
+    (a, b) =>
+      historicalOrder.get(a.achievementId)! -
+      historicalOrder.get(b.achievementId)!
+  );
+}
 
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -50,6 +107,14 @@ async function jsonRequest(
   return body;
 }
 
+function mediaAsset(media: JsonRecord, key: string): string | null {
+  if (!Array.isArray(media.assets)) return null;
+  const asset = media.assets
+    .map(record)
+    .find((candidate) => candidate?.key === key);
+  return asset ? nonEmptyString(asset.value) : null;
+}
+
 function categoryContainsRaids(category: JsonRecord): boolean {
   const categories = category.subcategories;
   if (!Array.isArray(categories)) return false;
@@ -78,10 +143,12 @@ async function fetchDefinition(
   ) {
     throw new Error("cutting_edge_achievement_invalid");
   }
+  const media = await jsonRequest(options, `/data/wow/media/achievement/${id}`);
   return {
     achievementId: String(id),
     achievementName,
     description,
+    iconUrl: mediaAsset(media, "icon"),
     categoryId: "15271"
   };
 }
@@ -102,14 +169,15 @@ export async function fetchCuttingEdgeAchievements(
   }
   const entries = raids.achievements;
   if (!Array.isArray(entries)) throw new Error("cutting_edge_category_invalid");
-  const ids = entries.flatMap((entry) => {
-    const candidate = record(entry);
-    const id = positiveInteger(candidate?.id);
-    const name = nonEmptyString(candidate?.name);
-    return id !== null && name?.startsWith("Cutting Edge:") ? [id] : [];
-  });
-  return Promise.all(ids.map((id) => fetchDefinition(options, id))).then(
-    (items) =>
-      items.sort((a, b) => Number(a.achievementId) - Number(b.achievementId))
+  const ids = new Set(
+    entries.flatMap((entry) => {
+      const candidate = record(entry);
+      const id = positiveInteger(candidate?.id);
+      const name = nonEmptyString(candidate?.name);
+      return id !== null && name?.startsWith("Cutting Edge:") ? [id] : [];
+    })
+  );
+  return Promise.all([...ids].map((id) => fetchDefinition(options, id))).then(
+    sortCuttingEdgeAchievementsChronologically
   );
 }

@@ -1,11 +1,18 @@
+import Link from "next/link";
+
 import { Logo } from "./logo";
 
 export function SiteHeader() {
   return (
     <header className="site-header">
-      <span className="header-logo" aria-label="Who">
+      <Link href="/" className="header-logo" aria-label="SlashWho home">
         <Logo className="header-logo-mark" />
-      </span>
+      </Link>
+      <nav aria-label="Primary" className="site-nav">
+        <Link href="/changelog" className="site-nav-link">
+          Changelog
+        </Link>
+      </nav>
     </header>
   );
 }

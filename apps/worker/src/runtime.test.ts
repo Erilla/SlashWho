@@ -1,4 +1,6 @@
 import type {
+  ApplicantEvidenceJobHandler,
+  ApplicantEvidenceJobHandlerOptions,
   DiscoveryJobHandler,
   DiscoveryJobHandlerOptions
 } from "@slashwho/application";
@@ -10,6 +12,7 @@ import type {
   Repositories
 } from "@slashwho/database";
 import type { RaiderIoGateway } from "@slashwho/domain";
+import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
@@ -32,6 +35,9 @@ const config: WorkerConfig = {
   raiderIoTimeoutMs: 5_000,
   blizzardClientId: "worker-client-id",
   blizzardClientSecret: "worker-client-secret",
+  warcraftLogsClientId: "warcraft-logs-client-id",
+  warcraftLogsClientSecret: "warcraft-logs-client-secret",
+  evidenceRequestCap: 500,
   blizzardSweepRequestCap: 300,
   blizzardHourlyRequestBudget: 28_800,
   fingerprintMinimumCommon: 200,
@@ -51,6 +57,12 @@ function runtimeFakes() {
     | undefined;
   let maintenanceHandler: (() => Promise<void>) | undefined;
   let admissionHandler: ((runId: string) => Promise<void>) | undefined;
+  let evidenceWorkHandler:
+    | ((
+        payload: { runId: string },
+        context: DiscoveryWorkContext
+      ) => Promise<void>)
+    | undefined;
   const pendingDispatches: DiscoverCharacterJob[] = [];
   const recoveredDispatches: string[] = [];
   const enqueued: DiscoverCharacterJob[] = [];
@@ -71,6 +83,9 @@ function runtimeFakes() {
       fingerprintAdmissions.push(runId);
       return runId;
     },
+    async enqueueCharacterEvidence(runId) {
+      return runId;
+    },
     async work(handler) {
       workHandler = handler;
     },
@@ -80,6 +95,9 @@ function runtimeFakes() {
     async workFingerprintAdmissions(handler) {
       admissionHandler = handler;
     },
+    async workCharacterEvidence(handler) {
+      evidenceWorkHandler = handler;
+    },
     async stop() {
       queueReady = false;
     },
@@ -88,6 +106,9 @@ function runtimeFakes() {
     }
   };
   const handler: DiscoveryJobHandler = { execute: vi.fn(async () => {}) };
+  const evidenceHandler: ApplicantEvidenceJobHandler = {
+    execute: vi.fn(async () => {})
+  };
   const pool = {
     async query() {
       connectionAttempts += 1;
@@ -103,9 +124,30 @@ function runtimeFakes() {
     rateLimits: vi.fn(async () => 2),
     negativeCache: vi.fn(async () => 3),
     suppressions: vi.fn(async () => 4),
-    fingerprintRequests: vi.fn(async () => 5)
+    fingerprintRequests: vi.fn(async () => 5),
+    evidence: vi.fn(async () => 6)
   };
   const repositories = {
+    evidence: {
+      cleanupExpired: cleanup.evidence,
+      async find() {
+        return null;
+      },
+      async claim() {
+        return null;
+      },
+      async publish() {},
+      async fail() {},
+      async reserve() {
+        return { kind: "existing" as const, run: null };
+      },
+      async getCompleted() {
+        return null;
+      },
+      async listStatus() {
+        return [];
+      }
+    },
     searchReservations: {
       async listPending() {
         return [...pendingDispatches];
@@ -146,6 +188,12 @@ function runtimeFakes() {
       createRepositories: () => repositories,
       createQueue: () => queue,
       createGateway: () => ({}) as RaiderIoGateway,
+      createEvidenceGateway: () =>
+        ({}) as Pick<WarcraftLogsGateway, "getFirstKillReports">,
+      createEvidenceHandler: (options: ApplicantEvidenceJobHandlerOptions) => {
+        void options;
+        return evidenceHandler;
+      },
       createHandler: (options: DiscoveryJobHandlerOptions) => {
         void options;
         return handler;
@@ -155,6 +203,7 @@ function runtimeFakes() {
       }
     },
     handler,
+    evidenceHandler,
     migrations,
     cleanup,
     repositories,
@@ -181,6 +230,9 @@ function runtimeFakes() {
     },
     get admissionHandler() {
       return admissionHandler;
+    },
+    get evidenceWorkHandler() {
+      return evidenceWorkHandler;
     },
     sleeps
   };
@@ -354,6 +406,47 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("registers worker-owned Warcraft Logs evidence collection", async () => {
+    // Break caught: evidence jobs could be queued successfully but no worker
+    // would ever claim them, leaving dossier history permanently stale.
+    const fakes = runtimeFakes();
+    let handlerOptions: ApplicantEvidenceJobHandlerOptions | undefined;
+    const warcraftLogs = {} as Pick<WarcraftLogsGateway, "getFirstKillReports">;
+    Object.assign(fakes.dependencies, {
+      createEvidenceGateway: () => warcraftLogs,
+      createEvidenceHandler(options: ApplicantEvidenceJobHandlerOptions) {
+        handlerOptions = options;
+        return fakes.evidenceHandler;
+      }
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    const context = {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    };
+
+    expect(handlerOptions).toMatchObject({
+      warcraftLogs,
+      requestCap: 500,
+      evidence: (
+        fakes.repositories as typeof fakes.repositories & {
+          evidence: unknown;
+        }
+      ).evidence
+    });
+    await fakes.evidenceWorkHandler?.(
+      { runId: "00000000-0000-4000-8000-000000000006" },
+      context
+    );
+    expect(fakes.evidenceHandler.execute).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000006",
+      context
+    );
+    await runtime.stop();
+  });
+
   it("routes only run ids to the handler", async () => {
     // Break caught: private character lookup values could be forwarded into logs or handlers.
     const fakes = runtimeFakes();
@@ -390,6 +483,7 @@ describe("worker runtime", () => {
     expect(fakes.cleanup.negativeCache).toHaveBeenCalledOnce();
     expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
     expect(fakes.cleanup.fingerprintRequests).toHaveBeenCalledOnce();
+    expect(fakes.cleanup.evidence).toHaveBeenCalledOnce();
     await runtime.stop();
   });
 

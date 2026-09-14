@@ -166,9 +166,27 @@ export interface StoredCharacterMythicKill extends CharacterMythicKillInput {
   id: string;
 }
 
+export interface CharacterMythicWipeInput {
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  journalBossId: string | null;
+  bossOrder: number;
+  attemptedAt: string;
+  reportUrl: string;
+  fightUrl: string;
+}
+
+export interface StoredCharacterMythicWipe extends CharacterMythicWipeInput {
+  id: string;
+}
+
 export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
   kills: readonly StoredCharacterMythicKill[];
+  wipes: readonly StoredCharacterMythicWipe[];
+  wipeCapable: boolean;
 }
 
 export type EvidenceReservationResult =
@@ -203,6 +221,7 @@ export interface EvidenceRepository {
       state: "complete" | "partial";
       limitationCode: string | null;
       kills: readonly CharacterMythicKillInput[];
+      wipes: readonly CharacterMythicWipeInput[];
       completedAt: Date;
     }
   ): Promise<void>;

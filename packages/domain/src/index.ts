@@ -6,6 +6,8 @@ export {
   toRaiderIoUrl
 } from "./character-key";
 export type { CharacterKey, Region } from "./character-key";
+export { formatCharacterDisplayName } from "./display-name";
+export { lookupRaiderIoBoss, supportedRaidCatalogue } from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,
@@ -13,15 +15,30 @@ export type {
   ApplicantDossierCuttingEdge,
   ApplicantDossierFirstKill,
   ApplicantDossierRaid,
+  ApplicantDossierWipe,
   BuildApplicantDossierInput,
   DossierCharacter,
   DossierCuttingEdgeEvidence,
   DossierKillEvidence,
-  DossierLimitation
+  DossierLimitation,
+  DossierWipeEvidence
 } from "./applicant-dossier";
+export type {
+  RaidCatalogueEncounter,
+  RaidCatalogueRaid,
+  SupportedRaidCatalogueEntry
+} from "./raid-catalogue";
 export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
-export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
 export { isAccountWideCuttingEdgeAchievement } from "./cutting-edge-catalogue";
+export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
+export {
+  buildBoundedCuttingEdgeSequence,
+  lookupCuttingEdgeAchievement
+} from "./cutting-edge-catalogue";
+export type {
+  CuttingEdgeCatalogueAchievement,
+  CuttingEdgeSequenceEntry
+} from "./cutting-edge-catalogue";
 export { discoverCharacter } from "./discovery";
 export type {
   DiscoverCharacterOptions,

@@ -12,7 +12,7 @@
     "@slashwho/domain": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.22.0",
-    "pg-boss": "^12.27.0",
+    "pg-boss": "12.27.0",
     "tsx": "4.23.5"
   },
   "devDependencies": {
