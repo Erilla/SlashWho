@@ -210,19 +210,19 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
 
   await boss.getByText("View kill evidence").click();
   const evidence = boss.getByRole("region", { name: "Kill evidence" });
-  const firstEventParses = evidence.getByRole("region", {
+  const latestEventParses = evidence.getByRole("region", {
     name: "First kill parses"
   });
-  const laterEventParses = evidence.getByRole("region", {
+  const earlierEventParses = evidence.getByRole("region", {
     name: "Kill parses",
     exact: true
   });
   await expect(
-    firstEventParses.getByRole("link", { name: "Damage 99.2 percentile" })
-  ).toHaveAttribute("href", /e2eReport#fight=10$/);
-  await expect(
-    laterEventParses.getByRole("link", { name: "Damage 100th percentile" })
+    latestEventParses.getByRole("link", { name: "Damage 100th percentile" })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
+  await expect(
+    earlierEventParses.getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await firstKillParses.scrollIntoViewIfNeeded();
@@ -239,22 +239,22 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
     bestParses.getByRole("link", { name: "Damage 100th percentile" })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
 
-  await firstEventParses.scrollIntoViewIfNeeded();
-  await expect(firstEventParses).toBeVisible();
-  await expect(firstEventParses).toBeInViewport();
+  await latestEventParses.scrollIntoViewIfNeeded();
+  await expect(latestEventParses).toBeVisible();
+  await expect(latestEventParses).toBeInViewport();
   await expect(
-    firstEventParses.getByRole("link", {
-      name: "Damage 99.2 percentile"
-    })
-  ).toHaveAttribute("href", /e2eReport#fight=10$/);
-  await laterEventParses.scrollIntoViewIfNeeded();
-  await expect(laterEventParses).toBeVisible();
-  await expect(laterEventParses).toBeInViewport();
-  await expect(
-    laterEventParses.getByRole("link", {
+    latestEventParses.getByRole("link", {
       name: "Damage 100th percentile"
     })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
+  await earlierEventParses.scrollIntoViewIfNeeded();
+  await expect(earlierEventParses).toBeVisible();
+  await expect(earlierEventParses).toBeInViewport();
+  await expect(
+    earlierEventParses.getByRole("link", {
+      name: "Damage 99.2 percentile"
+    })
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
