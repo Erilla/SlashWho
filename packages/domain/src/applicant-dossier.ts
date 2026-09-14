@@ -122,80 +122,46 @@ function compareEvidence(
   );
 }
 function sharedEvidenceKey(k: DossierKillEvidence): string {
-  // A participant can only share evidence when the source identifies the same
-  // fight. Timestamp-only evidence cannot prove that two character kills were
-  // the same event, so it remains distinct per character.
+  // Preserve the narrow legacy identity only when a malformed timestamp cannot
+  // supply the UTC date required by the normal grouping rule.
   return k.reportUrl === null
     ? `character\0${canonicalCharacterId(k.character)}\0${k.killedAt}`
     : `report\0${k.reportUrl}`;
 }
 
-function sameGuildKill(
-  a: DossierKillEvidence,
-  b: DossierKillEvidence
-): boolean {
-  if (
-    a.guild === null ||
-    b.guild === null ||
-    a.reportUrl === null ||
-    b.reportUrl === null
-  )
-    return false;
-  const aTime = Date.parse(a.killedAt);
-  const bTime = Date.parse(b.killedAt);
+function killEventKey(kill: DossierKillEvidence): string {
+  const timestamp = Date.parse(kill.killedAt);
+  if (!Number.isFinite(timestamp))
+    return [kill.character.region, sharedEvidenceKey(kill)].join("\0");
+  // The dossier deliberately treats same-region, same-date evidence as one
+  // simplified event. Distinct same-day reclears may therefore be merged.
+  const utcDate = new Date(timestamp).toISOString().slice(0, 10);
+  return [kill.character.region, utcDate].join("\0");
+}
+
+function compareAttributedGuild(
+  a: NonNullable<DossierKillEvidence["guild"]>,
+  b: NonNullable<DossierKillEvidence["guild"]>
+): number {
   return (
-    Number.isFinite(aTime) &&
-    Number.isFinite(bTime) &&
-    a.guild.name.trim().toLocaleLowerCase("en-US") ===
-      b.guild.name.trim().toLocaleLowerCase("en-US") &&
-    a.guild.realm.trim().toLocaleLowerCase("en-US") ===
-      b.guild.realm.trim().toLocaleLowerCase("en-US") &&
-    a.character.region === b.character.region &&
-    Math.abs(aTime - bTime) <= 5_000
+    text(normalizedGuildText(a.name), normalizedGuildText(b.name)) ||
+    text(normalizedGuildText(a.realm), normalizedGuildText(b.realm)) ||
+    text(a.name, b.name) ||
+    text(a.realm, b.realm)
   );
 }
 
-function canCombineKills(
-  left: readonly DossierKillEvidence[],
-  right: readonly DossierKillEvidence[]
+function normalizedGuildText(value: string): string {
+  return value.trim().toLocaleLowerCase("en-US");
+}
+
+function sameAttributedGuild(
+  a: NonNullable<DossierKillEvidence["guild"]>,
+  b: NonNullable<DossierKillEvidence["guild"]>
 ): boolean {
-  const group = [...left, ...right];
-  const first = group[0]!;
-  if (group.some((k) => k.character.region !== first.character.region))
-    return false;
-  const guild = group.find((k) => k.guild)?.guild;
-  // Conflicting attribution cannot be resolved by another uploader's missing guild.
-  if (
-    group.some(
-      (k) =>
-        k.guild &&
-        guild &&
-        (k.guild.name.trim().toLocaleLowerCase("en-US") !==
-          guild.name.trim().toLocaleLowerCase("en-US") ||
-          k.guild.realm.trim().toLocaleLowerCase("en-US") !==
-            guild.realm.trim().toLocaleLowerCase("en-US"))
-    )
-  )
-    return false;
-  if (group.every((k) => sharedEvidenceKey(k) === sharedEvidenceKey(first)))
-    return true;
-  if (group.some((k) => !k.reportUrl)) return false;
-  // Five seconds covers observed uploader clock differences. Check the entire
-  // group, not just the last report, so nearby events cannot chain together.
-  const times = group.map((k) => Date.parse(k.killedAt));
-  if (
-    !times.every(Number.isFinite) ||
-    Math.max(...times) - Math.min(...times) > 5_000
-  )
-    return false;
-  return left.some((a) =>
-    right.some(
-      (b) =>
-        sharedEvidenceKey(a) === sharedEvidenceKey(b) ||
-        canonicalCharacterId(a.character) ===
-          canonicalCharacterId(b.character) ||
-        sameGuildKill(a, b)
-    )
+  return (
+    normalizedGuildText(a.name) === normalizedGuildText(b.name) &&
+    normalizedGuildText(a.realm) === normalizedGuildText(b.realm)
   );
 }
 
@@ -271,28 +237,27 @@ export function buildApplicantDossier(
     }
   >();
   for (const kills of byBoss.values()) {
-    const groupedEvidence: DossierKillEvidence[][] = [];
+    const groupedEvidence = new Map<string, DossierKillEvidence[]>();
     for (const kill of [...kills].sort(compareEvidence)) {
-      const group = [kill];
-      // A newly observed participant can connect two existing report groups.
-      // Recheck the full union each time, preserving the bounded time span.
-      for (let index = 0; index < groupedEvidence.length;) {
-        if (canCombineKills(groupedEvidence[index]!, group)) {
-          group.push(...groupedEvidence.splice(index, 1)[0]!);
-          index = 0;
-        } else index += 1;
-      }
-      groupedEvidence.push(group.sort(compareEvidence));
+      const key = killEventKey(kill);
+      groupedEvidence.set(key, [...(groupedEvidence.get(key) ?? []), kill]);
     }
-    const firstKills = groupedEvidence
+    const firstKills = [...groupedEvidence.values()]
       .map((shared) => {
         const selected = [...shared].sort(compareEvidence)[0]!;
+        const attributed = shared
+          .flatMap((k) => (k.guild === null ? [] : [k.guild]))
+          .sort(compareAttributedGuild)[0];
         const ranks = new Set(
           shared.flatMap((k) =>
-            k.historicWorldRank === null ? [] : [k.historicWorldRank]
+            attributed !== undefined &&
+            k.guild !== null &&
+            sameAttributedGuild(k.guild, attributed) &&
+            k.historicWorldRank !== null
+              ? [k.historicWorldRank]
+              : []
           )
         );
-        const attributed = shared.find((k) => k.guild !== null);
         const reportUrls = [
           ...new Set(shared.flatMap((k) => (k.reportUrl ? [k.reportUrl] : [])))
         ].sort(text);
@@ -303,7 +268,7 @@ export function buildApplicantDossier(
           selected,
           firstKill: {
             killedAt: selected.killedAt,
-            guild: attributed?.guild ?? null,
+            guild: attributed ?? null,
             historicWorldRank: ranks.size === 1 ? [...ranks][0]! : null,
             reportUrl: selected.reportUrl,
             reportUrls,

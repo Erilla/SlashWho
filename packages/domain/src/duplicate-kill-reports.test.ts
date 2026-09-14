@@ -51,26 +51,35 @@ it("combines recorded Nekzali timestamps while retaining guild, rank and all rep
   ]);
   expect(events([...kills].reverse())).toEqual(events(kills));
 });
-it("bounds duplicate groups to five seconds without timestamp chaining or same-day merging", () => {
-  const kills = [0, 5000, 5001, 10000, 3600000].map((offset, index) => ({
-    ...base,
-    killedAt: new Date(Date.parse(base.killedAt) + offset).toISOString(),
-    reportUrl: `https://www.warcraftlogs.com/reports/r${index}#fight=1`
-  }));
+it("groups the full UTC date and starts a new event at midnight", () => {
+  const kills = [
+    { ...base, killedAt: "2026-08-23T00:00:00.000Z" },
+    { ...second, killedAt: "2026-08-23T23:59:59.999Z" },
+    { ...third, killedAt: "2026-08-24T00:00:00.000Z" }
+  ];
   expect(events(kills).map((k) => k.killedAt)).toEqual([
     kills[0]!.killedAt,
-    kills[2]!.killedAt,
-    kills[4]!.killedAt
+    kills[2]!.killedAt
   ]);
   expect(events([...kills].reverse())).toEqual(events(kills));
 });
 it.each([
   { guild: { name: "Other", realm: "draenor" } },
   { guild: { name: "Rancour", realm: "silvermoon" } },
-  { character: { ...character, region: "us" as const } },
   { character: { ...character, name: "unrelated" }, guild: null }
-])("keeps incompatible evidence separate: %j", (change) => {
-  expect(events([second, { ...third, ...change }])).toHaveLength(2);
+])(
+  "groups same-date evidence despite attribution differences: %j",
+  (change) => {
+    expect(events([second, { ...third, ...change }])).toHaveLength(1);
+  }
+);
+it("keeps evidence from different regions separate", () => {
+  expect(
+    events([
+      second,
+      { ...third, character: { ...character, region: "us" as const } }
+    ])
+  ).toHaveLength(2);
 });
 it("does not pick an arbitrary conflicting rank and keeps unique links", () => {
   expect(
@@ -92,12 +101,12 @@ it("does not lend a verified first-kill rank to a later reclear", () => {
   ).toEqual([48, null]);
 });
 
-it("merges groups when a shared report supplies the missing participant connection", () => {
+it("groups same-date participants without requiring a shared report", () => {
   const other = { ...character, name: "ryrn" };
   const kills = [
     { ...base, character: other },
-    { ...third, character, reportUrl: second.reportUrl },
-    { ...third, character: other, reportUrl: second.reportUrl }
+    { ...second, character },
+    { ...third, character: other }
   ];
   expect(events(kills)).toHaveLength(1);
   expect(events([...kills].reverse())).toEqual(events(kills));
