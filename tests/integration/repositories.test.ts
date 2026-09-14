@@ -215,7 +215,85 @@ describe("PostgreSQL repositories", () => {
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
       ],
-      wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })]
+      wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })],
+      wipeCapable: true
+    });
+  });
+
+  it("recovers complete evidence hidden behind a legacy partial refresh", async () => {
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: [mythicKill()],
+      wipes: [mythicWipe()],
+      completedAt: new Date("2026-08-04T12:00:00.000Z")
+    });
+    await pool.query(
+      `INSERT INTO character_evidence_runs
+        (region, realm_slug, normalized_name, status, limitation_code, completed_at)
+       VALUES ($1, $2, $3, 'partial', 'request_cap', $4)`,
+      [
+        rootKey.region,
+        rootKey.realm,
+        rootKey.name,
+        new Date("2026-08-04T12:30:00.000Z")
+      ]
+    );
+    const refresh = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:31:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (refresh.kind !== "reserved") throw new Error("evidence_not_reserved");
+
+    await repositories.evidence.publish(refresh.run.id, {
+      state: "partial",
+      limitationCode: "schema_drift",
+      kills: [],
+      wipes: [],
+      completedAt: new Date("2026-08-04T13:01:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.getCompleted(rootKey)
+    ).resolves.toMatchObject({
+      run: { id: refresh.run.id, status: "partial" },
+      kills: [mythicKill()],
+      wipes: [mythicWipe()],
+      wipeCapable: true
+    });
+  });
+
+  it("marks pre-wipe-schema evidence as incapable of negative conclusions", async () => {
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      completedAt: new Date("2026-08-04T12:00:00.000Z")
+    });
+    await pool.query(
+      "UPDATE character_evidence_runs SET evidence_version = 1 WHERE id = $1",
+      [reserved.run.id]
+    );
+
+    await expect(
+      repositories.evidence.getCompleted(rootKey)
+    ).resolves.toMatchObject({
+      wipeCapable: false,
+      kills: [mythicKill()]
     });
   });
 

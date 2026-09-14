@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
   CharacterEvidenceRun,
+  CharacterMythicKillInput,
   CompletedCharacterEvidence,
   EvidenceReservationResult,
   CreateSnapshotInput,
@@ -68,6 +69,7 @@ interface EvidenceRunRow {
   normalized_name: string;
   queue_job_id: string | null;
   status: CharacterEvidenceRun["status"];
+  evidence_version: number;
   attempt: number;
   limitation_code: string | null;
   error_code: string | null;
@@ -340,7 +342,7 @@ async function loadCompletedEvidence(
 ): Promise<CompletedCharacterEvidence | null> {
   const runResult = await client.query<EvidenceRunRow>(
     `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-            attempt, limitation_code, error_code, created_at, started_at,
+            evidence_version, attempt, limitation_code, error_code, created_at, started_at,
             completed_at
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -372,7 +374,51 @@ async function loadCompletedEvidence(
   return {
     run: mapEvidenceRun(run),
     kills: killsResult.rows.map(mapCharacterMythicKill),
-    wipes: wipesResult.rows.map(mapCharacterMythicWipe)
+    wipes: wipesResult.rows.map(mapCharacterMythicWipe),
+    wipeCapable: run.evidence_version >= 2
+  };
+}
+
+async function loadPositiveEvidenceForPartial(
+  client: Queryable,
+  key: CharacterKey
+): Promise<{
+  kills: readonly StoredCharacterMythicKill[];
+  wipes: readonly StoredCharacterMythicWipe[];
+}> {
+  const runs = await client.query<Pick<EvidenceRunRow, "id" | "status">>(
+    `SELECT id, status
+     FROM character_evidence_runs
+     WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+       AND status IN ('complete', 'partial')
+     ORDER BY completed_at DESC, id DESC`,
+    [key.region, key.realm, key.name]
+  );
+  const baselineIndex = runs.rows.findIndex((run) => run.status === "complete");
+  const relevantRuns =
+    baselineIndex === -1 ? runs.rows : runs.rows.slice(0, baselineIndex + 1);
+  const runIds = relevantRuns.map((run) => run.id);
+  if (runIds.length === 0) return { kills: [], wipes: [] };
+  const kills = await client.query<CharacterMythicKillRow>(
+    `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
+            boss_order, is_final_boss, killed_at, report_url, fight_url,
+            guild_name, guild_realm, historic_world_rank
+     FROM character_mythic_kills
+     WHERE evidence_run_id = ANY($1::uuid[])
+     ORDER BY killed_at, source_fight_key`,
+    [runIds]
+  );
+  const wipes = await client.query<CharacterMythicWipeRow>(
+    `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
+            boss_order, attempted_at, report_url, fight_url
+     FROM character_mythic_wipes
+     WHERE evidence_run_id = ANY($1::uuid[])
+     ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
+    [runIds]
+  );
+  return {
+    kills: kills.rows.map(mapCharacterMythicKill),
+    wipes: wipes.rows.map(mapCharacterMythicWipe)
   };
 }
 
@@ -1843,8 +1889,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const client = await pool.connect();
         try {
           await client.query("BEGIN");
-          const active = await client.query<{ id: string }>(
-            `SELECT id FROM character_evidence_runs
+          const active = await client.query<{
+            id: string;
+            region: CharacterKey["region"];
+            realm_slug: string;
+            normalized_name: string;
+          }>(
+            `SELECT id, region, realm_slug, normalized_name
+             FROM character_evidence_runs
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
              FOR UPDATE`,
             [runId]
@@ -1852,7 +1904,33 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           if (active.rowCount !== 1) {
             throw new Error("character_evidence_run_not_active");
           }
-          for (const kill of input.kills) {
+          const activeRun = active.rows[0]!;
+          const previous =
+            input.state === "partial"
+              ? await loadPositiveEvidenceForPartial(client, {
+                  region: activeRun.region,
+                  realm: activeRun.realm_slug,
+                  name: activeRun.normalized_name
+                })
+              : null;
+          const kills = new Map<string, CharacterMythicKillInput>(
+            previous?.kills.map((kill) => [kill.fightUrl, kill]) ?? []
+          );
+          for (const kill of input.kills) kills.set(kill.fightUrl, kill);
+          const wipes = new Map<string, (typeof input.wipes)[number]>();
+          for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
+            const identifier = `${wipe.raidId}\0${wipe.bossId}`;
+            const current = wipes.get(identifier);
+            if (
+              !current ||
+              wipe.attemptedAt > current.attemptedAt ||
+              (wipe.attemptedAt === current.attemptedAt &&
+                wipe.fightUrl < current.fightUrl)
+            ) {
+              wipes.set(identifier, wipe);
+            }
+          }
+          for (const kill of kills.values()) {
             if (
               kill.guild !== null &&
               (kill.guild.name.length === 0 || kill.guild.realm.length === 0)
@@ -1884,7 +1962,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               ]
             );
           }
-          for (const wipe of input.wipes) {
+          for (const wipe of wipes.values()) {
             await client.query(
               `INSERT INTO character_mythic_wipes
                 (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
@@ -1907,7 +1985,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, error_code = NULL,
-                 completed_at = $4
+                 completed_at = $4, evidence_version = 2
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [runId, input.state, input.limitationCode, input.completedAt]
           );

@@ -351,6 +351,7 @@ export const characterEvidenceRuns = pgTable(
     normalizedName: text("normalized_name").notNull(),
     queueJobId: text("queue_job_id"),
     status: characterEvidenceRunStatus("status").default("queued").notNull(),
+    evidenceVersion: integer("evidence_version").default(1).notNull(),
     attempt: integer("attempt").default(0).notNull(),
     limitationCode: text("limitation_code"),
     errorCode: text("error_code"),

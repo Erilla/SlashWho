@@ -50,6 +50,13 @@
       "when": 1789378831840,
       "tag": "0006_character_mythic_wipes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789382068697,
+      "tag": "0007_wipe_capable_evidence",
+      "breakpoints": true
     }
   ]
 }

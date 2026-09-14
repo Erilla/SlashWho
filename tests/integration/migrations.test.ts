@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../packages/database/src";
@@ -99,5 +101,35 @@ describe("database migrations", () => {
         values
       )
     ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("keeps both legacy and newly reserved evidence at version one", async () => {
+    // Break caught: applying the wipe-aware migration could falsely certify
+    // pre-existing scans that never collected wipe evidence.
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+    await pool.query(
+      "CREATE TABLE character_evidence_runs (id integer PRIMARY KEY)"
+    );
+    await pool.query("INSERT INTO character_evidence_runs (id) VALUES (1)");
+    const migration = readFileSync(
+      new URL(
+        "../../packages/database/drizzle/0007_wipe_capable_evidence.sql",
+        import.meta.url
+      ),
+      "utf8"
+    );
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      if (statement.trim()) await pool.query(statement);
+    }
+    await pool.query("INSERT INTO character_evidence_runs (id) VALUES (2)");
+
+    const versions = await pool.query<{ id: number; evidence_version: number }>(
+      "SELECT id, evidence_version FROM character_evidence_runs ORDER BY id"
+    );
+    expect(versions.rows).toEqual([
+      { id: 1, evidence_version: 1 },
+      { id: 2, evidence_version: 1 }
+    ]);
   });
 });

@@ -229,7 +229,8 @@ async function gatherCharacterEvidence(
     warcraftLogsComplete:
       reservation.kind === "fresh" &&
       completed?.run.status === "complete" &&
-      completed.run.limitationCode === null,
+      completed.run.limitationCode === null &&
+      completed.wipeCapable,
     cuttingEdges:
       blizzard.kind === "evidence"
         ? blizzard.achievements.map((achievement) => ({

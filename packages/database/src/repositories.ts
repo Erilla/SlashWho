@@ -186,6 +186,7 @@ export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
   kills: readonly StoredCharacterMythicKill[];
   wipes: readonly StoredCharacterMythicWipe[];
+  wipeCapable: boolean;
 }
 
 export type EvidenceReservationResult =

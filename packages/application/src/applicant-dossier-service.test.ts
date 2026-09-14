@@ -64,6 +64,7 @@ function fixture(
     wipes?: readonly StoredCharacterMythicWipe[];
     includeCachedKills?: boolean;
     evidenceStatus?: "complete" | "partial";
+    wipeCapable?: boolean;
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -133,7 +134,8 @@ function fixture(
             ...(options.includeCachedKills === false ? [] : cachedKills),
             ...(options.additionalKills ?? [])
           ],
-          wipes: options.wipes ?? []
+          wipes: options.wipes ?? [],
+          wipeCapable: options.wipeCapable ?? true
         }
       })),
       markEnqueued
@@ -285,6 +287,15 @@ describe("applicant dossier service", () => {
     }).dossiers.read(root);
     if (partial.kind !== "ready") throw new Error("dossier_not_ready");
     expect(partial.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "incomplete"
+    });
+
+    const legacy = await fixture({
+      includeCachedKills: false,
+      wipeCapable: false
+    }).dossiers.read(root);
+    if (legacy.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(legacy.dossier.raids[0]?.bosses[0]).toMatchObject({
       state: "incomplete"
     });
   });

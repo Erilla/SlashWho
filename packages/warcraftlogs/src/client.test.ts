@@ -879,6 +879,101 @@ describe("Warcraft Logs gateway", () => {
       expect(result.kills.length).toBeGreaterThan(0);
   });
 
+  it("retains evidence collected before a malformed report on the same page", async () => {
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: { data: Array<Record<string, unknown>> };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data.push({
+      code: null
+    });
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: expect.arrayContaining([
+        expect.objectContaining({
+          fightUrl: expect.stringContaining("earlyReport#fight=7")
+        })
+      ]),
+      limitation: { code: "schema_drift" }
+    });
+  });
+
+  it("retains evidence collected before a malformed fight in the same report", async () => {
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: {
+              data: Array<{ fights: Array<Record<string, unknown>> }>;
+            };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data[0]!.fights.push({
+      id: null
+    });
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ fightUrl: expect.stringContaining("earlyReport#fight=7") }],
+      limitation: { code: "schema_drift" }
+    });
+  });
+
+  it.each([
+    ["missing start", undefined, 3_600_000],
+    ["reversed interval", 3_600_001, 3_600_000]
+  ])("rejects a fight with a %s", async (_label, startTime, endTime) => {
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: {
+              data: Array<{ fights: Array<Record<string, unknown>> }>;
+            };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data = [
+      page.data.characterData.character.recentReports.data[0]!
+    ];
+    const fight =
+      page.data.characterData.character.recentReports.data[0]!.fights[0]!;
+    fight.startTime = startTime;
+    fight.endTime = endTime;
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1 })
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+  });
+
   it("retains collected kills when the history deadline expires", async () => {
     const firstPage = (
       fixture("character-report-valid") as { pages: unknown[] }
