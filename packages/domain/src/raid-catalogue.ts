@@ -35,6 +35,7 @@ const currentContentWindows = new Map<string, RaidCurrentContentWindow>([
   ["1307", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
   ["1308", { startsAt: "2026-03-31T00:00:00.000Z", endsAt: null }],
   ["1314", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
+  ["1317", { startsAt: "2026-08-19T00:00:00.000Z", endsAt: null }],
   ["1320", { startsAt: "2026-08-01T00:00:00.000Z", endsAt: null }]
 ]);
 

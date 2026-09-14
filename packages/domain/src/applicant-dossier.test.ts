@@ -75,6 +75,57 @@ function wipe(
 }
 
 describe("applicant dossier", () => {
+  it("retains Mythic Tidebound Grotto kills inside its reviewed content window", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "1317",
+          raidName: "The Tidebound Grotto",
+          bossId: "2849",
+          bossName: "Nymrissa Wavecaller",
+          journalBossId: "2849",
+          bossOrder: 1,
+          killedAt: "2026-08-19T00:00:00.000Z",
+          reportUrl:
+            "https://www.warcraftlogs.com/reports/V8LFB9HjR4pZYrb6#fight=27"
+        }),
+        kill(root, {
+          raidId: "1317",
+          raidName: "The Tidebound Grotto",
+          bossId: "2849",
+          bossName: "Nymrissa Wavecaller",
+          journalBossId: "2849",
+          bossOrder: 1,
+          killedAt: "2026-08-26T12:00:00.000Z",
+          reportUrl:
+            "https://www.warcraftlogs.com/reports/Aqc9zw1dg7jpmLkZ#fight=23"
+        })
+      ],
+      wipes: [],
+      completeWarcraftLogsCharacters: [root],
+      limitations: []
+    });
+
+    const boss = dossier.raids.find((raid) => raid.raidId === "1317")
+      ?.bosses[0];
+    expect(boss).toMatchObject({
+      state: "kill",
+      firstKill: {
+        reportUrl:
+          "https://www.warcraftlogs.com/reports/V8LFB9HjR4pZYrb6#fight=27"
+      }
+    });
+    if (boss?.state !== "kill") throw new Error("expected_kill");
+    expect(boss.firstKills.map((entry) => entry.reportUrl)).toEqual(
+      expect.arrayContaining([
+        "https://www.warcraftlogs.com/reports/V8LFB9HjR4pZYrb6#fight=27",
+        "https://www.warcraftlogs.com/reports/Aqc9zw1dg7jpmLkZ#fight=23"
+      ])
+    );
+  });
+
   it("aggregates the full catalogue with kill, wipe, no-log, and incomplete precedence", () => {
     // Break caught: missing kills must neither erase concrete wipes nor turn a
     // partial linked-character scan into negative evidence.
