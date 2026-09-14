@@ -350,6 +350,26 @@ so later normalization must retain this qualified cross-walk and reject a
 missing or non-unique canonical actor match. It must never fall back to a
 ranking-row name alone.
 
+The executable probe now performs that validation for every distinct ranking
+character ID (bounded at 50): it aliases `characterData.character(id: ...)`
+lookups, verifies the global ID plus canonical name/server/region against the
+ranking row, then requires exactly one matching Player actor. Realm comparison
+normalizes display separators (for example, a display space versus the
+canonical slug hyphen) but does not weaken the ID, name, region, or uniqueness
+checks. A successful post-validation run measured a nine-point delta; this
+includes the bounded canonical lookups and remains an operational sample only.
+
+### Unobserved failure states and decoder policy
+
+No credentialed private-report, archived-and-inaccessible-report, or malformed
+ranking JSON response was safely available in the test dossier selection.
+Those provider-specific shapes are therefore unobserved rather than inferred.
+The decoder policy is strict: malformed ranking JSON or an invalid/missing/
+mismatched/non-unique Character-to-actor bridge is rejected as schema drift;
+private, inaccessible, archived, or otherwise unavailable ranking responses
+produce an unavailable metric state. None of those states may become zero or
+`not_applicable` without independent role evidence.
+
 [api-docs]: https://www.warcraftlogs.com/api/docs
 [archive-status]: https://www.warcraftlogs.com/v2-api-docs/warcraft/reportarchivestatus.doc.html
 [archon-percentile]: https://www.archon.gg/wow/articles/help/archon-disclaimers-and-faq

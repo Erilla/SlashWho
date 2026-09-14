@@ -12,6 +12,7 @@ type SanitizationState = {
   names: Map<string, string>;
   realms: Map<string, string>;
   regions: Map<string, string>;
+  serverIds: Map<number, number>;
   actorIds: Map<number, number>;
   characterIds: Map<number, number>;
 };
@@ -63,6 +64,10 @@ function collectSensitiveValues(
     if (!state.characterIds.has(entry.id)) {
       state.characterIds.set(entry.id, 2000 + state.characterIds.size + 1);
     }
+  }
+  const server = record(entry.server);
+  if (typeof server?.id === "number" && !state.serverIds.has(server.id)) {
+    state.serverIds.set(server.id, 3000 + state.serverIds.size + 1);
   }
 
   for (const [key, child] of Object.entries(entry)) {
@@ -122,6 +127,10 @@ function masterActorRecord(value: Record<string, unknown>): boolean {
   return typeof value.type === "string" && typeof value.id === "number";
 }
 
+function serverRecord(value: Record<string, unknown>): boolean {
+  return typeof value.name === "string" && "region" in value;
+}
+
 function sanitizeNumber(
   value: number,
   owner: Record<string, unknown> | undefined,
@@ -138,6 +147,9 @@ function sanitizeNumber(
   }
   if (normalized === "id" && owner && rankedCharacterRecord(owner)) {
     return state.characterIds.get(value) ?? value;
+  }
+  if (normalized === "id" && owner && serverRecord(owner)) {
+    return state.serverIds.get(value) ?? value;
   }
   return value;
 }
@@ -171,6 +183,7 @@ export function sanitizeRankingsFixture(value: unknown): unknown {
     names: new Map(),
     realms: new Map(),
     regions: new Map(),
+    serverIds: new Map(),
     actorIds: new Map(),
     characterIds: new Map()
   };
@@ -227,6 +240,142 @@ export function parseContractProbeOptions(
     encounterId: positiveInteger(encounterId),
     difficulty: positiveInteger(difficulty)
   };
+}
+
+type RankingCharacterIdentity = Readonly<{
+  id: number;
+  name: string;
+  realm: string;
+  region: string;
+}>;
+
+function normalizedIdentityPart(value: string): string {
+  return value.toLocaleLowerCase("en-US");
+}
+
+function normalizedRealm(value: string): string {
+  return value.replaceAll(/[^\p{L}\p{N}]/gu, "").toLocaleLowerCase("en-US");
+}
+
+function rankingIdentities(
+  value: unknown
+): readonly RankingCharacterIdentity[] {
+  const report = record(record(record(value)?.data)?.reportData)?.report;
+  const reportRecord = record(report);
+  const metrics = ["damage", "healing", "bossDamage"];
+  const identities = new Map<number, RankingCharacterIdentity>();
+  for (const metric of metrics) {
+    const rows = record(reportRecord?.[metric])?.data;
+    if (!Array.isArray(rows)) continue;
+    for (const rowValue of rows) {
+      const roles = record(rowValue)?.roles;
+      if (!roles) continue;
+      for (const role of Object.values(roles)) {
+        const characters = record(role)?.characters;
+        if (!Array.isArray(characters)) continue;
+        for (const characterValue of characters) {
+          const character = record(characterValue);
+          const server = character && record(character.server);
+          const id = character?.id;
+          const name = character?.name;
+          const realm = server?.name;
+          const region = server?.region;
+          if (
+            typeof id !== "number" ||
+            !Number.isSafeInteger(id) ||
+            typeof name !== "string" ||
+            typeof realm !== "string" ||
+            typeof region !== "string"
+          ) {
+            throw new Error("ranking_identity_malformed");
+          }
+          const identity = { id, name, realm, region };
+          const existing = identities.get(id);
+          if (
+            existing &&
+            (existing.name !== name ||
+              existing.realm !== realm ||
+              existing.region !== region)
+          ) {
+            throw new Error("ranking_identity_mismatch");
+          }
+          identities.set(id, identity);
+        }
+      }
+    }
+  }
+  return [...identities.values()];
+}
+
+export function validateRankingIdentities(
+  rankings: unknown,
+  canonicalCharacters: ReadonlyMap<number, unknown>
+): void {
+  const report = record(record(record(rankings)?.data)?.reportData)?.report;
+  const actors = record(record(report)?.masterData)?.actors;
+  if (!Array.isArray(actors)) throw new Error("ranking_identity_malformed");
+
+  for (const identity of rankingIdentities(rankings)) {
+    const character = record(canonicalCharacters.get(identity.id));
+    const server = character && record(character.server);
+    const region = server && record(server.region);
+    if (!character || !server || !region) {
+      throw new Error("ranking_identity_missing_character");
+    }
+    if (character.id !== identity.id)
+      throw new Error("ranking_identity_id_mismatch");
+    if (
+      typeof character.name !== "string" ||
+      normalizedIdentityPart(character.name) !==
+        normalizedIdentityPart(identity.name)
+    ) {
+      throw new Error("ranking_identity_name_mismatch");
+    }
+    if (
+      typeof server.slug !== "string" ||
+      normalizedRealm(server.slug) !== normalizedRealm(identity.realm)
+    ) {
+      throw new Error("ranking_identity_realm_mismatch");
+    }
+    if (
+      typeof region.slug !== "string" ||
+      normalizedIdentityPart(region.slug) !==
+        normalizedIdentityPart(identity.region)
+    ) {
+      throw new Error("ranking_identity_region_mismatch");
+    }
+    const matchingActors = actors.filter((value) => {
+      const actor = record(value);
+      return (
+        actor?.type === "Player" &&
+        typeof actor.name === "string" &&
+        typeof actor.server === "string" &&
+        normalizedIdentityPart(actor.name) ===
+          normalizedIdentityPart(character.name as string) &&
+        normalizedRealm(actor.server) === normalizedRealm(server.slug as string)
+      );
+    });
+    if (matchingActors.length !== 1) {
+      throw new Error("ranking_identity_non_unique_actor");
+    }
+  }
+}
+
+const MAX_CHARACTER_IDENTITY_LOOKUPS = 50;
+
+function characterIdentityQuery(
+  identities: readonly RankingCharacterIdentity[]
+): string {
+  const selections = identities
+    .map(
+      (identity, index) =>
+        `character${index}: character(id: $character${index}) { id name server { slug region { slug } } }`
+    )
+    .join("\n");
+  const variables = identities
+    .map((_, index) => `$character${index}: Int!`)
+    .join(", ");
+  return `query RankingCharacterIdentities(${variables}) { characterData { ${selections} } }`;
 }
 
 const rateLimitQuery = `
@@ -352,6 +501,27 @@ async function run(): Promise<void> {
     encounterID: options.encounterId,
     difficulty: options.difficulty
   });
+  const identities = rankingIdentities(rankings);
+  if (identities.length > MAX_CHARACTER_IDENTITY_LOOKUPS) {
+    throw new Error("ranking_identity_lookup_limit");
+  }
+  if (identities.length) {
+    const identityResponse = await graphql(
+      token,
+      characterIdentityQuery(identities),
+      Object.fromEntries(
+        identities.map((identity, index) => [`character${index}`, identity.id])
+      )
+    );
+    const identityData = record(record(identityResponse)?.data)?.characterData;
+    const canonicalCharacters = new Map(
+      identities.map((identity, index) => [
+        identity.id,
+        record(identityData)?.[`character${index}`]
+      ])
+    );
+    validateRankingIdentities(rankings, canonicalCharacters);
+  }
   const after = pointsSpent(await graphql(token, rateLimitQuery));
 
   console.log(
