@@ -6,6 +6,7 @@ export type CuttingEdgeCatalogueAchievement = Readonly<{
   description: string;
   iconUrl: string | null;
   categoryId: string;
+  scope: "account_wide";
 }>;
 
 export type CuttingEdgeSequenceEntry<T> =
@@ -16,7 +17,10 @@ export type CuttingEdgeSequenceEntry<T> =
     }>;
 
 const orderedAchievements: readonly CuttingEdgeCatalogueAchievement[] =
-  catalogue.achievements;
+  catalogue.achievements.map((achievement) => ({
+    ...achievement,
+    scope: "account_wide" as const
+  }));
 
 const achievements = new Map<string, CuttingEdgeCatalogueAchievement>(
   orderedAchievements.map((achievement) => [
@@ -29,6 +33,12 @@ export function lookupCuttingEdgeAchievement(
   achievementId: string
 ): CuttingEdgeCatalogueAchievement | null {
   return achievements.get(achievementId) ?? null;
+}
+
+export function isAccountWideCuttingEdgeAchievement(
+  achievementId: string
+): boolean {
+  return lookupCuttingEdgeAchievement(achievementId)?.scope === "account_wide";
 }
 
 export function buildBoundedCuttingEdgeSequence<

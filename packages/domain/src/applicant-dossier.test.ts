@@ -513,7 +513,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]?.raidId).toBe("1273");
   });
 
-  it("merges Cutting Edge dates using the earliest completion and all qualifying characters", () => {
+  it("uses the earliest Cutting Edge completion without character attribution", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -521,18 +521,15 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "40254",
-          completedAt: "2025-02-14T20:30:00.000Z",
-          character: altKey
+          completedAt: "2025-02-14T20:30:00.000Z"
         },
         {
           achievementId: "1",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ],
       limitations: []
@@ -543,7 +540,6 @@ describe("applicant dossier", () => {
         achievementId: "40254",
         achievementName: "Cutting Edge: Queen Ansurek",
         completedAt: "2025-01-14T20:30:00.000Z",
-        characters: [root, altKey],
         iconUrl: "https://render.worldofwarcraft.com/eu/icons/56/5779391.jpg"
       })
     ]);
@@ -645,13 +641,11 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "41297",
-          completedAt: "2025-05-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-05-14T20:30:00.000Z"
         }
       ]
     });
@@ -661,7 +655,7 @@ describe("applicant dossier", () => {
     ]);
   });
 
-  it("preserves canonical identities for same-named Cutting Edge characters", () => {
+  it("does not retain character identity on Cutting Edge evidence", () => {
     const sameNamedAlt: CharacterKey = {
       region: "us",
       realm: "illidan",
@@ -674,14 +668,13 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: sameNamedAlt
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ],
       limitations: []
     });
 
-    expect(dossier.cuttingEdges[0]!.characters).toEqual([sameNamedAlt]);
+    expect(dossier.cuttingEdges[0]).not.toHaveProperty("characters");
   });
 
   it("keeps the full verified Raider.IO boss slug when a name includes a subtitle", () => {

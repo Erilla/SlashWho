@@ -98,8 +98,7 @@ export const dossierCuttingEdgeSchema = z
     achievementName: z.string().min(1),
     description: z.string().min(1),
     iconUrl: z.url().nullable(),
-    completedAt: z.iso.datetime(),
-    characters: z.array(characterKeySchema).min(1)
+    completedAt: z.iso.datetime()
   })
   .strict();
 

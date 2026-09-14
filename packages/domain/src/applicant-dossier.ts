@@ -54,7 +54,6 @@ export type DossierLimitation = Readonly<{
 export type DossierCuttingEdgeEvidence = Readonly<{
   achievementId: string;
   completedAt: string;
-  character: CharacterKey;
 }>;
 export type BuildApplicantDossierInput = Readonly<{
   root: CharacterKey;
@@ -119,7 +118,6 @@ export type ApplicantDossierCuttingEdge = Readonly<{
   description: string;
   iconUrl: string | null;
   completedAt: string;
-  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossier = Readonly<{
   root: CharacterKey;
@@ -252,28 +250,19 @@ export function buildApplicantDossier(
     string,
     {
       achievement: NonNullable<ReturnType<typeof lookupCuttingEdgeAchievement>>;
-      characters: Set<string>;
       completedAt: string;
     }
   >();
   for (const evidence of input.cuttingEdges ?? []) {
     const achievement = lookupCuttingEdgeAchievement(evidence.achievementId);
     if (!achievement) continue;
-    const character = input.characters.find(
-      (item) =>
-        canonicalCharacterId(item.key) ===
-        canonicalCharacterId(evidence.character)
-    );
-    if (!character) continue;
     const key = achievement.achievementId;
     const entry = cuttingEdges.get(key) ?? {
       achievement,
-      characters: new Set<string>(),
       completedAt: evidence.completedAt
     };
     if (evidence.completedAt < entry.completedAt)
       entry.completedAt = evidence.completedAt;
-    entry.characters.add(canonicalCharacterId(character.key));
     cuttingEdges.set(key, entry);
   }
   const allKills: DossierKillEvidence[] = [];
@@ -480,12 +469,7 @@ export function buildApplicantDossier(
           achievementName: entry.achievement.achievementName,
           description: entry.achievement.description,
           iconUrl: entry.achievement.iconUrl,
-          completedAt: entry.completedAt,
-          characters: input.characters
-            .filter((character) =>
-              entry.characters.has(canonicalCharacterId(character.key))
-            )
-            .map((character) => character.key)
+          completedAt: entry.completedAt
         };
       })
       .sort(

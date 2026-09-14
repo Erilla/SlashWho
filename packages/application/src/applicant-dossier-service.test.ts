@@ -373,7 +373,7 @@ describe("applicant dossier service", () => {
       dossiers.read(root)
     ]);
     expect(results[0]).toEqual(results[1]);
-    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
     vi.mocked(repositories.snapshots.getCurrent).mockResolvedValue(
       storedSnapshot([storedSnapshot().characters[0]!])
@@ -382,10 +382,10 @@ describe("applicant dossier service", () => {
     expect(changed).toMatchObject({
       dossier: {
         characters: [{ key: root }],
-        cuttingEdges: [{ characters: [root] }]
+        cuttingEdges: [{ achievementId: "40254" }]
       }
     });
-    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes boss rankings after fifteen minutes and never serves an expired rank on failure", async () => {
@@ -439,7 +439,7 @@ describe("applicant dossier service", () => {
       const { dossiers, blizzard } = fixture();
       await dossiers.read(root);
       await dossiers.read(root);
-      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
       vi.advanceTimersByTime(15 * 60_000);
       vi.mocked(blizzard.getCompletedAchievements).mockRejectedValue(
         new Error("offline")
@@ -454,7 +454,7 @@ describe("applicant dossier service", () => {
           ]
         }
       });
-      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(4);
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
@@ -529,7 +529,7 @@ describe("applicant dossier service", () => {
             historicWorldRank: 2
           })
         ]),
-        cuttingEdges: [{ achievementId: "40254", characters: [root, alt] }],
+        cuttingEdges: [{ achievementId: "40254" }],
         research: {
           state: "complete",
           message: "Linked-character research is complete."
@@ -913,7 +913,7 @@ describe("applicant dossier service", () => {
         vi
           .mocked(blizzard.getCompletedAchievements)
           .mock.calls.map(([key]) => key)
-      ).toEqual([root, third]);
+      ).toEqual(source === "fingerprint" ? [root] : [root, third]);
       expect(snapshot).toEqual(original);
     }
   );

@@ -339,6 +339,26 @@ it("requires a separate Cutting Edge achievement collection", () => {
   ).toThrow();
 });
 
+it("rejects character attribution on account-wide Cutting Edge achievements", () => {
+  // Break caught: a character list on this account-level record would make the
+  // public contract imply a per-character achievement claim.
+  expect(() =>
+    applicantDossierSchema.parse({
+      ...validDossier,
+      cuttingEdges: [
+        {
+          achievementId: "40254",
+          achievementName: "Cutting Edge: Queen Ansurek",
+          description:
+            "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
+          completedAt: "2025-01-14T20:30:00.000Z",
+          characters: ["Ryii"]
+        }
+      ]
+    })
+  ).toThrow();
+});
+
 it("retains an unknown historic world rank as null", () => {
   // Break caught: an unavailable historic rank could be converted into a
   // fabricated numeric finding or rejected entirely.
