@@ -477,11 +477,13 @@ describe("applicant dossier", () => {
       (candidate) => candidate.raidName === "Nerub-ar Palace"
     )!;
     const queen = verifiedKill(
-      raid.bosses.find((candidate) => candidate.bossId === "queen-ansurek")!
+      raid.bosses.find((candidate) => candidate.bossName === "Queen Ansurek")!
     );
     expect(queen.wipes).toEqual([]);
     expect(
-      raid.bosses.find((candidate) => candidate.bossId === "sikran")
+      raid.bosses.find(
+        (candidate) => candidate.bossName === "Sikran, Captain of the Sureki"
+      )
     ).toMatchObject({ state: "wipe" });
   });
 
