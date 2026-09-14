@@ -29,6 +29,7 @@ export type {
   SupportedRaidCatalogueEntry
 } from "./raid-catalogue";
 export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
+export { isAccountWideCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
 export {
   buildBoundedCuttingEdgeSequence,

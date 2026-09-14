@@ -19,6 +19,8 @@ export type {
   CallerClass,
   CharacterEvidenceRun,
   CharacterMythicKillInput,
+  CharacterMythicKillParseMetric,
+  CharacterMythicKillPerformance,
   CharacterMythicWipeInput,
   CompletedCharacterEvidence,
   CreateSnapshotInput,

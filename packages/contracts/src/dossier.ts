@@ -34,6 +34,27 @@ export const dossierGuildSchema = z
   })
   .strict();
 
+export const applicantDossierParseMetricSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      state: z.literal("available"),
+      percentile: z.number().min(0).max(100),
+      reportUrl: z.url()
+    })
+    .strict(),
+  z.object({ state: z.literal("not_applicable") }).strict(),
+  z.object({ state: z.literal("unavailable") }).strict()
+]);
+
+export const applicantDossierCharacterParsesSchema = z
+  .object({
+    character: z.string().min(1),
+    damage: applicantDossierParseMetricSchema,
+    healing: applicantDossierParseMetricSchema,
+    bossDamage: applicantDossierParseMetricSchema
+  })
+  .strict();
+
 export const dossierFirstKillSchema = z
   .object({
     killedAt: z.iso.datetime(),
@@ -41,7 +62,8 @@ export const dossierFirstKillSchema = z
     historicWorldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable(),
     reportUrls: z.array(z.url()).optional(),
-    characters: z.array(characterKeySchema)
+    characters: z.array(characterKeySchema),
+    parses: z.array(applicantDossierCharacterParsesSchema)
   })
   .strict();
 
@@ -52,26 +74,31 @@ const dossierBossMetadata = {
   imageUrl: z.url().nullable()
 };
 
+const dossierWipeSchema = z
+  .object({
+    attemptedAt: z.iso.datetime(),
+    reportUrl: z.url(),
+    characters: z.array(characterKeySchema).min(1)
+  })
+  .strict();
+
 export const dossierBossSchema = z.discriminatedUnion("state", [
   z
     .object({
       ...dossierBossMetadata,
       state: z.literal("kill"),
       firstKill: dossierFirstKillSchema,
-      firstKills: z.array(dossierFirstKillSchema).min(1).optional()
+      firstKills: z.array(dossierFirstKillSchema).min(1).optional(),
+      bestParses: z.array(applicantDossierCharacterParsesSchema),
+      wipes: z.array(dossierWipeSchema).optional()
     })
     .strict(),
   z
     .object({
       ...dossierBossMetadata,
       state: z.literal("wipe"),
-      wipe: z
-        .object({
-          attemptedAt: z.iso.datetime(),
-          reportUrl: z.url(),
-          characters: z.array(characterKeySchema).min(1)
-        })
-        .strict()
+      wipe: dossierWipeSchema,
+      wipes: z.array(dossierWipeSchema).min(1).optional()
     })
     .strict(),
   z.object({ ...dossierBossMetadata, state: z.literal("no_logs") }).strict(),
@@ -94,8 +121,7 @@ export const dossierCuttingEdgeSchema = z
     achievementName: z.string().min(1),
     description: z.string().min(1),
     iconUrl: z.url().nullable(),
-    completedAt: z.iso.datetime(),
-    characters: z.array(characterKeySchema).min(1)
+    completedAt: z.iso.datetime()
   })
   .strict();
 
@@ -109,7 +135,12 @@ export const dossierLimitationSchema = z
       "rate_limited",
       "request_cap",
       "unavailable",
-      "schema_changed"
+      "schema_changed",
+      "parse_private",
+      "parse_rate_limited",
+      "parse_request_cap",
+      "parse_unavailable",
+      "parse_schema_drift"
     ]),
     message: z.string().min(1)
   })
@@ -154,6 +185,12 @@ export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
 export type DossierCuttingEdge = z.infer<typeof dossierCuttingEdgeSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;
 export type DossierResearch = z.infer<typeof dossierResearchSchema>;
+export type ApplicantDossierParseMetric = z.infer<
+  typeof applicantDossierParseMetricSchema
+>;
+export type ApplicantDossierCharacterParses = z.infer<
+  typeof applicantDossierCharacterParsesSchema
+>;
 export type CreateDossierRequest = z.infer<typeof createDossierRequestSchema>;
 export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;

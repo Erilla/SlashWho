@@ -1,0 +1,237 @@
+{
+  "report": {
+    "data": {
+      "reportData": {
+        "report": {
+          "code": "fixture-report-mismatch-1",
+          "masterData": {
+            "actors": [
+              {
+                "id": 1001,
+                "gameID": 2001,
+                "name": "fixture-name-1",
+                "server": "fixture-realm-1",
+                "type": "Player"
+              }
+            ]
+          },
+          "damage": {
+            "data": [
+              {
+                "fightID": 26,
+                "encounter": { "id": 3306 },
+                "difficulty": 5,
+                "roles": {
+                  "dps": {
+                    "characters": [
+                      {
+                        "id": 2101,
+                        "name": "fixture-name-1",
+                        "server": {
+                          "id": 3001,
+                          "name": "fixture-realm-1",
+                          "region": "fixture-region-1"
+                        },
+                        "class": "Mage",
+                        "spec": "Frost",
+                        "rankPercent": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "fight": {
+    "data": {
+      "reportData": {
+        "report": {
+          "code": "fixture-report-1",
+          "masterData": {
+            "actors": [
+              {
+                "id": 1001,
+                "gameID": 2001,
+                "name": "fixture-name-1",
+                "server": "fixture-realm-1",
+                "type": "Player"
+              }
+            ]
+          },
+          "damage": {
+            "data": [
+              {
+                "fightID": 27,
+                "encounter": { "id": 3306 },
+                "difficulty": 5,
+                "roles": {
+                  "dps": {
+                    "characters": [
+                      {
+                        "id": 2101,
+                        "name": "fixture-name-1",
+                        "server": {
+                          "id": 3001,
+                          "name": "fixture-realm-1",
+                          "region": "fixture-region-1"
+                        },
+                        "class": "Mage",
+                        "spec": "Frost",
+                        "rankPercent": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "encounter": {
+    "data": {
+      "reportData": {
+        "report": {
+          "code": "fixture-report-1",
+          "masterData": {
+            "actors": [
+              {
+                "id": 1001,
+                "gameID": 2001,
+                "name": "fixture-name-1",
+                "server": "fixture-realm-1",
+                "type": "Player"
+              }
+            ]
+          },
+          "damage": {
+            "data": [
+              {
+                "fightID": 26,
+                "encounter": { "id": 3307 },
+                "difficulty": 5,
+                "roles": {
+                  "dps": {
+                    "characters": [
+                      {
+                        "id": 2101,
+                        "name": "fixture-name-1",
+                        "server": {
+                          "id": 3001,
+                          "name": "fixture-realm-1",
+                          "region": "fixture-region-1"
+                        },
+                        "class": "Mage",
+                        "spec": "Frost",
+                        "rankPercent": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "difficulty": {
+    "data": {
+      "reportData": {
+        "report": {
+          "code": "fixture-report-1",
+          "masterData": {
+            "actors": [
+              {
+                "id": 1001,
+                "gameID": 2001,
+                "name": "fixture-name-1",
+                "server": "fixture-realm-1",
+                "type": "Player"
+              }
+            ]
+          },
+          "damage": {
+            "data": [
+              {
+                "fightID": 26,
+                "encounter": { "id": 3306 },
+                "difficulty": 4,
+                "roles": {
+                  "dps": {
+                    "characters": [
+                      {
+                        "id": 2101,
+                        "name": "fixture-name-1",
+                        "server": {
+                          "id": 3001,
+                          "name": "fixture-realm-1",
+                          "region": "fixture-region-1"
+                        },
+                        "class": "Mage",
+                        "spec": "Frost",
+                        "rankPercent": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "character": {
+    "data": {
+      "reportData": {
+        "report": {
+          "code": "fixture-report-1",
+          "masterData": {
+            "actors": [
+              {
+                "id": 1001,
+                "gameID": 2001,
+                "name": "fixture-name-1",
+                "server": "fixture-realm-1",
+                "type": "Player"
+              }
+            ]
+          },
+          "damage": {
+            "data": [
+              {
+                "fightID": 26,
+                "encounter": { "id": 3306 },
+                "difficulty": 5,
+                "roles": {
+                  "dps": {
+                    "characters": [
+                      {
+                        "id": 2102,
+                        "name": "fixture-name-mismatch-1",
+                        "server": {
+                          "id": 3002,
+                          "name": "fixture-realm-mismatch-1",
+                          "region": "fixture-region-mismatch-1"
+                        },
+                        "class": "Mage",
+                        "spec": "Frost",
+                        "rankPercent": 20
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

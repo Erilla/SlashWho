@@ -14,6 +14,7 @@ export type WorkerConfig = {
   warcraftLogsClientId: string;
   warcraftLogsClientSecret: string;
   evidenceRequestCap: number;
+  evidenceParseRequestCap: number;
   blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
@@ -150,6 +151,11 @@ export function loadWorkerConfig(
       environment.EVIDENCE_REQUEST_CAP,
       500,
       "invalid_evidence_request_cap"
+    ),
+    evidenceParseRequestCap: positiveInteger(
+      environment.EVIDENCE_PARSE_REQUEST_CAP,
+      8,
+      "invalid_evidence_parse_request_cap"
     ),
     blizzardBaseUrl: optionalHttpUrl(
       environment.BLIZZARD_BASE_URL,

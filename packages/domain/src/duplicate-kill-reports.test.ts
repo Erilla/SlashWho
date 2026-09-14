@@ -16,7 +16,12 @@ const base: DossierKillEvidence = {
   killedAt: "2026-08-23T20:50:12.607Z",
   guild: null,
   historicWorldRank: null,
-  reportUrl: "https://www.warcraftlogs.com/reports/dqg8zDNWLA9Rkfca#fight=29"
+  reportUrl: "https://www.warcraftlogs.com/reports/dqg8zDNWLA9Rkfca#fight=29",
+  performance: {
+    damage: { state: "unavailable" },
+    healing: { state: "unavailable" },
+    bossDamage: { state: "unavailable" }
+  }
 };
 const second: DossierKillEvidence = {
   ...base,

@@ -57,9 +57,32 @@ corepack pnpm playwright test
 
 Live Raider.IO traffic is never part of the pull-request gate. Automated discovery tests use sanitized recorded or local fixtures.
 
+## Warcraft Logs parse evidence
+
+Historic Mythic kill evidence can include damage, healing, and boss-damage
+percentiles. SlashWho queries `Report.rankings` with `compare: Rankings` and
+`timeframe: Historical`, scoped to the exact report, fight, encounter, Mythic
+difficulty, region, realm, and canonical character. A ranking-row character ID
+is resolved through the canonical `Character(id)` lookup and then matched to a
+unique Player actor; a name-only match is never enough. Available values link
+to the exact supporting fight.
+
+The dossier shows **First kill parses** for the earliest displayed kill event
+and **Best shown parses** across only the displayed events for that boss. These
+are not lifetime or character-wide best parses. An available numeric `0` is a
+legitimate provider result. `unavailable` means the value could not safely be
+obtained; `not_applicable` is reserved for independently established role
+inapplicability. Neither state is presented as numeric zero, and a partial
+parse result never removes verified kill evidence.
+
+Percentile labels also use the seven Warcraft Logs/RPGLogs bands (grey
+`#666666`, green `#1eff00`, blue `#0070ff`, purple `#a335ee`, orange
+`#ff8000`, pink `#e268a8`, and gold `#e5cc80`); text and accessible labels
+always carry the metric meaning as well as colour.
+
 ## Operations
 
-This is not a public API, searchable directory, or historical character archive. Dossiers are assembled for the current browser request and may contain incomplete source evidence. Maintainers retain the internal snapshot and suppression process in [`docs/operations/removals.md`](docs/operations/removals.md).
+This is not a public API, searchable directory, or historical character archive. Dossiers are assembled for the current browser request and may contain incomplete source evidence. The assembled response is always `Cache-Control: no-store`; reusable per-character evidence is separately cached in normalized form only. Maintainers retain the internal snapshot and suppression process in [`docs/operations/removals.md`](docs/operations/removals.md).
 
 Railway setup, variables, health checks, backups, and validation are documented in [`docs/deployment/railway.md`](docs/deployment/railway.md). `main` deploys to the `test` environment. Production is promoted only by fast-forwarding the staging-validated commit to `prod`.
 

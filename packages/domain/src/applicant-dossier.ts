@@ -17,6 +17,14 @@ export type DossierCharacter = Readonly<{
   className?: string | null;
   raiderIoUrl?: string;
 }>;
+export type DossierKillParseMetric =
+  | Readonly<{ state: "available"; percentile: number }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+export type DossierKillPerformance = Readonly<{
+  damage: DossierKillParseMetric;
+  healing: DossierKillParseMetric;
+  bossDamage: DossierKillParseMetric;
+}>;
 export type DossierKillEvidence = Readonly<{
   raidId: string;
   raidName: string;
@@ -34,6 +42,7 @@ export type DossierKillEvidence = Readonly<{
   }> | null;
   historicWorldRank: number | null;
   reportUrl: string | null;
+  performance: DossierKillPerformance;
 }>;
 export type DossierWipeEvidence = Readonly<{
   raidId: string;
@@ -54,7 +63,6 @@ export type DossierLimitation = Readonly<{
 export type DossierCuttingEdgeEvidence = Readonly<{
   achievementId: string;
   completedAt: string;
-  character: CharacterKey;
 }>;
 export type BuildApplicantDossierInput = Readonly<{
   root: CharacterKey;
@@ -76,6 +84,20 @@ export type ApplicantDossierFirstKill = Readonly<{
   reportUrl: string | null;
   reportUrls: readonly string[];
   characters: readonly CharacterKey[];
+  parses: readonly ApplicantDossierCharacterParses[];
+}>;
+export type ApplicantDossierParseMetric =
+  | Readonly<{
+      state: "available";
+      percentile: number;
+      reportUrl: string;
+    }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+export type ApplicantDossierCharacterParses = Readonly<{
+  character: string;
+  damage: ApplicantDossierParseMetric;
+  healing: ApplicantDossierParseMetric;
+  bossDamage: ApplicantDossierParseMetric;
 }>;
 type ApplicantDossierBossMetadata = Readonly<{
   bossId: string;
@@ -94,9 +116,15 @@ export type ApplicantDossierBoss =
         state: "kill";
         firstKill: ApplicantDossierFirstKill;
         firstKills: readonly ApplicantDossierFirstKill[];
+        bestParses: readonly ApplicantDossierCharacterParses[];
+        wipes?: readonly ApplicantDossierWipe[];
       }>)
   | (ApplicantDossierBossMetadata &
-      Readonly<{ state: "wipe"; wipe: ApplicantDossierWipe }>)
+      Readonly<{
+        state: "wipe";
+        wipe: ApplicantDossierWipe;
+        wipes?: readonly ApplicantDossierWipe[];
+      }>)
   | (ApplicantDossierBossMetadata & Readonly<{ state: "no_logs" }>)
   | (ApplicantDossierBossMetadata & Readonly<{ state: "incomplete" }>);
 export type ApplicantDossierRaid = Readonly<{
@@ -114,7 +142,6 @@ export type ApplicantDossierCuttingEdge = Readonly<{
   description: string;
   iconUrl: string | null;
   completedAt: string;
-  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossier = Readonly<{
   root: CharacterKey;
@@ -159,7 +186,7 @@ function compareEvidence(
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
 }
-function compareEvidenceLatestFirst(
+function compareEventsLatestFirst(
   a: DossierKillEvidence,
   b: DossierKillEvidence
 ): number {
@@ -236,6 +263,88 @@ function catalogueEncounter(evidence: {
     : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
 }
 
+function selectParseMetric(
+  metrics: readonly ApplicantDossierParseMetric[]
+): ApplicantDossierParseMetric {
+  const available = metrics
+    .filter(
+      (
+        metric
+      ): metric is Extract<
+        ApplicantDossierParseMetric,
+        { state: "available" }
+      > => metric.state === "available"
+    )
+    .sort(
+      (a, b) => b.percentile - a.percentile || text(a.reportUrl, b.reportUrl)
+    );
+  if (available.length > 0) return available[0]!;
+  return metrics.some((metric) => metric.state === "not_applicable")
+    ? { state: "not_applicable" }
+    : { state: "unavailable" };
+}
+
+function parseCandidate(
+  kill: DossierKillEvidence,
+  metric: DossierKillParseMetric
+): ApplicantDossierParseMetric {
+  if (metric.state !== "available") return metric;
+  return kill.reportUrl === null
+    ? { state: "unavailable" }
+    : {
+        state: "available",
+        percentile: metric.percentile,
+        reportUrl: kill.reportUrl
+      };
+}
+
+function aggregateEventParses(
+  kills: readonly DossierKillEvidence[],
+  characters: readonly DossierCharacter[]
+): readonly ApplicantDossierCharacterParses[] {
+  const participants = new Set(
+    kills.map((kill) => canonicalCharacterId(kill.character))
+  );
+  return characters.flatMap((character) => {
+    const characterKills = kills.filter(
+      (kill) =>
+        canonicalCharacterId(kill.character) ===
+        canonicalCharacterId(character.key)
+    );
+    if (!participants.has(canonicalCharacterId(character.key))) return [];
+    return [
+      {
+        character: character.displayName,
+        damage: selectParseMetric(
+          characterKills.map((kill) =>
+            parseCandidate(kill, kill.performance.damage)
+          )
+        ),
+        healing: selectParseMetric(
+          characterKills.map((kill) =>
+            parseCandidate(kill, kill.performance.healing)
+          )
+        ),
+        bossDamage: selectParseMetric(
+          characterKills.map((kill) =>
+            parseCandidate(kill, kill.performance.bossDamage)
+          )
+        )
+      }
+    ];
+  });
+}
+
+function aggregateBossParses(
+  events: readonly (readonly DossierKillEvidence[])[],
+  characters: readonly DossierCharacter[]
+): readonly ApplicantDossierCharacterParses[] {
+  // The events are already formed by the displayed-evidence grouping seam.
+  // Re-aggregating their supporting rows by canonical key avoids merging
+  // distinct characters which happen to share a display name.
+  return aggregateEventParses(events.flat(), characters);
+}
+
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
@@ -247,28 +356,19 @@ export function buildApplicantDossier(
     string,
     {
       achievement: NonNullable<ReturnType<typeof lookupCuttingEdgeAchievement>>;
-      characters: Set<string>;
       completedAt: string;
     }
   >();
   for (const evidence of input.cuttingEdges ?? []) {
     const achievement = lookupCuttingEdgeAchievement(evidence.achievementId);
     if (!achievement) continue;
-    const character = input.characters.find(
-      (item) =>
-        canonicalCharacterId(item.key) ===
-        canonicalCharacterId(evidence.character)
-    );
-    if (!character) continue;
     const key = achievement.achievementId;
     const entry = cuttingEdges.get(key) ?? {
       achievement,
-      characters: new Set<string>(),
       completedAt: evidence.completedAt
     };
     if (evidence.completedAt < entry.completedAt)
       entry.completedAt = evidence.completedAt;
-    entry.characters.add(canonicalCharacterId(character.key));
     cuttingEdges.set(key, entry);
   }
   const allKills: DossierKillEvidence[] = [];
@@ -323,6 +423,7 @@ export function buildApplicantDossier(
         );
         return {
           selected,
+          shared,
           firstKill: {
             killedAt: selected.killedAt,
             guild: attributed ?? null,
@@ -331,15 +432,13 @@ export function buildApplicantDossier(
             reportUrls,
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
-              .map((c) => c.key)
+              .map((c) => c.key),
+            parses: aggregateEventParses(shared, characters)
           }
         };
       })
-      .sort((a, b) => compareEvidenceLatestFirst(a.selected, b.selected));
+      .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
-    const earliestFirstKill = [...firstKills].sort((a, b) =>
-      compareEvidence(a.selected, b.selected)
-    )[0]!;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
@@ -355,8 +454,12 @@ export function buildApplicantDossier(
         lookupJournalEncounter(selected.bossId)?.imageUrl ??
         lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
         null,
-      firstKill: earliestFirstKill.firstKill,
+      firstKill: firstKills.at(-1)!.firstKill,
       firstKills: firstKills.map((entry) => entry.firstKill),
+      bestParses: aggregateBossParses(
+        firstKills.map((entry) => entry.shared),
+        characters
+      ),
       isFinalBoss: selected.isFinalBoss
     });
     raids.set(selected.raidId, raid);
@@ -372,6 +475,41 @@ export function buildApplicantDossier(
     const key = `${metadata.raidId}\0${metadata.bossId}`;
     wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
   }
+  const aggregateWipes = (
+    wipes: readonly (DossierWipeEvidence & RaidCatalogueEncounter)[]
+  ): ApplicantDossierWipe[] => {
+    const grouped = new Map<
+      string,
+      (DossierWipeEvidence & RaidCatalogueEncounter)[]
+    >();
+    for (const wipe of wipes) {
+      grouped.set(wipe.reportUrl, [
+        ...(grouped.get(wipe.reportUrl) ?? []),
+        wipe
+      ]);
+    }
+    return [...grouped.values()]
+      .map((shared) => {
+        const selected = [...shared].sort(
+          (a, b) =>
+            text(b.attemptedAt, a.attemptedAt) || text(a.reportUrl, b.reportUrl)
+        )[0]!;
+        const ids = new Set(
+          shared.map((wipe) => canonicalCharacterId(wipe.character))
+        );
+        return {
+          attemptedAt: selected.attemptedAt,
+          reportUrl: selected.reportUrl,
+          characters: input.characters
+            .filter((character) => ids.has(canonicalCharacterId(character.key)))
+            .map((character) => character.key)
+        };
+      })
+      .sort(
+        (a, b) =>
+          text(b.attemptedAt, a.attemptedAt) || text(a.reportUrl, b.reportUrl)
+      );
+  };
   const completeCharacters = new Set(
     (input.completeWarcraftLogsCharacters ?? []).map(canonicalCharacterId)
   );
@@ -396,7 +534,14 @@ export function buildApplicantDossier(
             if (observedKill) {
               const { isFinalBoss, ...boss } = observedKill;
               void isFinalBoss;
-              return boss;
+              return {
+                ...boss,
+                wipes: aggregateWipes(
+                  wipesByBoss.get(
+                    `${catalogueRaid.raidId}\0${encounter.bossId}`
+                  ) ?? []
+                )
+              };
             }
             const wipes = wipesByBoss.get(
               `${catalogueRaid.raidId}\0${encounter.bossId}`
@@ -408,26 +553,12 @@ export function buildApplicantDossier(
               imageUrl: encounter.imageUrl
             };
             if (wipes?.length) {
-              const selected = [...wipes].sort(
-                (a, b) =>
-                  text(b.attemptedAt, a.attemptedAt) ||
-                  text(a.reportUrl, b.reportUrl)
-              )[0]!;
-              const ids = new Set(
-                wipes.map((wipe) => canonicalCharacterId(wipe.character))
-              );
+              const evidence = aggregateWipes(wipes);
               return {
                 ...metadata,
                 state: "wipe" as const,
-                wipe: {
-                  attemptedAt: selected.attemptedAt,
-                  reportUrl: selected.reportUrl,
-                  characters: input.characters
-                    .filter((character) =>
-                      ids.has(canonicalCharacterId(character.key))
-                    )
-                    .map((character) => character.key)
-                }
+                wipe: evidence[0]!,
+                wipes: evidence
               };
             }
             return {
@@ -450,12 +581,7 @@ export function buildApplicantDossier(
           achievementName: entry.achievement.achievementName,
           description: entry.achievement.description,
           iconUrl: entry.achievement.iconUrl,
-          completedAt: entry.completedAt,
-          characters: input.characters
-            .filter((character) =>
-              entry.characters.has(canonicalCharacterId(character.key))
-            )
-            .map((character) => character.key)
+          completedAt: entry.completedAt
         };
       })
       .sort(
@@ -482,7 +608,12 @@ export function buildApplicantDossier(
               )
               .map(({ isFinalBoss, ...boss }) => {
                 void isFinalBoss;
-                return boss;
+                return {
+                  ...boss,
+                  wipes: aggregateWipes(
+                    wipesByBoss.get(`${raidId}\0${boss.bossId}`) ?? []
+                  )
+                };
               })
           }))
           .sort((a, b) => {

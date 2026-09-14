@@ -141,11 +141,22 @@ export interface CharacterEvidenceRun {
   status: EvidenceRunStatus;
   attempt: number;
   limitationCode: string | null;
+  parseLimitationCode: string | null;
   errorCode: string | null;
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
 }
+
+export type CharacterMythicKillParseMetric =
+  | Readonly<{ state: "available"; percentile: number }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+
+export type CharacterMythicKillPerformance = Readonly<{
+  damage: CharacterMythicKillParseMetric;
+  healing: CharacterMythicKillParseMetric;
+  bossDamage: CharacterMythicKillParseMetric;
+}>;
 
 export interface CharacterMythicKillInput {
   raidId: string;
@@ -160,6 +171,7 @@ export interface CharacterMythicKillInput {
   fightUrl: string;
   guild: { name: string; realm: string } | null;
   historicWorldRank?: number | null;
+  performance: CharacterMythicKillPerformance;
 }
 
 export interface StoredCharacterMythicKill extends CharacterMythicKillInput {
@@ -220,6 +232,7 @@ export interface EvidenceRepository {
     input: {
       state: "complete" | "partial";
       limitationCode: string | null;
+      parseLimitationCode: string | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly CharacterMythicWipeInput[];
       completedAt: Date;
