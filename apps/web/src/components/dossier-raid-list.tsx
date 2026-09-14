@@ -132,6 +132,26 @@ function WipeEvidenceList({
   );
 }
 
+function reportKey(url: string): string {
+  return url.split("#", 1)[0] ?? url;
+}
+
+function killReportKeys(evidence: KillBoss["firstKill"]): Set<string> {
+  return new Set(
+    [evidence.reportUrl, ...(evidence.reportUrls ?? [])]
+      .filter((url): url is string => url !== null)
+      .map(reportKey)
+  );
+}
+
+function sortWipes(wipes: readonly WipeEvidence[]): WipeEvidence[] {
+  return [...wipes].sort(
+    (a, b) =>
+      b.attemptedAt.localeCompare(a.attemptedAt) ||
+      b.reportUrl.localeCompare(a.reportUrl)
+  );
+}
+
 function BossArtwork({ boss }: { boss: Boss }) {
   return boss.imageUrl ? (
     <img
@@ -151,10 +171,33 @@ function BossArtwork({ boss }: { boss: Boss }) {
 function KillEvidence({ boss }: { boss: KillBoss }) {
   const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
     (a, b) =>
-      b.killedAt.localeCompare(a.killedAt) ||
-      (b.reportUrl ?? "").localeCompare(a.reportUrl ?? "")
+      a.killedAt.localeCompare(b.killedAt) ||
+      (a.reportUrl ?? "").localeCompare(b.reportUrl ?? "")
   );
-  const firstKill = boss.firstKill;
+  const firstKill = firstKills[0] ?? boss.firstKill;
+  const killGroups = firstKills.map((evidence) => ({
+    evidence,
+    wipes: [] as WipeEvidence[]
+  }));
+
+  for (const wipe of boss.wipes ?? []) {
+    const wipeReport = reportKey(wipe.reportUrl);
+    const subsequentKill = killGroups
+      .filter(
+        ({ evidence }) =>
+          evidence.killedAt > wipe.attemptedAt &&
+          !killReportKeys(evidence).has(wipeReport)
+      )
+      .sort(
+        (a, b) =>
+          a.evidence.killedAt.localeCompare(b.evidence.killedAt) ||
+          (a.evidence.reportUrl ?? "").localeCompare(b.evidence.reportUrl ?? "")
+      )[0];
+
+    if (subsequentKill) subsequentKill.wipes.push(wipe);
+  }
+
+  for (const group of killGroups) group.wipes = sortWipes(group.wipes);
   return (
     <>
       <div className="dossier-boss-heading">
@@ -175,74 +218,72 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
           </p>
         </div>
       </div>
-      <DossierParseList
-        label="First kill parses"
-        parses={boss.firstKill.parses}
-      />
+      <DossierParseList label="First kill parses" parses={firstKill.parses} />
       <DossierParseList label="Best shown parses" parses={boss.bestParses} />
       <details>
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
-          {firstKills.map((evidence, index) => {
-            const isChronologicalFirst = index === firstKills.length - 1;
+          {killGroups.map(({ evidence, wipes }, index) => {
+            const isChronologicalFirst = index === 0;
             return (
-              <div
-                className="dossier-evidence-row"
-                key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
-              >
-                <StatusIcon state="kill" />
-                <dl
-                  className={`dossier-evidence${
-                    isChronologicalFirst ? " dossier-evidence-first-kill" : ""
-                  }`}
-                >
-                  <div>
-                    <dt>{isChronologicalFirst ? "First kill" : "Kill"}</dt>
-                    <dd>
-                      <time dateTime={evidence.killedAt}>
-                        {displayDate(evidence.killedAt)}
-                      </time>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Guild</dt>
-                    <dd>
-                      Guild: {displayGuild(evidence.guild)}
-                      {evidence.guild ? (
-                        <GuildProfileLinks guild={evidence.guild} />
-                      ) : null}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>World rank</dt>
-                    <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>Reports</dt>
-                    <dd>
-                      <ReportLinks evidence={evidence} />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Characters present</dt>
-                    <dd>
-                      <DossierCharacterNames characters={evidence.characters} />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Parses</dt>
-                    <dd>
-                      <DossierParseList
-                        label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
-                        parses={evidence.parses}
-                      />
-                    </dd>
-                  </div>
-                </dl>
+              <div key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}>
+                <div className="dossier-evidence-row">
+                  <StatusIcon state="kill" />
+                  <dl
+                    className={`dossier-evidence${
+                      isChronologicalFirst ? " dossier-evidence-first-kill" : ""
+                    }`}
+                  >
+                    <div>
+                      <dt>{isChronologicalFirst ? "First kill" : "Kill"}</dt>
+                      <dd>
+                        <time dateTime={evidence.killedAt}>
+                          {displayDate(evidence.killedAt)}
+                        </time>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Guild</dt>
+                      <dd>
+                        Guild: {displayGuild(evidence.guild)}
+                        {evidence.guild ? (
+                          <GuildProfileLinks guild={evidence.guild} />
+                        ) : null}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>World rank</dt>
+                      <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Reports</dt>
+                      <dd>
+                        <ReportLinks evidence={evidence} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Characters present</dt>
+                      <dd>
+                        <DossierCharacterNames
+                          characters={evidence.characters}
+                        />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Parses</dt>
+                      <dd>
+                        <DossierParseList
+                          label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
+                          parses={evidence.parses}
+                        />
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <WipeEvidenceList wipes={wipes} />
               </div>
             );
           })}
-          <WipeEvidenceList wipes={boss.wipes} />
         </section>
       </details>
     </>
@@ -275,7 +316,7 @@ function BossEvidence({ boss }: { boss: Boss }) {
               aria-label="Wipe evidence"
               className="dossier-evidence-list"
             >
-              <WipeEvidenceList wipes={boss.wipes ?? [boss.wipe]} />
+              <WipeEvidenceList wipes={sortWipes(boss.wipes ?? [boss.wipe])} />
             </section>
           </details>
         </>
