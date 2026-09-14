@@ -766,6 +766,46 @@ describe("discovery job handler", () => {
     });
   });
 
+  it("keeps known tournament members out of the snapshot when fingerprint discovery also matches them", async () => {
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "tournament-reservation",
+      requestCap: 300
+    });
+    const gateway = new MutableGateway();
+    gateway.getClaimedCharacters = async () => ({
+      characters: [
+        character(secondKey),
+        { ...character(fingerprintKey), isTournamentProfile: true }
+      ]
+    });
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [character(fingerprintKey)];
+    blizzardGateway.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    blizzardGateway.fingerprints.set(
+      keyId(fingerprintKey),
+      achievementFingerprint()
+    );
+
+    await handlerFor(repositories, gateway, { blizzardGateway }).execute(
+      run.id,
+      delivery()
+    );
+
+    const snapshot = await repositories.snapshots.getCurrent(rootKey);
+    expect(snapshot).toMatchObject({
+      state: "partial",
+      limitationCode: "unsupported_member"
+    });
+    expect(snapshot?.characters.map((item) => item.key)).toEqual([
+      rootKey,
+      secondKey
+    ]);
+    expect(snapshot).not.toHaveProperty("excludedTournamentCharacterIds");
+  });
+
   it("spends no Raider.IO request per swept candidate", async () => {
     // Break caught: checking each candidate's upstream ownership cost one
     // unbudgeted Raider.IO request per roster member — hundreds per sweep,

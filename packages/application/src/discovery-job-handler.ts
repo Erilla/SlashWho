@@ -1,6 +1,7 @@
 import type { DiscoveryWorkContext, Repositories } from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import {
+  canonicalCharacterId,
   deduplicateCharacters,
   discoverCharacter,
   discoverFingerprintMatches,
@@ -375,10 +376,20 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       : outcome.state === "partial"
                         ? outcome.limitationCode
                         : null;
+                  const excludedTournamentCharacters = new Set(
+                    outcome.state === "partial"
+                      ? outcome.excludedTournamentCharacterIds
+                      : []
+                  );
                   const characters = deduplicateCharacters([
                     ...outcome.characters,
                     ...sweep.characters
-                  ]);
+                  ]).filter(
+                    (character) =>
+                      !excludedTournamentCharacters.has(
+                        canonicalCharacterId(character.key)
+                      )
+                  );
                   record.outcome = "snapshot";
                   record.state =
                     limitationCode === null ? "complete" : "partial";

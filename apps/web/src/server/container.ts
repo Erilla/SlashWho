@@ -55,7 +55,7 @@ export type WebContainerDependencies = Readonly<{
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     search: Pick<SearchService, "create">;
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
-    raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
+    raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
     config: ApplicationConfig;
     onCacheEvent?: (source: string, event: string) => void;
   }): ApplicantDossierService;

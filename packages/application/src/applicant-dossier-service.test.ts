@@ -164,6 +164,16 @@ function fixture(
     ])
   } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">;
   const raiderio = {
+    getCharacter: vi.fn().mockResolvedValue({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null,
+      isTournamentProfile: false
+    }),
     getMythicBossRankings: vi.fn().mockResolvedValue({
       kind: "rankings",
       rows: [
@@ -176,7 +186,10 @@ function fixture(
         }
       ]
     })
-  } as unknown as Pick<RaiderIoGateway, "getMythicBossRankings">;
+  } as unknown as Pick<
+    RaiderIoGateway,
+    "getMythicBossRankings" | "getCharacter"
+  >;
   const config = applicationConfigSchema.parse({
     BOT_API_KEY: "b".repeat(32),
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -209,6 +222,47 @@ function fixture(
 }
 
 describe("applicant dossier service", () => {
+  it("withholds initial evidence for a tournament root before discovery finishes", async () => {
+    const { dossiers, raiderio, warcraftLogs, blizzard } = fixture();
+    vi.mocked(raiderio.getCharacter).mockResolvedValue({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null,
+      isTournamentProfile: true
+    });
+    await expect(dossiers.readInitial(root)).resolves.toEqual({
+      kind: "not_ready"
+    });
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(blizzard.getCompletedAchievements).not.toHaveBeenCalled();
+  });
+
+  it("withholds unchecked initial evidence when the eligibility lookup fails", async () => {
+    const { dossiers, raiderio, warcraftLogs } = fixture();
+    vi.mocked(raiderio.getCharacter).mockRejectedValue({ kind: "transient" });
+    await expect(dossiers.readInitial(root)).resolves.toEqual({
+      kind: "not_ready"
+    });
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("preserves cancellation during initial eligibility checking", async () => {
+    const { dossiers, raiderio } = fixture();
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled", "AbortError");
+    vi.mocked(raiderio.getCharacter).mockImplementation(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+    await expect(dossiers.readInitial(root, controller.signal)).rejects.toBe(
+      reason
+    );
+  });
+
   it("lets an uncancelled reader finish a shared achievement request", async () => {
     const { dossiers, blizzard } = fixture();
     let finish!: () => void;

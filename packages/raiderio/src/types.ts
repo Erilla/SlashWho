@@ -8,6 +8,8 @@ export interface RaiderIoCharacter {
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;
+  /** Explicit upstream tournament evidence; never infer this from a realm name. */
+  readonly isTournamentProfile?: boolean;
   /**
    * True when the upstream payload named at least one related character this
    * system cannot represent, so anything derived from it is knowingly incomplete.
