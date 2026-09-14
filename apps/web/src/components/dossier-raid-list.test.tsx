@@ -299,7 +299,7 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
     })
     .closest(".dossier-boss-first-kill");
   expect(firstKillSummary).toHaveTextContent(
-    "First kill: 14 Feb 2025 · Ryalts"
+    "First kill: 14 Jan 2025 · Ryii"
   );
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
