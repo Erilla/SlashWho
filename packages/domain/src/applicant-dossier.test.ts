@@ -79,15 +79,71 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].bosses[0]).toMatchObject({
       firstKills: [
         {
-          killedAt: "2024-10-01T20:00:00.000Z",
-          characters: ["Ryii"]
-        },
-        {
           killedAt: "2024-10-02T20:00:00.000Z",
           characters: ["Ryalts"]
+        },
+        {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          characters: ["Ryii"]
         }
       ]
     });
+  });
+
+  it("orders distinct boss kill events latest first regardless of input order", () => {
+    const kills = [
+      kill(root, {
+        killedAt: "2024-10-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8"
+      }),
+      kill(altKey, {
+        killedAt: "2024-10-03T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8"
+      })
+    ];
+    const make = (input: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, altCharacter],
+        kills: input,
+        limitations: []
+      });
+
+    expect(make(kills).raids[0].bosses[0].firstKills).toMatchObject([
+      { killedAt: "2024-10-03T20:00:00.000Z", characters: ["Ryalts"] },
+      { killedAt: "2024-10-01T20:00:00.000Z", characters: ["Ryii"] }
+    ]);
+    expect(make([...kills].reverse())).toEqual(make(kills));
+  });
+
+  it("uses deterministic secondary ordering for distinct boss events with tied timestamps", () => {
+    const kills = [
+      kill(root, {
+        reportUrl: "https://www.warcraftlogs.com/reports/zeta#fight=8"
+      }),
+      kill(altKey, {
+        reportUrl: "https://www.warcraftlogs.com/reports/alpha#fight=8"
+      })
+    ];
+    const make = (input: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, altCharacter],
+        kills: input,
+        limitations: []
+      });
+
+    expect(make(kills).raids[0].bosses[0].firstKills).toMatchObject([
+      {
+        reportUrl: "https://www.warcraftlogs.com/reports/alpha#fight=8",
+        characters: ["Ryalts"]
+      },
+      {
+        reportUrl: "https://www.warcraftlogs.com/reports/zeta#fight=8",
+        characters: ["Ryii"]
+      }
+    ]);
+    expect(make([...kills].reverse())).toEqual(make(kills));
   });
 
   it("uses the same result when tied evidence input is reversed", () => {

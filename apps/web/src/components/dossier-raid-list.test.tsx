@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier } from "@slashwho/contracts";
 
@@ -75,4 +75,92 @@ it("keeps text evidence intact when official artwork is unavailable", () => {
 
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
+});
+
+it("renders distinct boss kill events latest first", () => {
+  // Break caught: the dossier could preserve upstream or domain order and show
+  // an older Mythic event before the most recent evidence for the same boss.
+  render(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                imageUrl: null,
+                firstKills: [
+                  boss.firstKill,
+                  {
+                    ...boss.firstKill,
+                    killedAt: "2025-02-14T20:30:00.000Z",
+                    characters: ["Ryalts"]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const evidence = within(
+    screen.getByRole("group", { name: "Queen Ansurek evidence" })
+  );
+  expect(
+    evidence.getAllByRole("time").map((item) => item.getAttribute("datetime"))
+  ).toEqual(["2025-02-14T20:30:00.000Z", "2025-01-14T20:30:00.000Z"]);
+});
+
+it("uses deterministic secondary ordering for tied boss kill events", () => {
+  render(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                imageUrl: null,
+                firstKills: [
+                  {
+                    ...boss.firstKill,
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/zeta#fight=8"
+                  },
+                  {
+                    ...boss.firstKill,
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/alpha#fight=8",
+                    characters: ["Ryalts"]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const evidence = within(
+    screen.getByRole("group", { name: "Queen Ansurek evidence" })
+  );
+  expect(
+    evidence
+      .getAllByRole("link", { name: "View Warcraft Logs report" })
+      .map((item) => item.getAttribute("href"))
+  ).toEqual([
+    "https://www.warcraftlogs.com/reports/alpha#fight=8",
+    "https://www.warcraftlogs.com/reports/zeta#fight=8"
+  ]);
 });

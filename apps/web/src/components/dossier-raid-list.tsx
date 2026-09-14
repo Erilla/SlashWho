@@ -10,6 +10,20 @@ function displayGuild(
   return guild ? `${guild.name} · ${guild.realm}` : "—";
 }
 
+function compareFirstKillsLatestFirst(
+  a: ApplicantDossier["raids"][number]["bosses"][number]["firstKill"],
+  b: ApplicantDossier["raids"][number]["bosses"][number]["firstKill"]
+): number {
+  return (
+    b.killedAt.localeCompare(a.killedAt) ||
+    (a.reportUrl ?? "").localeCompare(b.reportUrl ?? "") ||
+    (a.guild?.name ?? "").localeCompare(b.guild?.name ?? "") ||
+    (a.guild?.realm ?? "").localeCompare(b.guild?.realm ?? "") ||
+    (a.historicWorldRank ?? -1) - (b.historicWorldRank ?? -1) ||
+    a.characters.join("\0").localeCompare(b.characters.join("\0"))
+  );
+}
+
 export function DossierRaidList({ raids }: DossierRaidListProps) {
   return (
     <section aria-labelledby="historic-mythic-evidence-heading">
@@ -37,7 +51,9 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
               </h3>
               <div className="dossier-boss-list">
                 {raid.bosses.map((boss) => {
-                  const firstKills = boss.firstKills ?? [boss.firstKill];
+                  const firstKills = [
+                    ...(boss.firstKills ?? [boss.firstKill])
+                  ].sort(compareFirstKillsLatestFirst);
                   const firstKill = firstKills[0]!;
                   return (
                     <article
