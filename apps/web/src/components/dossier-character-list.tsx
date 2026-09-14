@@ -1,6 +1,8 @@
 import type { DossierCharacter } from "@slashwho/contracts";
 import { useEffect, useRef, useState } from "react";
 
+import { UpstreamIconLink } from "./upstream-icon-link";
+
 type DossierCharacterListProps = Readonly<{
   characters: readonly DossierCharacter[];
 }>;
@@ -28,12 +30,12 @@ const classColourClass: Record<string, string> = {
   warrior: "warrior"
 };
 
-function characterLinkClass(className: string | null): string {
+function characterNameClass(className: string | null): string {
   const classKey = className?.trim().toLowerCase();
   const colourClass = classKey ? classColourClass[classKey] : undefined;
   return colourClass
-    ? `dossier-character-link dossier-character-link--${colourClass}`
-    : "dossier-character-link";
+    ? `dossier-character-name dossier-character-link--${colourClass}`
+    : "dossier-character-name";
 }
 
 export function DossierCharacterList({
@@ -93,12 +95,15 @@ export function DossierCharacterList({
             key={`${character.key.region}/${character.key.realm}/${character.key.name}`}
           >
             <div>
-              <a
-                className={characterLinkClass(character.className)}
+              <UpstreamIconLink
                 href={character.raiderIoUrl}
+                label={`View ${character.displayName} on Raider.IO`}
+                source="raiderio"
               >
-                {character.displayName}
-              </a>
+                <span className={characterNameClass(character.className)}>
+                  {character.displayName}
+                </span>
+              </UpstreamIconLink>
               <span className="dossier-location">
                 {character.key.region.toUpperCase()} · {character.key.realm}
               </span>

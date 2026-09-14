@@ -59,6 +59,18 @@ it("shows the grouped rank in the summary and retains all distinct report links"
       .getAllByRole("link", { hidden: true })
       .map((link) => link.getAttribute("href"))
   ).toEqual(reportUrls);
+  for (const [index, link] of screen
+    .getAllByRole("link", { hidden: true })
+    .entries()) {
+    expect(link).toHaveAccessibleName(
+      `View Warcraft Logs report ${index + 1} (opens in a new tab)`
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(
+      link.querySelector(".upstream-link-icon--warcraft-logs")
+    ).toBeInTheDocument();
+  }
   expect(screen.getAllByText("First kill")).toHaveLength(1);
 });
 

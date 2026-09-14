@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-import { seedSnapshot } from "./support/seed";
+import { seedCharacterEvidence, seedSnapshot } from "./support/seed";
 
 test("keeps dossier research accessible without horizontal overflow on mobile", async ({
   page
@@ -15,6 +15,7 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
     // and the shared fake Raider.IO fixture deliberately holds a refresh.
     refreshedAt: new Date()
   });
+  await seedCharacterEvidence(key);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
@@ -49,7 +50,11 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await evidence.getByText("View kill evidence").click();
   await expect(
-    evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
+    evidence
+      .getByRole("link", {
+        name: "View Warcraft Logs report (opens in a new tab)"
+      })
+      .first()
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
   expect(
     await page.evaluate(

@@ -129,7 +129,9 @@ describe("DossierPageClient", () => {
       name: "Queen Ansurek evidence"
     });
     expect(
-      within(evidence).getByRole("link", { name: "View Warcraft Logs report" })
+      within(evidence).getByRole("link", {
+        name: "View Warcraft Logs report (opens in a new tab)"
+      })
     ).toHaveAttribute("href", "https://www.warcraftlogs.com/reports/abc123");
     await userEvent
       .setup()

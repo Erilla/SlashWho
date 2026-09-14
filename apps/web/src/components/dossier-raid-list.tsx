@@ -1,6 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { DossierMediaFallback } from "./dossier-media-fallback";
+import { UpstreamIconLink } from "./upstream-icon-link";
 
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
@@ -18,11 +19,15 @@ function ReportLinks({
     <ul className="dossier-report-links">
       {urls.map((url, index) => (
         <li key={url}>
-          <a className="external-link" href={url}>
-            {urls.length === 1
-              ? "View Warcraft Logs report"
-              : `View Warcraft Logs report ${index + 1}`}
-          </a>
+          <UpstreamIconLink
+            href={url}
+            label={
+              urls.length === 1
+                ? "View Warcraft Logs report"
+                : `View Warcraft Logs report ${index + 1}`
+            }
+            source="warcraft_logs"
+          />
         </li>
       ))}
     </ul>
