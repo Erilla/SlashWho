@@ -310,8 +310,8 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
     .getAllByText(/14 (Jan|Feb) 2025/)
     .filter((date) => date.tagName === "TIME");
   expect(dates.map((date) => date.textContent)).toEqual([
-    "14 Jan 2025",
-    "14 Feb 2025"
+    "14 Feb 2025",
+    "14 Jan 2025"
   ]);
 });
 

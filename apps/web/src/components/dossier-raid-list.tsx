@@ -117,7 +117,7 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
   const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
     compareFirstKillsLatestFirst
   );
-  const firstKill = firstKills[0]!;
+  const firstKill = boss.firstKill;
   return (
     <>
       <div className="dossier-boss-heading">

@@ -166,12 +166,12 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].bosses[0]).toMatchObject({
       firstKills: [
         {
-          killedAt: "2024-10-01T20:00:00.000Z",
-          characters: [root]
-        },
-        {
           killedAt: "2024-10-02T20:00:00.000Z",
           characters: [altKey]
+        },
+        {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          characters: [root]
         }
       ]
     });
@@ -499,11 +499,7 @@ describe("applicant dossier", () => {
     });
     expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
-        killedAt: "2024-10-01T20:00:00.000Z",
-        characters: [root, altKey]
-      }),
-      expect.objectContaining({
-        killedAt: "2024-10-02T20:00:00.000Z",
+        killedAt: "2024-10-04T20:00:00.000Z",
         characters: [root]
       }),
       expect.objectContaining({
@@ -511,8 +507,12 @@ describe("applicant dossier", () => {
         characters: [root, altKey]
       }),
       expect.objectContaining({
-        killedAt: "2024-10-04T20:00:00.000Z",
+        killedAt: "2024-10-02T20:00:00.000Z",
         characters: [root]
+      }),
+      expect.objectContaining({
+        killedAt: "2024-10-01T20:00:00.000Z",
+        characters: [root, altKey]
       })
     ]);
   });

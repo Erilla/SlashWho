@@ -337,6 +337,9 @@ export function buildApplicantDossier(
       })
       .sort((a, b) => compareEvidenceLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
+    const earliestFirstKill = [...firstKills].sort((a, b) =>
+      compareEvidence(a.selected, b.selected)
+    )[0]!;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
@@ -352,7 +355,7 @@ export function buildApplicantDossier(
         lookupJournalEncounter(selected.bossId)?.imageUrl ??
         lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
         null,
-      firstKill: firstKills[0]!.firstKill,
+      firstKill: earliestFirstKill.firstKill,
       firstKills: firstKills.map((entry) => entry.firstKill),
       isFinalBoss: selected.isFinalBoss
     });
