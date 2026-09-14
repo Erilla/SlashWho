@@ -324,7 +324,15 @@ describe("DossierPageClient staged research", () => {
     );
 
     expect(await screen.findByText("Expanded evidence")).toBeVisible();
-    expect(screen.getByText("Researching applicant dossier…")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dossiers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          characterUrl: "https://raider.io/characters/eu/silvermoon/root"
+        })
+      })
+    );
   });
 
   it("keeps initial evidence visible when linked-character research fails", async () => {

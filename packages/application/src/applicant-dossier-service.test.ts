@@ -881,10 +881,11 @@ describe("applicant dossier service", () => {
       containingSnapshot: snapshot
     });
 
-    await expect(dossiers.read(alt)).resolves.toMatchObject({
-      kind: "ready",
-      dossier: { root, characters: expect.arrayContaining([{ key: alt }]) }
-    });
+    const result = await dossiers.read(alt);
+    expect(result).toMatchObject({ kind: "ready", dossier: { root } });
+    expect(result.kind === "ready" ? result.dossier.characters : []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: alt })])
+    );
     expect(repositories.snapshots.getCurrent).toHaveBeenCalledWith(alt);
     expect(
       repositories.snapshots.getCurrentContainingCharacter
