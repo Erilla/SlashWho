@@ -197,7 +197,7 @@ describe("applicant evidence job handler", () => {
                 difficulty: 5,
                 reportUrl: "https://www.warcraftlogs.com/reports/report",
                 fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
-                guild: { name: "Guild", realm: "Silvermoon" },
+                guild: { name: "Guild", region: "eu", realm: "Silvermoon" },
                 historicWorldRank: null,
                 performance: {
                   damage: { state: "available" as const, percentile: 0 },
@@ -240,7 +240,7 @@ describe("applicant evidence job handler", () => {
               killedAt: "2026-09-12T20:00:00.000Z",
               reportUrl: "https://www.warcraftlogs.com/reports/report",
               fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
-              guild: { name: "Guild", realm: "Silvermoon" },
+              guild: { name: "Guild", region: "eu", realm: "Silvermoon" },
               historicWorldRank: null,
               performance: {
                 damage: { state: "available", percentile: 0 },
