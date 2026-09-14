@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier } from "@slashwho/contracts";
 
@@ -74,9 +74,9 @@ it("shows the grouped rank in the summary and retains all distinct report links"
   expect(screen.getAllByText("First kill")).toHaveLength(1);
 });
 
-it("renders official raid and boss artwork when supplied", () => {
-  // Break caught: official catalogue media could reach the dossier but never
-  // become visible to a guild reviewer.
+it("renders raid artwork as a decorative banner behind the real heading", () => {
+  // Break caught: raid artwork could be announced as a duplicate identifier
+  // or regress to a thumbnail that does not frame the section heading.
   render(
     <DossierRaidList
       raids={
@@ -98,7 +98,15 @@ it("renders official raid and boss artwork when supplied", () => {
     />
   );
 
-  expect(screen.getByAltText("Nerub-ar Palace artwork")).toHaveAttribute(
+  const heading = screen.getByRole("heading", {
+    level: 3,
+    name: "Nerub-ar Palace"
+  });
+  const artwork = heading.querySelector("img");
+
+  expect(artwork).toHaveAttribute("alt", "");
+  expect(artwork).toHaveAttribute("aria-hidden", "true");
+  expect(artwork).toHaveAttribute(
     "src",
     "https://render.example/raids/nerub-ar.jpg"
   );
@@ -108,7 +116,57 @@ it("renders official raid and boss artwork when supplied", () => {
   );
 });
 
-it("renders fallback artwork when official raid and boss artwork is unavailable", () => {
+it("keeps the raid heading visible when its banner artwork fails to load", () => {
+  // Break caught: a failed Blizzard image request could leave a broken-image
+  // marker over the raid name instead of the text-first fallback.
+  const view = render(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: "https://render.example/raids/missing.jpg",
+            cuttingEdge: null,
+            bosses: [{ ...boss, imageUrl: null }]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const heading = screen.getByRole("heading", {
+    level: 3,
+    name: "Nerub-ar Palace"
+  });
+  const artwork = heading.querySelector("img");
+
+  expect(artwork).not.toBeNull();
+  fireEvent.error(artwork!);
+  expect(artwork).toHaveAttribute("hidden");
+  expect(heading).toBeVisible();
+
+  view.rerender(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: "https://render.example/raids/recovered.jpg",
+            cuttingEdge: null,
+            bosses: [{ ...boss, imageUrl: null }]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+  const recoveredArtwork = heading.querySelector("img");
+  fireEvent.load(recoveredArtwork!);
+  expect(recoveredArtwork).not.toHaveAttribute("hidden");
+});
+
+it("keeps a text-first raid heading when official artwork is unavailable", () => {
   render(
     <DossierRaidList
       raids={
@@ -126,7 +184,10 @@ it("renders fallback artwork when official raid and boss artwork is unavailable"
   );
 
   expect(
-    screen.getByRole("img", { name: "Unmapped raid artwork" })
+    screen.queryByRole("img", { name: "Unmapped raid artwork" })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { level: 3, name: "Unmapped raid" })
   ).toBeVisible();
   expect(
     screen.getByRole("img", { name: "Queen Ansurek artwork" })
