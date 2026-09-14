@@ -102,6 +102,35 @@ const reportFightParsesQuery = `
   }
 `;
 
+const characterEncounterRankingsQuery = `
+  query CharacterEncounterRankings(
+    $name: String!
+    $serverSlug: String!
+    $serverRegion: String!
+    $encounterID: Int!
+    $difficulty: Int!
+  ) {
+    characterData {
+      character(name: $name, serverSlug: $serverSlug, serverRegion: $serverRegion) {
+        name
+        server { slug region { slug } }
+        damage: encounterRankings(
+          compare: Rankings difficulty: $difficulty encounterID: $encounterID
+          metric: dps timeframe: Historical partition: -1
+        )
+        healing: encounterRankings(
+          compare: Rankings difficulty: $difficulty encounterID: $encounterID
+          metric: hps timeframe: Historical partition: -1
+        )
+        bossDamage: encounterRankings(
+          compare: Rankings difficulty: $difficulty encounterID: $encounterID
+          metric: bossdps timeframe: Historical partition: -1
+        )
+      }
+    }
+  }
+`;
+
 export type CreateWarcraftLogsClientOptions = Readonly<{
   fetch: typeof globalThis.fetch;
   clientId: string;
@@ -760,6 +789,65 @@ function decodeCanonicalIdentityIds(
   return ids;
 }
 
+function characterRankingPercentile(value: unknown): WarcraftLogsParseMetric {
+  let best: number | undefined;
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) visit(item);
+      return;
+    }
+    const object = record(candidate);
+    if (!object) return;
+    const rankPercent = object.rankPercent;
+    if (
+      typeof rankPercent === "number" &&
+      Number.isFinite(rankPercent) &&
+      rankPercent >= 0 &&
+      rankPercent <= 100
+    ) {
+      best = Math.max(best ?? rankPercent, rankPercent);
+    }
+    for (const nested of Object.values(object)) visit(nested);
+  };
+  visit(value);
+  return best === undefined
+    ? { state: "unavailable" }
+    : { state: "available", percentile: best };
+}
+
+function decodeCharacterEncounterRankings(
+  value: unknown,
+  key: CharacterKey,
+  bossId: string,
+  difficulty: number
+): WarcraftLogsPerformance | WarcraftLogsLimitation {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const characterData = data && record(data.characterData);
+  const character = characterData && record(characterData.character);
+  const server = character && record(character.server);
+  const region = server && record(server.region);
+  if (
+    !character ||
+    normalizedIdentity(nonEmptyString(character.name) ?? "") !==
+      normalizedIdentity(key.name) ||
+    normalizedRealm(nonEmptyString(server?.slug) ?? "") !==
+      normalizedRealm(key.realm) ||
+    normalizedIdentity(nonEmptyString(region?.slug) ?? "") !==
+      normalizedIdentity(key.region)
+  ) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  if (typeof bossId !== "string" || !Number.isSafeInteger(difficulty)) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  return {
+    damage: characterRankingPercentile(character.damage),
+    healing: characterRankingPercentile(character.healing),
+    bossDamage: characterRankingPercentile(character.bossDamage)
+  };
+}
+
 function normalizedPerformance(
   rows: readonly RankingRow[],
   requestedIds: readonly number[],
@@ -1124,6 +1212,68 @@ export function createWarcraftLogsClient(
             }
         }
       }
+    }
+
+    // Character-level rankings fill the best-shown view when the bounded
+    // report scan could not hydrate every historical report group.
+    if (parseLimitation?.code === "parse_request_cap") {
+      const bosses = new Map<string, { bossId: string; difficulty: number }>();
+      for (const kill of kills.values()) {
+        bosses.set(`${kill.bossId}:${kill.difficulty}`, {
+          bossId: kill.bossId,
+          difficulty: kill.difficulty
+        });
+      }
+      await Promise.all(
+        [...bosses.values()].map(async ({ bossId, difficulty }) => {
+          const rankings = await graphql(
+            characterEncounterRankingsQuery,
+            {
+              name: key.name,
+              serverSlug: key.realm,
+              serverRegion: key.region,
+              encounterID: Number(bossId),
+              difficulty
+            },
+            options.signal
+          ).catch((error: unknown) => {
+            if (options.signal?.reason?.name !== "TimeoutError") throw error;
+            return {
+              kind: "limitation" as const,
+              code: "unavailable" as const
+            };
+          });
+          if (rankings.kind !== "success") return;
+          const performance = decodeCharacterEncounterRankings(
+            rankings.value,
+            key,
+            bossId,
+            difficulty
+          );
+          if (isLimitation(performance)) return;
+          for (const [fightUrl, kill] of kills) {
+            if (kill.bossId !== bossId || kill.difficulty !== difficulty)
+              continue;
+            kills.set(fightUrl, {
+              ...kill,
+              performance: {
+                damage:
+                  kill.performance.damage.state === "unavailable"
+                    ? performance.damage
+                    : kill.performance.damage,
+                healing:
+                  kill.performance.healing.state === "unavailable"
+                    ? performance.healing
+                    : kill.performance.healing,
+                bossDamage:
+                  kill.performance.bossDamage.state === "unavailable"
+                    ? performance.bossDamage
+                    : kill.performance.bossDamage
+              }
+            });
+          }
+        })
+      );
     }
 
     const sortedKills = [...kills.values()].sort(
