@@ -48,8 +48,34 @@ const validDossier = {
             guild: { name: "Guild", realm: "silvermoon" },
             historicWorldRank: null,
             reportUrl: "https://www.warcraftlogs.com/reports/example",
-            characters: [applicantCharacter]
-          }
+            characters: [applicantCharacter],
+            parses: [
+              {
+                character: "Ryii",
+                damage: {
+                  state: "available",
+                  percentile: 98.7,
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/example#fight=9"
+                },
+                healing: { state: "not_applicable" },
+                bossDamage: { state: "unavailable" }
+              }
+            ]
+          },
+          bestParses: [
+            {
+              character: "Ryii",
+              damage: {
+                state: "available",
+                percentile: 98.7,
+                reportUrl:
+                  "https://www.warcraftlogs.com/reports/example#fight=9"
+              },
+              healing: { state: "not_applicable" },
+              bossDamage: { state: "unavailable" }
+            }
+          ]
         }
       ]
     }
@@ -105,6 +131,37 @@ it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
     }).success
   ).toBe(false);
 });
+
+function dossierWithParses(metric: unknown) {
+  return {
+    ...validDossier,
+    raids: validDossier.raids.map((raid) => ({
+      ...raid,
+      bosses: raid.bosses.map((boss) => ({
+        ...boss,
+        firstKill: {
+          ...boss.firstKill,
+          parses: [
+            {
+              character: "Ryii",
+              damage: metric,
+              healing: { state: "not_applicable" },
+              bossDamage: { state: "unavailable" }
+            }
+          ]
+        },
+        bestParses: [
+          {
+            character: "Ryii",
+            damage: metric,
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "unavailable" }
+          }
+        ]
+      }))
+    }))
+  };
+}
 
 const character = {
   region: "eu",
@@ -349,4 +406,40 @@ it("retains an unknown historic world rank as null", () => {
   expect(parsed?.state).toBe("kill");
   if (parsed?.state !== "kill") throw new Error("expected_verified_kill");
   expect(parsed.firstKill.historicWorldRank).toBeNull();
+});
+
+it("strictly validates applicant dossier parse summaries", () => {
+  const available = {
+    state: "available",
+    percentile: 98.7,
+    reportUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+  };
+  expect(
+    applicantDossierSchema.safeParse(dossierWithParses(available)).success
+  ).toBe(true);
+  expect(
+    applicantDossierSchema.safeParse(
+      dossierWithParses({ state: "unavailable", percentile: 50 })
+    ).success
+  ).toBe(false);
+  expect(
+    applicantDossierSchema.safeParse(
+      dossierWithParses({ state: "available", percentile: 50 })
+    ).success
+  ).toBe(false);
+  expect(
+    applicantDossierSchema.safeParse(
+      dossierWithParses({ ...available, bracketPercent: 100 })
+    ).success
+  ).toBe(false);
+  expect(
+    applicantDossierSchema.safeParse(
+      dossierWithParses({ ...available, percentile: 100.001 })
+    ).success
+  ).toBe(false);
+  expect(
+    applicantDossierSchema.safeParse(
+      dossierWithParses({ ...available, percentile: -0.001 })
+    ).success
+  ).toBe(false);
 });

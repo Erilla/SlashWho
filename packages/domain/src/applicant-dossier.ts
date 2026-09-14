@@ -17,6 +17,14 @@ export type DossierCharacter = Readonly<{
   className?: string | null;
   raiderIoUrl?: string;
 }>;
+export type DossierKillParseMetric =
+  | Readonly<{ state: "available"; percentile: number }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+export type DossierKillPerformance = Readonly<{
+  damage: DossierKillParseMetric;
+  healing: DossierKillParseMetric;
+  bossDamage: DossierKillParseMetric;
+}>;
 export type DossierKillEvidence = Readonly<{
   raidId: string;
   raidName: string;
@@ -30,6 +38,7 @@ export type DossierKillEvidence = Readonly<{
   guild: Readonly<{ name: string; realm: string }> | null;
   historicWorldRank: number | null;
   reportUrl: string | null;
+  performance: DossierKillPerformance;
 }>;
 export type DossierWipeEvidence = Readonly<{
   raidId: string;
@@ -68,6 +77,20 @@ export type ApplicantDossierFirstKill = Readonly<{
   reportUrl: string | null;
   reportUrls: readonly string[];
   characters: readonly CharacterKey[];
+  parses: readonly ApplicantDossierCharacterParses[];
+}>;
+export type ApplicantDossierParseMetric =
+  | Readonly<{
+      state: "available";
+      percentile: number;
+      reportUrl: string;
+    }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+export type ApplicantDossierCharacterParses = Readonly<{
+  character: string;
+  damage: ApplicantDossierParseMetric;
+  healing: ApplicantDossierParseMetric;
+  bossDamage: ApplicantDossierParseMetric;
 }>;
 type ApplicantDossierBossMetadata = Readonly<{
   bossId: string;
@@ -86,6 +109,7 @@ export type ApplicantDossierBoss =
         state: "kill";
         firstKill: ApplicantDossierFirstKill;
         firstKills: readonly ApplicantDossierFirstKill[];
+        bestParses: readonly ApplicantDossierCharacterParses[];
       }>)
   | (ApplicantDossierBossMetadata &
       Readonly<{ state: "wipe"; wipe: ApplicantDossierWipe }>)
@@ -222,6 +246,88 @@ function catalogueEncounter(evidence: {
     : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
 }
 
+function selectParseMetric(
+  metrics: readonly ApplicantDossierParseMetric[]
+): ApplicantDossierParseMetric {
+  const available = metrics
+    .filter(
+      (
+        metric
+      ): metric is Extract<
+        ApplicantDossierParseMetric,
+        { state: "available" }
+      > => metric.state === "available"
+    )
+    .sort(
+      (a, b) => b.percentile - a.percentile || text(a.reportUrl, b.reportUrl)
+    );
+  if (available.length > 0) return available[0]!;
+  return metrics.some((metric) => metric.state === "not_applicable")
+    ? { state: "not_applicable" }
+    : { state: "unavailable" };
+}
+
+function parseCandidate(
+  kill: DossierKillEvidence,
+  metric: DossierKillParseMetric
+): ApplicantDossierParseMetric {
+  if (metric.state !== "available") return metric;
+  return kill.reportUrl === null
+    ? { state: "unavailable" }
+    : {
+        state: "available",
+        percentile: metric.percentile,
+        reportUrl: kill.reportUrl
+      };
+}
+
+function aggregateEventParses(
+  kills: readonly DossierKillEvidence[],
+  characters: readonly DossierCharacter[]
+): readonly ApplicantDossierCharacterParses[] {
+  const participants = new Set(
+    kills.map((kill) => canonicalCharacterId(kill.character))
+  );
+  return characters.flatMap((character) => {
+    const characterKills = kills.filter(
+      (kill) =>
+        canonicalCharacterId(kill.character) ===
+        canonicalCharacterId(character.key)
+    );
+    if (!participants.has(canonicalCharacterId(character.key))) return [];
+    return [
+      {
+        character: character.displayName,
+        damage: selectParseMetric(
+          characterKills.map((kill) =>
+            parseCandidate(kill, kill.performance.damage)
+          )
+        ),
+        healing: selectParseMetric(
+          characterKills.map((kill) =>
+            parseCandidate(kill, kill.performance.healing)
+          )
+        ),
+        bossDamage: selectParseMetric(
+          characterKills.map((kill) =>
+            parseCandidate(kill, kill.performance.bossDamage)
+          )
+        )
+      }
+    ];
+  });
+}
+
+function aggregateBossParses(
+  events: readonly (readonly DossierKillEvidence[])[],
+  characters: readonly DossierCharacter[]
+): readonly ApplicantDossierCharacterParses[] {
+  // The events are already formed by the displayed-evidence grouping seam.
+  // Re-aggregating their supporting rows by canonical key avoids merging
+  // distinct characters which happen to share a display name.
+  return aggregateEventParses(events.flat(), characters);
+}
+
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
@@ -309,6 +415,7 @@ export function buildApplicantDossier(
         );
         return {
           selected,
+          shared,
           firstKill: {
             killedAt: selected.killedAt,
             guild: attributed ?? null,
@@ -317,7 +424,8 @@ export function buildApplicantDossier(
             reportUrls,
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
-              .map((c) => c.key)
+              .map((c) => c.key),
+            parses: aggregateEventParses(shared, input.characters)
           }
         };
       })
@@ -340,6 +448,10 @@ export function buildApplicantDossier(
         null,
       firstKill: firstKills[0]!.firstKill,
       firstKills: firstKills.map((entry) => entry.firstKill),
+      bestParses: aggregateBossParses(
+        firstKills.map((entry) => entry.shared),
+        input.characters
+      ),
       isFinalBoss: selected.isFinalBoss
     });
     raids.set(selected.raidId, raid);

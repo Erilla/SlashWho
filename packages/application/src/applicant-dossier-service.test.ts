@@ -65,6 +65,7 @@ function fixture(
     includeCachedKills?: boolean;
     evidenceStatus?: "complete" | "partial";
     wipeCapable?: boolean;
+    evidenceLimitationCode?: string | null;
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -115,7 +116,8 @@ function fixture(
           status: options.evidenceStatus ?? "complete",
           attempt: 1,
           limitationCode:
-            options.evidenceStatus === "partial" ? "request_cap" : null,
+            options.evidenceLimitationCode ??
+            (options.evidenceStatus === "partial" ? "request_cap" : null),
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
           startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -129,7 +131,10 @@ function fixture(
             status: options.evidenceStatus ?? "complete",
             attempt: 1,
             limitationCode:
-              options.evidenceStatus === "partial" ? "request_cap" : null,
+              options.evidenceLimitationCode ??
+              (options.evidenceStatus === "partial"
+                ? "request_cap"
+                : null),
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -727,6 +732,35 @@ describe("applicant dossier service", () => {
       });
       await dossiers.read(root);
       expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([
+    "parse_private",
+    "parse_rate_limited",
+    "parse_request_cap",
+    "parse_unavailable",
+    "parse_schema_drift"
+  ] as const)(
+    "describes Warcraft Logs %s as missing parse availability, not kill history",
+    async (code) => {
+      const { dossiers } = fixture({ evidenceLimitationCode: code });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      const limitation = result.dossier.limitations.find(
+        (item) =>
+          item.source === "warcraft_logs" &&
+          item.character !== null &&
+          item.character.name === root.name
+      );
+      expect(limitation).toEqual(
+        expect.objectContaining({
+          code,
+          message: expect.stringMatching(/parse/i)
+        })
+      );
+      expect(limitation!.message).not.toContain("history is incomplete");
     }
   );
 

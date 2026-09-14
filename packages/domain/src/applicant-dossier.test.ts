@@ -47,6 +47,11 @@ function kill(
     guild: { name: "Example Guild", realm: "silvermoon" },
     historicWorldRank: 147,
     reportUrl: "https://www.warcraftlogs.com/reports/shared#fight=8",
+    performance: {
+      damage: { state: "unavailable" },
+      healing: { state: "unavailable" },
+      bossDamage: { state: "unavailable" }
+    },
     ...overrides
   };
 }
@@ -124,6 +129,178 @@ describe("applicant dossier", () => {
     });
     expect(partial.raids[0]?.bosses[0]).toMatchObject({ state: "incomplete" });
   });
+
+  it("aggregates fight parses by displayed event and boss", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, {
+          reportUrl: "https://www.warcraftlogs.com/reports/b#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 90 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "not_applicable" }
+          }
+        }),
+        kill(root, {
+          killedAt: "2024-10-01T20:00:01.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/a#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 90 },
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-01T20:00:02.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 73 },
+            healing: { state: "available", percentile: 88 },
+            bossDamage: { state: "available", percentile: 66 }
+          }
+        }),
+        kill(root, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 95 },
+            healing: { state: "available", percentile: 70 },
+            bossDamage: { state: "available", percentile: 92 }
+          }
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-02T20:00:01.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/e#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 72 },
+            healing: { state: "available", percentile: 99 },
+            bossDamage: { state: "available", percentile: 67 }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    const boss = dossier.raids[0]!.bosses[0]!;
+    expect(boss.firstKill.parses).toEqual([
+      {
+        character: "Ryii",
+        damage: {
+          state: "available",
+          percentile: 90,
+          reportUrl: "https://www.warcraftlogs.com/reports/a#fight=8"
+        },
+        healing: { state: "not_applicable" },
+        bossDamage: { state: "not_applicable" }
+      },
+      {
+        character: "Ryalts",
+        damage: {
+          state: "available",
+          percentile: 73,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        },
+        healing: {
+          state: "available",
+          percentile: 88,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        },
+        bossDamage: {
+          state: "available",
+          percentile: 66,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        }
+      }
+    ]);
+    expect(boss.bestParses).toEqual([
+      {
+        character: "Ryii",
+        damage: {
+          state: "available",
+          percentile: 95,
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8"
+        },
+        healing: {
+          state: "available",
+          percentile: 70,
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8"
+        },
+        bossDamage: {
+          state: "available",
+          percentile: 92,
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8"
+        }
+      },
+      {
+        character: "Ryalts",
+        damage: {
+          state: "available",
+          percentile: 73,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        },
+        healing: {
+          state: "available",
+          percentile: 99,
+          reportUrl: "https://www.warcraftlogs.com/reports/e#fight=8"
+        },
+        bossDamage: {
+          state: "available",
+          percentile: 67,
+          reportUrl: "https://www.warcraftlogs.com/reports/e#fight=8"
+        }
+      }
+    ]);
+  });
+
+  it("keeps same-named characters' boss parses independent", () => {
+    const sameNamedAlt: CharacterKey = {
+      region: "us",
+      realm: "illidan",
+      name: "ryii"
+    };
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, { key: sameNamedAlt, displayName: "Ryii" }],
+      kills: [
+        kill(root, {
+          reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 90 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }),
+        kill(sameNamedAlt, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 70 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(
+      dossier.raids[0]!.bosses[0]!.bestParses.map((parse) => parse.damage)
+    ).toEqual([
+      {
+        state: "available",
+        percentile: 90,
+        reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8"
+      },
+      {
+        state: "available",
+        percentile: 70,
+        reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8"
+      }
+    ]);
+  });
+
   it("credits shared earliest evidence and propagates limitations", () => {
     const dossier = buildApplicantDossier({
       root,
