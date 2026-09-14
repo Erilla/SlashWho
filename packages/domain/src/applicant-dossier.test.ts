@@ -79,15 +79,73 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].bosses[0]).toMatchObject({
       firstKills: [
         {
-          killedAt: "2024-10-01T20:00:00.000Z",
-          characters: ["Ryii"]
-        },
-        {
           killedAt: "2024-10-02T20:00:00.000Z",
           characters: ["Ryalts"]
+        },
+        {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          characters: ["Ryii"]
         }
       ]
     });
+  });
+
+  it("shows distinct boss events latest first regardless of source order", () => {
+    // Break caught: the evidence event list reused the ascending first-kill
+    // selector, so a reviewer saw older reports before newer reports.
+    const forward = [
+      kill(root, {
+        killedAt: "2024-10-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8"
+      }),
+      kill(altKey, {
+        killedAt: "2024-10-02T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8"
+      })
+    ];
+    const make = (kills: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, altCharacter],
+        kills,
+        limitations: []
+      });
+
+    expect(make(forward).raids[0]?.bosses[0]?.firstKills).toMatchObject([
+      { killedAt: "2024-10-02T20:00:00.000Z" },
+      { killedAt: "2024-10-01T20:00:00.000Z" }
+    ]);
+    expect(make([...forward].reverse())).toEqual(make(forward));
+  });
+
+  it("orders tied distinct boss events deterministically", () => {
+    // Break caught: equal event timestamps could leave the displayed report
+    // sequence dependent on Warcraft Logs source order.
+    const forward = [
+      kill(root, {
+        reportUrl: "https://www.warcraftlogs.com/reports/a#fight=8"
+      }),
+      kill(altKey, {
+        reportUrl: "https://www.warcraftlogs.com/reports/z#fight=8"
+      })
+    ];
+    const make = (kills: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, altCharacter],
+        kills,
+        limitations: []
+      });
+
+    expect(
+      make(forward).raids[0]?.bosses[0]?.firstKills.map(
+        (evidence) => evidence.reportUrl
+      )
+    ).toEqual([
+      "https://www.warcraftlogs.com/reports/z#fight=8",
+      "https://www.warcraftlogs.com/reports/a#fight=8"
+    ]);
+    expect(make([...forward].reverse())).toEqual(make(forward));
   });
 
   it("uses the same result when tied evidence input is reversed", () => {

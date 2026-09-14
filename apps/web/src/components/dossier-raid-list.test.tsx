@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier } from "@slashwho/contracts";
 
@@ -75,4 +76,46 @@ it("keeps text evidence intact when official artwork is unavailable", () => {
 
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
+});
+
+it("renders each boss's consolidated evidence latest first", async () => {
+  // Break caught: a dossier whose domain events were ordered latest first could
+  // still render the supporting reports in the opposite order.
+  render(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                imageUrl: null,
+                firstKills: [
+                  { ...boss.firstKill, killedAt: "2025-01-14T20:30:00.000Z" },
+                  { ...boss.firstKill, killedAt: "2025-01-10T20:30:00.000Z" }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const evidence = screen.getByRole("group", {
+    name: "Queen Ansurek evidence"
+  });
+  await userEvent
+    .setup()
+    .click(within(evidence).getByText("View first-kill evidence"));
+
+  expect(
+    within(evidence)
+      .getAllByText(/Jan 2025/)
+      .map((element) => element.getAttribute("datetime"))
+  ).toEqual(["2025-01-14T20:30:00.000Z", "2025-01-10T20:30:00.000Z"]);
 });

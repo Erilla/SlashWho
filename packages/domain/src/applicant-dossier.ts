@@ -114,6 +114,12 @@ function compareEvidence(
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
 }
+function compareEventsLatestFirst(
+  a: DossierKillEvidence,
+  b: DossierKillEvidence
+): number {
+  return compareEvidence(b, a);
+}
 function characterBossKey(k: DossierKillEvidence): string {
   return [canonicalCharacterId(k.character), k.raidId, k.bossId].join("\0");
 }
@@ -210,7 +216,7 @@ export function buildApplicantDossier(
           }
         };
       })
-      .sort((a, b) => compareEvidence(a.selected, b.selected));
+      .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
