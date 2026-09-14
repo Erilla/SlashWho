@@ -67,18 +67,23 @@ export function DossierRaidList({ raids }: DossierRaidListProps) {
               <h3 className="dossier-raid-heading">
                 {raid.imageUrl ? (
                   <img
-                    alt={`${raid.raidName} artwork`}
+                    alt=""
+                    aria-hidden="true"
                     className="dossier-raid-artwork"
+                    decoding="async"
+                    height="180"
                     loading="lazy"
+                    onError={({ currentTarget }) => {
+                      currentTarget.hidden = true;
+                    }}
+                    onLoad={({ currentTarget }) => {
+                      currentTarget.hidden = false;
+                    }}
                     src={raid.imageUrl}
+                    width="800"
                   />
-                ) : (
-                  <DossierMediaFallback
-                    alt={`${raid.raidName} artwork`}
-                    className="dossier-raid-artwork"
-                  />
-                )}
-                <span>{raid.raidName}</span>
+                ) : null}
+                <span className="dossier-raid-name">{raid.raidName}</span>
               </h3>
               <div className="dossier-boss-list">
                 {raid.bosses.map((boss) => {
