@@ -30,6 +30,13 @@ for (const applicantUrl of applicantUrls) {
     await expect(page).toHaveURL(
       /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
     );
+    await expect(page.getByLabel("Applicant URL")).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Research applicant" })
+    ).toHaveCount(1);
+    await expect(page.locator("main").getByLabel("Applicant URL")).toHaveCount(
+      0
+    );
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
