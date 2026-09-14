@@ -49,7 +49,6 @@ function displayDate(isoDate: string): string {
     timeZone: "UTC"
   }).format(new Date(isoDate));
 }
-
 function StatusIcon({ state }: { state: "kill" | "wipe" | "no_logs" }) {
   const label =
     state === "kill"

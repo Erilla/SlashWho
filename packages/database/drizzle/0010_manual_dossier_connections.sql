@@ -8,4 +8,3 @@ CREATE TABLE "manual_dossier_connections" (
 --> statement-breakpoint
 ALTER TABLE "manual_dossier_connections" ADD CONSTRAINT "manual_dossier_connections_root_character_id_characters_id_fk" FOREIGN KEY ("root_character_id") REFERENCES "public"."characters"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "manual_dossier_connections" ADD CONSTRAINT "manual_dossier_connections_connected_character_id_characters_id_fk" FOREIGN KEY ("connected_character_id") REFERENCES "public"."characters"("id") ON DELETE cascade ON UPDATE no action;
-
