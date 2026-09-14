@@ -689,7 +689,7 @@ a {
 }
 
 .dossier-evidence-icon--wipe {
-  color: var(--warning, #f59e0b);
+  color: var(--muted);
 }
 
 .dossier-evidence-icon--no_logs {
@@ -741,6 +741,12 @@ a {
   margin-top: 1rem;
   overflow-y: auto;
   padding-right: 0.35rem;
+}
+
+.dossier-evidence-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
 }
 
 .dossier-evidence {
