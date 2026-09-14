@@ -11,7 +11,7 @@ export default function Home() {
         </h1>
         <p className="home-introduction">
           Research a World of Warcraft applicant from a Raider.IO or Warcraft
-          Logs character URL.
+          Logs character URL, or by character name and realm.
         </p>
         <SearchForm />
       </section>
