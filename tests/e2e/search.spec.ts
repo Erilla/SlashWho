@@ -248,8 +248,18 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(
     firstEventParses.getByRole("link", { name: "Damage 99.2 percentile" })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
-  await expect(latestEventParses).toContainText("Laterparse");
-  await expect(firstEventParses).toContainText("Parsecheck");
+  await expect(
+    latestEventParses.getByRole("group", { name: "Laterparse parses" })
+  ).toBeVisible();
+  await expect(
+    firstEventParses.getByRole("group", { name: "Parsecheck parses" })
+  ).toBeVisible();
+  await expect(
+    latestEventParses.getByText("Laterparse", { exact: true })
+  ).toHaveCount(0);
+  await expect(
+    firstEventParses.getByText("Parsecheck", { exact: true })
+  ).toHaveCount(0);
   await expect(latestEventParses.locator("xpath=ancestor::dl")).not.toHaveClass(
     /dossier-evidence-first-kill/
   );
