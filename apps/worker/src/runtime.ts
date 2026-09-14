@@ -258,7 +258,7 @@ export async function createWorkerRuntime(
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
       const removedEvidenceRuns = await (
-        (repositories.evidence as unknown) as {
+        repositories.evidence as unknown as {
           cleanupExpired(at?: Date): Promise<number>;
         }
       ).cleanupExpired();
