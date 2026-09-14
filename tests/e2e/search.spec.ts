@@ -189,10 +189,10 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/parsecheck");
   const boss = page.getByRole("group", { name: "Queen Ansurek evidence" });
-  const firstKillParses = boss.getByRole("region", {
-    name: "First kill parses"
-  });
-  const bestParses = boss.getByRole("region", { name: "Best shown parses" });
+  const firstKillParses = boss.locator(
+    ":scope > [aria-label='First kill parses']"
+  );
+  const bestParses = boss.locator(":scope > [aria-label='Best shown parses']");
   await expect(firstKillParses).toBeVisible();
   await expect(bestParses).toBeVisible();
   await expect(
@@ -217,6 +217,24 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await firstKillParses.scrollIntoViewIfNeeded();
+  await expect(firstKillParses).toBeVisible();
+  await expect(firstKillParses).toBeInViewport();
+  await expect(
+    firstKillParses.getByRole("link", { name: "Damage 87.1 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+
+  const mobileEventParses = evidence.getByRole("region", {
+    name: "First kill parses"
+  });
+  await mobileEventParses.scrollIntoViewIfNeeded();
+  await expect(mobileEventParses).toBeVisible();
+  await expect(mobileEventParses).toBeInViewport();
+  await expect(
+    mobileEventParses.getByRole("link", {
+      name: "Damage 87.1 percentile"
+    })
+  ).toHaveAttribute("href", /e2eReport#fight=9$/);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
