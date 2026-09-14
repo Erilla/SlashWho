@@ -912,6 +912,93 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("drops Mythic wipe evidence for bosses already killed in the same report", async () => {
+    // Break caught: a wipe row from the same report and boss as a kill can
+    // remain and create a false impression of mixed progression status.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "mixedReport",
+                        startTime: 1_706_918_400_000,
+                        zone: {
+                          id: 42,
+                          name: "Nerub-ar Palace",
+                          encounters: [{ id: 1234, journalID: 2345 }]
+                        },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 1,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 120_000,
+                            endTime: 180_000,
+                            kill: false,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          },
+                          {
+                            id: 2,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 360_000,
+                            endTime: 420_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          },
+                          {
+                            id: 3,
+                            encounterID: 4321,
+                            name: "The Silken Court",
+                            startTime: 600_000,
+                            endTime: 660_000,
+                            kill: false,
+                            difficulty: 5,
+                            friendlyPlayers: [7]
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [{ bossId: "1234" }],
+      wipes: [{ bossId: "4321" }]
+    });
+    expect(result).not.toMatchObject({
+      wipes: [{ bossId: "1234" }]
+    });
+  });
+
   it("retains every wipe newest-first with a stable report tie-break", async () => {
     // Break caught: keeping only the latest wipe hides earlier progression
     // evidence, while ties must not depend on upstream report order.

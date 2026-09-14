@@ -211,6 +211,11 @@ function killEventKey(kill: DossierKillEvidence): string {
   return [kill.character.region, utcDate].join("\0");
 }
 
+function reportIdentity(reportUrl: string): string {
+  const hashIndex = reportUrl.indexOf("#");
+  return hashIndex === -1 ? reportUrl : reportUrl.slice(0, hashIndex);
+}
+
 function compareAttributedGuild(
   a: NonNullable<DossierKillEvidence["guild"]>,
   b: NonNullable<DossierKillEvidence["guild"]>
@@ -416,6 +421,18 @@ export function buildApplicantDossier(
       tierOrdinal: number | null;
     }
   >();
+  const wipesByBoss = new Map<
+    string,
+    Array<DossierWipeEvidence & RaidCatalogueEncounter>
+  >();
+  for (const suppliedWipe of input.wipes ?? []) {
+    const metadata = catalogueEncounter(suppliedWipe);
+    if (!metadata) continue;
+    const wipe = { ...suppliedWipe, ...metadata };
+    const key = `${metadata.raidId}\0${metadata.bossId}`;
+    wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
+  }
+
   for (const kills of byBoss.values()) {
     const groupedEvidence = new Map<string, DossierKillEvidence[]>();
     for (const kill of [...kills].sort(compareEvidence)) {
@@ -462,12 +479,21 @@ export function buildApplicantDossier(
       })
       .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
+    const killReportUrls = new Set(
+      kills.flatMap((kill) =>
+        kill.reportUrl === null ? [] : [reportIdentity(kill.reportUrl)]
+      )
+    );
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
       bosses: [],
       tierOrdinal: lookupRaidByName(selected.raidName)?.tierOrdinal ?? null
     };
+    const wipeKey = `${selected.raidId}\0${selected.bossId}`;
+    const wipesForBoss = (wipesByBoss.get(wipeKey) ?? []).filter(
+      (wipe) => !killReportUrls.has(reportIdentity(wipe.reportUrl))
+    );
     raid.bosses.push({
       state: "kill",
       bossId: selected.bossId,
@@ -483,24 +509,14 @@ export function buildApplicantDossier(
         firstKills.map((entry) => entry.shared),
         characters
       ),
-      isFinalBoss: selected.isFinalBoss
+      isFinalBoss: selected.isFinalBoss,
+      wipes: aggregateWipes(wipesForBoss)
     });
     raids.set(selected.raidId, raid);
   }
-  const wipesByBoss = new Map<
-    string,
-    Array<DossierWipeEvidence & RaidCatalogueEncounter>
-  >();
-  for (const suppliedWipe of input.wipes ?? []) {
-    const metadata = catalogueEncounter(suppliedWipe);
-    if (!metadata) continue;
-    const wipe = { ...suppliedWipe, ...metadata };
-    const key = `${metadata.raidId}\0${metadata.bossId}`;
-    wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
-  }
-  const aggregateWipes = (
+  function aggregateWipes(
     wipes: readonly (DossierWipeEvidence & RaidCatalogueEncounter)[]
-  ): ApplicantDossierWipe[] => {
+  ): ApplicantDossierWipe[] {
     const grouped = new Map<
       string,
       (DossierWipeEvidence & RaidCatalogueEncounter)[]
@@ -532,7 +548,7 @@ export function buildApplicantDossier(
         (a, b) =>
           text(b.attemptedAt, a.attemptedAt) || text(a.reportUrl, b.reportUrl)
       );
-  };
+  }
   const completeCharacters = new Set(
     (input.completeWarcraftLogsCharacters ?? []).map(canonicalCharacterId)
   );
@@ -557,13 +573,21 @@ export function buildApplicantDossier(
             if (observedKill) {
               const { isFinalBoss, ...boss } = observedKill;
               void isFinalBoss;
+              const killReportUrls = new Set(
+                boss.firstKills.flatMap((kill) =>
+                  kill.reportUrls.map(reportIdentity)
+                )
+              );
+              const wipesForBoss = (
+                wipesByBoss.get(
+                  `${catalogueRaid.raidId}\0${encounter.bossId}`
+                ) ?? []
+              ).filter(
+                (wipe) => !killReportUrls.has(reportIdentity(wipe.reportUrl))
+              );
               return {
                 ...boss,
-                wipes: aggregateWipes(
-                  wipesByBoss.get(
-                    `${catalogueRaid.raidId}\0${encounter.bossId}`
-                  ) ?? []
-                )
+                wipes: aggregateWipes(wipesForBoss)
               };
             }
             const wipes = wipesByBoss.get(

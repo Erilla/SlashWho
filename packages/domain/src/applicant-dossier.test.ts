@@ -441,6 +441,52 @@ describe("applicant dossier", () => {
     ]);
   });
 
+  it("hides wipes from the same report when building a kill boss", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidName: "Nerub-ar Palace",
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8,
+          reportUrl: "https://www.warcraftlogs.com/reports/shared#fight=2"
+        })
+      ],
+      wipes: [
+        wipe(root, {
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8,
+          attemptedAt: "2024-10-02T21:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/shared#fight=1"
+        }),
+        wipe(root, {
+          bossName: "Sikran",
+          journalBossId: "2599",
+          bossOrder: 5,
+          attemptedAt: "2024-10-02T22:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/other#fight=3"
+        })
+      ],
+      limitations: []
+    });
+
+    const raid = dossier.raids.find(
+      (candidate) => candidate.raidName === "Nerub-ar Palace"
+    )!;
+    const queen = verifiedKill(
+      raid.bosses.find((candidate) => candidate.bossName === "Queen Ansurek")!
+    );
+    expect(queen.wipes).toEqual([]);
+    expect(
+      raid.bosses.find(
+        (candidate) => candidate.bossName === "Sikran, Captain of the Sureki"
+      )
+    ).toMatchObject({ state: "wipe" });
+  });
+
   it("keeps each character's distinct first kill for the same boss", () => {
     // Break caught: selecting only the dossier-wide earliest kill hid an alt's
     // later, distinct report instead of retaining its own first-kill evidence.
