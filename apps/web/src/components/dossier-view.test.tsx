@@ -317,9 +317,10 @@ describe("DossierPageClient", () => {
       "dossier-character-name--mage"
     );
 
-    const evidenceDefinitions =
-      document.querySelectorAll<HTMLDListElement>(".dossier-evidence");
-    expect(within(evidenceDefinitions[1]!).getByText("Ryii")).toHaveClass(
+    const firstKillEvidence = document.querySelector<HTMLDListElement>(
+      ".dossier-evidence-first-kill"
+    )!;
+    expect(within(firstKillEvidence).getByText("Ryii")).toHaveClass(
       "dossier-character-name--mage"
     );
 
