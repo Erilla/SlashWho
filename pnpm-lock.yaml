@@ -39,7 +39,7 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
       pg-boss:
-        specifier: ^12.27.0
+        specifier: 12.27.0
         version: 12.27.0
       playwright:
         specifier: 1.62.1
@@ -141,6 +141,9 @@ importers:
       '@slashwho/raiderio':
         specifier: workspace:*
         version: link:../../packages/raiderio
+      '@slashwho/warcraftlogs':
+        specifier: workspace:*
+        version: link:../../packages/warcraftlogs
       pg:
         specifier: ^8.22.0
         version: 8.22.0
@@ -206,7 +209,7 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
       pg-boss:
-        specifier: ^12.27.0
+        specifier: 12.27.0
         version: 12.27.0
       tsx:
         specifier: 4.23.5

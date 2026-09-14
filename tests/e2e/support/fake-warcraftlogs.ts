@@ -46,6 +46,10 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
                     {
                       code: "e2eReport",
                       startTime: 1_736_800_000_000,
+                      guild: {
+                        name: "Arachnid",
+                        server: { slug: "silvermoon" }
+                      },
                       zone: { id: 42, name: "Nerub-ar Palace" },
                       masterData: {
                         actors: [
@@ -60,6 +64,37 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
                       fights: [
                         {
                           id: 9,
+                          encounterID: 1234,
+                          name: "Queen Ansurek",
+                          startTime: 3_600_000,
+                          endTime: 3_900_000,
+                          kill: true,
+                          difficulty: 5,
+                          friendlyPlayers: [7]
+                        }
+                      ]
+                    },
+                    {
+                      code: "e2eSecondReport",
+                      startTime: 1_736_803_600_000,
+                      guild: {
+                        name: "Arachnid",
+                        server: { slug: "silvermoon" }
+                      },
+                      zone: { id: 42, name: "Nerub-ar Palace" },
+                      masterData: {
+                        actors: [
+                          {
+                            id: 7,
+                            name,
+                            server: serverName,
+                            type: "Player"
+                          }
+                        ]
+                      },
+                      fights: [
+                        {
+                          id: 10,
                           encounterID: 1234,
                           name: "Queen Ansurek",
                           startTime: 3_600_000,

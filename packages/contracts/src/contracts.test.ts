@@ -25,6 +25,8 @@ const validDossier = {
     {
       key: applicantCharacter,
       displayName: "Ryii",
+      className: "Mage",
+      raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
       source: "raiderio_declared"
     }
   ],
@@ -45,7 +47,7 @@ const validDossier = {
             guild: { name: "Guild", realm: "silvermoon" },
             historicWorldRank: null,
             reportUrl: "https://www.warcraftlogs.com/reports/example",
-            characters: ["Ryii"]
+            characters: [applicantCharacter]
           }
         }
       ]
@@ -249,6 +251,26 @@ it("accepts a strict applicant dossier request and response", () => {
     characterUrl
   });
   expect(applicantDossierSchema.parse(validDossier)).toEqual(validDossier);
+  const stringParticipants = {
+    ...validDossier,
+    raids: [
+      {
+        ...validDossier.raids[0]!,
+        bosses: [
+          {
+            ...validDossier.raids[0]!.bosses[0]!,
+            firstKill: {
+              ...validDossier.raids[0]!.bosses[0]!.firstKill,
+              characters: ["Ryii"]
+            }
+          }
+        ]
+      }
+    ]
+  };
+  expect(applicantDossierSchema.safeParse(stringParticipants).success).toBe(
+    false
+  );
   expect(() =>
     applicantDossierSchema.parse({ ...validDossier, rawResponse: {} })
   ).toThrow();

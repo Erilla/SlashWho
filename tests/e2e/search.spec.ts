@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-import { seedSnapshot } from "./support/seed";
+import { seedCharacterEvidence, seedSnapshot } from "./support/seed";
 
 const applicantUrls = [
   "https://raider.io/characters/eu/silvermoon/Ryii",
@@ -18,6 +18,11 @@ for (const applicantUrl of applicantUrls) {
       displayName: "Ryii",
       refreshedAt: new Date("2026-09-11T00:00:00.000Z")
     });
+    await seedCharacterEvidence({
+      region: "eu",
+      realm: "silvermoon",
+      name: "ryii"
+    });
     await page.goto("/");
     await page.getByLabel("Applicant URL").fill(applicantUrl);
     await page.getByRole("button", { name: "Research applicant" }).click();
@@ -28,20 +33,54 @@ for (const applicantUrl of applicantUrls) {
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
+    const raiderIoLink = page.getByRole("link", {
+      name: "View Ryii on Raider.IO (opens in a new tab)"
+    });
+    await expect(raiderIoLink).toHaveAttribute(
+      "href",
+      /raider\.io\/characters\/eu\/silvermoon\/ryii$/
+    );
+    await expect(raiderIoLink).toHaveAttribute("target", "_blank");
     await expect(page.getByText("Queen Ansurek")).toBeVisible();
-    await page
-      .getByRole("group", { name: "Queen Ansurek evidence" })
-      .getByText("View first-kill evidence")
-      .click();
-    await expect(
-      page.getByRole("link", { name: "View Warcraft Logs report" })
-    ).toBeVisible();
+    const evidence = page.getByRole("group", {
+      name: "Queen Ansurek evidence"
+    });
+    await expect(evidence.getByText("World #147")).toBeVisible();
+    await evidence.getByText("View kill evidence").click();
+    await expect
+      .poll(() =>
+        evidence
+          .locator(".dossier-evidence time")
+          .evaluateAll((times) =>
+            times.map((time) => time.getAttribute("datetime"))
+          )
+      )
+      .toEqual(["2025-01-13T21:31:40.000Z"]);
+    const reportLinks = evidence.getByRole("link", {
+      name: /View Warcraft Logs report/
+    });
+    await expect(reportLinks).toHaveCount(2);
+    expect(
+      await reportLinks.evaluateAll((links) =>
+        links.map((link) => link.getAttribute("href"))
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
+        "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
+      ])
+    );
   });
 }
 
 test("shows submitted-character evidence while queued discovery is held", async ({
   page
 }) => {
+  await seedCharacterEvidence({
+    region: "eu",
+    realm: "silvermoon",
+    name: "queued"
+  });
   await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/hold`);
   await page.goto("/");
   await page
@@ -64,10 +103,21 @@ test("shows submitted-character evidence while queued discovery is held", async 
     page.getByText("Linked-character research is complete.", { exact: true })
   ).toBeVisible();
   await expect(initialDisclosure).not.toBeVisible();
-  await evidence.getByText("View first-kill evidence").click();
-  await expect(
-    evidence.getByRole("link", { name: "View Warcraft Logs report" })
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+  await evidence.getByText("View kill evidence").click();
+  const reportLinks = evidence.getByRole("link", {
+    name: /View Warcraft Logs report/
+  });
+  await expect(reportLinks).toHaveCount(2);
+  expect(
+    await reportLinks.evaluateAll((links) =>
+      links.map((link) => link.getAttribute("href"))
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
+      "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
+    ])
+  );
 });
 
 test("discloses that a partial snapshot may omit linked characters", async ({

@@ -46,6 +46,8 @@ export function serializeDossierCharacter(
   return {
     key: character.key,
     displayName: character.displayName,
+    className: character.className,
+    raiderIoUrl: character.raiderIoUrl,
     source: dossierSourceLabels[character.source]
   };
 }

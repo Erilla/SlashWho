@@ -6,6 +6,7 @@ export {
   toRaiderIoUrl
 } from "./character-key";
 export type { CharacterKey, Region } from "./character-key";
+export { lookupRaiderIoBoss } from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,
@@ -44,3 +45,11 @@ export type {
   FingerprintGateway,
   FingerprintSweepOutcome
 } from "./fingerprint-discovery";
+export {
+  buildBoundedCuttingEdgeSequence,
+  lookupCuttingEdgeAchievement
+} from "./cutting-edge-catalogue";
+export type {
+  CuttingEdgeCatalogueAchievement,
+  CuttingEdgeSequenceEntry
+} from "./cutting-edge-catalogue";

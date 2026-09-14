@@ -147,11 +147,19 @@ function completedAchievementsFromResponse(
   for (const achievement of response.achievements) {
     const entry = valueRecord(achievement);
     const id = entry && finiteNumber(entry.id);
-    const timestamp = entry && finiteNumber(entry.completed_timestamp);
-    if (id === null || timestamp === null || !Number.isSafeInteger(id))
-      continue;
-    const completedAt = new Date(timestamp).toISOString();
-    if (Number.isNaN(Date.parse(completedAt))) continue;
+    if (entry === null || id === null || !Number.isSafeInteger(id) || id <= 0)
+      return null;
+    if (!("completed_timestamp" in entry)) continue;
+    const timestamp = finiteNumber(entry.completed_timestamp);
+    if (
+      timestamp === null ||
+      !Number.isSafeInteger(timestamp) ||
+      timestamp <= 0
+    )
+      return null;
+    const completedDate = new Date(timestamp);
+    if (Number.isNaN(completedDate.getTime())) return null;
+    const completedAt = completedDate.toISOString();
     achievements.push({ achievementId: String(id), completedAt });
   }
   return achievements;
@@ -165,9 +173,22 @@ export function createBlizzardClient(
   options: CreateBlizzardClientOptions
 ): BlizzardGateway {
   let cachedToken: AccessToken | undefined;
+  let tokenRequest: Promise<string> | undefined;
   let cachedClassNames: ReadonlyMap<number, string> | undefined;
 
   async function accessToken(signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    tokenRequest ??= fetchAccessToken(AbortSignal.timeout(15_000)).finally(
+      () => {
+        tokenRequest = undefined;
+      }
+    );
+    const token = await tokenRequest;
+    signal?.throwIfAborted();
+    return token;
+  }
+
+  async function fetchAccessToken(signal?: AbortSignal): Promise<string> {
     if (cachedToken && cachedToken.expiresAt > Date.now()) {
       return cachedToken.value;
     }

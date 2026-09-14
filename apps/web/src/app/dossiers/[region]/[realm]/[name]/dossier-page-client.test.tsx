@@ -5,6 +5,11 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 
+const push = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push })
+}));
+
 import { DossierPageClient } from "./dossier-page-client";
 
 const identity: CharacterKey = {
@@ -27,6 +32,8 @@ function dossier(
       {
         key: identity,
         displayName: "Ryii",
+        className: "Mage",
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
         source: state === "initial" ? "submitted" : "raiderio_declared"
       }
     ],
@@ -47,7 +54,7 @@ function dossier(
               guild: null,
               historicWorldRank: null,
               reportUrl: null,
-              characters: ["Ryii"]
+              characters: [identity]
             }
           }
         ]
@@ -68,14 +75,31 @@ const expanded = dossier(
   "Linked-character research is complete.",
   "Expanded evidence"
 );
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  push.mockReset();
 });
 
 describe("DossierPageClient staged research", () => {
+  it("shows a reusable dossier search form", () => {
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={expanded}
+        jobId={null}
+      />
+    );
+
+    expect(
+      screen.getByRole("group", { name: "Search mode" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Applicant URL" })
+    ).toBeInTheDocument();
+  });
+
   it("shows a loading indicator while applicant research is in progress", () => {
     // Break caught: an in-progress dossier could show only static text, making
     // it unclear that background research is still active.
@@ -93,6 +117,85 @@ describe("DossierPageClient staged research", () => {
     expect(status).toBeVisible();
     expect(status).toHaveTextContent("Researching applicant dossier…");
     expect(status.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
+  });
+
+  it("falls back to initial evidence when a direct visit finds research in progress", async () => {
+    // Break caught: direct visits could request only the expanded dossier and
+    // remain on the loading indicator when discovery was not ready yet.
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "discovery_not_ready",
+                message: "Discovery is still in progress."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
+      if (input === `${dossierPath}?scope=initial`) {
+        return Promise.resolve(Response.json(initial));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Initial evidence")).toBeVisible();
+    expect(screen.getByText(/research is still running/i)).toBeVisible();
+    expect(
+      screen.queryByText("Loading applicant dossier…")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("does not fall back for an unrelated conflict response", async () => {
+    // Break caught: treating every conflict as in-progress discovery could
+    // hide a different server error behind partial dossier evidence.
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "search_failed",
+                message: "The dossier request conflicted."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
+      if (input === `${dossierPath}?scope=initial`) {
+        return Promise.resolve(Response.json(initial));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The dossier request conflicted."
+    );
+    expect(
+      screen.queryByText("Loading applicant dossier…")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
   });
 
   it("shows initial evidence while queued research polls, then replaces it after completion", async () => {

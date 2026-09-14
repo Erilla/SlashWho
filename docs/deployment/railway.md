@@ -39,8 +39,6 @@ ANONYMOUS_SEARCHES_PER_HOUR=10
 BOT_SEARCHES_PER_HOUR=60
 PUBLIC_READS_PER_MINUTE=300
 FRESHNESS_HOURS=24
-WARCRAFT_LOGS_CLIENT_ID=<Warcraft Logs OAuth client ID secret>
-WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
 DOSSIER_RAIDERIO_TIER_CAP=8
 DOSSIER_CHARACTER_CAP=12
 DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
@@ -48,7 +46,8 @@ DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP=20
 DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS=8000
 ```
 
-Warcraft Logs credentials and all `DOSSIER_*` values are web-service-only Railway configuration. Set them as secret/config variables on web; never expose them to the browser or duplicate them on worker.
+The web service never receives Warcraft Logs credentials. It schedules and reads
+normalized cached evidence only; never expose worker credentials to the browser.
 
 Worker variables. `DISCOVERY_REQUEST_CAP`, `NEGATIVE_CACHE_TTL_MS`, and the
 Blizzard fingerprint settings are read only by the worker, so set them on the
@@ -70,6 +69,9 @@ WORKER_DRAIN_TIMEOUT_MS=30000
 WORKER_HEALTH_HOST=0.0.0.0
 BLIZZARD_CLIENT_ID=<Blizzard OAuth client ID secret>
 BLIZZARD_CLIENT_SECRET=<Blizzard OAuth client secret>
+WARCRAFT_LOGS_CLIENT_ID=<Warcraft Logs OAuth client ID secret>
+WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
+EVIDENCE_REQUEST_CAP=500
 BLIZZARD_SWEEP_REQUEST_CAP=300
 BLIZZARD_HOURLY_REQUEST_BUDGET=28800
 FINGERPRINT_MINIMUM_COMMON=200

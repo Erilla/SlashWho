@@ -1,0 +1,85 @@
+{
+  "retail": {
+    "characterDetails": {
+      "user": {
+        "name": "fixture-owner"
+      },
+      "isTournamentProfile": false,
+      "character": {
+        "class": {
+          "name": "Priest"
+        },
+        "realm": {
+          "realmType": "live",
+          "slug": "silvermoon"
+        },
+        "region": {
+          "slug": "eu"
+        },
+        "name": "Retail",
+        "level": 90
+      }
+    }
+  },
+  "tournament": {
+    "characterDetails": {
+      "user": {
+        "name": "fixture-owner"
+      },
+      "isTournamentProfile": true,
+      "character": {
+        "class": {
+          "name": "Paladin"
+        },
+        "realm": {
+          "realmType": "tr",
+          "slug": "eu-mythic-dungeons"
+        },
+        "region": {
+          "slug": "eu"
+        },
+        "name": "Tournament",
+        "level": 80
+      }
+    }
+  },
+  "profile": {
+    "viewUserCharactersApi": {
+      "name": "fixture-owner",
+      "characters": [
+        {
+          "character": {
+            "class": {
+              "name": "Paladin"
+            },
+            "realm": {
+              "realmType": "tr",
+              "slug": "eu-mythic-dungeons"
+            },
+            "region": {
+              "slug": "eu"
+            },
+            "name": "Tournament",
+            "level": 80
+          }
+        },
+        {
+          "character": {
+            "class": {
+              "name": "Priest"
+            },
+            "realm": {
+              "realmType": "live",
+              "slug": "silvermoon"
+            },
+            "region": {
+              "slug": "eu"
+            },
+            "name": "Retail",
+            "level": 90
+          }
+        }
+      ]
+    }
+  }
+}

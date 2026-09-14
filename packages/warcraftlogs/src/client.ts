@@ -230,7 +230,7 @@ function firstKillReports(
     return { kind: "limitation", code: "schema_drift" };
   }
 
-  const earliest = new Map<number, WarcraftLogsFirstKillEvidence>();
+  const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
   for (const reportValue of reports) {
     const report = record(reportValue);
     const code = report && nonEmptyString(report.code);
@@ -286,12 +286,10 @@ function firstKillReports(
       const actorId = actor && positiveInteger(actor.id);
       const name = actor && nonEmptyString(actor.name);
       const server = actor && nonEmptyString(actor.server);
-      if (!actorId || !name) {
-        return { kind: "limitation", code: "schema_drift" };
-      }
-      // A player without a realm cannot establish this character's identity.
-      // Ignore that actor rather than discarding other attributable kills.
-      if (!server) continue;
+      // An actor without a complete identity cannot establish this character's
+      // participation. Ignore it rather than discarding other attributable
+      // kills in the report.
+      if (!actorId || !name || !server) continue;
       if (
         name.toLocaleLowerCase("en-US") === requestedKey.name &&
         server.toLocaleLowerCase("en-US") ===
@@ -310,13 +308,16 @@ function firstKillReports(
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
-      if (!id || encounterId === null || fightEndTime === null) {
+      if (!id || encounterId === null) {
         return { kind: "limitation", code: "schema_drift" };
       }
       // Warcraft Logs represents trash pulls with encounterID 0. They have no
       // boss identity and must not turn an otherwise valid report into schema
       // drift or dossier evidence.
       if (encounterId === 0) continue;
+      if (fightEndTime === null) {
+        return { kind: "limitation", code: "schema_drift" };
+      }
       if (
         typeof killed !== "boolean" ||
         !Number.isSafeInteger(difficulty) ||
@@ -356,21 +357,13 @@ function firstKillReports(
         guild,
         historicWorldRank: null
       };
-      const current = earliest.get(encounterId);
-      if (
-        !current ||
-        candidate.killedAt < current.killedAt ||
-        (candidate.killedAt === current.killedAt &&
-          candidate.fightUrl < current.fightUrl)
-      ) {
-        earliest.set(encounterId, candidate);
-      }
+      kills.set(candidate.fightUrl, candidate);
     }
   }
 
   return {
     kind: "evidence",
-    kills: [...earliest.values()].sort(
+    kills: [...kills.values()].sort(
       (a, b) =>
         a.bossOrder - b.bossOrder ||
         a.killedAt.localeCompare(b.killedAt) ||
@@ -401,6 +394,7 @@ export function createWarcraftLogsClient(
     throw new Error("invalid_base_url");
   }
   let cachedToken: AccessToken | undefined;
+  let tokenRequest: Promise<string | WarcraftLogsLimitation> | undefined;
 
   function tokenUrl(): URL {
     return new URL("/oauth/token", baseUrl ?? "https://www.warcraftlogs.com");
@@ -411,6 +405,20 @@ export function createWarcraftLogsClient(
   }
 
   async function accessToken(
+    signal?: AbortSignal
+  ): Promise<string | WarcraftLogsLimitation> {
+    signal?.throwIfAborted();
+    tokenRequest ??= fetchAccessToken(AbortSignal.timeout(15_000)).finally(
+      () => {
+        tokenRequest = undefined;
+      }
+    );
+    const token = await tokenRequest;
+    signal?.throwIfAborted();
+    return token;
+  }
+
+  async function fetchAccessToken(
     signal?: AbortSignal
   ): Promise<string | WarcraftLogsLimitation> {
     if (cachedToken && cachedToken.expiresAt > Date.now()) {
@@ -516,12 +524,12 @@ export function createWarcraftLogsClient(
       return { kind: "limitation", code: "request_cap" };
     }
 
-    const earliest = new Map<string, WarcraftLogsFirstKillEvidence>();
+    const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
     const partial = (
       limitation: WarcraftLogsLimitation
     ): WarcraftLogsReportResult =>
-      earliest.size
-        ? { kind: "evidence", kills: [...earliest.values()], limitation }
+      kills.size
+        ? { kind: "evidence", kills: [...kills.values()], limitation }
         : limitation;
     for (let page = 1; page <= options.requestCap; page++) {
       const result = await graphql(
@@ -537,16 +545,7 @@ export function createWarcraftLogsClient(
       const normalized = firstKillReports(result.value, key);
       if (normalized.kind === "limitation") return partial(normalized);
       for (const kill of normalized.kills) {
-        const identifier = `${kill.raidId}\u0000${kill.bossId}`;
-        const current = earliest.get(identifier);
-        if (
-          !current ||
-          kill.killedAt < current.killedAt ||
-          (kill.killedAt === current.killedAt &&
-            kill.fightUrl < current.fightUrl)
-        ) {
-          earliest.set(identifier, kill);
-        }
+        kills.set(kill.fightUrl, kill);
       }
 
       const hasMorePages = hasMoreReportPages(result.value);
@@ -556,7 +555,7 @@ export function createWarcraftLogsClient(
       if (!hasMorePages) {
         return {
           kind: "evidence",
-          kills: [...earliest.values()].sort(
+          kills: [...kills.values()].sort(
             (a, b) =>
               a.raidId.localeCompare(b.raidId) ||
               a.bossOrder - b.bossOrder ||

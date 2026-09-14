@@ -3,13 +3,16 @@ import type { CharacterKey } from "./character-key";
 import {
   lookupJournalEncounter,
   lookupRaidBossByName,
-  lookupRaidByName
+  lookupRaidByName,
+  lookupUniqueRaidBossByName
 } from "./raid-catalogue";
 import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
   displayName: string;
+  className?: string | null;
+  raiderIoUrl?: string;
 }>;
 export type DossierKillEvidence = Readonly<{
   raidId: string;
@@ -47,7 +50,8 @@ export type ApplicantDossierFirstKill = Readonly<{
   guild: Readonly<{ name: string; realm: string }> | null;
   historicWorldRank: number | null;
   reportUrl: string | null;
-  characters: readonly string[];
+  reportUrls: readonly string[];
+  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossierBoss = Readonly<{
   bossId: string;
@@ -64,12 +68,15 @@ export type ApplicantDossierRaid = Readonly<{
   cuttingEdge: true | null;
   bosses: readonly ApplicantDossierBoss[];
 }>;
+type AggregatedDossierBoss = ApplicantDossierBoss &
+  Readonly<{ isFinalBoss: boolean }>;
 export type ApplicantDossierCuttingEdge = Readonly<{
   achievementId: string;
   achievementName: string;
   description: string;
+  iconUrl: string | null;
   completedAt: string;
-  characters: readonly string[];
+  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossier = Readonly<{
   root: CharacterKey;
@@ -114,20 +121,54 @@ function compareEvidence(
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
 }
-function characterBossKey(k: DossierKillEvidence): string {
-  return [canonicalCharacterId(k.character), k.raidId, k.bossId].join("\0");
-}
 function sharedEvidenceKey(k: DossierKillEvidence): string {
-  // A participant can only share evidence when the source identifies the same
-  // fight. Timestamp-only evidence cannot prove that two character kills were
-  // the same event, so it remains distinct per character.
+  // Preserve the narrow legacy identity only when a malformed timestamp cannot
+  // supply the UTC date required by the normal grouping rule.
   return k.reportUrl === null
-    ? `character\0${canonicalCharacterId(k.character)}`
+    ? `character\0${canonicalCharacterId(k.character)}\0${k.killedAt}`
     : `report\0${k.reportUrl}`;
 }
 
-function isMythicPlusSeason(raidName: string): boolean {
-  return /^mythic\+\s+season\b/i.test(raidName.trim());
+function killEventKey(kill: DossierKillEvidence): string {
+  const timestamp = Date.parse(kill.killedAt);
+  if (!Number.isFinite(timestamp))
+    return [kill.character.region, sharedEvidenceKey(kill)].join("\0");
+  // The dossier deliberately treats same-region, same-date evidence as one
+  // simplified event. Distinct same-day reclears may therefore be merged.
+  const utcDate = new Date(timestamp).toISOString().slice(0, 10);
+  return [kill.character.region, utcDate].join("\0");
+}
+
+function compareAttributedGuild(
+  a: NonNullable<DossierKillEvidence["guild"]>,
+  b: NonNullable<DossierKillEvidence["guild"]>
+): number {
+  return (
+    text(normalizedGuildText(a.name), normalizedGuildText(b.name)) ||
+    text(normalizedGuildText(a.realm), normalizedGuildText(b.realm)) ||
+    text(a.name, b.name) ||
+    text(a.realm, b.realm)
+  );
+}
+
+function normalizedGuildText(value: string): string {
+  return value.trim().toLocaleLowerCase("en-US");
+}
+
+function sameAttributedGuild(
+  a: NonNullable<DossierKillEvidence["guild"]>,
+  b: NonNullable<DossierKillEvidence["guild"]>
+): boolean {
+  return (
+    normalizedGuildText(a.name) === normalizedGuildText(b.name) &&
+    normalizedGuildText(a.realm) === normalizedGuildText(b.realm)
+  );
+}
+
+function isNonRaidWclZone(zoneName: string): boolean {
+  return /^(?:mythic\+\s+seasons?|(?:normal|heroic|mythic)\s+dungeons)\b/i.test(
+    zoneName.trim()
+  );
 }
 
 export function buildApplicantDossier(
@@ -138,6 +179,7 @@ export function buildApplicantDossier(
     {
       achievement: NonNullable<ReturnType<typeof lookupCuttingEdgeAchievement>>;
       characters: Set<string>;
+      completedAt: string;
     }
   >();
   for (const evidence of input.cuttingEdges ?? []) {
@@ -149,30 +191,39 @@ export function buildApplicantDossier(
         canonicalCharacterId(evidence.character)
     );
     if (!character) continue;
-    const key = `${achievement.achievementId}\0${evidence.completedAt}`;
+    const key = achievement.achievementId;
     const entry = cuttingEdges.get(key) ?? {
       achievement,
-      characters: new Set<string>()
+      characters: new Set<string>(),
+      completedAt: evidence.completedAt
     };
-    entry.characters.add(character.displayName);
+    if (evidence.completedAt < entry.completedAt)
+      entry.completedAt = evidence.completedAt;
+    entry.characters.add(canonicalCharacterId(character.key));
     cuttingEdges.set(key, entry);
   }
-  const earliest = new Map<string, DossierKillEvidence>();
+  const allKills: DossierKillEvidence[] = [];
   for (const suppliedKill of input.kills) {
-    if (isMythicPlusSeason(suppliedKill.raidName)) continue;
-    const metadata =
-      (suppliedKill.journalBossId === null
-        ? null
-        : lookupJournalEncounter(suppliedKill.journalBossId)) ??
-      lookupRaidBossByName(suppliedKill.raidName, suppliedKill.bossName);
+    if (isNonRaidWclZone(suppliedKill.raidName)) continue;
     const raid = lookupRaidByName(suppliedKill.raidName);
+    const journalEncounter =
+      suppliedKill.journalBossId === null
+        ? null
+        : lookupJournalEncounter(suppliedKill.journalBossId);
+    const namedEncounter = lookupRaidBossByName(
+      suppliedKill.raidName,
+      suppliedKill.bossName
+    );
+    const metadata = raid
+      ? (namedEncounter ??
+        (journalEncounter?.raidId === raid.raidId ? journalEncounter : null))
+      : (journalEncounter ?? lookupUniqueRaidBossByName(suppliedKill.bossName));
+    if (metadata === null) continue;
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
-    const key = characterBossKey(kill);
-    const current = earliest.get(key);
-    if (!current || compareEvidence(kill, current) < 0) earliest.set(key, kill);
+    allKills.push(kill);
   }
   const byBoss = new Map<string, DossierKillEvidence[]>();
-  for (const kill of earliest.values()) {
+  for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");
     byBoss.set(key, [...(byBoss.get(key) ?? []), kill]);
   }
@@ -181,19 +232,35 @@ export function buildApplicantDossier(
     {
       raidName: string;
       imageUrl: string | null;
-      bosses: ApplicantDossierBoss[];
-      final: boolean;
+      bosses: AggregatedDossierBoss[];
+      tierOrdinal: number | null;
     }
   >();
   for (const kills of byBoss.values()) {
-    const byEvidence = new Map<string, DossierKillEvidence[]>();
-    for (const kill of kills) {
-      const key = sharedEvidenceKey(kill);
-      byEvidence.set(key, [...(byEvidence.get(key) ?? []), kill]);
+    const groupedEvidence = new Map<string, DossierKillEvidence[]>();
+    for (const kill of [...kills].sort(compareEvidence)) {
+      const key = killEventKey(kill);
+      groupedEvidence.set(key, [...(groupedEvidence.get(key) ?? []), kill]);
     }
-    const firstKills = [...byEvidence.values()]
+    const firstKills = [...groupedEvidence.values()]
       .map((shared) => {
         const selected = [...shared].sort(compareEvidence)[0]!;
+        const attributed = shared
+          .flatMap((k) => (k.guild === null ? [] : [k.guild]))
+          .sort(compareAttributedGuild)[0];
+        const ranks = new Set(
+          shared.flatMap((k) =>
+            attributed !== undefined &&
+            k.guild !== null &&
+            sameAttributedGuild(k.guild, attributed) &&
+            k.historicWorldRank !== null
+              ? [k.historicWorldRank]
+              : []
+          )
+        );
+        const reportUrls = [
+          ...new Set(shared.flatMap((k) => (k.reportUrl ? [k.reportUrl] : [])))
+        ].sort(text);
         const ids = new Set(
           shared.map((kill) => canonicalCharacterId(kill.character))
         );
@@ -201,12 +268,13 @@ export function buildApplicantDossier(
           selected,
           firstKill: {
             killedAt: selected.killedAt,
-            guild: selected.guild,
-            historicWorldRank: selected.historicWorldRank,
+            guild: attributed ?? null,
+            historicWorldRank: ranks.size === 1 ? [...ranks][0]! : null,
             reportUrl: selected.reportUrl,
+            reportUrls,
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
-              .map((c) => c.displayName)
+              .map((c) => c.key)
           }
         };
       })
@@ -216,7 +284,7 @@ export function buildApplicantDossier(
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
       bosses: [],
-      final: false
+      tierOrdinal: lookupRaidByName(selected.raidName)?.tierOrdinal ?? null
     };
     raid.bosses.push({
       bossId: selected.bossId,
@@ -227,23 +295,27 @@ export function buildApplicantDossier(
         lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
         null,
       firstKill: firstKills[0]!.firstKill,
-      firstKills: firstKills.map((entry) => entry.firstKill)
+      firstKills: firstKills.map((entry) => entry.firstKill),
+      isFinalBoss: selected.isFinalBoss
     });
-    raid.final ||= kills.some((kill) => kill.isFinalBoss);
     raids.set(selected.raidId, raid);
   }
   return {
     root: input.root,
     characters: input.characters,
     cuttingEdges: [...cuttingEdges.entries()]
-      .map(([key, entry]) => {
-        const [, completedAt] = key.split("\0", 2);
+      .map(([, entry]) => {
         return {
           achievementId: entry.achievement.achievementId,
           achievementName: entry.achievement.achievementName,
           description: entry.achievement.description,
-          completedAt: completedAt!,
-          characters: [...entry.characters].sort(text)
+          iconUrl: entry.achievement.iconUrl,
+          completedAt: entry.completedAt,
+          characters: input.characters
+            .filter((character) =>
+              entry.characters.has(canonicalCharacterId(character.key))
+            )
+            .map((character) => character.key)
         };
       })
       .sort(
@@ -258,13 +330,28 @@ export function buildApplicantDossier(
         raidName: raid.raidName,
         imageUrl: raid.imageUrl,
         cuttingEdge: null,
-        bosses: raid.bosses.sort(
-          (a, b) =>
-            a.bossOrder - b.bossOrder ||
-            text(a.bossName, b.bossName) ||
-            text(a.bossId, b.bossId)
-        )
+        bosses: raid.bosses
+          .sort(
+            (a, b) =>
+              Number(b.isFinalBoss) - Number(a.isFinalBoss) ||
+              b.bossOrder - a.bossOrder ||
+              text(a.bossName, b.bossName) ||
+              text(a.bossId, b.bossId)
+          )
+          .map(({ isFinalBoss, ...boss }) => {
+            void isFinalBoss;
+            return boss;
+          })
       }))
-      .sort((a, b) => text(a.raidName, b.raidName) || text(a.raidId, b.raidId))
+      .sort((a, b) => {
+        const tierA = raids.get(a.raidId)?.tierOrdinal ?? null;
+        const tierB = raids.get(b.raidId)?.tierOrdinal ?? null;
+        if (tierA !== null || tierB !== null) {
+          if (tierA === null) return 1;
+          if (tierB === null) return -1;
+          if (tierA !== tierB) return tierB - tierA;
+        }
+        return text(a.raidName, b.raidName) || text(a.raidId, b.raidId);
+      })
   };
 }

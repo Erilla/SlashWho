@@ -1,7 +1,12 @@
 import type { SearchService } from "./search-service";
-import type { Repositories, StoredSnapshot } from "@slashwho/database";
+import type {
+  Repositories,
+  StoredCharacterMythicKill,
+  StoredSnapshot
+} from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
@@ -54,9 +59,29 @@ function fixture(
     snapshot?: StoredSnapshot | null;
     characterCap?: number;
     warcraftLogsRequestCap?: number;
+    additionalKills?: readonly StoredCharacterMythicKill[];
   } = {}
 ) {
   const runsCreate = vi.fn();
+  const enqueueCharacterEvidence = vi.fn().mockResolvedValue("evidence-job");
+  const markEnqueued = vi.fn().mockResolvedValue(undefined);
+  const cachedKills: readonly StoredCharacterMythicKill[] = [
+    {
+      id: "10000000-0000-4000-8000-000000000011",
+      raidId: "42",
+      raidName: "Nerub-ar Palace",
+      bossId: "1234",
+      bossName: "Queen Ansurek",
+      journalBossId: null,
+      bossOrder: 8,
+      isFinalBoss: false,
+      killedAt: "2024-10-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/example",
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
+      guild: { name: "Example Guild", realm: "silvermoon" },
+      historicWorldRank: null
+    }
+  ];
   const repositories = {
     snapshots: {
       getCurrent: vi
@@ -69,7 +94,40 @@ function fixture(
       find: vi.fn(),
       listHistory: vi.fn()
     },
-    runs: { create: runsCreate }
+    runs: { create: runsCreate },
+    evidence: {
+      reserve: vi.fn().mockImplementation(async ({ key }) => ({
+        kind: "fresh",
+        run: {
+          id: "10000000-0000-4000-8000-000000000012",
+          key,
+          queueJobId: "evidence-job",
+          status: "complete",
+          attempt: 1,
+          limitationCode: null,
+          errorCode: null,
+          createdAt: new Date("2026-09-11T12:00:00.000Z"),
+          startedAt: new Date("2026-09-11T12:00:00.000Z"),
+          completedAt: new Date()
+        },
+        completed: {
+          run: {
+            id: "10000000-0000-4000-8000-000000000012",
+            key,
+            queueJobId: "evidence-job",
+            status: "complete",
+            attempt: 1,
+            limitationCode: null,
+            errorCode: null,
+            createdAt: new Date("2026-09-11T12:00:00.000Z"),
+            startedAt: new Date("2026-09-11T12:00:00.000Z"),
+            completedAt: new Date()
+          },
+          kills: [...cachedKills, ...(options.additionalKills ?? [])]
+        }
+      })),
+      markEnqueued
+    }
   } as unknown as Repositories;
   const search = {
     create: vi.fn().mockResolvedValue({
@@ -91,7 +149,7 @@ function fixture(
           killedAt: "2024-10-01T20:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/example",
           fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
-          guild: null,
+          guild: { name: "Example Guild", realm: "silvermoon" },
           historicWorldRank: null
         }
       ]
@@ -105,6 +163,33 @@ function fixture(
       }
     ])
   } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">;
+  const raiderio = {
+    getCharacter: vi.fn().mockResolvedValue({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null,
+      isTournamentProfile: false
+    }),
+    getMythicBossRankings: vi.fn().mockResolvedValue({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        }
+      ]
+    })
+  } as unknown as Pick<
+    RaiderIoGateway,
+    "getMythicBossRankings" | "getCharacter"
+  >;
   const config = applicationConfigSchema.parse({
     BOT_API_KEY: "b".repeat(32),
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -118,14 +203,181 @@ function fixture(
   const dossiers = createApplicantDossierService({
     repositories,
     search,
-    warcraftLogs,
+    queue: { enqueueCharacterEvidence },
     blizzard,
+    raiderio,
     config
   });
-  return { dossiers, repositories, runsCreate, search, warcraftLogs, blizzard };
+  return {
+    dossiers,
+    repositories,
+    runsCreate,
+    enqueueCharacterEvidence,
+    markEnqueued,
+    search,
+    warcraftLogs,
+    blizzard,
+    raiderio
+  };
 }
 
 describe("applicant dossier service", () => {
+  it("withholds initial evidence for a tournament root before discovery finishes", async () => {
+    const { dossiers, raiderio, warcraftLogs, blizzard } = fixture();
+    vi.mocked(raiderio.getCharacter).mockResolvedValue({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null,
+      isTournamentProfile: true
+    });
+    await expect(dossiers.readInitial(root)).resolves.toEqual({
+      kind: "not_ready"
+    });
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(blizzard.getCompletedAchievements).not.toHaveBeenCalled();
+  });
+
+  it("withholds unchecked initial evidence when the eligibility lookup fails", async () => {
+    const { dossiers, raiderio, warcraftLogs } = fixture();
+    vi.mocked(raiderio.getCharacter).mockRejectedValue({ kind: "transient" });
+    await expect(dossiers.readInitial(root)).resolves.toEqual({
+      kind: "not_ready"
+    });
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("preserves cancellation during initial eligibility checking", async () => {
+    const { dossiers, raiderio } = fixture();
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled", "AbortError");
+    vi.mocked(raiderio.getCharacter).mockImplementation(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+    await expect(dossiers.readInitial(root, controller.signal)).rejects.toBe(
+      reason
+    );
+  });
+
+  it("lets an uncancelled reader finish a shared achievement request", async () => {
+    const { dossiers, blizzard } = fixture();
+    let finish!: () => void;
+    vi.mocked(blizzard.getCompletedAchievements).mockImplementation(
+      async () => {
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        return [
+          { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+        ];
+      }
+    );
+    const controller = new AbortController();
+    const first = dossiers.readInitial(root, controller.signal);
+    const rejected = expect(first).rejects.toThrow();
+    const second = dossiers.readInitial(root);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    controller.abort();
+    finish();
+    await rejected;
+    expect(await second).toMatchObject({
+      dossier: { cuttingEdges: [{ achievementId: "40254" }] }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+  });
+  it("reuses source evidence across concurrent reads but follows a replacement snapshot", async () => {
+    const { dossiers, repositories, blizzard, raiderio } = fixture();
+    const results = await Promise.all([
+      dossiers.read(root),
+      dossiers.read(root)
+    ]);
+    expect(results[0]).toEqual(results[1]);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+    vi.mocked(repositories.snapshots.getCurrent).mockResolvedValue(
+      storedSnapshot([storedSnapshot().characters[0]!])
+    );
+    const changed = await dossiers.read(root);
+    expect(changed).toMatchObject({
+      dossier: {
+        characters: [{ key: root }],
+        cuttingEdges: [{ characters: [root] }]
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes boss rankings after fifteen minutes and never serves an expired rank on failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dossiers, raiderio } = fixture();
+      await expect(dossiers.read(root)).resolves.toMatchObject({
+        dossier: {
+          raids: [{ bosses: [{ firstKill: { historicWorldRank: 2 } }] }]
+        }
+      });
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "rankings",
+        rows: []
+      });
+      await dossiers.read(root);
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(15 * 60_000);
+      await expect(dossiers.read(root)).resolves.toMatchObject({
+        dossier: {
+          raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }],
+          limitations: []
+        }
+      });
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "limitation",
+        code: "unavailable"
+      });
+      vi.advanceTimersByTime(15 * 60_000);
+      await expect(dossiers.read(root)).resolves.toMatchObject({
+        dossier: {
+          limitations: [
+            expect.objectContaining({ source: "raiderio", code: "unavailable" })
+          ]
+        }
+      });
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires achievements and reports a failed refresh without stale Cutting Edge claims", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dossiers, blizzard } = fixture();
+      await dossiers.read(root);
+      await dossiers.read(root);
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(15 * 60_000);
+      vi.mocked(blizzard.getCompletedAchievements).mockRejectedValue(
+        new Error("offline")
+      );
+      const expired = await dossiers.read(root);
+      expect(expired).toMatchObject({
+        dossier: {
+          cuttingEdges: [],
+          limitations: [
+            { source: "blizzard", character: root, code: "unavailable" },
+            { source: "blizzard", character: alt, code: "unavailable" }
+          ]
+        }
+      });
+      expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each([
     raiderUrl,
     "https://www.warcraftlogs.com/character/eu/silvermoon/ryii"
@@ -167,9 +419,9 @@ describe("applicant dossier service", () => {
     expect(runsCreate).not.toHaveBeenCalled();
   });
 
-  it("assembles current snapshot evidence without writing a dossier or mutating the snapshot", async () => {
+  it("assembles current snapshot evidence from the durable cache without calling Warcraft Logs", async () => {
     // Break caught: evidence reads could persist a dossier or lose the Warcraft Logs link matching a boss and timestamp.
-    const { dossiers, repositories, runsCreate } = fixture();
+    const { dossiers, repositories, runsCreate, warcraftLogs } = fixture();
 
     const result = await dossiers.read(root);
 
@@ -177,8 +429,18 @@ describe("applicant dossier service", () => {
       kind: "ready",
       dossier: {
         characters: [
-          { displayName: "Ryii", source: "raiderio_declared" },
-          { displayName: "Ryalts", source: "fingerprint_derived" }
+          {
+            displayName: "Ryii",
+            className: "Mage",
+            raiderIoUrl: raiderUrl,
+            source: "raiderio_declared"
+          },
+          {
+            displayName: "Ryalts",
+            className: "Priest",
+            raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+            source: "fingerprint_derived"
+          }
         ],
         raids: [
           {
@@ -187,15 +449,14 @@ describe("applicant dossier service", () => {
               {
                 firstKill: {
                   reportUrl:
-                    "https://www.warcraftlogs.com/reports/example#fight=9"
+                    "https://www.warcraftlogs.com/reports/example#fight=9",
+                  historicWorldRank: 2
                 }
               }
             ]
           }
         ],
-        cuttingEdges: [
-          { achievementId: "40254", characters: ["Ryalts", "Ryii"] }
-        ],
+        cuttingEdges: [{ achievementId: "40254", characters: [root, alt] }],
         research: {
           state: "complete",
           message: "Linked-character research is complete."
@@ -204,6 +465,206 @@ describe("applicant dossier service", () => {
     });
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("shares a guild raid lookup across bosses without mixing their ranks", async () => {
+    const { dossiers, raiderio } = fixture({
+      additionalKills: [
+        {
+          id: "10000000-0000-4000-8000-000000000021",
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "5678",
+          bossName: "The Silken Court",
+          journalBossId: null,
+          bossOrder: 7,
+          isFinalBoss: false,
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/court",
+          fightUrl: "https://www.warcraftlogs.com/reports/court#fight=1",
+          guild: { name: "Example Guild", realm: "silvermoon" },
+          historicWorldRank: null
+        },
+        {
+          id: "10000000-0000-4000-8000-000000000022",
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "9012",
+          bossName: "Ulgrax the Devourer",
+          journalBossId: null,
+          bossOrder: 1,
+          isFinalBoss: false,
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/ulgrax",
+          fightUrl: "https://www.warcraftlogs.com/reports/ulgrax#fight=1",
+          guild: { name: "Other Guild", realm: "silvermoon" },
+          historicWorldRank: null
+        }
+      ]
+    });
+    vi.mocked(raiderio.getMythicBossRankings).mockImplementation(
+      async (request) => ({
+        kind: "rankings",
+        rows: (request.guild?.name === "Other Guild"
+          ? [{ bossSlug: "ulgrax-the-devourer", rank: 741 }]
+          : [
+              { bossSlug: "queen-ansurek", rank: 371 },
+              { bossSlug: "the-silken-court", rank: 412 }
+            ]
+        ).map((row) => ({
+          ...row,
+          guildName: request.guild!.name,
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        }))
+      })
+    );
+    const result = await dossiers.read(root);
+    expect(result.kind).toBe("ready");
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    expect(
+      result.dossier.raids
+        .flatMap((raid) => raid.bosses)
+        .map((boss) => boss.firstKill.historicWorldRank)
+        .sort()
+    ).toEqual([371, 412, 741]);
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+  });
+
+  it("only enriches a kill with a unique Raider.IO guild, region, realm, and time match", async () => {
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Example Guild",
+          guildRealm: "connected-silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:01:59.000Z"
+        },
+        {
+          rank: 3,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "us",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        }
+      ]
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        raids: [{ bosses: [{ firstKill: { historicWorldRank: 2 } }] }]
+      }
+    });
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledWith(
+      {
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek",
+        guild: { name: "Example Guild", realm: "silvermoon", region: "eu" }
+      },
+      expect.any(AbortSignal)
+    );
+  });
+
+  it.each([
+    { bossSlug: "other-boss" },
+    { guildName: "Other Guild" },
+    { guildRealm: "draenor" },
+    { guildRegion: "us" },
+    { firstDefeated: "2024-09-24T20:00:00.000Z" }
+  ])(
+    "leaves unrelated guilds and later player kills unranked: %j",
+    async (change) => {
+      const { dossiers, raiderio } = fixture();
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "rankings",
+        rows: [
+          {
+            rank: 2,
+            guildName: "Example Guild",
+            guildRealm: "silvermoon",
+            guildRegion: "eu",
+            firstDefeated: "2024-10-01T20:00:00.000Z",
+            ...change
+          }
+        ]
+      });
+      await expect(dossiers.read(root)).resolves.toMatchObject({
+        kind: "ready",
+        dossier: {
+          raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }],
+          limitations: []
+        }
+      });
+    }
+  );
+
+  it.each([
+    "schema_drift",
+    "rate_limited",
+    "unavailable",
+    "not_found",
+    "private"
+  ] as const)(
+    "exposes ranking %s separately from successful unmatched evidence and retries failures",
+    async (code) => {
+      const { dossiers, raiderio } = fixture();
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "limitation",
+        code
+      });
+      await expect(dossiers.read(root)).resolves.toMatchObject({
+        kind: "ready",
+        dossier: {
+          raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }],
+          limitations: [
+            expect.objectContaining({
+              source: "raiderio",
+              code: code === "schema_drift" ? "schema_changed" : code,
+              message: expect.stringContaining("boss world ranks")
+            })
+          ]
+        }
+      });
+      await dossiers.read(root);
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("leaves the rank unknown when multiple leaderboard rows match the same kill", async () => {
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "rankings",
+      rows: [
+        {
+          rank: 2,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:00:00.000Z"
+        },
+        {
+          rank: 3,
+          guildName: "Example Guild",
+          guildRealm: "silvermoon",
+          guildRegion: "eu",
+          firstDefeated: "2024-10-01T20:01:00.000Z"
+        }
+      ]
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }]
+      }
+    });
   });
 
   it("retains Warcraft Logs evidence when Blizzard achievement data is unavailable", async () => {
@@ -223,6 +684,24 @@ describe("applicant dossier service", () => {
     });
   });
 
+  it("marks malformed Blizzard achievement data as a schema limitation", async () => {
+    const { dossiers, blizzard } = fixture();
+    vi.mocked(blizzard.getCompletedAchievements).mockRejectedValueOnce(
+      Object.assign(new Error("blizzard_schema_drift"), {
+        kind: "schema_drift"
+      })
+    );
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        limitations: [
+          { source: "blizzard", character: root, code: "schema_changed" }
+        ]
+      }
+    });
+  });
+
   it("returns not_ready without contacting evidence sources when no snapshot exists", async () => {
     // Break caught: a missing discovery result could trigger unbounded third-party requests.
     const { dossiers, warcraftLogs } = fixture({ snapshot: null });
@@ -231,8 +710,8 @@ describe("applicant dossier service", () => {
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
-  it("reads transient root-only evidence without contacting snapshot repositories", async () => {
-    // Break caught: initial evidence could wait on or write linked-character discovery state.
+  it("reads cached root-only evidence without contacting snapshot repositories", async () => {
+    // Break caught: initial dossier reads could bypass the durable cache and re-query Warcraft Logs.
     const { dossiers, repositories, runsCreate, warcraftLogs } = fixture();
 
     await expect(dossiers.readInitial(root)).resolves.toMatchObject({
@@ -267,10 +746,9 @@ describe("applicant dossier service", () => {
       }
     });
 
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledTimes(1);
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledWith(
-      root,
-      expect.objectContaining({ requestCap: 20 })
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: root })
     );
     expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
@@ -325,9 +803,85 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("uses stored snapshot order for the character cap and reports every skipped evidence stream", async () => {
-    // Break caught: a cap could depend on incidental identity ordering or silently omit evidence.
-    const { dossiers, warcraftLogs } = fixture({
+  it.each(["claimed", "fingerprint"] as const)(
+    "prioritises the root and higher levels before capping %s characters",
+    async (source) => {
+      // Break caught: stored order or source priority could spend the cap on a low-level alt.
+      const [submitted, linked] = storedSnapshot().characters;
+      const low = {
+        ...linked!,
+        level: 10,
+        source:
+          source === "claimed" ? ("fingerprint" as const) : ("claimed" as const)
+      };
+      const high = {
+        ...linked!,
+        key: third,
+        displayName: "Third",
+        level: 100,
+        source
+      };
+      const input = { ...submitted!, level: 1 };
+      const snapshot = storedSnapshot([low, high, input]);
+      const original = structuredClone(snapshot);
+      const { dossiers, repositories, blizzard } = fixture({
+        snapshot,
+        characterCap: 2
+      });
+
+      const result = await dossiers.read(root);
+
+      expect(result).toMatchObject({
+        kind: "ready",
+        dossier: {
+          characters: [{ key: root }, { key: third }],
+          limitations: [{ character: alt, code: "request_cap" }]
+        }
+      });
+      expect(
+        vi
+          .mocked(repositories.evidence.reserve)
+          .mock.calls.map(([{ key }]) => key)
+      ).toEqual([root, third]);
+      expect(
+        vi
+          .mocked(blizzard.getCompletedAchievements)
+          .mock.calls.map(([key]) => key)
+      ).toEqual([root, third]);
+      expect(snapshot).toEqual(original);
+    }
+  );
+
+  it("orders equal-level characters by region, realm, then name regardless of stored order", async () => {
+    // Break caught: unstable or partial tie-breaking changes which characters get evidence under a cap.
+    const [submitted, linked] = storedSnapshot().characters;
+    const keys = [
+      { region: "us", realm: "aegwynn", name: "aaa" },
+      { region: "eu", realm: "silvermoon", name: "zzz" },
+      { region: "eu", realm: "silvermoon", name: "aaa" },
+      { region: "eu", realm: "aegwynn", name: "zzz" }
+    ] as const;
+    const characters = keys.map((key) => ({ ...linked!, key }));
+    for (const ordered of [characters, [...characters].reverse()]) {
+      const { dossiers } = fixture({
+        snapshot: storedSnapshot([...ordered, submitted!])
+      });
+      const result = await dossiers.read(root);
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") throw new Error("Expected a ready dossier");
+      expect(result.dossier.characters.map(({ key }) => key)).toEqual([
+        root,
+        keys[3],
+        keys[2],
+        keys[1],
+        keys[0]
+      ]);
+    }
+  });
+
+  it("reports every evidence stream skipped by the character cap", async () => {
+    // Break caught: a cap could silently omit evidence.
+    const { dossiers, repositories, warcraftLogs } = fixture({
       characterCap: 1,
       snapshot: storedSnapshot([
         {
@@ -355,7 +909,11 @@ describe("applicant dossier service", () => {
 
     const result = await dossiers.read(root);
 
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledTimes(1);
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(repositories.evidence.reserve).toHaveBeenCalledTimes(1);
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: alt })
+    );
     expect(result).toMatchObject({
       kind: "ready",
       dossier: {
@@ -371,22 +929,22 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("shares one Warcraft Logs request cap across selected characters", async () => {
-    // Break caught: treating the configured cap as per-character multiplied
-    // upstream traffic for every linked character in the snapshot.
-    const { dossiers, warcraftLogs } = fixture({ warcraftLogsRequestCap: 6 });
+  it("reads each selected character from its own durable evidence cache", async () => {
+    // Break caught: a cached dossier could omit an alt's evidence stream or return to direct Warcraft Logs reads.
+    const { dossiers, repositories, warcraftLogs } = fixture({
+      warcraftLogsRequestCap: 6
+    });
 
     await dossiers.read(root);
 
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenNthCalledWith(
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(repositories.evidence.reserve).toHaveBeenNthCalledWith(
       1,
-      root,
-      expect.objectContaining({ requestCap: 3 })
+      expect.objectContaining({ key: root })
     );
-    expect(warcraftLogs.getFirstKillReports).toHaveBeenNthCalledWith(
+    expect(repositories.evidence.reserve).toHaveBeenNthCalledWith(
       2,
-      alt,
-      expect.objectContaining({ requestCap: 3 })
+      expect.objectContaining({ key: alt })
     );
   });
 });

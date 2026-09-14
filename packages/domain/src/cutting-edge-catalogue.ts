@@ -4,6 +4,7 @@ export type CuttingEdgeCatalogueAchievement = Readonly<{
   achievementId: string;
   achievementName: string;
   description: string;
+  iconUrl: string | null;
   categoryId: string;
 }>;
 
@@ -72,7 +73,6 @@ export function buildBoundedCuttingEdgeSequence<
         )
       : -1;
     if (currentIndex < 0 || nextIndex < 0) continue;
-
     const between = orderedAchievements.slice(
       Math.min(currentIndex, nextIndex) + 1,
       Math.max(currentIndex, nextIndex)
@@ -88,7 +88,6 @@ export function buildBoundedCuttingEdgeSequence<
       }
     }
   }
-
   for (const achievement of orderedAchievements
     .slice(first, last + 1)
     .reverse()) {

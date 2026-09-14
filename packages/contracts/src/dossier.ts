@@ -20,6 +20,8 @@ export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
     displayName: z.string().min(1),
+    className: z.string().min(1).nullable(),
+    raiderIoUrl: z.url(),
     source: dossierSourceLabelSchema
   })
   .strict();
@@ -37,7 +39,8 @@ export const dossierFirstKillSchema = z
     guild: dossierGuildSchema.nullable(),
     historicWorldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable(),
-    characters: z.array(z.string().min(1))
+    reportUrls: z.array(z.url()).optional(),
+    characters: z.array(characterKeySchema)
   })
   .strict();
 
@@ -67,8 +70,9 @@ export const dossierCuttingEdgeSchema = z
     achievementId: z.string().regex(/^\d+$/),
     achievementName: z.string().min(1),
     description: z.string().min(1),
+    iconUrl: z.url().nullable(),
     completedAt: z.iso.datetime(),
-    characters: z.array(z.string().min(1)).min(1)
+    characters: z.array(characterKeySchema).min(1)
   })
   .strict();
 
@@ -90,7 +94,7 @@ export const dossierLimitationSchema = z
 
 export const dossierResearchSchema = z
   .object({
-    state: z.enum(["initial", "complete", "partial"]),
+    state: z.enum(["initial", "gathering", "complete", "partial"]),
     message: z.string().min(1)
   })
   .strict();
