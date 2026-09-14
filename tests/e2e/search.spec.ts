@@ -167,3 +167,59 @@ test("shows a grey no-log row when an entire supported tier has no evidence", as
   ).toBeVisible();
   await expect(tier.getByRole("article")).toHaveCount(0);
 });
+
+test("presents parse evidence with exact fight sources at desktop and mobile widths", async ({
+  page
+}) => {
+  // Break caught: a parse could become detached from its precise fight source,
+  // inaccessible without colour, hidden from a collapsed card, or force a
+  // horizontal scroll on the dossier's existing mobile viewport.
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "parsecheck"
+  } as const;
+  await seedSnapshot({
+    key,
+    displayName: "Parsecheck",
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z")
+  });
+  await seedCharacterEvidence(key);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/dossiers/eu/silvermoon/parsecheck");
+  const boss = page.getByRole("group", { name: "Queen Ansurek evidence" });
+  const firstKillParses = boss.getByRole("region", {
+    name: "First kill parses"
+  });
+  const bestParses = boss.getByRole("region", { name: "Best shown parses" });
+  await expect(firstKillParses).toBeVisible();
+  await expect(bestParses).toBeVisible();
+  await expect(
+    firstKillParses.getByRole("link", { name: "Damage 87.1 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+  await expect(
+    bestParses.getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
+  await expect(
+    firstKillParses.getByText("Healing not applicable")
+  ).toBeVisible();
+  await expect(
+    firstKillParses.getByText("Boss damage unavailable")
+  ).toBeVisible();
+
+  await boss.getByText("View kill evidence").click();
+  const evidence = boss.getByRole("region", { name: "Kill evidence" });
+  await expect(
+    evidence
+      .getByRole("region", { name: "First kill parses" })
+      .getByRole("link", { name: "Damage 87.1 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth
+    )
+  ).toBe(true);
+});

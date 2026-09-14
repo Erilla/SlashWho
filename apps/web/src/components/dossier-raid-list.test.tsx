@@ -62,8 +62,10 @@ const boss = {
     guild: null,
     historicWorldRank: null,
     reportUrl: null,
-    characters: [ryii]
-  }
+    characters: [ryii],
+    parses: []
+  },
+  bestParses: []
 };
 
 afterEach(cleanup);
@@ -263,14 +265,16 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                     guild: { name: "Method", realm: "Tarren Mill" },
                     historicWorldRank: 2,
                     reportUrl: "https://www.warcraftlogs.com/reports/first",
-                    characters: [ryii]
+                    characters: [ryii],
+                    parses: []
                   },
                   {
                     killedAt: "2025-02-14T20:30:00.000Z",
                     guild: { name: "Method", realm: "Tarren Mill" },
                     historicWorldRank: null,
                     reportUrl: "https://www.warcraftlogs.com/reports/second",
-                    characters: [ryalts]
+                    characters: [ryalts],
+                    parses: []
                   }
                 ]
               }
@@ -423,4 +427,95 @@ it("greys out an entire no-log tier as a single explanatory row", () => {
   expect(
     within(row).queryByAltText("Empty Tier artwork")
   ).not.toBeInTheDocument();
+});
+
+it("shows first-kill and best parse summaries before evidence details are opened", () => {
+  // Break caught: meaningful parse evidence could be buried behind the
+  // disclosure, preventing a reviewer from comparing a boss at a glance.
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                imageUrl: null,
+                firstKill: {
+                  ...boss.firstKill,
+                  parses: [
+                    {
+                      character: "Ryii",
+                      damage: {
+                        state: "available",
+                        percentile: 87,
+                        reportUrl:
+                          "https://www.warcraftlogs.com/reports/first#fight=8"
+                      },
+                      healing: { state: "not_applicable" },
+                      bossDamage: { state: "unavailable" }
+                    }
+                  ]
+                },
+                bestParses: [
+                  {
+                    character: "Ryii",
+                    damage: {
+                      state: "available",
+                      percentile: 99.2,
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/best#fight=9"
+                    },
+                    healing: { state: "not_applicable" },
+                    bossDamage: { state: "unavailable" }
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const firstKillParses = screen.getAllByRole("region", {
+    name: "First kill parses"
+  })[0]!;
+  expect(firstKillParses.closest("details")).toBeNull();
+  expect(firstKillParses).toBeVisible();
+  const bestParses = screen.getByRole("region", {
+    name: "Best shown parses"
+  });
+  expect(bestParses).toBeVisible();
+  expect(
+    within(firstKillParses).getByRole("link", {
+      name: "Damage 87th percentile"
+    })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/first#fight=8"
+  );
+  expect(
+    within(bestParses).getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/best#fight=9"
+  );
+  expect(
+    screen.getByText("View kill evidence").closest("details")
+  ).not.toHaveAttribute("open");
+  screen.getByText("View kill evidence").click();
+  const eventParses = within(
+    screen.getByRole("region", { name: "Kill evidence" })
+  ).getByRole("region", { name: "First kill parses" });
+  expect(
+    within(eventParses).getByRole("link", { name: "Damage 87th percentile" })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/first#fight=8"
+  );
 });

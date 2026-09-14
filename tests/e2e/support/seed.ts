@@ -111,7 +111,12 @@ export async function seedCharacterEvidence(
                 fightUrl:
                   "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
                 guild: { name: "Arachnid", realm: "silvermoon" },
-                historicWorldRank: 147
+                historicWorldRank: 147,
+                performance: {
+                  damage: { state: "available", percentile: 87.19 },
+                  healing: { state: "not_applicable" },
+                  bossDamage: { state: "unavailable" }
+                }
               },
               {
                 raidId: "42",
@@ -126,7 +131,12 @@ export async function seedCharacterEvidence(
                 fightUrl:
                   "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
                 guild: { name: "Arachnid", realm: "silvermoon" },
-                historicWorldRank: 147
+                historicWorldRank: 147,
+                performance: {
+                  damage: { state: "available", percentile: 99.29 },
+                  healing: { state: "not_applicable" },
+                  bossDamage: { state: "unavailable" }
+                }
               },
               ...(options.withSecondRaid
                 ? [
@@ -144,7 +154,12 @@ export async function seedCharacterEvidence(
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eVaultReport#fight=11",
                       guild: { name: "Arachnid", realm: "silvermoon" },
-                      historicWorldRank: 212
+                      historicWorldRank: 212,
+                      performance: {
+                        damage: { state: "unavailable" },
+                        healing: { state: "unavailable" },
+                        bossDamage: { state: "unavailable" }
+                      }
                     }
                   ]
                 : [])

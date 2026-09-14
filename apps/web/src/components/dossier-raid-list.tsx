@@ -2,6 +2,7 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
+import { DossierParseList } from "./dossier-parse-list";
 import { UpstreamIconLink } from "./upstream-icon-link";
 
 type Raid = ApplicantDossier["raids"][number];
@@ -123,6 +124,8 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
           </p>
         </div>
       </div>
+      <DossierParseList label="First kill parses" parses={firstKill.parses} />
+      <DossierParseList label="Best shown parses" parses={boss.bestParses} />
       <details>
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
@@ -157,6 +160,15 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
                 <dt>Characters present</dt>
                 <dd>
                   <DossierCharacterNames characters={evidence.characters} />
+                </dd>
+              </div>
+              <div>
+                <dt>Parses</dt>
+                <dd>
+                  <DossierParseList
+                    label={`${index === 0 ? "First kill" : "Kill"} parses`}
+                    parses={evidence.parses}
+                  />
                 </dd>
               </div>
             </dl>
