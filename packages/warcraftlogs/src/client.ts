@@ -280,6 +280,7 @@ function firstKillReports(
 
   const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
   const wipes = new Map<string, WarcraftLogsWipeEvidence>();
+  const killedByReportBoss = new Set<string>();
   const schemaDrift = (): WarcraftLogsReportResult =>
     kills.size > 0 || wipes.size > 0
       ? {
@@ -421,18 +422,18 @@ function firstKillReports(
       const reportUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`;
       const fightUrl = `${reportUrl}#fight=${id}`;
       if (!killed) {
-        const candidate: WarcraftLogsWipeEvidence = {
-          raidId: String(raidId),
-          raidName,
-          bossId: String(encounterId),
-          bossName,
+      const candidate: WarcraftLogsWipeEvidence = {
+        raidId: String(raidId),
+        raidName,
+        bossId: String(encounterId),
+        bossName,
           journalBossId: journalBossIds.get(encounterId) ?? null,
           bossOrder: encounterId,
           attemptedAt: evidenceAt,
-          reportUrl,
-          fightUrl
-        };
-        wipes.set(candidate.fightUrl, candidate);
+        reportUrl,
+        fightUrl
+      };
+      wipes.set(candidate.fightUrl, candidate);
         continue;
       }
       const candidate: WarcraftLogsFirstKillEvidence = {
@@ -453,9 +454,15 @@ function firstKillReports(
         guild,
         historicWorldRank: null
       };
+      killedByReportBoss.add(`${candidate.reportUrl}\0${candidate.bossId}`);
       kills.set(candidate.fightUrl, candidate);
     }
   }
+
+  const filteredWipes = [...wipes.values()].filter((wipe) => {
+    const key = `${wipe.reportUrl}\0${wipe.bossId}`;
+    return !killedByReportBoss.has(key);
+  });
 
   return {
     kind: "evidence",
@@ -465,7 +472,7 @@ function firstKillReports(
         a.killedAt.localeCompare(b.killedAt) ||
         a.fightUrl.localeCompare(b.fightUrl)
     ),
-    wipes: [...wipes.values()].sort(
+    wipes: [...filteredWipes].sort(
       (a, b) =>
         a.raidId.localeCompare(b.raidId) ||
         a.bossOrder - b.bossOrder ||

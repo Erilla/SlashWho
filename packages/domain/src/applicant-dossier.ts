@@ -462,12 +462,19 @@ export function buildApplicantDossier(
       })
       .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
+    const killReportUrls = new Set(
+      kills.flatMap((kill) => (kill.reportUrl === null ? [] : [kill.reportUrl]))
+    );
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,
       bosses: [],
       tierOrdinal: lookupRaidByName(selected.raidName)?.tierOrdinal ?? null
     };
+    const wipeKey = `${selected.raidId}\0${selected.bossId}`;
+    const wipesForBoss = (wipesByBoss.get(wipeKey) ?? []).filter(
+      (wipe) => !killReportUrls.has(wipe.reportUrl)
+    );
     raid.bosses.push({
       state: "kill",
       bossId: selected.bossId,
@@ -483,7 +490,8 @@ export function buildApplicantDossier(
         firstKills.map((entry) => entry.shared),
         characters
       ),
-      isFinalBoss: selected.isFinalBoss
+      isFinalBoss: selected.isFinalBoss,
+      wipes: aggregateWipes(wipesForBoss)
     });
     raids.set(selected.raidId, raid);
   }
