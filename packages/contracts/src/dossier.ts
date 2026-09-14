@@ -40,7 +40,7 @@ export const dossierFirstKillSchema = z
     historicWorldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable(),
     reportUrls: z.array(z.url()).optional(),
-    characters: z.array(z.string().min(1))
+    characters: z.array(characterKeySchema)
   })
   .strict();
 
@@ -72,7 +72,7 @@ export const dossierCuttingEdgeSchema = z
     description: z.string().min(1),
     iconUrl: z.url().nullable(),
     completedAt: z.iso.datetime(),
-    characters: z.array(z.string().min(1)).min(1)
+    characters: z.array(characterKeySchema).min(1)
   })
   .strict();
 

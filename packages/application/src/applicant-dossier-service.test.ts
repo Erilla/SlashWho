@@ -305,7 +305,7 @@ describe("applicant dossier service", () => {
     expect(changed).toMatchObject({
       dossier: {
         characters: [{ key: root }],
-        cuttingEdges: [{ characters: ["Ryii"] }]
+        cuttingEdges: [{ characters: [root] }]
       }
     });
     expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(2);
@@ -457,7 +457,7 @@ describe("applicant dossier service", () => {
           }
         ],
         cuttingEdges: [
-          { achievementId: "40254", characters: ["Ryii", "Ryalts"] }
+          { achievementId: "40254", characters: [root, alt] }
         ],
         research: {
           state: "complete",
