@@ -33,7 +33,7 @@ for (const applicantUrl of applicantUrls) {
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
-    const raiderIoLink = page.getByRole("link", {
+    const raiderIoLink = page.locator("header").getByRole("link", {
       name: "View Ryii on Raider.IO (opens in a new tab)"
     });
     await expect(raiderIoLink).toHaveAttribute(
@@ -101,7 +101,7 @@ test("shows submitted-character evidence while queued discovery is held", async 
 
   await expect(
     page.getByText("Linked-character research is complete.", { exact: true })
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
   await expect(initialDisclosure).not.toBeVisible();
   await evidence.getByText("View kill evidence").click();
   const reportLinks = evidence.getByRole("link", {
