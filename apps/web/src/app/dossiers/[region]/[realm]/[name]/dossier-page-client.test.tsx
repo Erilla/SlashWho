@@ -119,9 +119,9 @@ describe("DossierPageClient staged research", () => {
     expect(status.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
   });
 
-  it("falls back to initial evidence when a direct visit finds research in progress", async () => {
-    // Break caught: direct visits could request only the expanded dossier and
-    // remain on the loading indicator when discovery was not ready yet.
+  it("starts linked research for a direct visit, then shows initial evidence", async () => {
+    // Break caught: a direct visit lacked the job identifier required to poll
+    // linked-character research, leaving it permanently root-only.
     vi.stubGlobal("fetch", (input: string) => {
       if (input === dossierPath) {
         return Promise.resolve(
@@ -136,9 +136,19 @@ describe("DossierPageClient staged research", () => {
           )
         );
       }
+      if (input === "/api/dossiers") {
+        return Promise.resolve(
+          Response.json(
+            { kind: "job", jobId, status: "queued" },
+            { status: 202 }
+          )
+        );
+      }
       if (input === `${dossierPath}?scope=initial`) {
         return Promise.resolve(Response.json(initial));
       }
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return new Promise<Response>(() => undefined);
       return Promise.reject(new Error(`Unexpected request: ${input}`));
     });
 
@@ -158,11 +168,24 @@ describe("DossierPageClient staged research", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("does not fall back for an unrelated conflict response", async () => {
-    // Break caught: treating every conflict as in-progress discovery could
-    // hide a different server error behind partial dossier evidence.
+  it("shows a start failure for a direct visit", async () => {
+    // Break caught: a failed direct-start request could be hidden behind
+    // partial dossier evidence or a persistent loading indicator.
     vi.stubGlobal("fetch", (input: string) => {
       if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "discovery_not_ready",
+                message: "Discovery is still in progress."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
+      if (input === "/api/dossiers") {
         return Promise.resolve(
           Response.json(
             {
@@ -174,9 +197,6 @@ describe("DossierPageClient staged research", () => {
             { status: 409 }
           )
         );
-      }
-      if (input === `${dossierPath}?scope=initial`) {
-        return Promise.resolve(Response.json(initial));
       }
       return Promise.reject(new Error(`Unexpected request: ${input}`));
     });
