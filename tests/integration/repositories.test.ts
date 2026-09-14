@@ -186,6 +186,41 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("refreshes evidence produced before the fight-parse cache version", async () => {
+    // Break caught: deploying a parse decoder fix could leave every previously
+    // cached kill fresh forever, so the worker would never recompute its metrics.
+    const completedAt = new Date("2026-08-04T12:00:00.000Z");
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: completedAt
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      completedAt
+    });
+    await pool.query(
+      "UPDATE character_evidence_runs SET evidence_version = 2 WHERE id = $1",
+      [first.run.id]
+    );
+
+    await expect(
+      repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+        at: new Date("2026-08-04T13:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      kind: "reserved",
+      completed: { run: { id: first.run.id }, kills: [mythicKill()] }
+    });
+  });
+
   it("persists every distinct wipe fight for one boss", async () => {
     // Break caught: a per-boss uniqueness key silently dropped earlier wipes,
     // even though the dossier must show the complete report history.
@@ -259,6 +294,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
+      evidenceVersion: 3,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })

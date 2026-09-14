@@ -284,6 +284,57 @@ describe("DossierPageClient staged research", () => {
     expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
   });
 
+  it("shows a linked snapshot immediately and starts discovery for its root", async () => {
+    const linkedDossier = {
+      ...expanded,
+      root: {
+        region: "eu" as const,
+        realm: "silvermoon",
+        name: "root"
+      }
+    };
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(linkedDossier));
+      if (input === "/api/dossiers") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          characterUrl: "https://raider.io/characters/eu/silvermoon/root"
+        });
+        return Promise.resolve(
+          Response.json(
+            { kind: "job", jobId, status: "running" },
+            { status: 202 }
+          )
+        );
+      }
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return new Promise<Response>(() => undefined);
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Expanded evidence")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dossiers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          characterUrl: "https://raider.io/characters/eu/silvermoon/root"
+        })
+      })
+    );
+  });
+
   it("keeps initial evidence visible when linked-character research fails", async () => {
     // Break caught: a failed background job could clear valid root-character
     // evidence instead of reporting the research failure separately.

@@ -88,6 +88,9 @@ export interface SnapshotRepository {
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
+  getCurrentContainingCharacter?(
+    key: CharacterKey
+  ): Promise<StoredSnapshot | null>;
   find(id: string): Promise<StoredSnapshot | null>;
   listHistory(
     key: CharacterKey,
@@ -204,6 +207,8 @@ export interface StoredCharacterMythicWipe extends CharacterMythicWipeInput {
 
 export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
+  /** Internal cache generation used to invalidate evidence after a parser fix. */
+  evidenceVersion?: number;
   kills: readonly StoredCharacterMythicKill[];
   wipes: readonly StoredCharacterMythicWipe[];
   wipeCapable: boolean;
