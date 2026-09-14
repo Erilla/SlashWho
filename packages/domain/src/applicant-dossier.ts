@@ -157,6 +157,12 @@ function compareEvidence(
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
 }
+function compareEventsLatestFirst(
+  a: DossierKillEvidence,
+  b: DossierKillEvidence
+): number {
+  return compareEvidence(b, a);
+}
 function sharedEvidenceKey(k: DossierKillEvidence): string {
   // Preserve the narrow legacy identity only when a malformed timestamp cannot
   // supply the UTC date required by the normal grouping rule.
@@ -318,7 +324,7 @@ export function buildApplicantDossier(
           }
         };
       })
-      .sort((a, b) => compareEvidence(a.selected, b.selected));
+      .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
