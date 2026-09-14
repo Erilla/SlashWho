@@ -125,7 +125,10 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
           </p>
         </div>
       </div>
-      <DossierParseList label="First kill parses" parses={boss.firstKill.parses} />
+      <DossierParseList
+        label="First kill parses"
+        parses={boss.firstKill.parses}
+      />
       <DossierParseList label="Best shown parses" parses={boss.bestParses} />
       <details>
         <summary>View kill evidence</summary>
