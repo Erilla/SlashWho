@@ -416,6 +416,18 @@ export function buildApplicantDossier(
       tierOrdinal: number | null;
     }
   >();
+  const wipesByBoss = new Map<
+    string,
+    Array<DossierWipeEvidence & RaidCatalogueEncounter>
+  >();
+  for (const suppliedWipe of input.wipes ?? []) {
+    const metadata = catalogueEncounter(suppliedWipe);
+    if (!metadata) continue;
+    const wipe = { ...suppliedWipe, ...metadata };
+    const key = `${metadata.raidId}\0${metadata.bossId}`;
+    wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
+  }
+
   for (const kills of byBoss.values()) {
     const groupedEvidence = new Map<string, DossierKillEvidence[]>();
     for (const kill of [...kills].sort(compareEvidence)) {
@@ -495,20 +507,9 @@ export function buildApplicantDossier(
     });
     raids.set(selected.raidId, raid);
   }
-  const wipesByBoss = new Map<
-    string,
-    Array<DossierWipeEvidence & RaidCatalogueEncounter>
-  >();
-  for (const suppliedWipe of input.wipes ?? []) {
-    const metadata = catalogueEncounter(suppliedWipe);
-    if (!metadata) continue;
-    const wipe = { ...suppliedWipe, ...metadata };
-    const key = `${metadata.raidId}\0${metadata.bossId}`;
-    wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
-  }
-  const aggregateWipes = (
+  function aggregateWipes(
     wipes: readonly (DossierWipeEvidence & RaidCatalogueEncounter)[]
-  ): ApplicantDossierWipe[] => {
+  ): ApplicantDossierWipe[] {
     const grouped = new Map<
       string,
       (DossierWipeEvidence & RaidCatalogueEncounter)[]
@@ -540,7 +541,7 @@ export function buildApplicantDossier(
         (a, b) =>
           text(b.attemptedAt, a.attemptedAt) || text(a.reportUrl, b.reportUrl)
       );
-  };
+  }
   const completeCharacters = new Set(
     (input.completeWarcraftLogsCharacters ?? []).map(canonicalCharacterId)
   );
