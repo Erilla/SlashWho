@@ -64,15 +64,22 @@ export function DossierPageClient({
     }
 
     async function readInitialDossier() {
-      const response = await fetch(
+      let response = await fetch(
         jobId ? `${dossierPath}?scope=initial` : dossierPath,
         {
           cache: "no-store",
           signal: controller.signal
         }
       );
+      if (!jobId && response.status === 409) {
+        response = await fetch(`${dossierPath}?scope=initial`, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+      }
       const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
+      if (!jobId) setStatus(null);
       if (!response.ok) {
         setInitialError(apiError(response, body));
         return;
@@ -83,7 +90,6 @@ export function DossierPageClient({
       } else {
         setDossier(parsed.data);
       }
-      if (!jobId) setStatus(null);
     }
 
     if (!initialDossier)
