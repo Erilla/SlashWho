@@ -328,7 +328,7 @@ describe("DossierPageClient", () => {
     const evidenceDefinitions =
       document.querySelectorAll<HTMLDListElement>(".dossier-evidence");
     expect(within(evidenceDefinitions[1]!).getByText("Ryii")).toHaveClass(
-      "dossier-character-name--priest"
+      "dossier-character-name--mage"
     );
 
     const limitation = screen
