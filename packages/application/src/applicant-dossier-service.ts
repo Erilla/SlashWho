@@ -7,6 +7,7 @@ import type {
   DiscoveryQueue,
   Repositories,
   StoredCharacterMythicKill,
+  StoredCharacterMythicWipe,
   StoredSnapshotCharacter
 } from "@slashwho/database";
 import {
@@ -19,6 +20,7 @@ import {
   type CharacterKey,
   type DossierCuttingEdgeEvidence,
   type DossierKillEvidence,
+  type DossierWipeEvidence,
   type DossierLimitation
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
@@ -61,6 +63,8 @@ type DossierSubject = Readonly<{
 }>;
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
+  wipes: readonly DossierWipeEvidence[];
+  warcraftLogsComplete: boolean;
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
@@ -100,13 +104,13 @@ function limitationMessage(
     case "rate_limited":
       return `${label} is temporarily rate limited.`;
     case "request_cap":
-      return `${label} history is incomplete because this dossier reached its request cap. Shown kills are the earliest found so far; older kills may exist.`;
+      return `${label} history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.`;
     case "unavailable":
       if (source === "blizzard")
         return `${label} could not be read; Cutting Edge status is unknown for this character.`;
-      return `${label} history could not be fully loaded. Shown kills are the earliest found so far; older kills may exist.`;
+      return `${label} history could not be fully loaded. Shown evidence is partial; other kills or wipes may exist.`;
     case "schema_changed":
-      return `${label} returned an unexpected response, so history is incomplete. Shown kills are the earliest found so far; older kills may exist.`;
+      return `${label} returned an unexpected response, so history is incomplete. Shown evidence is partial; other kills or wipes may exist.`;
   }
 }
 
@@ -152,6 +156,23 @@ function cachedKill(
     guild: kill.guild,
     historicWorldRank: kill.historicWorldRank ?? null,
     reportUrl: kill.fightUrl
+  };
+}
+
+function cachedWipe(
+  wipe: StoredCharacterMythicWipe,
+  character: CharacterKey
+): DossierWipeEvidence {
+  return {
+    raidId: wipe.raidId,
+    raidName: wipe.raidName,
+    bossId: wipe.bossId,
+    bossName: wipe.bossName,
+    journalBossId: wipe.journalBossId,
+    bossOrder: wipe.bossOrder,
+    character,
+    attemptedAt: wipe.attemptedAt,
+    reportUrl: wipe.fightUrl
   };
 }
 
@@ -203,6 +224,12 @@ async function gatherCharacterEvidence(
     limitations,
     kills:
       completed?.kills.map((kill) => cachedKill(kill, character.key)) ?? [],
+    wipes:
+      completed?.wipes.map((wipe) => cachedWipe(wipe, character.key)) ?? [],
+    warcraftLogsComplete:
+      reservation.kind === "fresh" &&
+      completed?.run.status === "complete" &&
+      completed.run.limitationCode === null,
     cuttingEdges:
       blizzard.kind === "evidence"
         ? blizzard.achievements.map((achievement) => ({
@@ -378,6 +405,10 @@ async function assembleDossier(options: {
       })
     ),
     kills: ranked.kills,
+    wipes: evidence.flatMap((item) => item.wipes),
+    completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
+      item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
+    ),
     cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
     limitations: [...limitations, ...ranked.limitations]
   });

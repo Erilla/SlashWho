@@ -2,6 +2,7 @@ import type { SearchService } from "./search-service";
 import type {
   Repositories,
   StoredCharacterMythicKill,
+  StoredCharacterMythicWipe,
   StoredSnapshot
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
@@ -60,6 +61,9 @@ function fixture(
     characterCap?: number;
     warcraftLogsRequestCap?: number;
     additionalKills?: readonly StoredCharacterMythicKill[];
+    wipes?: readonly StoredCharacterMythicWipe[];
+    includeCachedKills?: boolean;
+    evidenceStatus?: "complete" | "partial";
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -102,9 +106,10 @@ function fixture(
           id: "10000000-0000-4000-8000-000000000012",
           key,
           queueJobId: "evidence-job",
-          status: "complete",
+          status: options.evidenceStatus ?? "complete",
           attempt: 1,
-          limitationCode: null,
+          limitationCode:
+            options.evidenceStatus === "partial" ? "request_cap" : null,
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
           startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -115,15 +120,20 @@ function fixture(
             id: "10000000-0000-4000-8000-000000000012",
             key,
             queueJobId: "evidence-job",
-            status: "complete",
+            status: options.evidenceStatus ?? "complete",
             attempt: 1,
-            limitationCode: null,
+            limitationCode:
+              options.evidenceStatus === "partial" ? "request_cap" : null,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
             completedAt: new Date()
           },
-          kills: [...cachedKills, ...(options.additionalKills ?? [])]
+          kills: [
+            ...(options.includeCachedKills === false ? [] : cachedKills),
+            ...(options.additionalKills ?? [])
+          ],
+          wipes: options.wipes ?? []
         }
       })),
       markEnqueued
@@ -221,7 +231,63 @@ function fixture(
   };
 }
 
+function raidWithKill(firstKill: Record<string, unknown>) {
+  return expect.objectContaining({
+    raidId: "1273",
+    bosses: expect.arrayContaining([
+      expect.objectContaining({
+        state: "kill",
+        firstKill: expect.objectContaining(firstKill)
+      })
+    ])
+  });
+}
+
 describe("applicant dossier service", () => {
+  it("maps fresh cached wipes and complete scans into aggregate boss states", async () => {
+    // Break caught: a durable wipe could be discarded at the application
+    // boundary, or a partial scan could be misrepresented as no logs.
+    const wipe: StoredCharacterMythicWipe = {
+      id: "10000000-0000-4000-8000-000000000030",
+      raidId: "42",
+      raidName: "Nerub-ar Palace",
+      bossId: "2599",
+      bossName: "Sikran",
+      journalBossId: "2599",
+      bossOrder: 5,
+      attemptedAt: "2024-09-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/wipe",
+      fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5"
+    };
+    const complete = await fixture({
+      includeCachedKills: false,
+      wipes: [wipe]
+    }).dossiers.read(root);
+    if (complete.kind !== "ready") throw new Error("dossier_not_ready");
+    const nerubar = complete.dossier.raids.find(
+      (raid) => raid.raidName === "Nerub-ar Palace"
+    )!;
+    expect(
+      nerubar.bosses.find(
+        (boss) => boss.bossName === "Sikran, Captain of the Sureki"
+      )
+    ).toMatchObject({
+      state: "wipe",
+      wipe: { characters: ["Ryii", "Ryalts"] }
+    });
+    expect(nerubar.bosses.find((boss) => boss.bossOrder === 1)).toMatchObject({
+      state: "no_logs"
+    });
+
+    const partial = await fixture({
+      includeCachedKills: false,
+      evidenceStatus: "partial"
+    }).dossiers.read(root);
+    if (partial.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(partial.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "incomplete"
+    });
+  });
   it("withholds initial evidence for a tournament root before discovery finishes", async () => {
     const { dossiers, raiderio, warcraftLogs, blizzard } = fixture();
     vi.mocked(raiderio.getCharacter).mockResolvedValue({
@@ -317,7 +383,9 @@ describe("applicant dossier service", () => {
       const { dossiers, raiderio } = fixture();
       await expect(dossiers.read(root)).resolves.toMatchObject({
         dossier: {
-          raids: [{ bosses: [{ firstKill: { historicWorldRank: 2 } }] }]
+          raids: expect.arrayContaining([
+            raidWithKill({ historicWorldRank: 2 })
+          ])
         }
       });
       vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
@@ -329,7 +397,9 @@ describe("applicant dossier service", () => {
       vi.advanceTimersByTime(15 * 60_000);
       await expect(dossiers.read(root)).resolves.toMatchObject({
         dossier: {
-          raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }],
+          raids: expect.arrayContaining([
+            raidWithKill({ historicWorldRank: null })
+          ]),
           limitations: []
         }
       });
@@ -442,20 +512,12 @@ describe("applicant dossier service", () => {
             source: "fingerprint_derived"
           }
         ],
-        raids: [
-          {
-            raidId: "1273",
-            bosses: [
-              {
-                firstKill: {
-                  reportUrl:
-                    "https://www.warcraftlogs.com/reports/example#fight=9",
-                  historicWorldRank: 2
-                }
-              }
-            ]
-          }
-        ],
+        raids: expect.arrayContaining([
+          raidWithKill({
+            reportUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
+            historicWorldRank: 2
+          })
+        ]),
         cuttingEdges: [{ achievementId: "40254", characters: [root, alt] }],
         research: {
           state: "complete",
@@ -527,6 +589,7 @@ describe("applicant dossier service", () => {
     expect(
       result.dossier.raids
         .flatMap((raid) => raid.bosses)
+        .filter((boss) => boss.state === "kill")
         .map((boss) => boss.firstKill.historicWorldRank)
         .sort()
     ).toEqual([371, 412, 741]);
@@ -559,7 +622,7 @@ describe("applicant dossier service", () => {
     await expect(dossiers.read(root)).resolves.toMatchObject({
       kind: "ready",
       dossier: {
-        raids: [{ bosses: [{ firstKill: { historicWorldRank: 2 } }] }]
+        raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 2 })])
       }
     });
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledWith(
@@ -598,7 +661,9 @@ describe("applicant dossier service", () => {
       await expect(dossiers.read(root)).resolves.toMatchObject({
         kind: "ready",
         dossier: {
-          raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }],
+          raids: expect.arrayContaining([
+            raidWithKill({ historicWorldRank: null })
+          ]),
           limitations: []
         }
       });
@@ -622,7 +687,9 @@ describe("applicant dossier service", () => {
       await expect(dossiers.read(root)).resolves.toMatchObject({
         kind: "ready",
         dossier: {
-          raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }],
+          raids: expect.arrayContaining([
+            raidWithKill({ historicWorldRank: null })
+          ]),
           limitations: [
             expect.objectContaining({
               source: "raiderio",
@@ -662,7 +729,9 @@ describe("applicant dossier service", () => {
     await expect(dossiers.read(root)).resolves.toMatchObject({
       kind: "ready",
       dossier: {
-        raids: [{ bosses: [{ firstKill: { historicWorldRank: null } }] }]
+        raids: expect.arrayContaining([
+          raidWithKill({ historicWorldRank: null })
+        ])
       }
     });
   });
@@ -676,7 +745,9 @@ describe("applicant dossier service", () => {
     await expect(dossiers.read(root)).resolves.toMatchObject({
       kind: "ready",
       dossier: {
-        raids: [{ raidId: "1273" }],
+        raids: expect.arrayContaining([
+          expect.objectContaining({ raidId: "1273" })
+        ]),
         limitations: [
           { source: "blizzard", character: root, code: "unavailable" }
         ]
@@ -725,19 +796,11 @@ describe("applicant dossier service", () => {
             source: "submitted"
           }
         ],
-        raids: [
-          {
-            raidId: "1273",
-            bosses: [
-              {
-                firstKill: {
-                  reportUrl:
-                    "https://www.warcraftlogs.com/reports/example#fight=9"
-                }
-              }
-            ]
-          }
-        ],
+        raids: expect.arrayContaining([
+          raidWithKill({
+            reportUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+          })
+        ]),
         research: {
           state: "initial",
           message:
@@ -785,19 +848,11 @@ describe("applicant dossier service", () => {
     expect(result).toMatchObject({
       kind: "ready",
       dossier: {
-        raids: [
-          {
-            raidId: "1273",
-            bosses: [
-              {
-                firstKill: {
-                  reportUrl:
-                    "https://www.warcraftlogs.com/reports/example#fight=9"
-                }
-              }
-            ]
-          }
-        ],
+        raids: expect.arrayContaining([
+          raidWithKill({
+            reportUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+          })
+        ]),
         limitations: []
       }
     });

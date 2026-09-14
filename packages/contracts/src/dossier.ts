@@ -44,16 +44,38 @@ export const dossierFirstKillSchema = z
   })
   .strict();
 
-export const dossierBossSchema = z
-  .object({
-    bossId: z.string().min(1),
-    bossName: z.string().min(1),
-    bossOrder: z.number().int().nonnegative(),
-    imageUrl: z.url().nullable(),
-    firstKill: dossierFirstKillSchema,
-    firstKills: z.array(dossierFirstKillSchema).min(1).optional()
-  })
-  .strict();
+const dossierBossMetadata = {
+  bossId: z.string().min(1),
+  bossName: z.string().min(1),
+  bossOrder: z.number().int().nonnegative(),
+  imageUrl: z.url().nullable()
+};
+
+export const dossierBossSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      ...dossierBossMetadata,
+      state: z.literal("kill"),
+      firstKill: dossierFirstKillSchema,
+      firstKills: z.array(dossierFirstKillSchema).min(1).optional()
+    })
+    .strict(),
+  z
+    .object({
+      ...dossierBossMetadata,
+      state: z.literal("wipe"),
+      wipe: z
+        .object({
+          attemptedAt: z.iso.datetime(),
+          reportUrl: z.url(),
+          characters: z.array(z.string().min(1)).min(1)
+        })
+        .strict()
+    })
+    .strict(),
+  z.object({ ...dossierBossMetadata, state: z.literal("no_logs") }).strict(),
+  z.object({ ...dossierBossMetadata, state: z.literal("incomplete") }).strict()
+]);
 
 export const dossierRaidSchema = z
   .object({
