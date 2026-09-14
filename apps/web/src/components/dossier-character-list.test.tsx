@@ -32,7 +32,7 @@ function mockScrollViewport(desktop: boolean) {
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
 }
 
-it("links a connected character to Raider.IO using its class colour", () => {
+it("shows a safe accessible Raider.IO icon link beside a class-coloured character", () => {
   render(
     <DossierCharacterList
       characters={[
@@ -47,13 +47,18 @@ it("links a connected character to Raider.IO using its class colour", () => {
     />
   );
 
-  expect(screen.getByRole("link", { name: "Ryii" })).toHaveAttribute(
+  const link = screen.getByRole("link", {
+    name: "View Ryii on Raider.IO (opens in a new tab)"
+  });
+  expect(link).toHaveAttribute(
     "href",
     "https://raider.io/characters/eu/silvermoon/ryii"
   );
-  expect(screen.getByRole("link", { name: "Ryii" })).toHaveClass(
-    "dossier-character-link--mage"
-  );
+  expect(link).toHaveAttribute("target", "_blank");
+  expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  expect(link).toHaveTextContent("Ryii");
+  expect(screen.getByText("Ryii")).toHaveClass("dossier-character-link--mage");
+  expect(link.querySelector(".upstream-link-icon--raiderio")).toBeVisible();
 });
 
 it("exposes overflowing desktop rows as a labelled keyboard-scrollable region", async () => {

@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-import { seedSnapshot } from "./support/seed";
+import { seedCharacterEvidence, seedSnapshot } from "./support/seed";
 
 test("keeps dossier research accessible without horizontal overflow on mobile", async ({
   page
@@ -15,6 +15,7 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
     // and the shared fake Raider.IO fixture deliberately holds a refresh.
     refreshedAt: new Date()
   });
+  await seedCharacterEvidence(key);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
@@ -49,7 +50,11 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await evidence.getByText("View kill evidence").click();
   await expect(
-    evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
+    evidence
+      .getByRole("link", {
+        name: "View Warcraft Logs report (opens in a new tab)"
+      })
+      .first()
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
   expect(
     await page.evaluate(
@@ -68,24 +73,30 @@ test("matches dossier summary panels and confines character scrolling to desktop
     realm: "silvermoon",
     name: "longlist"
   } as const;
+  const characters = Array.from({ length: 12 }, (_, index) => ({
+    key:
+      index === 0
+        ? key
+        : {
+            region: "eu" as const,
+            realm: "silvermoon",
+            name: `ryalt${index}`
+          },
+    displayName: index === 0 ? "Longlist" : `Ryalt${index}`,
+    className: "Mage",
+    level: 80 - index
+  }));
   await seedSnapshot({
     key,
     displayName: "Longlist",
     refreshedAt: new Date(),
-    characters: Array.from({ length: 12 }, (_, index) => ({
-      key:
-        index === 0
-          ? key
-          : {
-              region: "eu" as const,
-              realm: "silvermoon",
-              name: `ryalt${index}`
-            },
-      displayName: index === 0 ? "Longlist" : `Ryalt${index}`,
-      className: "Mage",
-      level: 80 - index
-    }))
+    characters
   });
+  await Promise.all(
+    characters.map((character) =>
+      seedCharacterEvidence(character.key, { withSampleKills: false })
+    )
+  );
 
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/longlist");
@@ -172,6 +183,7 @@ test("does not create a desktop scroll range when connected characters fit", asy
     displayName: "Shortlist",
     refreshedAt: new Date()
   });
+  await seedCharacterEvidence(key, { withSampleKills: false });
 
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/shortlist");

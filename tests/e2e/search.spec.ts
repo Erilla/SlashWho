@@ -33,10 +33,14 @@ for (const applicantUrl of applicantUrls) {
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: "Ryii" })).toHaveAttribute(
+    const raiderIoLink = page.getByRole("link", {
+      name: "View Ryii on Raider.IO (opens in a new tab)"
+    });
+    await expect(raiderIoLink).toHaveAttribute(
       "href",
       /raider\.io\/characters\/eu\/silvermoon\/ryii$/
     );
+    await expect(raiderIoLink).toHaveAttribute("target", "_blank");
     await expect(page.getByText("Queen Ansurek")).toBeVisible();
     const evidence = page.getByRole("group", {
       name: "Queen Ansurek evidence"
@@ -53,7 +57,11 @@ for (const applicantUrl of applicantUrls) {
       )
       .toEqual(["2025-01-13T21:31:40.000Z", "2025-01-13T22:31:40.000Z"]);
     await expect(
-      evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
+      evidence
+        .getByRole("link", {
+          name: "View Warcraft Logs report (opens in a new tab)"
+        })
+        .first()
     ).toBeVisible();
   });
 }
@@ -90,7 +98,11 @@ test("shows submitted-character evidence while queued discovery is held", async 
   await expect(initialDisclosure).not.toBeVisible();
   await evidence.getByText("View kill evidence").click();
   await expect(
-    evidence.getByRole("link", { name: "View Warcraft Logs report" }).first()
+    evidence
+      .getByRole("link", {
+        name: "View Warcraft Logs report (opens in a new tab)"
+      })
+      .first()
   ).toHaveAttribute("href", /e2eReport#fight=9$/);
 });
 
