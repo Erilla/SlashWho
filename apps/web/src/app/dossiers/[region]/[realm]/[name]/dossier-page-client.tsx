@@ -71,13 +71,20 @@ export function DossierPageClient({
           signal: controller.signal
         }
       );
-      if (!jobId && response.status === 409) {
+      let body = await readJson(response);
+      const parsedError = safeApiErrorSchema.safeParse(body);
+      if (
+        !jobId &&
+        response.status === 409 &&
+        parsedError.success &&
+        parsedError.data.error.code === "discovery_not_ready"
+      ) {
         response = await fetch(`${dossierPath}?scope=initial`, {
           cache: "no-store",
           signal: controller.signal
         });
+        body = await readJson(response);
       }
-      const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
       if (!jobId) setStatus(null);
       if (!response.ok) {
