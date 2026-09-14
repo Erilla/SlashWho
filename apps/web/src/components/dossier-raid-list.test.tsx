@@ -298,9 +298,7 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
       selector: ".dossier-boss-first-kill .dossier-character-name"
     })
     .closest(".dossier-boss-first-kill");
-  expect(firstKillSummary).toHaveTextContent(
-    "First kill: 14 Jan 2025 · Ryii"
-  );
+  expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();
