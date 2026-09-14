@@ -396,7 +396,7 @@ export function createApplicantDossierService(options: {
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
-  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
   config: ApplicationConfig;
   onCacheEvent?: (source: string, event: string) => void;
 }): ApplicantDossierService {
@@ -480,6 +480,25 @@ export function createApplicantDossierService(options: {
     },
 
     async readInitial(key, signal) {
+      // Initial evidence precedes the worker's snapshot filter. One bounded
+      // lookup prevents that preview from exposing a tournament root.
+      const timeout = AbortSignal.timeout(15_000);
+      const requestSignal = signal
+        ? AbortSignal.any([signal, timeout])
+        : timeout;
+      try {
+        requestSignal.throwIfAborted();
+        const character = await options.raiderio.getCharacter(
+          key,
+          requestSignal
+        );
+        requestSignal.throwIfAborted();
+        if (character.isTournamentProfile === true)
+          return { kind: "not_ready" };
+      } catch {
+        signal?.throwIfAborted();
+        return { kind: "not_ready" };
+      }
       return {
         kind: "ready",
         dossier: await assembleDossier({

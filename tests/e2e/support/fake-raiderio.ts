@@ -72,8 +72,8 @@ async function listen(server: Server): Promise<number> {
 
 export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
   // The refreshing state is only observable while an upstream read is still in
-  // flight. Holding the root character response until the test releases it makes
-  // that window deterministic instead of dependent on render timing.
+  // flight. Hold the owner list so discovery stays pending while the initial
+  // dossier can independently check the root's tournament eligibility.
   let released = false;
   const held: Array<() => void> = [];
   const releaseAll = () => {
@@ -148,8 +148,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
             }
           }
         });
-      if (released) send();
-      else held.push(send);
+      send();
       return;
     }
 
@@ -157,14 +156,17 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       url.pathname === "/api/user/view-characters" &&
       url.searchParams.get("name") === "fixture-owner"
     ) {
-      json(response, 200, {
-        viewUserCharactersApi: {
-          name: "fixture-owner",
-          characters: ownerCharacters.map((character) => ({
-            character: upstreamCharacter(character)
-          }))
-        }
-      });
+      const send = () =>
+        json(response, 200, {
+          viewUserCharactersApi: {
+            name: "fixture-owner",
+            characters: ownerCharacters.map((character) => ({
+              character: upstreamCharacter(character)
+            }))
+          }
+        });
+      if (released) send();
+      else held.push(send);
       return;
     }
 

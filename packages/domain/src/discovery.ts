@@ -14,6 +14,8 @@ export interface RaiderIoCharacter {
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;
+  /** Explicit upstream tournament evidence; excluded before snapshot publication. */
+  readonly isTournamentProfile?: boolean;
   /**
    * True when the upstream payload named at least one related character this
    * system cannot represent (for example a character in an unsupported region),
@@ -55,6 +57,8 @@ export type DiscoveryOutcome =
       limitationCode: "privacy_hidden" | "request_cap" | "unsupported_member";
       /** Privacy-hidden ownership was observed even when another limitation won. */
       privacyHiddenObserved?: true;
+      /** Transient exclusions for subsequent discovery stages; never persist or expose. */
+      excludedTournamentCharacterIds?: readonly string[];
       characters: readonly DiscoveredCharacter[];
     }
   | {
@@ -105,6 +109,9 @@ function isRaiderIoCharacter(value: unknown): value is RaiderIoCharacter {
     typeof value.className === "string" &&
     "level" in value &&
     typeof value.level === "number" &&
+    (!("isTournamentProfile" in value) ||
+      value.isTournamentProfile === undefined ||
+      typeof value.isTournamentProfile === "boolean") &&
     "ownerId" in value &&
     (typeof value.ownerId === "string" || value.ownerId === null) &&
     "profileGuess" in value &&
@@ -203,6 +210,7 @@ export async function discoverCharacter(
   let privacyHidden = false;
   let omittedMembers = false;
   const visitedCharacters = new Set<string>();
+  const tournamentCharacters = new Set<string>();
   const visitedOwners = new Set<string>();
   const pendingCharacters: PendingCharacter[] = [
     { key: root, source: "input" }
@@ -233,6 +241,11 @@ export async function discoverCharacter(
     for (const character of profile.characters) {
       throwIfAborted();
       if (character.omittedMembers) omittedMembers = true;
+      if (character.isTournamentProfile === true) {
+        tournamentCharacters.add(canonicalCharacterId(character.key));
+        omittedMembers = true;
+        continue;
+      }
       if (!(await options.isSuppressed(character.key))) {
         throwIfAborted();
         observations.push(discoveredCharacter(character, source));
@@ -267,6 +280,18 @@ export async function discoverCharacter(
       if (character === budgetExhausted) break;
       if (!isRaiderIoCharacter(character)) throw schemaChanged();
       if (character.omittedMembers) omittedMembers = true;
+      if (character.isTournamentProfile === true) {
+        if (pending.source === "input") {
+          return {
+            kind: "failure",
+            code: "character_not_found",
+            retryable: false
+          };
+        }
+        tournamentCharacters.add(canonicalCharacterId(character.key));
+        omittedMembers = true;
+        continue;
+      }
 
       observations.push(discoveredCharacter(character, pending.source));
       inspectedCharacters.push(character);
@@ -325,7 +350,12 @@ export async function discoverCharacter(
         character.source === "claimed" || character.source === "profile_guess"
     )
     .sort(compareCharacterKeys);
-  const characters = deduplicateCharacters([...primary, ...related]);
+  // A later, less informative observation must not reintroduce a known
+  // tournament character (including one already observed through another path).
+  const characters = deduplicateCharacters([...primary, ...related]).filter(
+    (character) =>
+      !tournamentCharacters.has(canonicalCharacterId(character.key))
+  );
 
   // A snapshot is anchored to its root character. Without a root observation the
   // repository write cannot complete, so refuse rather than publishing a snapshot
@@ -343,6 +373,9 @@ export async function discoverCharacter(
       state: "partial",
       limitationCode: "request_cap",
       ...(privacyHidden ? { privacyHiddenObserved: true as const } : {}),
+      ...(tournamentCharacters.size > 0
+        ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
+        : {}),
       characters
     };
   }
@@ -351,6 +384,9 @@ export async function discoverCharacter(
       kind: "snapshot",
       state: "partial",
       limitationCode: "privacy_hidden",
+      ...(tournamentCharacters.size > 0
+        ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
+        : {}),
       characters
     };
   }
@@ -359,6 +395,9 @@ export async function discoverCharacter(
       kind: "snapshot",
       state: "partial",
       limitationCode: "unsupported_member",
+      ...(tournamentCharacters.size > 0
+        ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
+        : {}),
       characters
     };
   }
