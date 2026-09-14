@@ -508,7 +508,10 @@ async function assembleDossier(options: {
             "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
         }
       : options.research,
-    characters: options.subjects.map(serializeDossierSubject),
+    characters: options.subjects.map((character, index) => ({
+      ...serializeDossierSubject(character),
+      researchState: evidence[index]!.gathering ? "gathering" : "complete"
+    })),
     limitations: dossier.limitations.map((item) => ({
       ...item,
       code: contractLimitationCode(item.code),

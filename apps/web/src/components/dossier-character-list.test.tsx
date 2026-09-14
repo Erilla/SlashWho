@@ -76,6 +76,39 @@ it("keeps submitted-character links in the dossier header and shows both profile
   expect(screen.getByText("Ryii")).toHaveClass("dossier-character-name--mage");
 });
 
+it("shows a spinner only for characters whose evidence is still gathering", () => {
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: "Mage",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted",
+          researchState: "complete"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryalts" },
+          displayName: "Ryalts",
+          className: "Priest",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+          source: "fingerprint_derived",
+          researchState: "gathering"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  expect(
+    screen.getByRole("status", { name: "Research gathering for Ryalts" })
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("status", { name: "Research gathering for Ryii" })
+  ).not.toBeInTheDocument();
+});
+
 it("exposes overflowing desktop rows as a labelled keyboard-scrollable region", async () => {
   // Break caught: overflow can hide connected characters behind a scroll area
   // that keyboard and assistive-technology users cannot discover or operate.

@@ -540,6 +540,18 @@ a {
   font-size: 0.85rem;
 }
 
+.dossier-character-name-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dossier-character-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--muted);
+}
+
 .source-badge {
   flex: none;
   border: 1px solid var(--border-strong);
