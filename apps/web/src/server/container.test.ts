@@ -123,6 +123,12 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         code: "invalid_character_url" as const
       };
     },
+    async addConnectedCharacter() {
+      return {
+        kind: "invalid" as const,
+        code: "invalid_character_url" as const
+      };
+    },
     async read() {
       return { kind: "not_ready" as const };
     },

@@ -1,5 +1,5 @@
 import type { DossierCharacter } from "@slashwho/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { DossierCharacterName } from "./dossier-character-name";
 import { CharacterProfileLinks } from "./profile-links";
@@ -23,7 +23,8 @@ function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
 const sourceLabel: Record<DossierCharacter["source"], string> = {
   submitted: "Submitted character",
   raiderio_declared: "Raider.IO declared",
-  fingerprint_derived: "Fingerprint-derived"
+  fingerprint_derived: "Fingerprint-derived",
+  manually_added: "Manually added"
 };
 
 export function DossierCharacterList({
@@ -32,6 +33,29 @@ export function DossierCharacterList({
 }: DossierCharacterListProps) {
   const listRef = useRef<HTMLUListElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
+  const [characterUrl, setCharacterUrl] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function addCharacter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const response = await fetch(
+      `/api/dossiers/${root.region}/${root.realm}/${root.name}/connected-characters`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ characterUrl })
+      }
+    );
+    if (response.status === 202) {
+      setMessage("Researching connected character…");
+      return;
+    }
+    if (!response.ok) {
+      setMessage("The character could not be added.");
+      return;
+    }
+    window.location.reload();
+  }
 
   useEffect(() => {
     const list = listRef.current;
@@ -100,6 +124,30 @@ export function DossierCharacterList({
           </li>
         ))}
       </ul>
+      <form className="search-form" onSubmit={addCharacter}>
+        <label className="visually-hidden" htmlFor="connected-character-url">
+          Connected character URL
+        </label>
+        <div className="search-control">
+          <input
+            className="search-input"
+            id="connected-character-url"
+            type="url"
+            value={characterUrl}
+            onChange={(event) => setCharacterUrl(event.currentTarget.value)}
+            placeholder="Raider.IO or Warcraft Logs character URL"
+            required
+          />
+          <button className="search-button" type="submit">
+            Add character
+          </button>
+        </div>
+        {message ? (
+          <p className="form-error" role="status">
+            {message}
+          </p>
+        ) : null}
+      </form>
     </section>
   );
 }

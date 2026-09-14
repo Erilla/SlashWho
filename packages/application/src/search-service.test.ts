@@ -155,6 +155,14 @@ function policyFixture(
         return { items: [], nextCursor: null };
       }
     },
+    manualConnections: {
+      async add() {
+        return "added" as const;
+      },
+      async list() {
+        return [];
+      }
+    },
     suppressions: {
       async suppress() {},
       async isActive() {

@@ -47,3 +47,9 @@ _Avoid_: Best parse, all-time best, character-wide best
 **Source label**:
 The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown only on the reviewer surface; the public alt list still shows one undifferentiated list, and no confidence value is retained alongside it.
 _Avoid_: Confidence, provenance score, match strength
+
+**Manual connection**:
+A durable, directional relationship explicitly added from one applicant dossier
+to another discovered character. It is distinct from snapshot-discovered links
+and is excluded when the target has an active removal request.
+_Avoid_: Verified manual alt, ownership claim

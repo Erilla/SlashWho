@@ -95,6 +95,14 @@ export interface SnapshotRepository {
   ): Promise<SnapshotHistoryPage>;
 }
 
+export interface ManualConnectionRepository {
+  list(root: CharacterKey): Promise<readonly StoredSnapshotCharacter[]>;
+  add(
+    root: CharacterKey,
+    character: CharacterKey
+  ): Promise<"added" | "duplicate">;
+}
+
 export interface SuppressionRepository {
   suppress(
     key: CharacterKey,
@@ -323,6 +331,7 @@ export interface Repositories {
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
   };
   snapshots: SnapshotRepository;
+  manualConnections: ManualConnectionRepository;
   suppressions: SuppressionRepository;
   rateLimits: RateLimitRepository;
   negativeCache: NegativeCacheRepository;

@@ -37,6 +37,7 @@ describe("database migrations", () => {
       "fingerprint_sweep_request_events",
       "fingerprint_sweep_reservations",
       "fingerprint_sweep_states",
+      "manual_dossier_connections",
       "negative_character_cache",
       "rate_limit_events",
       "snapshot_characters",
@@ -83,10 +84,11 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-2).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-3).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 8, tag: "0008_character_mythic_wipe_fights" },
-      { idx: 9, tag: "0009_character_kill_parses" }
+      { idx: 9, tag: "0009_character_kill_parses" },
+      { idx: 10, tag: "0010_manual_dossier_connections" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
