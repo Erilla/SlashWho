@@ -123,6 +123,19 @@ describe("DossierPageClient staged research", () => {
     // Break caught: a direct visit lacked the job identifier required to poll
     // linked-character research, leaving it permanently root-only.
     vi.stubGlobal("fetch", (input: string) => {
+      if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "discovery_not_ready",
+                message: "Discovery is still in progress."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
       if (input === "/api/dossiers") {
         return Promise.resolve(
           Response.json(
@@ -159,6 +172,19 @@ describe("DossierPageClient staged research", () => {
     // Break caught: a failed direct-start request could be hidden behind
     // partial dossier evidence or a persistent loading indicator.
     vi.stubGlobal("fetch", (input: string) => {
+      if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "discovery_not_ready",
+                message: "Discovery is still in progress."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
       if (input === "/api/dossiers") {
         return Promise.resolve(
           Response.json(

@@ -172,7 +172,49 @@ export function DossierPageClient({
       }
     }
 
-    void startResearch();
+    async function readCurrentOrStartResearch() {
+      try {
+        const response = await fetch(dossierPath, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const body = await readJson(response);
+        if (controller.signal.aborted) return;
+        if (response.ok) {
+          const parsed = applicantDossierSchema.safeParse(body);
+          if (!parsed.success) {
+            setError("The dossier returned an unexpected response.");
+          } else {
+            hasExpandedDossier.current = true;
+            setDossier(parsed.data);
+            setInitialError(null);
+            setError(null);
+          }
+          setStatus(null);
+          return;
+        }
+        const parsedError = safeApiErrorSchema.safeParse(body);
+        if (
+          response.status !== 409 ||
+          !parsedError.success ||
+          parsedError.data.error.code !== "discovery_not_ready"
+        ) {
+          setError(apiError(response, body));
+          setStatus(null);
+          return;
+        }
+        await startResearch();
+      } catch (caught) {
+        if (caught instanceof Error && caught.name === "AbortError") return;
+        if (controller.signal.aborted) return;
+        setError(
+          "The dossier could not be loaded. Please check your connection."
+        );
+        setStatus(null);
+      }
+    }
+
+    void readCurrentOrStartResearch();
 
     return () => controller.abort();
   }, [activeJobId, dossierPath, identity, initialDossier]);
