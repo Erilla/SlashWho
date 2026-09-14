@@ -459,12 +459,9 @@ export function buildApplicantDossier(
             parses: aggregateEventParses(shared, characters)
           }
         };
-      })
+    })
       .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
-    const earliestFirstKill = [...firstKills].sort((a, b) =>
-      compareEvidence(a.selected, b.selected)
-    )[0]!;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
       imageUrl: lookupRaidByName(selected.raidName)?.imageUrl ?? null,

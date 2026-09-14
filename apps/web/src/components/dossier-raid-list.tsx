@@ -49,20 +49,6 @@ function displayDate(isoDate: string): string {
     timeZone: "UTC"
   }).format(new Date(isoDate));
 }
-function compareFirstKillsLatestFirst(
-  a: KillBoss["firstKill"],
-  b: KillBoss["firstKill"]
-): number {
-  return (
-    b.killedAt.localeCompare(a.killedAt) ||
-    (a.reportUrl ?? "").localeCompare(b.reportUrl ?? "") ||
-    a.characters
-      .map((character) => character.name)
-      .join("\0")
-      .localeCompare(b.characters.map((character) => character.name).join("\0"))
-  );
-}
-
 function StatusIcon({ state }: { state: "kill" | "wipe" | "no_logs" }) {
   const label =
     state === "kill"
