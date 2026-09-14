@@ -44,7 +44,16 @@ html {
 body {
   min-height: 100vh;
   margin: 0;
+  padding-top: var(--header-height);
   background: var(--page);
+}
+
+html {
+  scroll-padding-top: calc(var(--header-height) + 0.75rem);
+}
+
+[id] {
+  scroll-margin-top: calc(var(--header-height) + 0.75rem);
 }
 
 a {
@@ -68,24 +77,55 @@ a {
 }
 
 .site-header {
-  position: relative;
+  position: fixed;
+  top: 0;
+  inset-inline: 0;
   z-index: 10;
-  display: flex;
-  min-height: var(--header-height);
+  display: grid;
+  grid-template-columns: auto auto 1fr;
   align-items: center;
+  column-gap: 1rem;
+  min-height: var(--header-height);
   justify-content: space-between;
-  padding: 0 2rem;
+  padding: 0.65rem 2rem;
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
 }
 
 .header-logo {
+  grid-column: 1 / 2;
   display: inline-flex;
   color: var(--accent);
   border-radius: 0.4rem;
 }
 
 .site-nav {
+  grid-column: 2 / 3;
   display: flex;
   gap: 1rem;
+}
+
+.header-search {
+  grid-column: 3 / 4;
+  width: min(100%, 31rem);
+  justify-self: end;
+}
+
+.header-search .search-form {
+  width: 100%;
+}
+
+.header-search .form-error {
+  min-height: 0;
+  margin-top: 0.2rem;
+}
+
+.header-search .search-input {
+  min-height: 2.8rem;
+}
+
+.header-search .search-button {
+  min-height: 2.8rem;
 }
 
 .site-nav-link {
@@ -1433,10 +1473,40 @@ a {
   .dossier-heading > .profile-links {
     align-self: flex-start;
   }
+  :root {
+    --header-height: 7.75rem;
+  }
 
   .home-shell {
     align-items: start;
     padding-top: 19vh;
+  }
+
+  .site-header {
+    grid-template-columns: auto 1fr;
+    grid-template-areas:
+      "brand nav"
+      "search search";
+    row-gap: 0.55rem;
+    padding: 0.55rem 1.25rem;
+  }
+
+  .header-logo {
+    grid-area: brand;
+  }
+
+  .site-nav {
+    grid-area: nav;
+    justify-self: end;
+  }
+
+  .header-search {
+    grid-area: search;
+    width: 100%;
+  }
+
+  .header-search .search-control {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .search-control {
