@@ -62,7 +62,7 @@ export function DossierCharacterList({
           isScrollable ? "dossier-characters-scroll-hint" : undefined
         }
         aria-labelledby="dossier-characters-heading"
-        className="dossier-character-list"
+        className={`dossier-character-list${isScrollable ? " dossier-scrollable" : ""}`}
         ref={listRef}
         tabIndex={isScrollable ? 0 : undefined}
       >
