@@ -20,6 +20,7 @@ import { DossierLimitations } from "../../../../../components/dossier-limitation
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
 import { SearchForm } from "../../../../../components/search-form";
+import { CharacterProfileLinks } from "../../../../../components/profile-links";
 
 type DossierPageClientProps = Readonly<{
   identity: CharacterKey;
@@ -364,6 +365,13 @@ export function DossierPageClient({
 
   const visibleError = error ?? initialError;
   const research = dossier?.research;
+  const rootDisplayName =
+    dossier?.characters.find(
+      (character) =>
+        character.key.region === identity.region &&
+        character.key.realm.toLowerCase() === identity.realm.toLowerCase() &&
+        character.key.name.toLowerCase() === identity.name.toLowerCase()
+    )?.displayName ?? identity.name;
   const visibleResearch =
     research && research.state === "initial" && researchFailed
       ? {
@@ -380,13 +388,18 @@ export function DossierPageClient({
           <SearchForm />
         </div>
         <header className="dossier-heading">
-          <p className="eyebrow">Applicant dossier</p>
-          <h1>
-            <DossierCharacterName character={identity} />
-          </h1>
-          <p className="identity-meta">
-            {identity.region.toUpperCase()} · {identity.realm}
-          </p>
+          <div>
+            <p className="eyebrow">Applicant dossier</p>
+            <h1>
+              <DossierCharacterName character={identity} />
+            </h1>
+            <p className="identity-meta">
+              {identity.region.toUpperCase()} · {identity.realm}
+            </p>
+          </div>
+          <CharacterProfileLinks
+            character={{ key: identity, displayName: rootDisplayName }}
+          />
         </header>
 
         {visibleResearch ? (
@@ -412,7 +425,10 @@ export function DossierPageClient({
 
         {dossier ? (
           <div className="dossier-layout">
-            <DossierCharacterList characters={dossier.characters} />
+            <DossierCharacterList
+              characters={dossier.characters}
+              root={dossier.root}
+            />
             <DossierCuttingEdgeList
               cuttingEdges={dossier.cuttingEdges}
               limitations={dossier.limitations}

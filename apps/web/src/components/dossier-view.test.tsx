@@ -56,7 +56,7 @@ const dossier: ApplicantDossier = {
           state: "kill",
           firstKill: {
             killedAt: "2025-01-14T20:30:00.000Z",
-            guild: { name: "Arachnid", realm: "Silvermoon" },
+            guild: { name: "Arachnid", region: "eu", realm: "Silvermoon" },
             historicWorldRank: 147,
             reportUrl: "https://www.warcraftlogs.com/reports/abc123",
             characters: [
@@ -186,6 +186,38 @@ describe("DossierPageClient", () => {
     expect(screen.getByText("World #147")).toBeVisible();
     expect(screen.getByText("Raider.IO declared")).toBeVisible();
     expect(screen.getByText("Fingerprint-derived")).toBeVisible();
+    const dossierHeader = screen
+      .getByRole("heading", { level: 1 })
+      .closest("header")!;
+    expect(
+      within(dossierHeader).getByRole("link", {
+        name: "View Ryii on Raider.IO (opens in a new tab)"
+      })
+    ).toHaveAttribute(
+      "href",
+      "https://raider.io/characters/eu/silvermoon/ryii"
+    );
+    expect(
+      within(dossierHeader).getByRole("link", {
+        name: "View Ryii on Warcraft Logs (opens in a new tab)"
+      })
+    ).toHaveAttribute(
+      "href",
+      "https://www.warcraftlogs.com/character/eu/silvermoon/ryii"
+    );
+    const connectedCharacters = screen.getByRole("region", {
+      name: "Connected characters"
+    });
+    expect(
+      within(connectedCharacters).queryByRole("link", {
+        name: "View Ryii on Raider.IO (opens in a new tab)"
+      })
+    ).not.toBeInTheDocument();
+    expect(
+      within(connectedCharacters).getByRole("link", {
+        name: "View Ryalts on Raider.IO (opens in a new tab)"
+      })
+    ).toHaveAttribute("href", "https://raider.io/characters/eu/draenor/ryalts");
     const limitation = screen
       .getAllByRole("listitem")
       .find((item) => item.textContent?.includes("Warcraft Logs evidence"));
@@ -201,6 +233,14 @@ describe("DossierPageClient", () => {
         name: "View Warcraft Logs report (opens in a new tab)"
       })
     ).toHaveAttribute("href", "https://www.warcraftlogs.com/reports/abc123");
+    expect(
+      within(evidence).getByRole("link", {
+        name: "View Arachnid on Warcraft Logs (opens in a new tab)"
+      })
+    ).toHaveAttribute(
+      "href",
+      "https://www.warcraftlogs.com/guild/eu/Silvermoon/Arachnid"
+    );
     await userEvent
       .setup()
       .click(

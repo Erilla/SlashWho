@@ -21,7 +21,7 @@ const base: DossierKillEvidence = {
 const second: DossierKillEvidence = {
   ...base,
   killedAt: "2026-08-23T20:50:13.386Z",
-  guild: { name: "Rancour", realm: "draenor" },
+  guild: { name: "Rancour", region: "eu", realm: "draenor" },
   historicWorldRank: 48,
   reportUrl: "https://www.warcraftlogs.com/reports/PTpjc7XqvGgYR6Mn#fight=27"
 };
@@ -66,8 +66,14 @@ it("groups the full UTC date and starts a new event at midnight", () => {
   expect(events([...kills].reverse())).toEqual(events(kills));
 });
 it.each([
-  { guild: { name: "Other", realm: "draenor" } },
-  { guild: { name: "Rancour", realm: "silvermoon" } },
+  { guild: { name: "Other", region: "eu" as const, realm: "draenor" } },
+  {
+    guild: {
+      name: "Rancour",
+      region: "eu" as const,
+      realm: "silvermoon"
+    }
+  },
   { character: { ...character, name: "unrelated" }, guild: null }
 ])(
   "groups same-date evidence despite attribution differences: %j",

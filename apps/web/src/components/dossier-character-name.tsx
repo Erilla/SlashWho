@@ -4,6 +4,8 @@ import type { CharacterKey, DossierCharacter } from "@slashwho/contracts";
 import { formatCharacterDisplayName } from "@slashwho/domain";
 import { createContext, Fragment, type ReactNode, useContext } from "react";
 
+import { CharacterProfileLinks } from "./profile-links";
+
 type CharacterReference = DossierCharacter | CharacterKey;
 
 const DossierCharactersContext = createContext<readonly DossierCharacter[]>([]);
@@ -89,6 +91,7 @@ export function DossierCharacterNames({
   characters,
   empty = "—"
 }: Readonly<{ characters: readonly CharacterKey[]; empty?: string }>) {
+  const dossierCharacters = useContext(DossierCharactersContext);
   if (characters.length === 0) return <>{empty}</>;
 
   return (
@@ -99,6 +102,13 @@ export function DossierCharacterNames({
         >
           {index > 0 ? ", " : null}
           <DossierCharacterName character={character} />
+          <CharacterProfileLinks
+            character={{
+              key: character,
+              displayName: resolveCharacter(character, dossierCharacters)
+                .displayName
+            }}
+          />
         </Fragment>
       ))}
     </>
