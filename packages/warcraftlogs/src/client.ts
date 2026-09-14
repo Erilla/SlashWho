@@ -17,6 +17,7 @@ const MYTHIC_DIFFICULTY = 5;
 const REPORTS_PER_PAGE = 10;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const MAX_RANKING_IDENTITIES = 50;
+const CHARACTER_RANKING_CONCURRENCY = 2;
 
 const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
@@ -898,6 +899,25 @@ function hasMoreReportPages(value: unknown): boolean | null {
     : null;
 }
 
+async function forEachWithConcurrency<T>(
+  values: readonly T[],
+  concurrency: number,
+  task: (value: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, values.length) },
+      async () => {
+        while (nextIndex < values.length) {
+          const value = values[nextIndex++];
+          if (value !== undefined) await task(value);
+        }
+      }
+    )
+  );
+}
+
 export function createWarcraftLogsClient(
   options: CreateWarcraftLogsClientOptions
 ): WarcraftLogsGateway {
@@ -1239,8 +1259,10 @@ export function createWarcraftLogsClient(
           difficulty: kill.difficulty
         });
       }
-      await Promise.all(
-        [...bosses.values()].map(async ({ bossId, difficulty }) => {
+      await forEachWithConcurrency(
+        [...bosses.values()],
+        CHARACTER_RANKING_CONCURRENCY,
+        async ({ bossId, difficulty }) => {
           const rankings = await graphql(
             characterEncounterRankingsQuery,
             {
@@ -1287,7 +1309,7 @@ export function createWarcraftLogsClient(
               }
             });
           }
-        })
+        }
       );
     }
 
