@@ -529,6 +529,7 @@ type RankingScope = Readonly<{
   encounterId: number;
   difficulty: number;
   fightIds: readonly number[];
+  earliestKilledAt: string;
 }>;
 
 const unavailableParseMetric: WarcraftLogsParseMetric = {
@@ -1100,12 +1101,20 @@ export function createWarcraftLogsClient(
       groups.set(
         groupKey,
         existing
-          ? { ...existing, fightIds: [...existing.fightIds, kill.fightId] }
+          ? {
+              ...existing,
+              fightIds: [...existing.fightIds, kill.fightId],
+              earliestKilledAt:
+                kill.killedAt < existing.earliestKilledAt
+                  ? kill.killedAt
+                  : existing.earliestKilledAt
+            }
           : {
               reportCode: kill.reportCode,
               encounterId: Number(kill.bossId),
               difficulty: kill.difficulty,
-              fightIds: [kill.fightId]
+              fightIds: [kill.fightId],
+              earliestKilledAt: kill.killedAt
             }
       );
     }
@@ -1118,7 +1127,12 @@ export function createWarcraftLogsClient(
       >;
     }> = [];
     const identities = new Map<number, RankingIdentity>();
-    for (const group of groups.values()) {
+    for (const group of [...groups.values()].sort(
+      (a, b) =>
+        a.earliestKilledAt.localeCompare(b.earliestKilledAt) ||
+        a.reportCode.localeCompare(b.reportCode) ||
+        a.encounterId - b.encounterId
+    )) {
       // Reserve one request for the shared canonical identity lookup.
       if (parseRequests + 1 >= options.parseRequestCap) {
         parseLimitation = { kind: "limitation", code: "parse_request_cap" };
