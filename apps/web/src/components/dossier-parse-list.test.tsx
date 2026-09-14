@@ -45,6 +45,9 @@ it("presents every character metric with source links and accessible unavailable
     "https://www.warcraftlogs.com/reports/damage#fight=8"
   );
   expect(damage).toHaveClass("dossier-parse-metric--purple");
+  expect(
+    damage.querySelector(".upstream-link-icon--warcraft-logs")
+  ).toBeInTheDocument();
   expect(screen.getByText("Healing not applicable")).toBeVisible();
   expect(screen.getByText("Boss damage unavailable")).toBeVisible();
   expect(

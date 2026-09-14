@@ -1,5 +1,7 @@
 import type { CharacterKey } from "@slashwho/contracts";
 
+import { UpstreamIconLink } from "./upstream-icon-link";
+
 type ProfileCharacter = Readonly<{
   key: CharacterKey;
   displayName: string;
@@ -15,10 +17,6 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function icon(label: "RIO" | "WCL") {
-  return <span aria-hidden="true">{label}</span>;
-}
-
 export function CharacterProfileLinks({
   character
 }: Readonly<{ character: ProfileCharacter }>) {
@@ -26,24 +24,16 @@ export function CharacterProfileLinks({
   const path = `${segment(key.region)}/${segment(key.realm)}/${segment(key.name)}`;
   return (
     <span className="profile-links">
-      <a
-        aria-label={`View ${displayName} on Raider.IO (opens in a new tab)`}
-        className="profile-link profile-link-raiderio"
+      <UpstreamIconLink
         href={`https://raider.io/characters/${path}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        {icon("RIO")}
-      </a>
-      <a
-        aria-label={`View ${displayName} on Warcraft Logs (opens in a new tab)`}
-        className="profile-link profile-link-warcraft-logs"
+        label={`View ${displayName} on Raider.IO`}
+        source="raiderio"
+      />
+      <UpstreamIconLink
         href={`https://www.warcraftlogs.com/character/${path}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        {icon("WCL")}
-      </a>
+        label={`View ${displayName} on Warcraft Logs`}
+        source="warcraft_logs"
+      />
     </span>
   );
 }
@@ -54,24 +44,16 @@ export function GuildProfileLinks({
   const path = `${segment(guild.region)}/${segment(guild.realm)}/${segment(guild.name)}`;
   return (
     <span className="profile-links">
-      <a
-        aria-label={`View ${guild.name} on Raider.IO (opens in a new tab)`}
-        className="profile-link profile-link-raiderio"
+      <UpstreamIconLink
         href={`https://raider.io/guilds/${path}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        {icon("RIO")}
-      </a>
-      <a
-        aria-label={`View ${guild.name} on Warcraft Logs (opens in a new tab)`}
-        className="profile-link profile-link-warcraft-logs"
+        label={`View ${guild.name} on Raider.IO`}
+        source="raiderio"
+      />
+      <UpstreamIconLink
         href={`https://www.warcraftlogs.com/guild/${path}`}
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        {icon("WCL")}
-      </a>
+        label={`View ${guild.name} on Warcraft Logs`}
+        source="warcraft_logs"
+      />
     </span>
   );
 }

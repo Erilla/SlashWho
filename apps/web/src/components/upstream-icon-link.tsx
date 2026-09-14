@@ -8,7 +8,9 @@ type UpstreamIconLinkProps = Readonly<{
   source: "raiderio" | "warcraft_logs";
 }>;
 
-function UpstreamIcon({ source }: Pick<UpstreamIconLinkProps, "source">) {
+export function UpstreamIcon({
+  source
+}: Pick<UpstreamIconLinkProps, "source">) {
   const className = `upstream-link-icon upstream-link-icon--${
     source === "warcraft_logs" ? "warcraft-logs" : source
   }`;
