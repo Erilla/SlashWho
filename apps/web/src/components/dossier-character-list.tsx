@@ -5,9 +5,23 @@ import { useEffect, useRef, useState } from "react";
 import { DossierCharacterName } from "./dossier-character-name";
 import { UpstreamIconLink } from "./upstream-icon-link";
 
+import { CharacterProfileLinks } from "./profile-links";
+
 type DossierCharacterListProps = Readonly<{
   characters: readonly DossierCharacter[];
+  root: DossierCharacter["key"];
 }>;
+
+function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
+  return (
+    character.key.region.toLocaleLowerCase("en-US") ===
+      root.region.toLocaleLowerCase("en-US") &&
+    character.key.realm.toLocaleLowerCase("en-US") ===
+      root.realm.toLocaleLowerCase("en-US") &&
+    character.key.name.toLocaleLowerCase("en-US") ===
+      root.name.toLocaleLowerCase("en-US")
+  );
+}
 
 const sourceLabel: Record<DossierCharacter["source"], string> = {
   submitted: "Submitted character",
@@ -16,7 +30,8 @@ const sourceLabel: Record<DossierCharacter["source"], string> = {
 };
 
 export function DossierCharacterList({
-  characters
+  characters,
+  root
 }: DossierCharacterListProps) {
   const listRef = useRef<HTMLUListElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -83,9 +98,14 @@ export function DossierCharacterList({
                 {character.key.region.toUpperCase()} · {character.key.realm}
               </span>
             </div>
-            <span className="source-badge">
-              {sourceLabel[character.source]}
-            </span>
+            <div className="dossier-character-actions">
+              {isRoot(character, root) ? null : (
+                <CharacterProfileLinks character={character} />
+              )}
+              <span className="source-badge">
+                {sourceLabel[character.source]}
+              </span>
+            </div>
           </li>
         ))}
       </ul>
