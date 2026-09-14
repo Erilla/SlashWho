@@ -23,7 +23,8 @@ function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
 const sourceLabel: Record<DossierCharacter["source"], string> = {
   submitted: "Submitted character",
   raiderio_declared: "Raider.IO declared",
-  fingerprint_derived: "Fingerprint-derived"
+  fingerprint_derived: "Fingerprint-derived",
+  manually_added: "Manually added"
 };
 
 export function DossierCharacterList({

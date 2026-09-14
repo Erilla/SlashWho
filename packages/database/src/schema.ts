@@ -161,6 +161,31 @@ export const snapshotCharacters = pgTable(
   ]
 );
 
+export const manualDossierConnections = pgTable(
+  "manual_dossier_connections",
+  {
+    rootCharacterId: uuid("root_character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    connectedCharacterId: uuid("connected_character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "manual_dossier_connections_pkey",
+      columns: [table.rootCharacterId, table.connectedCharacterId]
+    }),
+    check(
+      "manual_dossier_connections_distinct_characters_check",
+      sql`${table.rootCharacterId} <> ${table.connectedCharacterId}`
+    )
+  ]
+);
+
 export const suppressedCharacters = pgTable(
   "suppressed_characters",
   {

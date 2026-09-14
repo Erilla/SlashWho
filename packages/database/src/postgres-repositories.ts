@@ -64,6 +64,25 @@ interface SnapshotCharacterRow {
   display_order: number;
 }
 
+function mapSnapshotCharacter(
+  character: SnapshotCharacterRow
+): StoredSnapshotCharacter {
+  return {
+    characterId: character.character_id,
+    key: {
+      region: character.region,
+      realm: character.realm_slug,
+      name: character.normalized_name
+    },
+    displayName: character.display_name,
+    className: character.class_name,
+    level: character.level,
+    raiderIoUrl: character.raider_io_url,
+    source: character.discovery_source,
+    displayOrder: character.display_order
+  };
+}
+
 interface EvidenceRunRow {
   id: string;
   region: CharacterKey["region"];
@@ -597,22 +616,7 @@ async function loadSnapshot(
     ORDER BY membership.display_order`,
     [id]
   );
-  const characters: StoredSnapshotCharacter[] = characterResult.rows.map(
-    (character) => ({
-      characterId: character.character_id,
-      key: {
-        region: character.region,
-        realm: character.realm_slug,
-        name: character.normalized_name
-      },
-      displayName: character.display_name,
-      className: character.class_name,
-      level: character.level,
-      raiderIoUrl: character.raider_io_url,
-      source: character.discovery_source,
-      displayOrder: character.display_order
-    })
-  );
+  const characters = characterResult.rows.map(mapSnapshotCharacter);
 
   return {
     id: row.id,
@@ -1383,6 +1387,66 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           items,
           nextCursor: hasMore ? encodeCursor(items.at(-1)!) : null
         };
+      }
+    },
+
+    manualConnections: {
+      async add(root, character) {
+        const result = await pool.query(
+          `INSERT INTO manual_dossier_connections
+             (root_character_id, connected_character_id)
+           SELECT root.id, connected.id
+           FROM characters root
+           JOIN characters connected
+             ON connected.region = $4
+            AND connected.realm_slug = $5
+            AND connected.normalized_name = $6
+           WHERE root.region = $1
+             AND root.realm_slug = $2
+             AND root.normalized_name = $3
+           ON CONFLICT DO NOTHING
+           RETURNING root_character_id`,
+          [
+            root.region,
+            root.realm,
+            root.name,
+            character.region,
+            character.realm,
+            character.name
+          ]
+        );
+        return result.rowCount === 1 ? "added" : "duplicate";
+      },
+
+      async list(root) {
+        const result = await pool.query<SnapshotCharacterRow>(
+          `SELECT connected.id AS character_id,
+                  connected.region,
+                  connected.realm_slug,
+                  connected.normalized_name,
+                  connected.display_name,
+                  connected.class_name,
+                  connected.level,
+                  connected.raider_io_url,
+                  'input'::discovery_source AS discovery_source,
+                  0 AS display_order
+           FROM manual_dossier_connections connection
+           JOIN characters owner ON owner.id = connection.root_character_id
+           JOIN characters connected ON connected.id = connection.connected_character_id
+           WHERE owner.region = $1
+             AND owner.realm_slug = $2
+             AND owner.normalized_name = $3
+             AND NOT EXISTS (
+               SELECT 1 FROM suppressed_characters suppression
+               WHERE suppression.region = connected.region
+                 AND suppression.realm_slug = connected.realm_slug
+                 AND suppression.normalized_name = connected.normalized_name
+                 AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+             )
+           ORDER BY connection.created_at, connected.id`,
+          [root.region, root.realm, root.name]
+        );
+        return result.rows.map(mapSnapshotCharacter);
       }
     },
 

@@ -13,7 +13,8 @@ export const characterKeySchema = z
 export const dossierSourceLabelSchema = z.enum([
   "submitted",
   "raiderio_declared",
-  "fingerprint_derived"
+  "fingerprint_derived",
+  "manually_added"
 ]);
 
 export const dossierCharacterSchema = z
