@@ -59,7 +59,15 @@ describe("applicant evidence job handler", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/report",
           fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
           guild: { name: "Guild", realm: "Silvermoon" },
-          historicWorldRank: null
+          historicWorldRank: null,
+          reportCode: "report",
+          fightId: 7,
+          difficulty: 5,
+          performance: {
+            damage: { state: "unavailable" as const },
+            healing: { state: "unavailable" as const },
+            bossDamage: { state: "unavailable" as const }
+          }
         }
       ],
       wipes: [
@@ -83,6 +91,7 @@ describe("applicant evidence job handler", () => {
         "getFirstKillReports"
       >,
       requestCap: 500,
+      parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -94,6 +103,7 @@ describe("applicant evidence job handler", () => {
 
     expect(getFirstKillReports).toHaveBeenCalledWith(key, {
       requestCap: 500,
+      parseRequestCap: 8,
       signal: expect.any(AbortSignal)
     });
     expect(evidence.published).toEqual([
@@ -132,6 +142,7 @@ describe("applicant evidence job handler", () => {
         }
       },
       requestCap: 500,
+      parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 

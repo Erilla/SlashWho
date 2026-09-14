@@ -34,6 +34,7 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   evidence: ApplicantEvidenceStore;
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
   requestCap: number;
+  parseRequestCap: number;
   now?: () => Date;
 }>;
 
@@ -62,6 +63,7 @@ export function createApplicantEvidenceJobHandler(
       activeContext.signal.throwIfAborted();
       const response = await options.warcraftLogs.getFirstKillReports(run.key, {
         requestCap: options.requestCap,
+        parseRequestCap: options.parseRequestCap,
         signal: activeContext.signal
       });
       activeContext.signal.throwIfAborted();

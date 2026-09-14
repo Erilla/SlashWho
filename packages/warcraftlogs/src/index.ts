@@ -7,6 +7,8 @@ export type {
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
   WarcraftLogsLimitationCode,
+  WarcraftLogsParseMetric,
+  WarcraftLogsPerformance,
   WarcraftLogsReportResult,
   WarcraftLogsWipeEvidence
 } from "./types";

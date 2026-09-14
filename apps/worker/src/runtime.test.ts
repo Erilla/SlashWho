@@ -38,6 +38,7 @@ const config: WorkerConfig = {
   warcraftLogsClientId: "warcraft-logs-client-id",
   warcraftLogsClientSecret: "warcraft-logs-client-secret",
   evidenceRequestCap: 500,
+  evidenceParseRequestCap: 8,
   blizzardSweepRequestCap: 300,
   blizzardHourlyRequestBudget: 28_800,
   fingerprintMinimumCommon: 200,
@@ -430,6 +431,7 @@ describe("worker runtime", () => {
     expect(handlerOptions).toMatchObject({
       warcraftLogs,
       requestCap: 500,
+      parseRequestCap: 8,
       evidence: (
         fakes.repositories as typeof fakes.repositories & {
           evidence: unknown;

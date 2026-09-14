@@ -6,7 +6,12 @@ export type WarcraftLogsLimitationCode =
   | "rate_limited"
   | "request_cap"
   | "unavailable"
-  | "schema_drift";
+  | "schema_drift"
+  | "parse_private"
+  | "parse_rate_limited"
+  | "parse_request_cap"
+  | "parse_unavailable"
+  | "parse_schema_drift";
 
 export type WarcraftLogsLimitation = Readonly<{
   kind: "limitation";
@@ -23,6 +28,16 @@ export type WarcraftLogsIdentity = Readonly<{
 export type WarcraftLogsIdentityResult =
   WarcraftLogsIdentity | WarcraftLogsLimitation;
 
+export type WarcraftLogsParseMetric =
+  | Readonly<{ state: "available"; percentile: number }>
+  | Readonly<{ state: "not_applicable" | "unavailable" }>;
+
+export type WarcraftLogsPerformance = Readonly<{
+  damage: WarcraftLogsParseMetric;
+  healing: WarcraftLogsParseMetric;
+  bossDamage: WarcraftLogsParseMetric;
+}>;
+
 export type WarcraftLogsFirstKillEvidence = Readonly<{
   raidId: string;
   raidName: string;
@@ -35,6 +50,10 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   /** The public report schema does not declare final-boss status. */
   isFinalBoss: false;
   killedAt: string;
+  reportCode: string;
+  fightId: number;
+  difficulty: number;
+  performance: WarcraftLogsPerformance;
   reportUrl: string;
   fightUrl: string;
   guild: Readonly<{ name: string; realm: string }> | null;
@@ -69,6 +88,10 @@ export interface WarcraftLogsGateway {
   ): Promise<WarcraftLogsIdentityResult>;
   getFirstKillReports(
     key: CharacterKey,
-    options: Readonly<{ requestCap: number; signal?: AbortSignal }>
+    options: Readonly<{
+      requestCap: number;
+      parseRequestCap: number;
+      signal?: AbortSignal;
+    }>
   ): Promise<WarcraftLogsReportResult>;
 }

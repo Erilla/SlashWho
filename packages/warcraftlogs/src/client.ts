@@ -5,6 +5,8 @@ import type {
   WarcraftLogsGateway,
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
+  WarcraftLogsParseMetric,
+  WarcraftLogsPerformance,
   WarcraftLogsReportResult,
   WarcraftLogsWipeEvidence
 } from "./types";
@@ -14,6 +16,7 @@ const MYTHIC_DIFFICULTY = 5;
 // 50,000-point query complexity ceiling. Ten reports fit that limit.
 const REPORTS_PER_PAGE = 10;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
+const MAX_RANKING_IDENTITIES = 50;
 
 const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
@@ -59,6 +62,47 @@ const recentReportsQuery = `
   }
 `;
 
+const reportFightParsesQuery = `
+  query ReportFightParses(
+    $code: String!
+    $fightIDs: [Int!]!
+    $encounterID: Int!
+    $difficulty: Int!
+  ) {
+    reportData {
+      report(code: $code) {
+        code
+        archiveStatus { isArchived isAccessible archiveDate }
+        masterData { actors { id name server type } }
+        damage: rankings(
+          compare: Rankings
+          difficulty: $difficulty
+          encounterID: $encounterID
+          fightIDs: $fightIDs
+          playerMetric: dps
+          timeframe: Historical
+        )
+        healing: rankings(
+          compare: Rankings
+          difficulty: $difficulty
+          encounterID: $encounterID
+          fightIDs: $fightIDs
+          playerMetric: hps
+          timeframe: Historical
+        )
+        bossDamage: rankings(
+          compare: Rankings
+          difficulty: $difficulty
+          encounterID: $encounterID
+          fightIDs: $fightIDs
+          playerMetric: bossdps
+          timeframe: Historical
+        )
+      }
+    }
+  }
+`;
+
 export type CreateWarcraftLogsClientOptions = Readonly<{
   fetch: typeof globalThis.fetch;
   clientId: string;
@@ -79,6 +123,10 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function isLimitation(value: unknown): value is WarcraftLogsLimitation {
+  return record(value)?.kind === "limitation";
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -394,6 +442,10 @@ function firstKillReports(
         bossOrder: encounterId,
         isFinalBoss: false,
         killedAt: evidenceAt,
+        reportCode: code,
+        fightId: id,
+        difficulty,
+        performance: unavailablePerformance(),
         reportUrl,
         fightUrl,
         guild,
@@ -419,6 +471,301 @@ function firstKillReports(
         a.fightUrl.localeCompare(b.fightUrl)
     )
   };
+}
+
+type RankingMetricName = keyof WarcraftLogsPerformance;
+type RankingIdentity = Readonly<{
+  id: number;
+  name: string;
+  realm: string;
+  region: string;
+}>;
+type RankingRow = Readonly<{
+  metric: RankingMetricName;
+  fightId: number;
+  characterId: number;
+  percentile: number | null;
+}>;
+type RankingScope = Readonly<{
+  reportCode: string;
+  encounterId: number;
+  difficulty: number;
+  fightIds: readonly number[];
+}>;
+
+const unavailableParseMetric: WarcraftLogsParseMetric = {
+  state: "unavailable"
+};
+
+function unavailablePerformance(): WarcraftLogsPerformance {
+  return {
+    damage: unavailableParseMetric,
+    healing: unavailableParseMetric,
+    bossDamage: unavailableParseMetric
+  };
+}
+
+function normalizedIdentity(value: string): string {
+  return value.toLocaleLowerCase("en-US");
+}
+
+function normalizedRealm(value: string): string {
+  return value.replaceAll(/[^\p{L}\p{N}]/gu, "").toLocaleLowerCase("en-US");
+}
+
+function toParseLimitation(
+  limitation: WarcraftLogsLimitation
+): WarcraftLogsLimitation {
+  switch (limitation.code) {
+    case "private":
+      return { kind: "limitation", code: "parse_private" };
+    case "rate_limited":
+      return {
+        kind: "limitation",
+        code: "parse_rate_limited",
+        ...(limitation.retryAfterMs === undefined
+          ? {}
+          : { retryAfterMs: limitation.retryAfterMs })
+      };
+    case "schema_drift":
+      return { kind: "limitation", code: "parse_schema_drift" };
+    default:
+      return { kind: "limitation", code: "parse_unavailable" };
+  }
+}
+
+function rankingIdentity(
+  value: unknown
+): RankingIdentity | WarcraftLogsLimitation {
+  const character = record(value);
+  const server = character && record(character.server);
+  const id = character && positiveInteger(character.id);
+  const name = character && nonEmptyString(character.name);
+  const realm = server && nonEmptyString(server.name);
+  const region = server && nonEmptyString(server.region);
+  if (!id || !name || !realm || !region) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  return { id, name, realm, region };
+}
+
+function decodeRankingRows(
+  value: unknown,
+  scope: RankingScope
+):
+  | Readonly<{
+      identities: readonly RankingIdentity[];
+      rows: readonly RankingRow[];
+      actors: readonly unknown[];
+    }>
+  | WarcraftLogsLimitation {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const reportData = data && record(data.reportData);
+  const report = reportData && record(reportData.report);
+  const code = report && nonEmptyString(report.code);
+  const archiveStatus = report && record(report.archiveStatus);
+  if (!report || code !== scope.reportCode || !archiveStatus) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  if (
+    typeof archiveStatus.isArchived !== "boolean" ||
+    typeof archiveStatus.isAccessible !== "boolean"
+  ) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  if (!archiveStatus.isAccessible) {
+    return { kind: "limitation", code: "parse_unavailable" };
+  }
+  const masterData = record(report.masterData);
+  const actors = masterData && masterData.actors;
+  if (!Array.isArray(actors)) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+
+  const identities = new Map<number, RankingIdentity>();
+  const rows: RankingRow[] = [];
+  const fightIds = new Set(scope.fightIds);
+  for (const metric of [
+    "damage",
+    "healing",
+    "bossDamage"
+  ] as const satisfies readonly RankingMetricName[]) {
+    const metricValue = record(report[metric]);
+    const metricRows = metricValue && metricValue.data;
+    if (!Array.isArray(metricRows)) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    for (const metricRowValue of metricRows) {
+      const metricRow = record(metricRowValue);
+      const fightId = metricRow && positiveInteger(metricRow.fightID);
+      const encounter = metricRow && record(metricRow.encounter);
+      const encounterId = encounter && positiveInteger(encounter.id);
+      const difficulty = metricRow && positiveInteger(metricRow.difficulty);
+      const roles = metricRow && record(metricRow.roles);
+      if (!fightId || !encounterId || !difficulty || !roles) {
+        return { kind: "limitation", code: "parse_schema_drift" };
+      }
+      if (
+        !fightIds.has(fightId) ||
+        encounterId !== scope.encounterId ||
+        difficulty !== scope.difficulty
+      ) {
+        continue;
+      }
+      for (const roleName of ["tanks", "healers", "dps"] as const) {
+        const role = record(roles[roleName]);
+        const characters = role && role.characters;
+        if (!role || !Array.isArray(characters)) {
+          return { kind: "limitation", code: "parse_schema_drift" };
+        }
+        for (const characterValue of characters) {
+          const identity = rankingIdentity(characterValue);
+          if (isLimitation(identity)) return identity;
+          const knownIdentity = identities.get(identity.id);
+          if (
+            knownIdentity &&
+            (knownIdentity.name !== identity.name ||
+              knownIdentity.realm !== identity.realm ||
+              knownIdentity.region !== identity.region)
+          ) {
+            return { kind: "limitation", code: "parse_schema_drift" };
+          }
+          identities.set(identity.id, identity);
+          const rankPercent = record(characterValue)?.rankPercent;
+          rows.push({
+            metric,
+            fightId,
+            characterId: identity.id,
+            percentile:
+              typeof rankPercent === "number" &&
+              Number.isFinite(rankPercent) &&
+              rankPercent >= 0 &&
+              rankPercent <= 100
+                ? rankPercent
+                : null
+          });
+        }
+      }
+    }
+  }
+  if (identities.size > MAX_RANKING_IDENTITIES) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  return { identities: [...identities.values()], rows, actors };
+}
+
+function rankingCharacterIdentityQuery(
+  identities: readonly RankingIdentity[]
+): string {
+  const variables = identities
+    .map((_, index) => `$character${index}: Int!`)
+    .join(", ");
+  const selections = identities
+    .map(
+      (_, index) =>
+        `character${index}: character(id: $character${index}) { id name server { slug region { slug } } }`
+    )
+    .join("\n");
+  return `query RankingCharacterIdentities(${variables}) { characterData { ${selections} } }`;
+}
+
+function canonicalRankingCharacterIds(
+  value: unknown,
+  identities: readonly RankingIdentity[],
+  actors: unknown,
+  requestedKey: CharacterKey
+): readonly number[] | WarcraftLogsLimitation {
+  if (!Array.isArray(actors)) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const characterData = data && record(data.characterData);
+  if (!characterData) return { kind: "limitation", code: "parse_schema_drift" };
+
+  const requestedIds: number[] = [];
+  for (const [index, identity] of identities.entries()) {
+    const character = record(characterData[`character${index}`]);
+    const server = character && record(character.server);
+    const region = server && record(server.region);
+    const id = character && positiveInteger(character.id);
+    const name = character && nonEmptyString(character.name);
+    const realm = server && nonEmptyString(server.slug);
+    const regionSlug = region && nonEmptyString(region.slug);
+    if (
+      id !== identity.id ||
+      !name ||
+      !realm ||
+      !regionSlug ||
+      normalizedIdentity(name) !== normalizedIdentity(identity.name) ||
+      normalizedRealm(realm) !== normalizedRealm(identity.realm) ||
+      normalizedIdentity(regionSlug) !== normalizedIdentity(identity.region)
+    ) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    const matchingActors = actors.filter((actorValue) => {
+      const actor = record(actorValue);
+      return (
+        actor?.type === "Player" &&
+        typeof actor.name === "string" &&
+        typeof actor.server === "string" &&
+        normalizedIdentity(actor.name) === normalizedIdentity(name) &&
+        normalizedRealm(actor.server) === normalizedRealm(realm)
+      );
+    });
+    if (matchingActors.length !== 1) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    if (
+      normalizedIdentity(name) === requestedKey.name &&
+      normalizedRealm(realm) === normalizedRealm(requestedKey.realm) &&
+      normalizedIdentity(regionSlug) === requestedKey.region
+    ) {
+      requestedIds.push(identity.id);
+    }
+  }
+  return requestedIds.length === 1
+    ? requestedIds
+    : { kind: "limitation", code: "parse_schema_drift" };
+}
+
+function normalizedPerformance(
+  rows: readonly RankingRow[],
+  requestedIds: readonly number[],
+  fightIds: readonly number[]
+): ReadonlyMap<number, WarcraftLogsPerformance> | WarcraftLogsLimitation {
+  const performance = new Map<number, WarcraftLogsPerformance>(
+    fightIds.map((fightId) => [fightId, unavailablePerformance()])
+  );
+  const values = new Map<string, number>();
+  for (const row of rows) {
+    if (!requestedIds.includes(row.characterId) || row.percentile === null) {
+      continue;
+    }
+    const key = `${row.fightId}:${row.metric}`;
+    if (values.has(key)) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    values.set(key, row.percentile);
+  }
+  for (const [fightId, initial] of performance) {
+    performance.set(fightId, {
+      damage: values.has(`${fightId}:damage`)
+        ? { state: "available", percentile: values.get(`${fightId}:damage`)! }
+        : initial.damage,
+      healing: values.has(`${fightId}:healing`)
+        ? { state: "available", percentile: values.get(`${fightId}:healing`)! }
+        : initial.healing,
+      bossDamage: values.has(`${fightId}:bossDamage`)
+        ? {
+            state: "available",
+            percentile: values.get(`${fightId}:bossDamage`)!
+          }
+        : initial.bossDamage
+    });
+  }
+  return performance;
 }
 
 function hasMoreReportPages(value: unknown): boolean | null {
@@ -515,7 +862,7 @@ export function createWarcraftLogsClient(
 
   async function graphql(
     query: string,
-    variables: Record<string, string | number>,
+    variables: Record<string, string | number | readonly number[]>,
     signal?: AbortSignal
   ): Promise<GraphqlResult> {
     const token = await accessToken(signal);
@@ -566,26 +913,26 @@ export function createWarcraftLogsClient(
 
   async function getFirstKillReports(
     requestedKey: CharacterKey,
-    options: Readonly<{ requestCap: number; signal?: AbortSignal }>
+    options: Readonly<{
+      requestCap: number;
+      parseRequestCap: number;
+      signal?: AbortSignal;
+    }>
   ): Promise<WarcraftLogsReportResult> {
     const key = validCharacterKey(requestedKey);
     if (!Number.isSafeInteger(options.requestCap) || options.requestCap <= 0) {
       return { kind: "limitation", code: "request_cap" };
     }
+    if (
+      !Number.isSafeInteger(options.parseRequestCap) ||
+      options.parseRequestCap <= 0
+    ) {
+      return { kind: "limitation", code: "parse_request_cap" };
+    }
 
     const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
-    const partial = (
-      limitation: WarcraftLogsLimitation
-    ): WarcraftLogsReportResult =>
-      kills.size || wipes.size
-        ? {
-            kind: "evidence",
-            kills: [...kills.values()],
-            wipes: [...wipes.values()],
-            limitation
-          }
-        : limitation;
+    let scanLimitation: WarcraftLogsLimitation | undefined;
     for (let page = 1; page <= options.requestCap; page++) {
       const result = await graphql(
         recentReportsQuery,
@@ -595,10 +942,16 @@ export function createWarcraftLogsClient(
         if (options.signal?.reason?.name !== "TimeoutError") throw error;
         return { kind: "limitation" as const, code: "unavailable" as const };
       });
-      if (result.kind !== "success") return partial(result);
+      if (result.kind !== "success") {
+        scanLimitation = result;
+        break;
+      }
 
       const normalized = firstKillReports(result.value, key);
-      if (normalized.kind === "limitation") return partial(normalized);
+      if (normalized.kind === "limitation") {
+        scanLimitation = normalized;
+        break;
+      }
       for (const kill of normalized.kills) {
         kills.set(kill.fightUrl, kill);
       }
@@ -614,33 +967,145 @@ export function createWarcraftLogsClient(
           wipes.set(identifier, wipe);
         }
       }
-      if (normalized.limitation) return partial(normalized.limitation);
+      if (normalized.limitation) {
+        scanLimitation = normalized.limitation;
+        break;
+      }
 
       const hasMorePages = hasMoreReportPages(result.value);
       if (hasMorePages === null) {
-        return { kind: "limitation", code: "schema_drift" };
+        scanLimitation = { kind: "limitation", code: "schema_drift" };
+        break;
       }
-      if (!hasMorePages) {
-        return {
-          kind: "evidence",
-          kills: [...kills.values()].sort(
-            (a, b) =>
-              a.raidId.localeCompare(b.raidId) ||
-              a.bossOrder - b.bossOrder ||
-              a.killedAt.localeCompare(b.killedAt) ||
-              a.fightUrl.localeCompare(b.fightUrl)
-          ),
-          wipes: [...wipes.values()].sort(
-            (a, b) =>
-              a.raidId.localeCompare(b.raidId) ||
-              a.bossOrder - b.bossOrder ||
-              b.attemptedAt.localeCompare(a.attemptedAt) ||
-              a.fightUrl.localeCompare(b.fightUrl)
-          )
-        };
+      if (!hasMorePages) break;
+      if (page === options.requestCap) {
+        scanLimitation = { kind: "limitation", code: "request_cap" };
       }
     }
-    return partial({ kind: "limitation", code: "request_cap" });
+
+    let parseLimitation: WarcraftLogsLimitation | undefined;
+    const groups = new Map<string, RankingScope>();
+    for (const kill of kills.values()) {
+      const groupKey = `${kill.reportCode}:${kill.bossId}:${kill.difficulty}`;
+      const existing = groups.get(groupKey);
+      groups.set(
+        groupKey,
+        existing
+          ? { ...existing, fightIds: [...existing.fightIds, kill.fightId] }
+          : {
+              reportCode: kill.reportCode,
+              encounterId: Number(kill.bossId),
+              difficulty: kill.difficulty,
+              fightIds: [kill.fightId]
+            }
+      );
+    }
+    let parseRequests = 0;
+    for (const group of groups.values()) {
+      if (parseRequests >= options.parseRequestCap) {
+        parseLimitation = { kind: "limitation", code: "parse_request_cap" };
+        break;
+      }
+      parseRequests += 1;
+      const rankings = await graphql(
+        reportFightParsesQuery,
+        {
+          code: group.reportCode,
+          fightIDs: group.fightIds,
+          encounterID: group.encounterId,
+          difficulty: group.difficulty
+        },
+        options.signal
+      ).catch((error: unknown) => {
+        if (options.signal?.reason?.name !== "TimeoutError") throw error;
+        return { kind: "limitation" as const, code: "unavailable" as const };
+      });
+      if (rankings.kind !== "success") {
+        parseLimitation = toParseLimitation(rankings);
+        break;
+      }
+      const decoded = decodeRankingRows(rankings.value, group);
+      if (isLimitation(decoded)) {
+        parseLimitation = decoded;
+        break;
+      }
+      if (decoded.identities.length === 0) continue;
+      if (parseRequests >= options.parseRequestCap) {
+        parseLimitation = { kind: "limitation", code: "parse_request_cap" };
+        break;
+      }
+      parseRequests += 1;
+      const canonical = await graphql(
+        rankingCharacterIdentityQuery(decoded.identities),
+        Object.fromEntries(
+          decoded.identities.map((identity, index) => [
+            `character${index}`,
+            identity.id
+          ])
+        ),
+        options.signal
+      ).catch((error: unknown) => {
+        if (options.signal?.reason?.name !== "TimeoutError") throw error;
+        return { kind: "limitation" as const, code: "unavailable" as const };
+      });
+      if (canonical.kind !== "success") {
+        parseLimitation = toParseLimitation(canonical);
+        break;
+      }
+      const requestedIds = canonicalRankingCharacterIds(
+        canonical.value,
+        decoded.identities,
+        decoded.actors,
+        key
+      );
+      if (isLimitation(requestedIds)) {
+        parseLimitation = requestedIds;
+        break;
+      }
+      const performance = normalizedPerformance(
+        decoded.rows,
+        requestedIds,
+        group.fightIds
+      );
+      if (isLimitation(performance)) {
+        parseLimitation = performance;
+        break;
+      }
+      for (const [fightId, value] of performance) {
+        for (const [fightUrl, kill] of kills) {
+          if (
+            kill.reportCode === group.reportCode &&
+            kill.fightId === fightId
+          ) {
+            kills.set(fightUrl, { ...kill, performance: value });
+          }
+        }
+      }
+    }
+
+    const sortedKills = [...kills.values()].sort(
+      (a, b) =>
+        a.raidId.localeCompare(b.raidId) ||
+        a.bossOrder - b.bossOrder ||
+        a.killedAt.localeCompare(b.killedAt) ||
+        a.fightUrl.localeCompare(b.fightUrl)
+    );
+    const sortedWipes = [...wipes.values()].sort(
+      (a, b) =>
+        a.raidId.localeCompare(b.raidId) ||
+        a.bossOrder - b.bossOrder ||
+        b.attemptedAt.localeCompare(a.attemptedAt) ||
+        a.fightUrl.localeCompare(b.fightUrl)
+    );
+    const limitation = scanLimitation ?? parseLimitation;
+    return sortedKills.length || sortedWipes.length
+      ? {
+          kind: "evidence",
+          kills: sortedKills,
+          wipes: sortedWipes,
+          ...(limitation ? { limitation } : {})
+        }
+      : (limitation ?? { kind: "evidence", kills: [], wipes: [] });
   }
 
   return { resolveCharacter, getFirstKillReports };

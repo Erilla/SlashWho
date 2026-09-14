@@ -21,6 +21,7 @@ const config: WorkerConfig = {
   warcraftLogsClientId: "warcraft-logs-client-id",
   warcraftLogsClientSecret: "warcraft-logs-client-secret",
   evidenceRequestCap: 500,
+  evidenceParseRequestCap: 8,
   blizzardSweepRequestCap: 300,
   blizzardHourlyRequestBudget: 28_800,
   fingerprintMinimumCommon: 200,
