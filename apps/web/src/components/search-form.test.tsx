@@ -94,6 +94,10 @@ describe("SearchForm", () => {
     await user.click(
       screen.getByRole("radio", { name: "Character name + realm" })
     );
+    expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("eu");
+    expect(
+      screen.getByRole("button", { name: "Research applicant" })
+    ).toHaveTextContent("→");
     await user.type(
       screen.getByRole("textbox", { name: "Character name" }),
       "Ryii"

@@ -223,7 +223,7 @@ a {
   grid-template-columns:
     minmax(9rem, 12rem)
     minmax(10rem, 12rem)
-    minmax(8rem, 10rem);
+    auto;
   gap: 0.625rem;
   justify-content: center;
 }
@@ -237,6 +237,27 @@ a {
 
 .search-field {
   display: grid;
+}
+
+.search-region-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.search-region-field label {
+  margin: 0;
+}
+
+.search-region-field .search-select {
+  min-height: 2.8rem;
+  width: 4.5rem;
+  padding: 0 0.55rem;
+}
+
+.search-structured-grid .search-input,
+.search-structured-grid .search-button {
+  min-height: 2.8rem;
 }
 
 .search-select {
@@ -285,13 +306,14 @@ a {
 }
 
 .search-button {
-  min-width: 6.75rem;
+  min-width: 2.8rem;
   min-height: 3.35rem;
   border: 1px solid var(--accent);
   border-radius: 0.65rem;
   background: var(--accent);
   color: var(--accent-ink);
-  padding: 0 1.35rem;
+  padding: 0 0.75rem;
+  font-size: 1.25rem;
   font-weight: 760;
   cursor: pointer;
   transition: background-color 140ms ease;
@@ -1531,6 +1553,10 @@ a {
 
   .search-button {
     width: 100%;
+  }
+
+  .search-region-field .search-button {
+    width: auto;
   }
 
   .character-heading {
