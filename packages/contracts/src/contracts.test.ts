@@ -45,7 +45,7 @@ const validDossier = {
           state: "kill",
           firstKill: {
             killedAt: "2024-10-01T20:00:00.000Z",
-            guild: { name: "Guild", realm: "silvermoon" },
+            guild: { name: "Guild", region: "eu", realm: "silvermoon" },
             historicWorldRank: null,
             reportUrl: "https://www.warcraftlogs.com/reports/example",
             characters: [applicantCharacter],

@@ -4,6 +4,7 @@ import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
 import { DossierParseList } from "./dossier-parse-list";
 import { UpstreamIconLink } from "./upstream-icon-link";
+import { GuildProfileLinks } from "./profile-links";
 
 type Raid = ApplicantDossier["raids"][number];
 type Boss = Raid["bosses"][number];
@@ -103,7 +104,7 @@ function BossArtwork({ boss }: { boss: Boss }) {
 
 function KillEvidence({ boss }: { boss: KillBoss }) {
   const firstKills = boss.firstKills ?? [boss.firstKill];
-  const firstKill = firstKills[0]!;
+  const latestKill = firstKills[0]!;
   return (
     <>
       <div className="dossier-boss-heading">
@@ -114,24 +115,26 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
             <span>{boss.bossName}</span>
           </h4>
           <p className="dossier-boss-first-kill">
-            First kill: {displayDate(firstKill.killedAt)} ·{" "}
-            <DossierCharacterNames characters={firstKill.characters} />
+            First kill: {displayDate(latestKill.killedAt)} ·{" "}
+            <DossierCharacterNames characters={latestKill.characters} />
           </p>
           <p className="dossier-boss-rank">
-            {firstKill.historicWorldRank === null
+            {latestKill.historicWorldRank === null
               ? "World rank: —"
-              : `World #${firstKill.historicWorldRank}`}
+              : `World #${latestKill.historicWorldRank}`}
           </p>
         </div>
       </div>
-      <DossierParseList label="First kill parses" parses={firstKill.parses} />
+      <DossierParseList label="First kill parses" parses={boss.firstKill.parses} />
       <DossierParseList label="Best shown parses" parses={boss.bestParses} />
       <details>
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
           {firstKills.map((evidence, index) => (
             <dl
-              className="dossier-evidence"
+              className={`dossier-evidence${
+                index === 0 ? " dossier-evidence-first-kill" : ""
+              }`}
               key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
             >
               <div>
@@ -144,7 +147,12 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
               </div>
               <div>
                 <dt>Guild</dt>
-                <dd>Guild: {displayGuild(evidence.guild)}</dd>
+                <dd>
+                  Guild: {displayGuild(evidence.guild)}
+                  {evidence.guild ? (
+                    <GuildProfileLinks guild={evidence.guild} />
+                  ) : null}
+                </dd>
               </div>
               <div>
                 <dt>World rank</dt>

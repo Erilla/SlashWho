@@ -972,7 +972,10 @@ describe("Warcraft Logs gateway", () => {
                         startTime: 1_706_918_400_000,
                         guild: {
                           name: "Example Guild",
-                          server: { slug: "silvermoon" }
+                          server: {
+                            slug: "silvermoon",
+                            region: { slug: "eu" }
+                          }
                         },
                         zone: {
                           id: 42,
@@ -1019,7 +1022,11 @@ describe("Warcraft Logs gateway", () => {
         {
           killedAt: "2024-02-03T02:00:00.000Z",
           journalBossId: "2345",
-          guild: { name: "Example Guild", realm: "silvermoon" }
+          guild: {
+            name: "Example Guild",
+            region: "eu",
+            realm: "silvermoon"
+          }
         }
       ]
     });

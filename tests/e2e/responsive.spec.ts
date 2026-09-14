@@ -95,6 +95,47 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   ).toBe(true);
 });
 
+test("keeps landing search modes compact and usable at desktop and mobile widths", async ({
+  page
+}) => {
+  // Break caught: equal flexible tracks made the character-name and realm
+  // controls dominate the structured desktop form, while constrained tracks
+  // must still collapse without overflowing on small screens.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+
+  const urlInput = page.getByLabel("Applicant URL");
+  await expect(urlInput).toBeVisible();
+  await page.getByRole("radio", { name: "Character name + realm" }).check();
+
+  const [nameWidth, realmWidth, regionWidth] = await Promise.all([
+    page
+      .getByRole("textbox", { name: "Character name" })
+      .evaluate((element) => element.getBoundingClientRect().width),
+    page
+      .getByRole("textbox", { name: "Realm" })
+      .evaluate((element) => element.getBoundingClientRect().width),
+    page
+      .getByLabel("Region")
+      .evaluate((element) => element.getBoundingClientRect().width)
+  ]);
+  expect(nameWidth).toBeLessThanOrEqual(192);
+  expect(realmWidth).toBeLessThanOrEqual(192);
+  expect(regionWidth).toBeLessThanOrEqual(160);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("textbox", { name: "Character name" }).fill("Ryii");
+  await page.getByRole("textbox", { name: "Realm" }).fill("the-shatar");
+  await page.getByRole("textbox", { name: "Character name" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("textbox", { name: "Realm" })).toBeFocused();
+  await expect(
+    page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth
+    )
+  ).resolves.toBe(true);
+});
+
 test("matches dossier summary panels and confines character scrolling to desktop", async ({
   page
 }) => {
@@ -129,7 +170,6 @@ test("matches dossier summary panels and confines character scrolling to desktop
       seedCharacterEvidence(character.key, { withSampleKills: false })
     )
   );
-
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/dossiers/eu/silvermoon/longlist");
 
@@ -228,6 +268,67 @@ test("does not create a desktop scroll range when connected characters fit", asy
       (element) => element.scrollHeight === element.clientHeight
     )
   ).toBe(true);
+  expect(
+    await characterList.evaluate((element) => ({
+      paddingInlineEnd: getComputedStyle(element).paddingInlineEnd,
+      scrollbarGutter: getComputedStyle(element).scrollbarGutter
+    }))
+  ).toEqual({ paddingInlineEnd: "0px", scrollbarGutter: "auto" });
+});
+
+test("keeps overflowing connected characters clear of classic and overlay scrollbars", async ({
+  page
+}) => {
+  // Break caught: scrollbar tracks could cover achievement cards or character
+  // badges and icon links when either summary list became scrollable.
+  const key = { region: "eu", realm: "silvermoon", name: "clearance" } as const;
+  const characters = Array.from({ length: 12 }, (_, index) => ({
+    key:
+      index === 0
+        ? key
+        : {
+            region: "eu" as const,
+            realm: "silvermoon",
+            name: `clearancealt${index}`
+          },
+    displayName: index === 0 ? "Clearance" : `Clearancealt${index}`,
+    className: "Mage",
+    level: 80 - index
+  }));
+  await seedSnapshot({
+    key,
+    displayName: "Clearance",
+    refreshedAt: new Date(),
+    characters
+  });
+  await Promise.all(
+    characters.map((character) =>
+      seedCharacterEvidence(character.key, { withSampleKills: false })
+    )
+  );
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/dossiers/eu/silvermoon/clearance");
+  await page.addStyleTag({
+    content: `
+      .dossier-character-list { max-height: 3rem; min-height: 0; }
+    `
+  });
+
+  const list = page.getByRole("list", { name: "Connected characters" });
+  await expect(list).toHaveAttribute("tabindex", "0");
+  expect(
+    await list.evaluate((element) => ({
+      paddingInlineEnd: Number.parseFloat(
+        getComputedStyle(element).paddingInlineEnd
+      ),
+      scrollbarGutter: getComputedStyle(element).scrollbarGutter
+    }))
+  ).toEqual({ paddingInlineEnd: 16, scrollbarGutter: "stable" });
+  await list.focus();
+  await page.keyboard.press("PageDown");
+  await expect
+    .poll(() => list.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
 });
 
 test("separates adjacent raid evidence with responsive artwork banners", async ({

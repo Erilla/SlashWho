@@ -91,7 +91,7 @@ it("shows the grouped rank in the summary and retains all distinct report links"
               firstKill: {
                 ...boss.firstKill,
                 historicWorldRank: 48,
-                guild: { name: "Rancour", realm: "draenor" },
+                guild: { name: "Rancour", region: "eu", realm: "draenor" },
                 reportUrl: reportUrls[0]!,
                 reportUrls
               }
@@ -106,9 +106,13 @@ it("shows the grouped rank in the summary and retains all distinct report links"
     screen
       .getAllByRole("link", { hidden: true })
       .map((link) => link.getAttribute("href"))
+      .filter((href) => href?.includes("/reports/"))
   ).toEqual(reportUrls);
   for (const [index, link] of screen
-    .getAllByRole("link", { hidden: true })
+    .getAllByRole("link", {
+      hidden: true,
+      name: /View Warcraft Logs report \d+ \(opens in a new tab\)/
+    })
     .entries()) {
     expect(link).toHaveAccessibleName(
       `View Warcraft Logs report ${index + 1} (opens in a new tab)`
@@ -245,7 +249,7 @@ it("keeps a text-first raid heading when official artwork is unavailable", () =>
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
 });
 
-it("shows first-kill metadata and lists every kill in chronological order", () => {
+it("shows latest-kill metadata and lists every kill latest first", () => {
   renderWithDossierCharacters(
     <DossierRaidList
       raids={
@@ -261,19 +265,27 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
                 imageUrl: null,
                 firstKills: [
                   {
-                    killedAt: "2025-01-14T20:30:00.000Z",
-                    guild: { name: "Method", realm: "Tarren Mill" },
-                    historicWorldRank: 2,
-                    reportUrl: "https://www.warcraftlogs.com/reports/first",
-                    characters: [ryii],
-                    parses: []
-                  },
-                  {
                     killedAt: "2025-02-14T20:30:00.000Z",
-                    guild: { name: "Method", realm: "Tarren Mill" },
+                    guild: {
+                      name: "Method",
+                      region: "eu",
+                      realm: "Tarren Mill"
+                    },
                     historicWorldRank: null,
                     reportUrl: "https://www.warcraftlogs.com/reports/second",
                     characters: [ryalts],
+                    parses: []
+                  },
+                  {
+                    killedAt: "2025-01-14T20:30:00.000Z",
+                    guild: {
+                      name: "Method",
+                      region: "eu",
+                      realm: "Tarren Mill"
+                    },
+                    historicWorldRank: 2,
+                    reportUrl: "https://www.warcraftlogs.com/reports/first",
+                    characters: [ryii],
                     parses: []
                   }
                 ]
@@ -286,14 +298,25 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
   );
 
   const firstKillSummary = screen
-    .getByText("Ryii", {
+    .getByText("Ryalts", {
       selector: ".dossier-boss-first-kill .dossier-character-name"
     })
     .closest(".dossier-boss-first-kill");
-  expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
+  expect(firstKillSummary).toHaveTextContent(
+    "First kill: 14 Feb 2025 · Ryalts"
+  );
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();
+  const evidenceRows = screen.getAllByText(/^(First kill|Kill)$/, {
+    selector: "dt"
+  });
+  expect(evidenceRows[0]?.closest(".dossier-evidence")).toHaveClass(
+    "dossier-evidence-first-kill"
+  );
+  expect(evidenceRows[1]?.closest(".dossier-evidence")).not.toHaveClass(
+    "dossier-evidence-first-kill"
+  );
   expect(
     screen.getByRole("region", { hidden: true, name: "Kill evidence" })
   ).toBeInTheDocument();
@@ -302,8 +325,8 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
     .getAllByText(/14 (Jan|Feb) 2025/)
     .filter((date) => date.tagName === "TIME");
   expect(dates.map((date) => date.textContent)).toEqual([
-    "14 Jan 2025",
-    "14 Feb 2025"
+    "14 Feb 2025",
+    "14 Jan 2025"
   ]);
 });
 
@@ -368,7 +391,7 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
     screen.getByText(
       (_, element) =>
         element?.tagName === "P" &&
-        element.textContent === "Wipe found: 14 Feb 2025 · Ryii, Ryalts"
+        /Wipe found: 14 Feb 2025 · Ryii.*Ryalts/.test(element.textContent ?? "")
     )
   ).toBeVisible();
   await userEvent.setup().click(screen.getByText("View wipe evidence"));

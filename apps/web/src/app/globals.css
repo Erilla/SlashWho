@@ -180,8 +180,12 @@ a {
 
 .search-structured-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns:
+    minmax(9rem, 12rem)
+    minmax(10rem, 12rem)
+    minmax(8rem, 10rem);
   gap: 0.625rem;
+  justify-content: center;
 }
 
 .search-field label {
@@ -274,8 +278,54 @@ a {
 }
 
 .dossier-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
   padding-bottom: 2rem;
   border-bottom: 1px solid var(--border);
+}
+
+.profile-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.45rem;
+  white-space: nowrap;
+}
+
+.dossier-heading > .profile-links {
+  flex: none;
+  margin-left: 0;
+}
+
+.profile-link {
+  display: inline-grid;
+  width: 1.65rem;
+  height: 1.65rem;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-decoration: none;
+}
+
+.profile-link:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.dossier-character-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dossier-character-actions .profile-links {
+  margin-left: 0;
 }
 
 .dossier-heading h1 {
@@ -709,6 +759,11 @@ a {
   background: var(--surface-raised);
   margin: 0;
   padding: 0.8rem;
+}
+
+.dossier-evidence-first-kill {
+  border: 2px solid var(--success);
+  padding: 0.75rem;
 }
 
 .dossier-evidence div {
@@ -1311,7 +1366,13 @@ a {
   .dossier-character-list {
     flex: 1 1 auto;
     overscroll-behavior: contain;
+  }
+
+  .dossier-scrollable {
     scrollbar-gutter: stable;
+    /* This is content clearance, not an assumed scrollbar width: it keeps
+       overlay scrollbars clear of cards, badges, and focused icon links. */
+    padding-inline-end: clamp(0.75rem, 1.5vw, 1rem);
   }
 
   .dossier-scroll-hint {
@@ -1358,6 +1419,15 @@ a {
 }
 
 @media (max-width: 34rem) {
+  .dossier-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dossier-heading > .profile-links {
+    align-self: flex-start;
+  }
+
   .home-shell {
     align-items: start;
     padding-top: 19vh;

@@ -44,7 +44,7 @@ function kill(
     isFinalBoss: true,
     character,
     killedAt: "2024-10-01T20:00:00.000Z",
-    guild: { name: "Example Guild", realm: "silvermoon" },
+    guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
     historicWorldRank: 147,
     reportUrl: "https://www.warcraftlogs.com/reports/shared#fight=8",
     performance: {
@@ -332,7 +332,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].cuttingEdge).toBeNull();
     expect(
       verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
-    ).toEqual([root, altKey]);
+    ).toEqual([altKey]);
     expect(dossier.limitations[0].code).toBe("private");
   });
 
@@ -358,12 +358,12 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].bosses[0]).toMatchObject({
       firstKills: [
         {
-          killedAt: "2024-10-01T20:00:00.000Z",
-          characters: [root]
-        },
-        {
           killedAt: "2024-10-02T20:00:00.000Z",
           characters: [altKey]
+        },
+        {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          characters: [root]
         }
       ]
     });
@@ -423,13 +423,13 @@ describe("applicant dossier", () => {
     const forward = [
       kill(root, {
         killedAt: "2024-10-01T23:59:00.000Z",
-        guild: { name: "Zeta Guild", realm: "silvermoon" },
+        guild: { name: "Zeta Guild", region: "eu", realm: "silvermoon" },
         historicWorldRank: 5,
         reportUrl: "https://www.warcraftlogs.com/reports/a-report#fight=8"
       }),
       kill(altKey, {
         killedAt: "2024-10-01T00:01:00.000Z",
-        guild: { name: "Alpha Guild", realm: "draenor" },
+        guild: { name: "Alpha Guild", region: "eu", realm: "draenor" },
         historicWorldRank: null,
         reportUrl: "https://www.warcraftlogs.com/reports/z-report#fight=9"
       })
@@ -446,7 +446,7 @@ describe("applicant dossier", () => {
     expect(verifiedKill(make(forward).raids[0]!.bosses[0]!).firstKills).toEqual(
       [
         expect.objectContaining({
-          guild: { name: "Alpha Guild", realm: "draenor" },
+          guild: { name: "Alpha Guild", region: "eu", realm: "draenor" },
           historicWorldRank: null,
           reportUrls: [
             "https://www.warcraftlogs.com/reports/a-report#fight=8",
@@ -480,7 +480,7 @@ describe("applicant dossier", () => {
 
     expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
-        guild: { name: "Example Guild", realm: "silvermoon" },
+        guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
         characters: [root, altKey]
       })
     ]);
@@ -512,6 +512,36 @@ describe("applicant dossier", () => {
     expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toHaveLength(
       3
     );
+  });
+
+  it("orders tied distinct events deterministically regardless of input order", () => {
+    // Break caught: cross-region events at the same timestamp could inherit
+    // Warcraft Logs input order instead of applying the secondary comparator.
+    const forward = [
+      kill(root, {
+        reportUrl: "https://www.warcraftlogs.com/reports/a#fight=8"
+      }),
+      kill(usAltKey, {
+        reportUrl: "https://www.warcraftlogs.com/reports/z#fight=8"
+      })
+    ];
+    const make = (kills: DossierKillEvidence[]) =>
+      buildApplicantDossier({
+        root,
+        characters: [rootCharacter, usAltCharacter],
+        kills,
+        limitations: []
+      });
+
+    expect(
+      verifiedKill(make(forward).raids[0]!.bosses[0]!).firstKills.map(
+        (evidence) => evidence.reportUrl
+      )
+    ).toEqual([
+      "https://www.warcraftlogs.com/reports/z#fight=8",
+      "https://www.warcraftlogs.com/reports/a#fight=8"
+    ]);
+    expect(make([...forward].reverse())).toEqual(make(forward));
   });
 
   it("keeps different bosses as distinct kill events", () => {
@@ -556,7 +586,7 @@ describe("applicant dossier", () => {
       kill(root, { reportUrl: null, guild: null, historicWorldRank: null }),
       kill(root, {
         reportUrl: "",
-        guild: { name: "", realm: "" },
+        guild: { name: "", region: "eu", realm: "" },
         historicWorldRank: Number.MAX_SAFE_INTEGER
       })
     ];
@@ -671,7 +701,7 @@ describe("applicant dossier", () => {
     ]);
   });
 
-  it("groups same-date timestamp fallbacks, retains reports, and sorts oldest first", () => {
+  it("groups same-date timestamp fallbacks, retains reports, and sorts latest first", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -691,11 +721,7 @@ describe("applicant dossier", () => {
     });
     expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
-        killedAt: "2024-10-01T20:00:00.000Z",
-        characters: [root, altKey]
-      }),
-      expect.objectContaining({
-        killedAt: "2024-10-02T20:00:00.000Z",
+        killedAt: "2024-10-04T20:00:00.000Z",
         characters: [root]
       }),
       expect.objectContaining({
@@ -703,8 +729,12 @@ describe("applicant dossier", () => {
         characters: [root, altKey]
       }),
       expect.objectContaining({
-        killedAt: "2024-10-04T20:00:00.000Z",
+        killedAt: "2024-10-02T20:00:00.000Z",
         characters: [root]
+      }),
+      expect.objectContaining({
+        killedAt: "2024-10-01T20:00:00.000Z",
+        characters: [root, altKey]
       })
     ]);
   });

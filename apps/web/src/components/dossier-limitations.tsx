@@ -1,6 +1,7 @@
 import type { DossierLimitation } from "@slashwho/contracts";
 
 import { DossierCharacterName } from "./dossier-character-name";
+import { CharacterProfileLinks } from "./profile-links";
 
 type DossierLimitationsProps = Readonly<{
   limitations: readonly DossierLimitation[];
@@ -25,6 +26,12 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
               <>
                 {" Affected character: "}
                 <DossierCharacterName character={limitation.character} />.
+                <CharacterProfileLinks
+                  character={{
+                    key: limitation.character,
+                    displayName: limitation.character.name
+                  }}
+                />
               </>
             ) : null}
           </li>

@@ -35,7 +35,11 @@ export type DossierKillEvidence = Readonly<{
   isFinalBoss: boolean;
   character: CharacterKey;
   killedAt: string;
-  guild: Readonly<{ name: string; realm: string }> | null;
+  guild: Readonly<{
+    name: string;
+    region: CharacterKey["region"];
+    realm: string;
+  }> | null;
   historicWorldRank: number | null;
   reportUrl: string | null;
   performance: DossierKillPerformance;
@@ -72,7 +76,11 @@ export type BuildApplicantDossierInput = Readonly<{
 }>;
 export type ApplicantDossierFirstKill = Readonly<{
   killedAt: string;
-  guild: Readonly<{ name: string; realm: string }> | null;
+  guild: Readonly<{
+    name: string;
+    region: CharacterKey["region"];
+    realm: string;
+  }> | null;
   historicWorldRank: number | null;
   reportUrl: string | null;
   reportUrls: readonly string[];
@@ -174,6 +182,12 @@ function compareEvidence(
     (a.isFinalBoss === b.isFinalBoss ? 0 : a.isFinalBoss ? -1 : 1) ||
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
+}
+function compareEventsLatestFirst(
+  a: DossierKillEvidence,
+  b: DossierKillEvidence
+): number {
+  return compareEvidence(b, a);
 }
 function sharedEvidenceKey(k: DossierKillEvidence): string {
   // Preserve the narrow legacy identity only when a malformed timestamp cannot
@@ -429,7 +443,7 @@ export function buildApplicantDossier(
           }
         };
       })
-      .sort((a, b) => compareEvidence(a.selected, b.selected));
+      .sort((a, b) => compareEventsLatestFirst(a.selected, b.selected));
     const selected = firstKills[0]!.selected;
     const raid = raids.get(selected.raidId) ?? {
       raidName: selected.raidName,
@@ -446,7 +460,10 @@ export function buildApplicantDossier(
         lookupJournalEncounter(selected.bossId)?.imageUrl ??
         lookupRaidBossByName(selected.raidName, selected.bossName)?.imageUrl ??
         null,
-      firstKill: firstKills[0]!.firstKill,
+      firstKill: {
+        ...firstKills[0]!.firstKill,
+        parses: firstKills.at(-1)!.firstKill.parses
+      },
       firstKills: firstKills.map((entry) => entry.firstKill),
       bestParses: aggregateBossParses(
         firstKills.map((entry) => entry.shared),

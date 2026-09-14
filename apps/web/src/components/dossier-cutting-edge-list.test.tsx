@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { CharacterKey } from "@slashwho/contracts";
 import type { ReactElement } from "react";
 
@@ -57,6 +57,31 @@ function renderWithDossierCharacters(ui: ReactElement) {
 }
 
 afterEach(cleanup);
+
+function mockScrollViewport() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockReturnValue({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })
+  );
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    }
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(500);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it.each([
   { count: 0, label: "0 Cutting Edge achievements" },
@@ -126,11 +151,37 @@ it("renders an official Cutting Edge achievement with its completion date and ch
   ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
   expect(screen.getByText("Ryii").parentElement).toHaveTextContent(
-    "Ryii, Ryalts"
+    /Ryii.*Ryalts/
   );
   expect(
     screen.getByAltText("Cutting Edge: Queen Ansurek icon")
   ).toHaveAttribute("src", "https://render.example/40254.jpg");
+});
+
+it("exposes overflowing Cutting Edge achievements as a keyboard-scrollable list", async () => {
+  // Break caught: overflowing achievement cards were not keyboard reachable,
+  // so the same visual space used by their scrollbar could cover card content.
+  mockScrollViewport();
+  renderWithDossierCharacters(
+    <DossierCuttingEdgeList
+      cuttingEdges={[
+        {
+          achievementId: "40254",
+          achievementName: "Cutting Edge: Queen Ansurek",
+          description: "Defeat Queen Ansurek on Mythic Difficulty.",
+          iconUrl: null,
+          completedAt: "2025-01-14T20:30:00.000Z",
+          characters: [ryii]
+        }
+      ]}
+      limitations={[]}
+    />
+  );
+
+  const list = await screen.findByRole("list", {
+    name: "Historic Cutting Edge"
+  });
+  expect(list).toHaveAttribute("tabindex", "0");
 });
 
 it("renders fallback artwork when an official achievement icon is unavailable", () => {
