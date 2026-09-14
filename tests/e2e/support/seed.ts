@@ -73,6 +73,7 @@ export async function seedSnapshot(
 export async function seedCharacterEvidence(
   key: CharacterKey,
   options: Readonly<{
+    withLaterParseEvent?: boolean;
     withSampleKills?: boolean;
     withSecondRaid?: boolean;
   }> = {}
@@ -138,6 +139,31 @@ export async function seedCharacterEvidence(
                   bossDamage: { state: "unavailable" }
                 }
               },
+              ...(options.withLaterParseEvent
+                ? [
+                    {
+                      raidId: "42",
+                      raidName: "Nerub-ar Palace",
+                      bossId: "1234",
+                      bossName: "Queen Ansurek",
+                      journalBossId: null,
+                      bossOrder: 8,
+                      isFinalBoss: true,
+                      killedAt: "2025-01-14T21:31:40.000Z",
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/e2eLaterReport",
+                      fightUrl:
+                        "https://www.warcraftlogs.com/reports/e2eLaterReport#fight=11",
+                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      historicWorldRank: 147,
+                      performance: {
+                        damage: { state: "available", percentile: 100 },
+                        healing: { state: "not_applicable" },
+                        bossDamage: { state: "unavailable" }
+                      }
+                    }
+                  ]
+                : []),
               ...(options.withSecondRaid
                 ? [
                     {
