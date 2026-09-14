@@ -254,6 +254,20 @@ describe("applicant dossier", () => {
     ]);
   });
 
+  it("formats parse character labels without changing canonical attribution", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [{ key: root, displayName: "rYII" }],
+      kills: [kill(root)],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses[0]!.bestParses[0]?.character).toBe(
+      "Ryii"
+    );
+    expect(dossier.raids[0]!.bosses[0]!.firstKill.characters).toEqual([root]);
+  });
+
   it("keeps same-named characters' boss parses independent", () => {
     const sameNamedAlt: CharacterKey = {
       region: "us",

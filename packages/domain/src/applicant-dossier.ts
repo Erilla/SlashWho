@@ -425,7 +425,7 @@ export function buildApplicantDossier(
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
               .map((c) => c.key),
-            parses: aggregateEventParses(shared, input.characters)
+            parses: aggregateEventParses(shared, characters)
           }
         };
       })
@@ -450,7 +450,7 @@ export function buildApplicantDossier(
       firstKills: firstKills.map((entry) => entry.firstKill),
       bestParses: aggregateBossParses(
         firstKills.map((entry) => entry.shared),
-        input.characters
+        characters
       ),
       isFinalBoss: selected.isFinalBoss
     });
