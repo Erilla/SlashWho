@@ -62,8 +62,10 @@ const dossier: ApplicantDossier = {
             characters: [
               { region: "eu", realm: "silvermoon", name: "ryii" },
               { region: "eu", realm: "draenor", name: "ryalts" }
-            ]
-          }
+            ],
+            parses: []
+          },
+          bestParses: []
         },
         {
           bossId: "sikran",
@@ -76,8 +78,10 @@ const dossier: ApplicantDossier = {
             guild: null,
             historicWorldRank: null,
             reportUrl: null,
-            characters: [{ region: "eu", realm: "silvermoon", name: "ryii" }]
-          }
+            characters: [{ region: "eu", realm: "silvermoon", name: "ryii" }],
+            parses: []
+          },
+          bestParses: []
         }
       ]
     }

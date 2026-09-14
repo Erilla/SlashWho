@@ -86,6 +86,19 @@ function limitationMessage(
   source: EvidenceSource,
   code: ContractDossierLimitation["code"]
 ): string {
+  if (source === "warcraft_logs" && code.startsWith("parse_")) {
+    const reason =
+      code === "parse_private"
+        ? "the supporting reports are private"
+        : code === "parse_rate_limited"
+          ? "Warcraft Logs is temporarily rate limited"
+          : code === "parse_request_cap"
+            ? "this dossier reached its parse request cap"
+            : code === "parse_schema_drift"
+              ? "Warcraft Logs returned an unexpected ranking response"
+              : "Warcraft Logs could not load the rankings";
+    return `Parse availability is partial because ${reason}. Verified kill evidence is still shown.`;
+  }
   if (source === "raiderio") {
     const reason =
       code === "schema_changed"
@@ -116,6 +129,8 @@ function limitationMessage(
       return `${label} history could not be fully loaded. Shown evidence is partial; other kills or wipes may exist.`;
     case "schema_changed":
       return `${label} returned an unexpected response, so history is incomplete. Shown evidence is partial; other kills or wipes may exist.`;
+    default:
+      return `${label} parse availability is partial. Verified kill evidence is still shown.`;
   }
 }
 
@@ -186,7 +201,8 @@ function cachedKill(
     killedAt: kill.killedAt,
     guild: kill.guild ? { ...kill.guild, region: character.region } : null,
     historicWorldRank: kill.historicWorldRank ?? null,
-    reportUrl: kill.fightUrl
+    reportUrl: kill.fightUrl,
+    performance: kill.performance
   };
 }
 
@@ -235,6 +251,15 @@ async function gatherCharacterEvidence(
   if (completed?.run.limitationCode) {
     limitations.push(
       limitation("warcraft_logs", character.key, completed.run.limitationCode)
+    );
+  }
+  if (completed?.run.parseLimitationCode) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        character.key,
+        completed.run.parseLimitationCode
+      )
     );
   }
   return {

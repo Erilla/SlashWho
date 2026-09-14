@@ -62,8 +62,10 @@ const boss = {
     guild: null,
     historicWorldRank: null,
     reportUrl: null,
-    characters: [ryii]
-  }
+    characters: [ryii],
+    parses: []
+  },
+  bestParses: []
 };
 
 afterEach(cleanup);
@@ -247,7 +249,7 @@ it("keeps a text-first raid heading when official artwork is unavailable", () =>
   expect(screen.getByText("Queen Ansurek")).toBeVisible();
 });
 
-it("shows latest-kill metadata and lists every kill latest first", () => {
+it("keeps the chronological first-kill summary coherent while listing events latest first", () => {
   renderWithDossierCharacters(
     <DossierRaidList
       raids={
@@ -261,6 +263,31 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
               {
                 ...boss,
                 imageUrl: null,
+                firstKill: {
+                  killedAt: "2025-01-14T20:30:00.000Z",
+                  guild: {
+                    name: "Earliest",
+                    region: "eu",
+                    realm: "Silvermoon"
+                  },
+                  historicWorldRank: 2,
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/first#fight=8",
+                  characters: [ryii],
+                  parses: [
+                    {
+                      character: "Ryii",
+                      damage: {
+                        state: "available",
+                        percentile: 77,
+                        reportUrl:
+                          "https://www.warcraftlogs.com/reports/first#fight=8"
+                      },
+                      healing: { state: "not_applicable" },
+                      bossDamage: { state: "unavailable" }
+                    }
+                  ]
+                },
                 firstKills: [
                   {
                     killedAt: "2025-02-14T20:30:00.000Z",
@@ -270,8 +297,22 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
                       realm: "Tarren Mill"
                     },
                     historicWorldRank: null,
-                    reportUrl: "https://www.warcraftlogs.com/reports/second",
-                    characters: [ryalts]
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/second#fight=9",
+                    characters: [ryalts],
+                    parses: [
+                      {
+                        character: "Ryalts",
+                        damage: {
+                          state: "available",
+                          percentile: 99,
+                          reportUrl:
+                            "https://www.warcraftlogs.com/reports/second#fight=9"
+                        },
+                        healing: { state: "not_applicable" },
+                        bossDamage: { state: "unavailable" }
+                      }
+                    ]
                   },
                   {
                     killedAt: "2025-01-14T20:30:00.000Z",
@@ -281,8 +322,35 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
                       realm: "Tarren Mill"
                     },
                     historicWorldRank: 2,
-                    reportUrl: "https://www.warcraftlogs.com/reports/first",
-                    characters: [ryii]
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/first#fight=8",
+                    characters: [ryii],
+                    parses: [
+                      {
+                        character: "Ryii",
+                        damage: {
+                          state: "available",
+                          percentile: 77,
+                          reportUrl:
+                            "https://www.warcraftlogs.com/reports/first#fight=8"
+                        },
+                        healing: { state: "not_applicable" },
+                        bossDamage: { state: "unavailable" }
+                      }
+                    ]
+                  }
+                ],
+                bestParses: [
+                  {
+                    character: "Ryalts",
+                    damage: {
+                      state: "available",
+                      percentile: 99,
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/second#fight=9"
+                    },
+                    healing: { state: "not_applicable" },
+                    bossDamage: { state: "unavailable" }
                   }
                 ]
               }
@@ -294,12 +362,31 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
   );
 
   const firstKillSummary = screen
-    .getByText("Ryalts", {
+    .getByText("Ryii", {
       selector: ".dossier-boss-first-kill .dossier-character-name"
     })
     .closest(".dossier-boss-first-kill");
-  expect(firstKillSummary).toHaveTextContent(
-    "First kill: 14 Feb 2025 · Ryalts"
+  expect(firstKillSummary).toHaveTextContent("First kill: 14 Jan 2025 · Ryii");
+  expect(screen.getByText("World #2")).toBeVisible();
+  const firstKillParses = screen.getAllByRole("region", {
+    name: "First kill parses"
+  })[0]!;
+  expect(
+    within(firstKillParses).getByRole("link", {
+      name: "Damage 77th percentile"
+    })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/first#fight=8"
+  );
+  expect(
+    within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
+      "link",
+      { name: "Damage 99th percentile" }
+    )
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/second#fight=9"
   );
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
@@ -307,10 +394,12 @@ it("shows latest-kill metadata and lists every kill latest first", () => {
   const evidenceRows = screen.getAllByText(/^(First kill|Kill)$/, {
     selector: "dt"
   });
-  expect(evidenceRows[0]?.closest(".dossier-evidence")).toHaveClass(
+  expect(evidenceRows[0]).toHaveTextContent("Kill");
+  expect(evidenceRows[0]?.closest(".dossier-evidence")).not.toHaveClass(
     "dossier-evidence-first-kill"
   );
-  expect(evidenceRows[1]?.closest(".dossier-evidence")).not.toHaveClass(
+  expect(evidenceRows[1]).toHaveTextContent("First kill");
+  expect(evidenceRows[1]?.closest(".dossier-evidence")).toHaveClass(
     "dossier-evidence-first-kill"
   );
   expect(
@@ -514,4 +603,95 @@ it("greys out an entire no-log tier as a single explanatory row", () => {
   expect(
     within(row).queryByAltText("Empty Tier artwork")
   ).not.toBeInTheDocument();
+});
+
+it("shows first-kill and best parse summaries before evidence details are opened", () => {
+  // Break caught: meaningful parse evidence could be buried behind the
+  // disclosure, preventing a reviewer from comparing a boss at a glance.
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                imageUrl: null,
+                firstKill: {
+                  ...boss.firstKill,
+                  parses: [
+                    {
+                      character: "Ryii",
+                      damage: {
+                        state: "available",
+                        percentile: 87,
+                        reportUrl:
+                          "https://www.warcraftlogs.com/reports/first#fight=8"
+                      },
+                      healing: { state: "not_applicable" },
+                      bossDamage: { state: "unavailable" }
+                    }
+                  ]
+                },
+                bestParses: [
+                  {
+                    character: "Ryii",
+                    damage: {
+                      state: "available",
+                      percentile: 99.2,
+                      reportUrl:
+                        "https://www.warcraftlogs.com/reports/best#fight=9"
+                    },
+                    healing: { state: "not_applicable" },
+                    bossDamage: { state: "unavailable" }
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const firstKillParses = screen.getAllByRole("region", {
+    name: "First kill parses"
+  })[0]!;
+  expect(firstKillParses.closest("details")).toBeNull();
+  expect(firstKillParses).toBeVisible();
+  const bestParses = screen.getByRole("region", {
+    name: "Best shown parses"
+  });
+  expect(bestParses).toBeVisible();
+  expect(
+    within(firstKillParses).getByRole("link", {
+      name: "Damage 87th percentile"
+    })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/first#fight=8"
+  );
+  expect(
+    within(bestParses).getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/best#fight=9"
+  );
+  expect(
+    screen.getByText("View kill evidence").closest("details")
+  ).not.toHaveAttribute("open");
+  screen.getByText("View kill evidence").click();
+  const eventParses = within(
+    screen.getByRole("region", { name: "Kill evidence" })
+  ).getByRole("region", { name: "First kill parses" });
+  expect(
+    within(eventParses).getByRole("link", { name: "Damage 87th percentile" })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/first#fight=8"
+  );
 });

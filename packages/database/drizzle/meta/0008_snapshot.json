@@ -1,6 +1,6 @@
 {
-  "id": "7749a9ca-4ef4-4f13-8959-15abee520fa1",
-  "prevId": "0d59feab-1e0b-42df-b2d6-1d9b0e67f1cb",
+  "id": "45f46485-6c2f-4d8d-a1ce-e5628fb1358d",
+  "prevId": "c9a6b43d-8d1a-4974-98f4-e124100ab01d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -46,6 +46,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'queued'"
+        },
+        "evidence_version": {
+          "name": "evidence_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
         },
         "attempt": {
           "name": "attempt",
@@ -395,8 +402,8 @@
         }
       },
       "indexes": {
-        "character_mythic_wipes_run_boss_idx": {
-          "name": "character_mythic_wipes_run_boss_idx",
+        "character_mythic_wipes_run_fight_idx": {
+          "name": "character_mythic_wipes_run_fight_idx",
           "columns": [
             {
               "expression": "evidence_run_id",
@@ -405,13 +412,7 @@
               "nulls": "last"
             },
             {
-              "expression": "raid_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "boss_id",
+              "expression": "fight_url",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -2,6 +2,7 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
+import { DossierParseList } from "./dossier-parse-list";
 import { UpstreamIconLink } from "./upstream-icon-link";
 import { GuildProfileLinks } from "./profile-links";
 
@@ -149,7 +150,7 @@ function BossArtwork({ boss }: { boss: Boss }) {
 
 function KillEvidence({ boss }: { boss: KillBoss }) {
   const firstKills = boss.firstKills ?? [boss.firstKill];
-  const firstKill = firstKills[0]!;
+  const firstKill = boss.firstKill;
   return (
     <>
       <div className="dossier-boss-heading">
@@ -170,56 +171,73 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
           </p>
         </div>
       </div>
+      <DossierParseList
+        label="First kill parses"
+        parses={boss.firstKill.parses}
+      />
+      <DossierParseList label="Best shown parses" parses={boss.bestParses} />
       <details>
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
-          {firstKills.map((evidence, index) => (
-            <div
-              className="dossier-evidence-row"
-              key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
-            >
-              <StatusIcon state="kill" />
-              <dl
-                className={`dossier-evidence${
-                  index === 0 ? " dossier-evidence-first-kill" : ""
-                }`}
+          {firstKills.map((evidence, index) => {
+            const isChronologicalFirst = index === firstKills.length - 1;
+            return (
+              <div
+                className="dossier-evidence-row"
+                key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
               >
-                <div>
-                  <dt>{index === 0 ? "First kill" : "Kill"}</dt>
-                  <dd>
-                    <time dateTime={evidence.killedAt}>
-                      {displayDate(evidence.killedAt)}
-                    </time>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Guild</dt>
-                  <dd>
-                    Guild: {displayGuild(evidence.guild)}
-                    {evidence.guild ? (
-                      <GuildProfileLinks guild={evidence.guild} />
-                    ) : null}
-                  </dd>
-                </div>
-                <div>
-                  <dt>World rank</dt>
-                  <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt>Reports</dt>
-                  <dd>
-                    <ReportLinks evidence={evidence} />
-                  </dd>
-                </div>
-                <div>
-                  <dt>Characters present</dt>
-                  <dd>
-                    <DossierCharacterNames characters={evidence.characters} />
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          ))}
+                <StatusIcon state="kill" />
+                <dl
+                  className={`dossier-evidence${
+                    isChronologicalFirst ? " dossier-evidence-first-kill" : ""
+                  }`}
+                >
+                  <div>
+                    <dt>{isChronologicalFirst ? "First kill" : "Kill"}</dt>
+                    <dd>
+                      <time dateTime={evidence.killedAt}>
+                        {displayDate(evidence.killedAt)}
+                      </time>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Guild</dt>
+                    <dd>
+                      Guild: {displayGuild(evidence.guild)}
+                      {evidence.guild ? (
+                        <GuildProfileLinks guild={evidence.guild} />
+                      ) : null}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>World rank</dt>
+                    <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>Reports</dt>
+                    <dd>
+                      <ReportLinks evidence={evidence} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Characters present</dt>
+                    <dd>
+                      <DossierCharacterNames characters={evidence.characters} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Parses</dt>
+                    <dd>
+                      <DossierParseList
+                        label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
+                        parses={evidence.parses}
+                      />
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            );
+          })}
           <WipeEvidenceList wipes={boss.wipes} />
         </section>
       </details>

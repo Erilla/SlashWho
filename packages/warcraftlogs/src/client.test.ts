@@ -11,6 +11,7 @@ type FixtureName =
   | "token-valid"
   | "character-report-valid"
   | "character-private"
+  | "report-rankings-valid"
   | "schema-drift";
 
 const fixtureDirectory = fileURLToPath(
@@ -36,18 +37,62 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+function jsonResponseWithRawJson(value: unknown): Response {
+  const response = jsonResponse(value);
+  Object.defineProperty(response, "json", { value: async () => value });
+  return response;
+}
+
+function emptyRankingsResponse(code: string): Response {
+  return jsonResponse({
+    data: {
+      reportData: {
+        report: {
+          code,
+          archiveStatus: {
+            isArchived: false,
+            isAccessible: true,
+            archiveDate: null
+          },
+          masterData: { actors: [] },
+          damage: { data: [] },
+          healing: { data: [] },
+          bossDamage: { data: [] }
+        }
+      }
+    }
+  });
+}
+
 function clientFor(
   responder: (url: URL, init?: RequestInit) => Response | Promise<Response>
 ) {
-  const fetch = vi.fn(
-    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
-      responder(
-        new URL(
-          typeof input === "string" || input instanceof URL ? input : input.url
-        ),
-        init
-      )
-  );
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? input : input.url
+    );
+    const response = await responder(url, init);
+    if (url.pathname === "/api/v2/client") {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        let payload: { data?: { reportData?: unknown } };
+        try {
+          payload = (await response.clone().json()) as {
+            data?: { reportData?: unknown };
+          };
+        } catch {
+          return emptyRankingsResponse(body.variables.code ?? "report");
+        }
+        if (!payload.data?.reportData) {
+          return emptyRankingsResponse(body.variables.code ?? "report");
+        }
+      }
+    }
+    return response;
+  });
   return {
     fetch,
     client: createWarcraftLogsClient({
@@ -60,6 +105,140 @@ function clientFor(
 
 function token(): Response {
   return jsonResponse(fixture("token-valid"));
+}
+
+function performanceReport(fightIds = [26], hasMorePages = false): unknown {
+  return {
+    data: {
+      characterData: {
+        character: {
+          server: { normalizedName: "Silvermoon" },
+          recentReports: {
+            data: [
+              {
+                code: "performance-report",
+                startTime: 1_706_918_400_000,
+                zone: {
+                  id: 1047,
+                  name: "Fixture",
+                  encounters: [{ id: 3306, journalID: 3306 }]
+                },
+                masterData: {
+                  actors: [
+                    {
+                      id: 1001,
+                      name: "Sentinel",
+                      server: "Silvermoon",
+                      type: "Player"
+                    }
+                  ]
+                },
+                fights: fightIds.map((id) => ({
+                  id,
+                  encounterID: 3306,
+                  name: "Boss",
+                  startTime: 1,
+                  endTime: 2,
+                  kill: true,
+                  difficulty: 5,
+                  friendlyPlayers: [1001]
+                }))
+              }
+            ],
+            has_more_pages: hasMorePages
+          }
+        }
+      }
+    }
+  };
+}
+
+function performanceRankings(
+  values: Readonly<{ damage: unknown; healing: unknown; bossDamage: unknown }>,
+  options: Readonly<{
+    code?: string;
+    fightId?: number;
+    encounterId?: number;
+    difficulty?: number;
+    characterId?: number;
+  }> = {}
+): unknown {
+  const row = (rankPercent: unknown) => ({
+    fightID: options.fightId ?? 26,
+    encounter: { id: options.encounterId ?? 3306 },
+    difficulty: options.difficulty ?? 5,
+    roles: {
+      tanks: { characters: [] },
+      healers: { characters: [] },
+      dps: {
+        characters: [
+          {
+            id: options.characterId ?? 2101,
+            name: "Sentinel",
+            server: { name: "silvermoon", region: "eu" },
+            rankPercent
+          }
+        ]
+      }
+    }
+  });
+  return {
+    data: {
+      reportData: {
+        report: {
+          code: options.code ?? "performance-report",
+          archiveStatus: {
+            isArchived: false,
+            isAccessible: true,
+            archiveDate: null
+          },
+          masterData: {
+            actors: [
+              {
+                id: 1001,
+                name: "Sentinel",
+                server: "Silvermoon",
+                type: "Player"
+              }
+            ]
+          },
+          damage: { data: [row(values.damage)] },
+          healing: { data: [row(values.healing)] },
+          bossDamage: { data: [row(values.bossDamage)] }
+        }
+      }
+    }
+  };
+}
+
+function performanceClient(
+  rankings: unknown,
+  fightIds = [26],
+  rawJson = false
+) {
+  return clientFor((url, init) => {
+    if (url.pathname === "/oauth/token") return token();
+    const query = JSON.parse(String(init?.body)) as { query: string };
+    if (query.query.includes("ReportFightParses")) {
+      return rawJson
+        ? jsonResponseWithRawJson(rankings)
+        : jsonResponse(rankings);
+    }
+    if (query.query.includes("RankingCharacterIdentities")) {
+      return jsonResponse({
+        data: {
+          characterData: {
+            character0: {
+              id: 2101,
+              name: "Sentinel",
+              server: { slug: "silvermoon", region: { slug: "eu" } }
+            }
+          }
+        }
+      });
+    }
+    return jsonResponse(performanceReport(fightIds));
+  });
 }
 
 describe("Warcraft Logs gateway", () => {
@@ -104,6 +283,288 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("normalizes exact-fight performance parses", async () => {
+    // Break caught: a kill could be presented with a percentile from another
+    // report, fight, character, encounter, or difficulty instead of this
+    // character's exact Mythic kill.
+    const rankings = JSON.parse(
+      JSON.stringify(fixture("report-rankings-valid"))
+        .replaceAll("fixture-name-1", "sentinel")
+        .replaceAll("fixture-realm-1", "silvermoon")
+        .replaceAll("fixture-region-1", "eu")
+    ) as unknown;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const query = JSON.parse(String(init?.body)) as { query: string };
+      if (query.query.includes("recentReports")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                server: { normalizedName: "Silvermoon" },
+                recentReports: {
+                  data: [
+                    {
+                      code: "fixture-report-1",
+                      startTime: 1_706_918_400_000,
+                      zone: {
+                        id: 1047,
+                        name: "Fixture raid",
+                        encounters: [{ id: 3306, journalID: 3306 }]
+                      },
+                      masterData: {
+                        actors: [
+                          {
+                            id: 1001,
+                            name: "Sentinel",
+                            server: "Silvermoon",
+                            type: "Player"
+                          }
+                        ]
+                      },
+                      fights: [
+                        {
+                          id: 26,
+                          encounterID: 3306,
+                          name: "Fixture boss",
+                          startTime: 1,
+                          endTime: 2,
+                          kill: true,
+                          difficulty: 5,
+                          friendlyPlayers: [1001]
+                        }
+                      ]
+                    }
+                  ],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (query.query.includes("ReportFightParses"))
+        return jsonResponse(rankings);
+      return jsonResponse({
+        data: {
+          characterData: {
+            character0: {
+              id: 2101,
+              name: "Sentinel",
+              server: { slug: "silvermoon", region: { slug: "eu" } }
+            },
+            character1: {
+              id: 2102,
+              name: "fixture-name-2",
+              server: {
+                slug: "fixture-realm-2",
+                region: { slug: "eu" }
+              }
+            },
+            character2: {
+              id: 2103,
+              name: "fixture-name-3",
+              server: {
+                slug: "fixture-realm-3",
+                region: { slug: "eu" }
+              }
+            }
+          }
+        }
+      });
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 2
+    });
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          reportCode: "fixture-report-1",
+          fightId: 26,
+          difficulty: 5,
+          performance: {
+            damage: { state: "available", percentile: 23 },
+            healing: { state: "available", percentile: 48 },
+            bossDamage: { state: "available", percentile: 42 }
+          }
+        }
+      ]
+    });
+  });
+
+  it.each([
+    ["report", { code: "another-report" }],
+    ["fight", { fightId: 27 }],
+    ["encounter", { encounterId: 3307 }],
+    ["difficulty", { difficulty: 4 }],
+    ["character", { characterId: 2102 }]
+  ])("rejects a mismatched %s identity", async (_identity, override) => {
+    // Break caught: a ranking row with any source dimension changed could be
+    // credited to this kill even though it does not prove this exact parse.
+    const { client } = performanceClient(
+      performanceRankings({ damage: 40, healing: 41, bossDamage: 42 }, override)
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          performance: {
+            damage: { state: "unavailable" },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }
+      ]
+    });
+  });
+
+  it("preserves zero and rejects malformed percentile values", async () => {
+    // Break caught: falsy zero could be discarded while malformed provider
+    // values were coerced into a displayed score.
+    const { client } = performanceClient(
+      performanceRankings({ damage: 0, healing: null, bossDamage: "52" })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          performance: {
+            damage: { state: "available", percentile: 0 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }
+      ]
+    });
+  });
+
+  it("selects the highest duplicate eligible ranking percentile", async () => {
+    // Break caught: duplicate provider rows could turn a valid exact parse into
+    // schema drift or retain an arbitrary lower percentile.
+    const rankings = performanceRankings({
+      damage: 40,
+      healing: 41,
+      bossDamage: 42
+    }) as {
+      data: {
+        reportData: {
+          report: { damage: { data: Array<Record<string, unknown>> } };
+        };
+      };
+    };
+    const duplicate = structuredClone(
+      rankings.data.reportData.report.damage.data[0]!
+    );
+    const roles = duplicate.roles as {
+      dps: { characters: Array<{ rankPercent: number }> };
+    };
+    roles.dps.characters[0]!.rankPercent = 87;
+    rankings.data.reportData.report.damage.data.push(duplicate);
+    const { client } = performanceClient(rankings);
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        { performance: { damage: { state: "available", percentile: 87 } } }
+      ]
+    });
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["negative", -1],
+    ["out of range", 101]
+  ])("marks a %s percentile unavailable", async (_description, percentile) => {
+    // Break caught: non-finite or out-of-range provider numbers could become
+    // a fabricated score instead of an explicit unavailable state.
+    const { client } = performanceClient(
+      performanceRankings({ damage: percentile, healing: 41, bossDamage: 42 }),
+      [26],
+      true
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ performance: { damage: { state: "unavailable" } } }]
+    });
+  });
+
+  it("retains kills with a parse-specific limitation when hydration cap is exhausted", async () => {
+    // Break caught: a ranking budget limit could discard independently proven
+    // kill evidence or falsely make missing parse values look complete.
+    const { client } = performanceClient(
+      performanceRankings({ damage: 40, healing: 41, bossDamage: 42 })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ performance: { damage: { state: "unavailable" } } }],
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+  });
+
+  it("retains scan and parse limitations when both caps are exhausted", async () => {
+    // Break caught: a scan cap could hide the reason parse metrics remain
+    // unavailable, causing downstream storage to report the wrong limitation.
+    const rankings = performanceRankings({
+      damage: 40,
+      healing: 41,
+      bossDamage: 42
+    });
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const query = JSON.parse(String(init?.body)) as { query: string };
+      return query.query.includes("ReportFightParses")
+        ? jsonResponse(rankings)
+        : jsonResponse(performanceReport([26], true));
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ performance: { damage: { state: "unavailable" } } }],
+      limitation: { kind: "limitation", code: "request_cap" },
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+  });
+
+  it("hydrates several fight IDs from one report with one ranking request", async () => {
+    // Break caught: issuing one ranking request per fight would multiply the
+    // measured provider cost despite the API accepting a fight-ID batch.
+    const { client, fetch } = performanceClient(
+      performanceRankings({ damage: 40, healing: 41, bossDamage: 42 }),
+      [26, 27]
+    );
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 2
+    });
+
+    const rankingCalls = fetch.mock.calls.filter(
+      ([url, init]) =>
+        new URL(String(url)).pathname === "/api/v2/client" &&
+        JSON.parse(String(init?.body)).query.includes("ReportFightParses")
+    );
+    expect(rankingCalls).toHaveLength(1);
+  });
+
   it("paginates public reports and retains every distinct Mythic kill", async () => {
     // Break caught: collapsing report pages to one kill per encounter hid the
     // complete chronological evidence needed by an applicant dossier.
@@ -120,12 +581,16 @@ describe("Warcraft Logs gateway", () => {
       const body = JSON.parse(String(init?.body)) as {
         query: string;
         variables: {
+          code?: string;
           name: string;
           realm: string;
           region: string;
           page: number;
         };
       };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables.code!);
+      }
       expect(body.query).toContain("recentReports(limit: 10,");
       expect(body.variables).toEqual({
         name: "sentinel",
@@ -137,8 +602,8 @@ describe("Warcraft Logs gateway", () => {
     });
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 10 })
-    ).resolves.toEqual({
+      client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 10 })
+    ).resolves.toMatchObject({
       kind: "evidence",
       kills: [
         {
@@ -198,7 +663,7 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(6);
   });
 
   it("emits only participant-attributed boss kills and ignores trash fights", async () => {
@@ -288,7 +753,10 @@ describe("Warcraft Logs gateway", () => {
           })
     );
 
-    const result = await client.getFirstKillReports(key, { requestCap: 1 });
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
 
     expect(result).toMatchObject({
       kind: "evidence",
@@ -400,7 +868,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       wipes: [
@@ -474,7 +942,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       wipes: [
@@ -555,7 +1023,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [
@@ -621,7 +1089,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({ kind: "evidence", kills: [{ guild: null }] });
   });
 
@@ -696,7 +1164,10 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(aeriePeakKey, { requestCap: 1 })
+      client.getFirstKillReports(aeriePeakKey, {
+        requestCap: 1,
+        parseRequestCap: 10
+      })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [
@@ -719,13 +1190,13 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 10 })
+      client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 10 })
     ).resolves.toMatchObject({ kind: "evidence" });
     await expect(
-      client.getFirstKillReports(key, { requestCap: 10 })
+      client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 10 })
     ).resolves.toMatchObject({ kind: "evidence" });
 
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(7);
   });
 
   it("refreshes the OAuth token sixty seconds before its reported expiry", async () => {
@@ -753,16 +1224,31 @@ describe("Warcraft Logs gateway", () => {
         return jsonResponse(reportPage);
       });
 
-      await client.getFirstKillReports(key, { requestCap: 10 });
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 10
+      });
       await vi.advanceTimersByTimeAsync(59_000);
-      await client.getFirstKillReports(key, { requestCap: 10 });
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 10
+      });
       await vi.advanceTimersByTimeAsync(1_000);
-      await client.getFirstKillReports(key, { requestCap: 10 });
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 10
+      });
 
-      expect(fetch).toHaveBeenCalledTimes(5);
+      expect(fetch).toHaveBeenCalledTimes(11);
       expect(authorizations).toEqual([
         "Bearer token-1",
         "Bearer token-1",
+        "Bearer token-1",
+        "Bearer token-1",
+        "Bearer token-1",
+        "Bearer token-1",
+        "Bearer token-2",
+        "Bearer token-2",
         "Bearer token-2"
       ]);
     } finally {
@@ -805,7 +1291,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
   });
 
@@ -845,7 +1331,10 @@ describe("Warcraft Logs gateway", () => {
           })
     );
 
-    const result = await client.getFirstKillReports(key, { requestCap: 1 });
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
     expect(result).toEqual({
       kind: "limitation",
       code: "rate_limited",
@@ -866,13 +1355,13 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: expect.any(Array),
       limitation: { kind: "limitation", code: "request_cap" }
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("retains collected kills if a later report page is malformed", async () => {
@@ -885,7 +1374,10 @@ describe("Warcraft Logs gateway", () => {
         ? token()
         : jsonResponse(page++ === 0 ? firstPage : fixture("schema-drift"))
     );
-    const result = await client.getFirstKillReports(key, { requestCap: 3 });
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 10
+    });
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "schema_drift" }
@@ -914,7 +1406,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: expect.arrayContaining([
@@ -948,7 +1440,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [{ fightUrl: expect.stringContaining("earlyReport#fight=7") }],
@@ -985,7 +1477,7 @@ describe("Warcraft Logs gateway", () => {
     );
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 1 })
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
     ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
   });
 
@@ -1003,11 +1495,13 @@ describe("Warcraft Logs gateway", () => {
     });
     const result = await client.getFirstKillReports(key, {
       requestCap: 3,
+      parseRequestCap: 10,
       signal: controller.signal
     });
     expect(result).toMatchObject({
       kind: "evidence",
-      limitation: { code: "unavailable" }
+      limitation: { code: "unavailable" },
+      parseLimitation: { code: "parse_unavailable" }
     });
     if (result.kind === "evidence")
       expect(result.kills.length).toBeGreaterThan(0);
@@ -1020,7 +1514,10 @@ describe("Warcraft Logs gateway", () => {
         : jsonResponse(fixture("schema-drift"))
     );
 
-    const result = await client.getFirstKillReports(key, { requestCap: 1 });
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
     expect(result).toEqual({ kind: "limitation", code: "schema_drift" });
     expect(JSON.stringify(result)).not.toContain("schema-envelope-marker");
     expect(JSON.stringify(result)).not.toContain("client-secret-marker");

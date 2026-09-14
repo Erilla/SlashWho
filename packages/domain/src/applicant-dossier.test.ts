@@ -47,6 +47,11 @@ function kill(
     guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
     historicWorldRank: 147,
     reportUrl: "https://www.warcraftlogs.com/reports/shared#fight=8",
+    performance: {
+      damage: { state: "unavailable" },
+      healing: { state: "unavailable" },
+      bossDamage: { state: "unavailable" }
+    },
     ...overrides
   };
 }
@@ -124,6 +129,258 @@ describe("applicant dossier", () => {
     });
     expect(partial.raids[0]?.bosses[0]).toMatchObject({ state: "incomplete" });
   });
+
+  it("aggregates fight parses by displayed event and boss", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, {
+          reportUrl: "https://www.warcraftlogs.com/reports/b#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 90 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "not_applicable" }
+          }
+        }),
+        kill(root, {
+          killedAt: "2024-10-01T20:00:01.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/a#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 90 },
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-01T20:00:02.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 73 },
+            healing: { state: "available", percentile: 88 },
+            bossDamage: { state: "available", percentile: 66 }
+          }
+        }),
+        kill(root, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 95 },
+            healing: { state: "available", percentile: 70 },
+            bossDamage: { state: "available", percentile: 92 }
+          }
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-02T20:00:01.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/e#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 72 },
+            healing: { state: "available", percentile: 99 },
+            bossDamage: { state: "available", percentile: 67 }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.firstKill.parses).toEqual([
+      {
+        character: "Ryii",
+        damage: {
+          state: "available",
+          percentile: 90,
+          reportUrl: "https://www.warcraftlogs.com/reports/a#fight=8"
+        },
+        healing: { state: "not_applicable" },
+        bossDamage: { state: "not_applicable" }
+      },
+      {
+        character: "Ryalts",
+        damage: {
+          state: "available",
+          percentile: 73,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        },
+        healing: {
+          state: "available",
+          percentile: 88,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        },
+        bossDamage: {
+          state: "available",
+          percentile: 66,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        }
+      }
+    ]);
+    expect(boss.bestParses).toEqual([
+      {
+        character: "Ryii",
+        damage: {
+          state: "available",
+          percentile: 95,
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8"
+        },
+        healing: {
+          state: "available",
+          percentile: 70,
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8"
+        },
+        bossDamage: {
+          state: "available",
+          percentile: 92,
+          reportUrl: "https://www.warcraftlogs.com/reports/d#fight=8"
+        }
+      },
+      {
+        character: "Ryalts",
+        damage: {
+          state: "available",
+          percentile: 73,
+          reportUrl: "https://www.warcraftlogs.com/reports/c#fight=8"
+        },
+        healing: {
+          state: "available",
+          percentile: 99,
+          reportUrl: "https://www.warcraftlogs.com/reports/e#fight=8"
+        },
+        bossDamage: {
+          state: "available",
+          percentile: 67,
+          reportUrl: "https://www.warcraftlogs.com/reports/e#fight=8"
+        }
+      }
+    ]);
+  });
+
+  it("keeps the chronological first kill's metadata and parses as one event", () => {
+    // Break caught: latest-first display ordering could combine a later event's
+    // provenance with the oldest event's parses in the top first-kill summary.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [
+        kill(root, {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          guild: { name: "Earliest", region: "eu", realm: "silvermoon" },
+          historicWorldRank: 47,
+          reportUrl: "https://www.warcraftlogs.com/reports/earliest#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 77 },
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }),
+        kill(altKey, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          guild: { name: "Later", region: "eu", realm: "draenor" },
+          historicWorldRank: 12,
+          reportUrl: "https://www.warcraftlogs.com/reports/later#fight=9",
+          performance: {
+            damage: { state: "available", percentile: 99 },
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.firstKills.map((event) => event.reportUrl)).toEqual([
+      "https://www.warcraftlogs.com/reports/later#fight=9",
+      "https://www.warcraftlogs.com/reports/earliest#fight=8"
+    ]);
+    expect(boss.firstKill).toMatchObject({
+      killedAt: "2024-10-01T20:00:00.000Z",
+      guild: { name: "Earliest", region: "eu", realm: "silvermoon" },
+      historicWorldRank: 47,
+      reportUrl: "https://www.warcraftlogs.com/reports/earliest#fight=8",
+      characters: [root],
+      parses: [
+        {
+          character: "Ryii",
+          damage: {
+            state: "available",
+            percentile: 77,
+            reportUrl: "https://www.warcraftlogs.com/reports/earliest#fight=8"
+          }
+        }
+      ]
+    });
+    expect(boss.bestParses[1]).toMatchObject({
+      character: "Ryalts",
+      damage: {
+        state: "available",
+        percentile: 99,
+        reportUrl: "https://www.warcraftlogs.com/reports/later#fight=9"
+      }
+    });
+  });
+
+  it("formats parse character labels without changing canonical attribution", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [{ key: root, displayName: "rYII" }],
+      kills: [kill(root)],
+      limitations: []
+    });
+
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.bestParses[0]?.character).toBe("Ryii");
+    expect(boss.firstKill.characters).toEqual([root]);
+  });
+
+  it("keeps same-named characters' boss parses independent", () => {
+    const sameNamedAlt: CharacterKey = {
+      region: "us",
+      realm: "illidan",
+      name: "ryii"
+    };
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, { key: sameNamedAlt, displayName: "Ryii" }],
+      kills: [
+        kill(root, {
+          reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 90 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }),
+        kill(sameNamedAlt, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 70 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses.map(
+        (parse) => parse.damage
+      )
+    ).toEqual([
+      {
+        state: "available",
+        percentile: 90,
+        reportUrl: "https://www.warcraftlogs.com/reports/root#fight=8"
+      },
+      {
+        state: "available",
+        percentile: 70,
+        reportUrl: "https://www.warcraftlogs.com/reports/alt#fight=8"
+      }
+    ]);
+  });
+
   it("credits shared earliest evidence and propagates limitations", () => {
     const dossier = buildApplicantDossier({
       root,
@@ -140,7 +397,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0].cuttingEdge).toBeNull();
     expect(
       verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
-    ).toEqual([altKey]);
+    ).toEqual([root, altKey]);
     expect(dossier.limitations[0].code).toBe("private");
   });
 

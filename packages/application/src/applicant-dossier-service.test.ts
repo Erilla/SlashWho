@@ -65,6 +65,8 @@ function fixture(
     includeCachedKills?: boolean;
     evidenceStatus?: "complete" | "partial";
     wipeCapable?: boolean;
+    evidenceLimitationCode?: string | null;
+    evidenceParseLimitationCode?: string | null;
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -84,7 +86,12 @@ function fixture(
       reportUrl: "https://www.warcraftlogs.com/reports/example",
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
       guild: { name: "Example Guild", realm: "silvermoon" },
-      historicWorldRank: null
+      historicWorldRank: null,
+      performance: {
+        damage: { state: "unavailable" },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
     }
   ];
   const repositories = {
@@ -110,7 +117,9 @@ function fixture(
           status: options.evidenceStatus ?? "complete",
           attempt: 1,
           limitationCode:
-            options.evidenceStatus === "partial" ? "request_cap" : null,
+            options.evidenceLimitationCode ??
+            (options.evidenceStatus === "partial" ? "request_cap" : null),
+          parseLimitationCode: options.evidenceParseLimitationCode ?? null,
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
           startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -124,7 +133,9 @@ function fixture(
             status: options.evidenceStatus ?? "complete",
             attempt: 1,
             limitationCode:
-              options.evidenceStatus === "partial" ? "request_cap" : null,
+              options.evidenceLimitationCode ??
+              (options.evidenceStatus === "partial" ? "request_cap" : null),
+            parseLimitationCode: options.evidenceParseLimitationCode ?? null,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -299,6 +310,28 @@ describe("applicant dossier service", () => {
       state: "incomplete"
     });
   });
+
+  it("keeps parse-limited complete evidence eligible for no-log gaps", async () => {
+    // Break caught: an incomplete Historical ranking query must not make a
+    // complete wipe-capable encounter traversal appear incomplete.
+    const result = await fixture({
+      includeCachedKills: false,
+      evidenceParseLimitationCode: "parse_request_cap"
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "no_logs"
+    });
+    expect(result.dossier.limitations).toContainEqual(
+      expect.objectContaining({
+        source: "warcraft_logs",
+        character: root,
+        code: "parse_request_cap"
+      })
+    );
+  });
+
   it("withholds initial evidence for a tournament root before discovery finishes", async () => {
     const { dossiers, raiderio, warcraftLogs, blizzard } = fixture();
     vi.mocked(raiderio.getCharacter).mockResolvedValue({
@@ -557,7 +590,12 @@ describe("applicant dossier service", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/court",
           fightUrl: "https://www.warcraftlogs.com/reports/court#fight=1",
           guild: { name: "Example Guild", realm: "silvermoon" },
-          historicWorldRank: null
+          historicWorldRank: null,
+          performance: {
+            damage: { state: "unavailable" },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
         },
         {
           id: "10000000-0000-4000-8000-000000000022",
@@ -572,7 +610,12 @@ describe("applicant dossier service", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/ulgrax",
           fightUrl: "https://www.warcraftlogs.com/reports/ulgrax#fight=1",
           guild: { name: "Other Guild", realm: "silvermoon" },
-          historicWorldRank: null
+          historicWorldRank: null,
+          performance: {
+            damage: { state: "unavailable" },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
         }
       ]
     });
@@ -712,6 +755,35 @@ describe("applicant dossier service", () => {
       });
       await dossiers.read(root);
       expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([
+    "parse_private",
+    "parse_rate_limited",
+    "parse_request_cap",
+    "parse_unavailable",
+    "parse_schema_drift"
+  ] as const)(
+    "describes Warcraft Logs %s as missing parse availability, not kill history",
+    async (code) => {
+      const { dossiers } = fixture({ evidenceLimitationCode: code });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      const limitation = result.dossier.limitations.find(
+        (item) =>
+          item.source === "warcraft_logs" &&
+          item.character !== null &&
+          item.character.name === root.name
+      );
+      expect(limitation).toEqual(
+        expect.objectContaining({
+          code,
+          message: expect.stringMatching(/parse/i)
+        })
+      );
+      expect(limitation!.message).not.toContain("history is incomplete");
     }
   );
 
