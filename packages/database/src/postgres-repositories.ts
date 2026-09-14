@@ -138,7 +138,9 @@ interface CharacterMythicWipeRow {
 
 type Queryable = Pick<Pool | PoolClient, "query">;
 
-const CURRENT_EVIDENCE_VERSION = 3;
+// Bump when the evidence collector changes in a way that must refresh
+// previously completed parse evidence.
+const CURRENT_EVIDENCE_VERSION = 4;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
