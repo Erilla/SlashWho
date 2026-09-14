@@ -35,7 +35,7 @@ it("presents every character metric with source links and accessible unavailable
   render(<DossierParseList label="First kill parses" parses={parses} />);
 
   expect(screen.getByText("First kill parses")).toBeVisible();
-  expect(screen.getByText("Historical Warcraft Logs rankings.")).toBeVisible();
+  expect(screen.queryByText(/rankings\./)).not.toBeInTheDocument();
   expect(screen.getByRole("group", { name: "Ryii parses" })).toBeVisible();
   const damage = screen.getByRole("link", {
     name: "Damage 87.1 percentile"

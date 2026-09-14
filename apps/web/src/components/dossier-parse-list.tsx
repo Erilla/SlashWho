@@ -73,7 +73,6 @@ export function DossierParseList({ label, parses }: DossierParseListProps) {
   return (
     <section aria-label={label} className="dossier-parse-list">
       <h5>{label}</h5>
-      <p className="dossier-parse-empty">Historical Warcraft Logs rankings.</p>
       {parses.length === 0 ? (
         <p className="dossier-parse-empty">No parse values were available.</p>
       ) : (

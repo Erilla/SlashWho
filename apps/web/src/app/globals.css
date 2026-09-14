@@ -444,6 +444,10 @@ a {
   list-style: none;
 }
 
+.dossier-character-panel > .search-form {
+  padding-top: 1rem;
+}
+
 .dossier-scroll-hint {
   display: none;
 }
