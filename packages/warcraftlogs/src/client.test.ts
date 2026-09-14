@@ -663,6 +663,97 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("prioritizes the earliest kill report group before the parse cap", async () => {
+    const recent = performanceReport([26], false, "recent-report") as {
+      data: {
+        characterData: { character: { recentReports: { data: unknown[] } } };
+      };
+    };
+    const firstKill = performanceReport([27], false, "first-kill-report") as {
+      data: {
+        characterData: { character: { recentReports: { data: unknown[] } } };
+      };
+    };
+    recent.data.characterData.character.recentReports.data[0] = {
+      ...(recent.data.characterData.character.recentReports.data[0] as object),
+      startTime: 2
+    };
+    (
+      recent.data.characterData.character.recentReports as unknown as {
+        has_more_pages: boolean;
+      }
+    ).has_more_pages = true;
+    firstKill.data.characterData.character.recentReports.data[0] = {
+      ...(firstKill.data.characterData.character.recentReports
+        .data[0] as object),
+      startTime: 1
+    };
+    const parseOrder: string[] = [];
+    let reportPage = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string; fightIDs?: number[] };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        parseOrder.push(body.variables.code ?? "");
+        const fightId = body.variables.fightIDs?.[0] ?? 0;
+        return jsonResponse(
+          performanceRankings(
+            { damage: fightId, healing: fightId, bossDamage: fightId },
+            { code: body.variables.code, fightId }
+          )
+        );
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [] },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      reportPage += 1;
+      return jsonResponse(reportPage === 1 ? recent : firstKill);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 2, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          fightId: 27,
+          performance: { damage: { state: "available", percentile: 27 } }
+        },
+        { fightId: 26, performance: { damage: { state: "unavailable" } } }
+      ],
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+    expect(parseOrder).toEqual(["first-kill-report"]);
+  });
+
   it("retains scan and parse limitations when both caps are exhausted", async () => {
     // Break caught: a scan cap could hide the reason parse metrics remain
     // unavailable, causing downstream storage to report the wrong limitation.
