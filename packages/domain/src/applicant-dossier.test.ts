@@ -106,7 +106,7 @@ describe("applicant dossier", () => {
       )
     ).toMatchObject({
       state: "wipe",
-      wipe: { characters: ["Ryii", "Ryalts"] }
+      wipe: { characters: [root, altKey] }
     });
     expect(nerubar.bosses.find((boss) => boss.bossOrder === 1)).toMatchObject({
       state: "no_logs"

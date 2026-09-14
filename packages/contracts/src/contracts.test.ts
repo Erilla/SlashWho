@@ -79,7 +79,7 @@ it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
       wipe: {
         attemptedAt: "2024-09-01T20:00:00.000Z",
         reportUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5",
-        characters: ["Ryii"]
+        characters: [validDossier.root]
       }
     },
     { ...metadata, state: "no_logs" },

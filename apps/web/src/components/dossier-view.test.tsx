@@ -121,26 +121,27 @@ const sameNamedDossier: ApplicantDossier = {
   raids: [
     {
       ...dossier.raids[0]!,
-      bosses: [
-        {
-          ...dossier.raids[0]!.bosses[0]!,
+      bosses: dossier.raids[0]!.bosses.slice(0, 1).map((boss) => {
+        if (boss.state !== "kill") return boss;
+        return {
+          ...boss,
           firstKill: {
-            ...dossier.raids[0]!.bosses[0]!.firstKill,
+            ...boss.firstKill,
             characters: [dossier.root]
           },
           firstKills: [
             {
-              ...dossier.raids[0]!.bosses[0]!.firstKill,
+              ...boss.firstKill,
               characters: [dossier.root]
             },
             {
-              ...dossier.raids[0]!.bosses[0]!.firstKill,
+              ...boss.firstKill,
               killedAt: "2025-01-15T20:30:00.000Z",
               characters: [sameNamedPriest.key]
             }
           ]
-        }
-      ]
+        };
+      })
     }
   ],
   cuttingEdges: [

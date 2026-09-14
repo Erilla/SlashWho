@@ -77,7 +77,7 @@ type ApplicantDossierBossMetadata = Readonly<{
 export type ApplicantDossierWipe = Readonly<{
   attemptedAt: string;
   reportUrl: string;
-  characters: readonly string[];
+  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossierBoss =
   | (ApplicantDossierBossMetadata &
@@ -404,7 +404,7 @@ export function buildApplicantDossier(
                     .filter((character) =>
                       ids.has(canonicalCharacterId(character.key))
                     )
-                    .map((character) => character.displayName)
+                    .map((character) => character.key)
                 }
               };
             }

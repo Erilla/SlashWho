@@ -68,7 +68,7 @@ export const dossierBossSchema = z.discriminatedUnion("state", [
         .object({
           attemptedAt: z.iso.datetime(),
           reportUrl: z.url(),
-          characters: z.array(z.string().min(1)).min(1)
+          characters: z.array(characterKeySchema).min(1)
         })
         .strict()
     })

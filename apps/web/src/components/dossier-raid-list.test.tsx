@@ -304,7 +304,7 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
 });
 
 it("renders kill, wipe, no-log, and incomplete states with accessible labels", async () => {
-  render(
+  renderWithDossierCharacters(
     <DossierRaidList
       raids={[
         {
@@ -323,7 +323,10 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
               wipe: {
                 attemptedAt: "2025-02-14T20:30:00.000Z",
                 reportUrl: "https://www.warcraftlogs.com/reports/wipe#fight=12",
-                characters: ["Ryii", "Ryalts"]
+                characters: [
+                  { region: "eu", realm: "silvermoon", name: "ryii" },
+                  { region: "eu", realm: "draenor", name: "ryalts" }
+                ]
               }
             },
             {
@@ -358,7 +361,11 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
   ).toBeVisible();
   expect(screen.getByText("Evidence incomplete")).toBeVisible();
   expect(
-    screen.getByText("Wipe found: 14 Feb 2025 · Ryii, Ryalts")
+    screen.getByText(
+      (_, element) =>
+        element?.tagName === "P" &&
+        element.textContent === "Wipe found: 14 Feb 2025 · Ryii, Ryalts"
+    )
   ).toBeVisible();
   await userEvent.setup().click(screen.getByText("View wipe evidence"));
   expect(
