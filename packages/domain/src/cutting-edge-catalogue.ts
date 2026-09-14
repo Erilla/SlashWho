@@ -60,16 +60,41 @@ export function buildBoundedCuttingEdgeSequence<
   const first = Math.min(...knownIndexes);
   const last = Math.max(...knownIndexes);
   const sequence: CuttingEdgeSequenceEntry<T>[] = [];
-  for (const achievement of orderedAchievements.slice(first, last + 1)) {
-    const recorded = recordedById.get(achievement.achievementId);
-    if (recorded) {
-      sequence.push(
-        ...recorded.map((item) => ({
-          status: "recorded" as const,
-          achievement: item
-        }))
-      );
-    } else {
+  const emittedGaps = new Set<string>();
+  for (const [index, recorded] of recordedAchievements.entries()) {
+    sequence.push({ status: "recorded", achievement: recorded });
+    const currentIndex = orderedAchievements.findIndex(
+      (achievement) => achievement.achievementId === recorded.achievementId
+    );
+    const next = recordedAchievements[index + 1];
+    const nextIndex = next
+      ? orderedAchievements.findIndex(
+          (achievement) => achievement.achievementId === next.achievementId
+        )
+      : -1;
+    if (currentIndex < 0 || nextIndex < 0) continue;
+    const between = orderedAchievements.slice(
+      Math.min(currentIndex, nextIndex) + 1,
+      Math.max(currentIndex, nextIndex)
+    );
+    if (currentIndex > nextIndex) between.reverse();
+    for (const achievement of between) {
+      if (
+        !recordedById.has(achievement.achievementId) &&
+        !emittedGaps.has(achievement.achievementId)
+      ) {
+        sequence.push({ status: "not_recorded", achievement });
+        emittedGaps.add(achievement.achievementId);
+      }
+    }
+  }
+  for (const achievement of orderedAchievements
+    .slice(first, last + 1)
+    .reverse()) {
+    if (
+      !recordedById.has(achievement.achievementId) &&
+      !emittedGaps.has(achievement.achievementId)
+    ) {
       sequence.push({ status: "not_recorded", achievement });
     }
   }

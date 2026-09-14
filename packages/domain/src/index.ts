@@ -22,6 +22,14 @@ export type {
 } from "./applicant-dossier";
 export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
 export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
+export {
+  buildBoundedCuttingEdgeSequence,
+  lookupCuttingEdgeAchievement
+} from "./cutting-edge-catalogue";
+export type {
+  CuttingEdgeCatalogueAchievement,
+  CuttingEdgeSequenceEntry
+} from "./cutting-edge-catalogue";
 export { discoverCharacter } from "./discovery";
 export type {
   DiscoverCharacterOptions,
@@ -37,11 +45,3 @@ export type {
   FingerprintGateway,
   FingerprintSweepOutcome
 } from "./fingerprint-discovery";
-export {
-  buildBoundedCuttingEdgeSequence,
-  lookupCuttingEdgeAchievement
-} from "./cutting-edge-catalogue";
-export type {
-  CuttingEdgeCatalogueAchievement,
-  CuttingEdgeSequenceEntry
-} from "./cutting-edge-catalogue";

@@ -186,9 +186,9 @@ it("renders catalogue-ordered gaps as not recorded between earned achievements",
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent)
   ).toEqual([
-    "Cutting Edge: Queen Ansurek",
+    "Cutting Edge: Dimensius, the All-Devouring",
     "Cutting Edge: Chrome King Gallywix",
-    "Cutting Edge: Dimensius, the All-Devouring"
+    "Cutting Edge: Queen Ansurek"
   ]);
   expect(screen.getByText("Not recorded")).toBeVisible();
   expect(

@@ -18,7 +18,7 @@ it("does not infer achievements absent from the generated catalogue", () => {
   expect(lookupCuttingEdgeAchievement("1")).toBeNull();
 });
 
-it("places recorded and not-recorded achievements in catalogue order", () => {
+it("preserves recorded order while placing bounded missing achievements", () => {
   expect(
     buildBoundedCuttingEdgeSequence([
       { achievementId: "41625", value: "Dimensius evidence" },
@@ -28,9 +28,9 @@ it("places recorded and not-recorded achievements in catalogue order", () => {
       status: entry.status
     }))
   ).toEqual([
-    { achievementId: "40254", status: "recorded" },
+    { achievementId: "41625", status: "recorded" },
     { achievementId: "41297", status: "not_recorded" },
-    { achievementId: "41625", status: "recorded" }
+    { achievementId: "40254", status: "recorded" }
   ]);
 
   expect(
