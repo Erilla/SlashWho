@@ -8,6 +8,7 @@ import type {
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
+import type { CharacterKey } from "@slashwho/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
@@ -68,6 +69,7 @@ function fixture(
     wipeCapable?: boolean;
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
+    gatheringCharacter?: CharacterKey | null;
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -119,7 +121,7 @@ function fixture(
     runs: { create: runsCreate },
     evidence: {
       reserve: vi.fn().mockImplementation(async ({ key }) => ({
-        kind: "fresh",
+        kind: options.gatheringCharacter === key ? "active" : "fresh",
         run: {
           id: "10000000-0000-4000-8000-000000000012",
           key,
@@ -582,6 +584,22 @@ describe("applicant dossier service", () => {
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
     expect(runsCreate).not.toHaveBeenCalled();
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("identifies each character whose evidence is still gathering", async () => {
+    const result = await fixture({ gatheringCharacter: alt }).dossiers.read(
+      root
+    );
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: {
+        characters: [
+          { key: root, researchState: "complete" },
+          { key: alt, researchState: "gathering" }
+        ]
+      }
+    });
   });
 
   it("shares a guild raid lookup across bosses without mixing their ranks", async () => {
