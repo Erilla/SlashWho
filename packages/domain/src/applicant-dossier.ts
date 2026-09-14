@@ -51,7 +51,7 @@ export type ApplicantDossierFirstKill = Readonly<{
   historicWorldRank: number | null;
   reportUrl: string | null;
   reportUrls: readonly string[];
-  characters: readonly string[];
+  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossierBoss = Readonly<{
   bossId: string;
@@ -76,7 +76,7 @@ export type ApplicantDossierCuttingEdge = Readonly<{
   description: string;
   iconUrl: string | null;
   completedAt: string;
-  characters: readonly string[];
+  characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossier = Readonly<{
   root: CharacterKey;
@@ -274,7 +274,7 @@ export function buildApplicantDossier(
             reportUrls,
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
-              .map((c) => c.displayName)
+              .map((c) => c.key)
           }
         };
       })
@@ -315,7 +315,7 @@ export function buildApplicantDossier(
             .filter((character) =>
               entry.characters.has(canonicalCharacterId(character.key))
             )
-            .map((character) => character.displayName)
+            .map((character) => character.key)
         };
       })
       .sort(

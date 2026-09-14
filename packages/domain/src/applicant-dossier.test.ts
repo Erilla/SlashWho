@@ -58,8 +58,8 @@ describe("applicant dossier", () => {
     });
     expect(dossier.raids[0].cuttingEdge).toBeNull();
     expect(dossier.raids[0].bosses[0].firstKill.characters).toEqual([
-      "Ryii",
-      "Ryalts"
+      root,
+      altKey
     ]);
     expect(dossier.limitations[0].code).toBe("private");
   });
@@ -87,14 +87,34 @@ describe("applicant dossier", () => {
       firstKills: [
         {
           killedAt: "2024-10-01T20:00:00.000Z",
-          characters: ["Ryii"]
+          characters: [root]
         },
         {
           killedAt: "2024-10-02T20:00:00.000Z",
-          characters: ["Ryalts"]
+          characters: [altKey]
         }
       ]
     });
+  });
+
+  it("preserves canonical identities for same-named kill participants", () => {
+    // Break caught: display-name attribution loses the class-bearing identity
+    // when two connected characters share the same visible name.
+    const sameNamedAlt: CharacterKey = {
+      region: "us",
+      realm: "illidan",
+      name: "ryii"
+    };
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, { key: sameNamedAlt, displayName: "Ryii" }],
+      kills: [kill(sameNamedAlt)],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses[0]!.firstKill.characters).toEqual([
+      sameNamedAlt
+    ]);
   });
 
   it("coalesces duplicate reports of the same guild kill", () => {
@@ -120,7 +140,7 @@ describe("applicant dossier", () => {
       expect.objectContaining({
         killedAt: "2024-10-01T20:00:00.000Z",
         reportUrl: "https://www.warcraftlogs.com/reports/first#fight=8",
-        characters: ["Ryii", "Ryalts"]
+        characters: [root, altKey]
       })
     ]);
   });
@@ -159,7 +179,7 @@ describe("applicant dossier", () => {
           "https://www.warcraftlogs.com/reports/a-report#fight=8",
           "https://www.warcraftlogs.com/reports/z-report#fight=9"
         ],
-        characters: ["Ryii", "Ryalts"]
+        characters: [root, altKey]
       })
     ]);
   });
@@ -187,7 +207,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
       expect.objectContaining({
         guild: { name: "Example Guild", realm: "silvermoon" },
-        characters: ["Ryii", "Ryalts"]
+        characters: [root, altKey]
       })
     ]);
   });
@@ -367,7 +387,7 @@ describe("applicant dossier", () => {
         achievementId: "40254",
         achievementName: "Cutting Edge: Queen Ansurek",
         completedAt: "2025-01-14T20:30:00.000Z",
-        characters: ["Ryii", "Ryalts"],
+        characters: [root, altKey],
         iconUrl: "https://render.worldofwarcraft.com/eu/icons/56/5779391.jpg"
       })
     ]);
@@ -394,19 +414,19 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]!.bosses[0]!.firstKills).toEqual([
       expect.objectContaining({
         killedAt: "2024-10-01T20:00:00.000Z",
-        characters: ["Ryii", "Ryalts"]
+        characters: [root, altKey]
       }),
       expect.objectContaining({
         killedAt: "2024-10-02T20:00:00.000Z",
-        characters: ["Ryii"]
+        characters: [root]
       }),
       expect.objectContaining({
         killedAt: "2024-10-03T20:00:00.000Z",
-        characters: ["Ryii", "Ryalts"]
+        characters: [root, altKey]
       }),
       expect.objectContaining({
         killedAt: "2024-10-04T20:00:00.000Z",
-        characters: ["Ryii"]
+        characters: [root]
       })
     ]);
   });
@@ -485,7 +505,7 @@ describe("applicant dossier", () => {
     ]);
   });
 
-  it("credits Cutting Edge only to the matching canonical character identity", () => {
+  it("preserves canonical identities for same-named Cutting Edge characters", () => {
     const sameNamedAlt: CharacterKey = {
       region: "us",
       realm: "illidan",
@@ -499,13 +519,13 @@ describe("applicant dossier", () => {
         {
           achievementId: "40254",
           completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          character: sameNamedAlt
         }
       ],
       limitations: []
     });
 
-    expect(dossier.cuttingEdges[0]!.characters).toEqual(["Ryii"]);
+    expect(dossier.cuttingEdges[0]!.characters).toEqual([sameNamedAlt]);
   });
 
   it("keeps the full verified Raider.IO boss slug when a name includes a subtitle", () => {
