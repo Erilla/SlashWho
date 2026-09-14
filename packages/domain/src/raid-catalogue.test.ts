@@ -23,6 +23,21 @@ it("maps Rinn's Sszorak evidence to the published leaderboard", () => {
   expect(lookupRaiderIoBoss("Unknown raid", "Unknown")).toBeNull();
 });
 
+it("resolves the recorded combined WCL Midnight zone before ranking enrichment", () => {
+  expect(lookupRaiderIoBoss("VS / DR / MQD", "Imperator Averzian")).toEqual({
+    raidSlug: "tier-mn-1",
+    bossSlug: "imperator-averzian"
+  });
+  expect(lookupRaiderIoBoss("VS / DR / MQD", "Fallen-King Salhadaar")).toEqual({
+    raidSlug: "tier-mn-1",
+    bossSlug: "fallenking-salhadaar"
+  });
+  expect(lookupRaiderIoBoss("VS / DR / MQD", "Queen Ansurek")).toBeNull();
+  expect(
+    lookupRaiderIoBoss("Mythic+ Season 1", "Imperator Averzian")
+  ).toBeNull();
+});
+
 it.each([
   [
     "Manaforge Omega",

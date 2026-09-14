@@ -194,6 +194,14 @@ export function lookupRaiderIoBoss(
   raidName: string,
   bossName: string
 ): Readonly<{ raidSlug: string; bossSlug: string }> | null {
+  // WCL stores the opening Midnight raids as a combined zone. Resolve only
+  // bosses belonging to that tier; do not reinterpret arbitrary zone labels.
+  if (normalizedName(raidName) === normalizedName("VS / DR / MQD")) {
+    const encounter = lookupUniqueRaidBossByName(bossName);
+    if (!encounter || raiderIoRaidSlugs.get(encounter.raidId) !== "tier-mn-1")
+      return null;
+    return lookupRaiderIoBoss(encounter.raidName, encounter.bossName);
+  }
   const raid = lookupRaidByName(raidName);
   if (!raid?.raiderIoRaidSlug) return null;
   const encounter = lookupRaidBossByName(raidName, bossName);
