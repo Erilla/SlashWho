@@ -27,6 +27,7 @@ Evidence outside a reviewed window is likewise withheld and reported as
 | March on Quel'Danas (`1308`)     | `2026-03-31T00:00:00Z` onward                    |
 | The Dreamrift (`1314`)           | `2026-03-24T00:00:00Z` onward                    |
 | Sporefall (`1305`)               | `2026-05-20T00:00:00Z` onward                    |
+| The Tidebound Grotto (`1317`)    | `2026-08-19T00:00:00Z` onward                    |
 
 The War Within dates come from Blizzard's season and raid announcements:
 [Season 1](https://worldofwarcraft.blizzard.com/en-us/news/24137817/the-war-within-season-1-now-live),
