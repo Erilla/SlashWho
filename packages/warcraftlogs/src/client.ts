@@ -38,7 +38,7 @@ const recentReportsQuery = `
           data {
             code
             startTime
-            guild { name server { slug } }
+            guild { name server { slug region { slug } } }
             zone { id name encounters { id journalID } }
             masterData { actors { id name server type } }
             fights {
@@ -269,12 +269,24 @@ function firstKillReports(
     if (reportGuild !== null && reportGuild !== undefined) {
       const guildRecord = record(reportGuild);
       const guildServer = guildRecord && record(guildRecord.server);
+      const guildRegion = guildServer && record(guildServer.region);
       const guildName = guildRecord && nonEmptyString(guildRecord.name);
       const guildRealm = guildServer && nonEmptyString(guildServer.slug);
-      if (!guildName || !guildRealm) {
+      const guildRegionSlug = guildRegion && nonEmptyString(guildRegion.slug);
+      const region = guildRegionSlug?.toLocaleLowerCase("en-US");
+      if (
+        !guildName ||
+        !guildRealm ||
+        !region ||
+        !supportedRegions.includes(region as CharacterKey["region"])
+      ) {
         return schemaDrift();
       }
-      guild = { name: guildName, realm: guildRealm };
+      guild = {
+        name: guildName,
+        region: region as CharacterKey["region"],
+        realm: guildRealm
+      };
     }
 
     const journalBossIds = new Map<number, string>();

@@ -3,6 +3,7 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
 import { UpstreamIconLink } from "./upstream-icon-link";
+import { GuildProfileLinks } from "./profile-links";
 
 type Raid = ApplicantDossier["raids"][number];
 type Boss = Raid["bosses"][number];
@@ -141,7 +142,12 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
               </div>
               <div>
                 <dt>Guild</dt>
-                <dd>Guild: {displayGuild(evidence.guild)}</dd>
+                <dd>
+                  Guild: {displayGuild(evidence.guild)}
+                  {evidence.guild ? (
+                    <GuildProfileLinks guild={evidence.guild} />
+                  ) : null}
+                </dd>
               </div>
               <div>
                 <dt>World rank</dt>

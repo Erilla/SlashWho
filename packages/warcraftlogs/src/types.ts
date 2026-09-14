@@ -37,7 +37,11 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   killedAt: string;
   reportUrl: string;
   fightUrl: string;
-  guild: Readonly<{ name: string; realm: string }> | null;
+  guild: Readonly<{
+    name: string;
+    region: CharacterKey["region"];
+    realm: string;
+  }> | null;
   historicWorldRank: null;
 }>;
 

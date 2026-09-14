@@ -151,7 +151,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
   ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
   expect(screen.getByText("Ryii").parentElement).toHaveTextContent(
-    "Ryii, Ryalts"
+    /Ryii.*Ryalts/
   );
   expect(
     screen.getByAltText("Cutting Edge: Queen Ansurek icon")

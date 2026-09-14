@@ -44,7 +44,7 @@ function kill(
     isFinalBoss: true,
     character,
     killedAt: "2024-10-01T20:00:00.000Z",
-    guild: { name: "Example Guild", realm: "silvermoon" },
+    guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
     historicWorldRank: 147,
     reportUrl: "https://www.warcraftlogs.com/reports/shared#fight=8",
     ...overrides
@@ -231,13 +231,13 @@ describe("applicant dossier", () => {
     const forward = [
       kill(root, {
         killedAt: "2024-10-01T23:59:00.000Z",
-        guild: { name: "Zeta Guild", realm: "silvermoon" },
+        guild: { name: "Zeta Guild", region: "eu", realm: "silvermoon" },
         historicWorldRank: 5,
         reportUrl: "https://www.warcraftlogs.com/reports/a-report#fight=8"
       }),
       kill(altKey, {
         killedAt: "2024-10-01T00:01:00.000Z",
-        guild: { name: "Alpha Guild", realm: "draenor" },
+        guild: { name: "Alpha Guild", region: "eu", realm: "draenor" },
         historicWorldRank: null,
         reportUrl: "https://www.warcraftlogs.com/reports/z-report#fight=9"
       })
@@ -254,7 +254,7 @@ describe("applicant dossier", () => {
     expect(verifiedKill(make(forward).raids[0]!.bosses[0]!).firstKills).toEqual(
       [
         expect.objectContaining({
-          guild: { name: "Alpha Guild", realm: "draenor" },
+          guild: { name: "Alpha Guild", region: "eu", realm: "draenor" },
           historicWorldRank: null,
           reportUrls: [
             "https://www.warcraftlogs.com/reports/a-report#fight=8",
@@ -288,7 +288,7 @@ describe("applicant dossier", () => {
 
     expect(verifiedKill(dossier.raids[0]!.bosses[0]!).firstKills).toEqual([
       expect.objectContaining({
-        guild: { name: "Example Guild", realm: "silvermoon" },
+        guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
         characters: [root, altKey]
       })
     ]);
@@ -364,7 +364,7 @@ describe("applicant dossier", () => {
       kill(root, { reportUrl: null, guild: null, historicWorldRank: null }),
       kill(root, {
         reportUrl: "",
-        guild: { name: "", realm: "" },
+        guild: { name: "", region: "eu", realm: "" },
         historicWorldRank: Number.MAX_SAFE_INTEGER
       })
     ];
