@@ -350,7 +350,11 @@ describe("PostgreSQL repositories", () => {
     }
 
     const withoutIds = (kills: readonly { id: string }[]) =>
-      kills.map(({ id: _id, ...kill }) => kill);
+      kills.map((kill) => {
+        const { id, ...withoutId } = kill;
+        void id;
+        return withoutId;
+      });
     await expect(
       repositories.evidence.getCompleted(rootKey)
     ).resolves.toMatchObject({

@@ -44,13 +44,21 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
 function toCharacterMythicKillInput(
   kill: WarcraftLogsFirstKillEvidence
 ): CharacterMythicKillInput {
-  const {
-    reportCode: _reportCode,
-    fightId: _fightId,
-    difficulty: _difficulty,
-    ...normalizedKill
-  } = kill;
-  return normalizedKill;
+  return {
+    raidId: kill.raidId,
+    raidName: kill.raidName,
+    bossId: kill.bossId,
+    bossName: kill.bossName,
+    journalBossId: kill.journalBossId,
+    bossOrder: kill.bossOrder,
+    isFinalBoss: kill.isFinalBoss,
+    killedAt: kill.killedAt,
+    reportUrl: kill.reportUrl,
+    fightUrl: kill.fightUrl,
+    guild: kill.guild,
+    historicWorldRank: kill.historicWorldRank,
+    performance: kill.performance
+  };
 }
 
 /**

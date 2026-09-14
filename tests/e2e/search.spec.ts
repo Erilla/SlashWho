@@ -196,8 +196,8 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(firstKillParses).toBeVisible();
   await expect(bestParses).toBeVisible();
   await expect(
-    firstKillParses.getByRole("link", { name: "Damage 87.1 percentile" })
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+    firstKillParses.getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
   await expect(
     bestParses.getByRole("link", { name: "Damage 99.2 percentile" })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
@@ -213,16 +213,16 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(
     evidence
       .getByRole("region", { name: "First kill parses" })
-      .getByRole("link", { name: "Damage 87.1 percentile" })
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+      .getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await firstKillParses.scrollIntoViewIfNeeded();
   await expect(firstKillParses).toBeVisible();
   await expect(firstKillParses).toBeInViewport();
   await expect(
-    firstKillParses.getByRole("link", { name: "Damage 87.1 percentile" })
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+    firstKillParses.getByRole("link", { name: "Damage 99.2 percentile" })
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
 
   const mobileEventParses = evidence.getByRole("region", {
     name: "First kill parses"
@@ -232,9 +232,9 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(mobileEventParses).toBeInViewport();
   await expect(
     mobileEventParses.getByRole("link", {
-      name: "Damage 87.1 percentile"
+      name: "Damage 99.2 percentile"
     })
-  ).toHaveAttribute("href", /e2eReport#fight=9$/);
+  ).toHaveAttribute("href", /e2eReport#fight=10$/);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
