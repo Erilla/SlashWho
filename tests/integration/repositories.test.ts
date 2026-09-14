@@ -323,7 +323,7 @@ describe("PostgreSQL repositories", () => {
         parseLimitationCode: null
       },
       {
-        state: "partial" as const,
+        state: "complete" as const,
         limitationCode: null,
         parseLimitationCode: "parse_request_cap"
       },
@@ -365,7 +365,7 @@ describe("PostgreSQL repositories", () => {
       {
         state: "partial" as const,
         limitationCode: null,
-        parseLimitationCode: null
+        parseLimitationCode: "parse_request_cap"
       }
     ].entries()) {
       const reserved = await repositories.evidence.reserve({

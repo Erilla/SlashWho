@@ -225,7 +225,7 @@ describe("applicant evidence job handler", () => {
       {
         runId: run.id,
         result: {
-          state: "partial",
+          state: "complete",
           limitationCode: null,
           parseLimitationCode: "parse_request_cap",
           kills: [

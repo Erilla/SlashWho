@@ -1969,12 +1969,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async publish(runId, input) {
         if (
           Number.isNaN(input.completedAt.valueOf()) ||
-          (input.state === "complete" &&
-            (input.limitationCode !== null ||
-              input.parseLimitationCode !== null)) ||
-          (input.state === "partial" &&
-            input.limitationCode === null &&
-            input.parseLimitationCode === null)
+          (input.state === "complete" && input.limitationCode !== null) ||
+          (input.state === "partial" && input.limitationCode === null)
         ) {
           throw new RangeError("character_evidence_publication_invalid");
         }

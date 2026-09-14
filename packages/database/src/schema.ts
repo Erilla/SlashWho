@@ -380,7 +380,7 @@ export const characterEvidenceRuns = pgTable(
     ),
     check(
       "character_evidence_runs_completion_limitations_check",
-      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL AND ${table.parseLimitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
+      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND ${table.limitationCode} IS NOT NULL) OR ${table.status} NOT IN ('complete', 'partial')`
     )
   ]
 );

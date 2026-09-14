@@ -105,10 +105,7 @@ export function createApplicantEvidenceJobHandler(
       }
 
       await options.evidence.publish(run.id, {
-        state:
-          response.limitation || response.parseLimitation
-            ? "partial"
-            : "complete",
+        state: response.limitation ? "partial" : "complete",
         limitationCode: response.limitation?.code ?? null,
         parseLimitationCode: response.parseLimitation?.code ?? null,
         kills: response.kills.map(toCharacterMythicKillInput),

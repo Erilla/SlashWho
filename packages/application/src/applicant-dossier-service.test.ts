@@ -66,6 +66,7 @@ function fixture(
     evidenceStatus?: "complete" | "partial";
     wipeCapable?: boolean;
     evidenceLimitationCode?: string | null;
+    evidenceParseLimitationCode?: string | null;
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -118,6 +119,7 @@ function fixture(
           limitationCode:
             options.evidenceLimitationCode ??
             (options.evidenceStatus === "partial" ? "request_cap" : null),
+          parseLimitationCode: options.evidenceParseLimitationCode ?? null,
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
           startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -133,6 +135,7 @@ function fixture(
             limitationCode:
               options.evidenceLimitationCode ??
               (options.evidenceStatus === "partial" ? "request_cap" : null),
+            parseLimitationCode: options.evidenceParseLimitationCode ?? null,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -307,6 +310,28 @@ describe("applicant dossier service", () => {
       state: "incomplete"
     });
   });
+
+  it("keeps parse-limited complete evidence eligible for no-log gaps", async () => {
+    // Break caught: an incomplete Historical ranking query must not make a
+    // complete wipe-capable encounter traversal appear incomplete.
+    const result = await fixture({
+      includeCachedKills: false,
+      evidenceParseLimitationCode: "parse_request_cap"
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "no_logs"
+    });
+    expect(result.dossier.limitations).toContainEqual(
+      expect.objectContaining({
+        source: "warcraft_logs",
+        character: root,
+        code: "parse_request_cap"
+      })
+    );
+  });
+
   it("withholds initial evidence for a tournament root before discovery finishes", async () => {
     const { dossiers, raiderio, warcraftLogs, blizzard } = fixture();
     vi.mocked(raiderio.getCharacter).mockResolvedValue({

@@ -60,12 +60,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "parse_limitation_code": {
-          "name": "parse_limitation_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "error_code": {
           "name": "error_code",
           "type": "text",
@@ -159,12 +153,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "character_evidence_runs_completion_limitations_check": {
-          "name": "character_evidence_runs_completion_limitations_check",
-          "value": "(\"character_evidence_runs\".\"status\" = 'complete' AND \"character_evidence_runs\".\"limitation_code\" IS NULL AND \"character_evidence_runs\".\"parse_limitation_code\" IS NULL) OR (\"character_evidence_runs\".\"status\" = 'partial' AND (\"character_evidence_runs\".\"limitation_code\" IS NOT NULL OR \"character_evidence_runs\".\"parse_limitation_code\" IS NOT NULL)) OR \"character_evidence_runs\".\"status\" NOT IN ('complete', 'partial')"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.character_mythic_kills": {
