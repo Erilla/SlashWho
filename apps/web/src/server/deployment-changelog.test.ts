@@ -104,6 +104,6 @@ it("ignores failed deployment statuses", async () => {
 });
 
 it("returns unavailable if repository is not configured", async () => {
-  const changelog = await loadDeploymentChangelog();
+  const changelog = await loadDeploymentChangelog({ environment: {} });
   expect(changelog.kind).toBe("unavailable");
 });
