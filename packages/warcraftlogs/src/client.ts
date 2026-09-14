@@ -906,15 +906,12 @@ async function forEachWithConcurrency<T>(
 ): Promise<void> {
   let nextIndex = 0;
   await Promise.all(
-    Array.from(
-      { length: Math.min(concurrency, values.length) },
-      async () => {
-        while (nextIndex < values.length) {
-          const value = values[nextIndex++];
-          if (value !== undefined) await task(value);
-        }
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (nextIndex < values.length) {
+        const value = values[nextIndex++];
+        if (value !== undefined) await task(value);
       }
-    )
+    })
   );
 }
 

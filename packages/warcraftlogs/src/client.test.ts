@@ -1014,10 +1014,7 @@ describe("Warcraft Logs gateway", () => {
       const body = JSON.parse(String(init?.body)) as { query: string };
       if (body.query.includes("CharacterEncounterRankings")) {
         activeRankings++;
-        maximumActiveRankings = Math.max(
-          maximumActiveRankings,
-          activeRankings
-        );
+        maximumActiveRankings = Math.max(maximumActiveRankings, activeRankings);
         await new Promise((resolve) => setTimeout(resolve, 10));
         activeRankings--;
         return jsonResponse({
