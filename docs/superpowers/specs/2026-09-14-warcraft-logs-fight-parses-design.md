@@ -4,7 +4,7 @@
 
 **Issue:** #90
 
-**Status:** Approved in chat; pending written-spec review
+**Status:** Approved for implementation
 
 ## Purpose
 
