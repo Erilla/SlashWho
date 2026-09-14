@@ -52,26 +52,30 @@ const dossierBossMetadata = {
   imageUrl: z.url().nullable()
 };
 
+const dossierWipeSchema = z
+  .object({
+    attemptedAt: z.iso.datetime(),
+    reportUrl: z.url(),
+    characters: z.array(characterKeySchema).min(1)
+  })
+  .strict();
+
 export const dossierBossSchema = z.discriminatedUnion("state", [
   z
     .object({
       ...dossierBossMetadata,
       state: z.literal("kill"),
       firstKill: dossierFirstKillSchema,
-      firstKills: z.array(dossierFirstKillSchema).min(1).optional()
+      firstKills: z.array(dossierFirstKillSchema).min(1).optional(),
+      wipes: z.array(dossierWipeSchema).optional()
     })
     .strict(),
   z
     .object({
       ...dossierBossMetadata,
       state: z.literal("wipe"),
-      wipe: z
-        .object({
-          attemptedAt: z.iso.datetime(),
-          reportUrl: z.url(),
-          characters: z.array(characterKeySchema).min(1)
-        })
-        .strict()
+      wipe: dossierWipeSchema,
+      wipes: z.array(dossierWipeSchema).min(1).optional()
     })
     .strict(),
   z.object({ ...dossierBossMetadata, state: z.literal("no_logs") }).strict(),

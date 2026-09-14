@@ -8,6 +8,7 @@ import { GuildProfileLinks } from "./profile-links";
 type Raid = ApplicantDossier["raids"][number];
 type Boss = Raid["bosses"][number];
 type KillBoss = Extract<Boss, { state: "kill" }>;
+type WipeEvidence = Extract<Boss, { state: "wipe" }>["wipe"];
 
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
@@ -85,6 +86,51 @@ function StatusIcon({ state }: { state: "kill" | "wipe" | "no_logs" }) {
   );
 }
 
+function WipeEvidenceList({
+  wipes
+}: {
+  wipes: readonly WipeEvidence[] | undefined;
+}) {
+  return (
+    <>
+      {(wipes ?? []).map((wipe) => (
+        <div
+          className="dossier-evidence-row"
+          key={`${wipe.attemptedAt}-${wipe.reportUrl}`}
+        >
+          <StatusIcon state="wipe" />
+          <dl className="dossier-evidence">
+            <div>
+              <dt>Wipe</dt>
+              <dd>
+                <time dateTime={wipe.attemptedAt}>
+                  {displayDate(wipe.attemptedAt)}
+                </time>
+              </dd>
+            </div>
+            <div>
+              <dt>Report</dt>
+              <dd>
+                <UpstreamIconLink
+                  href={wipe.reportUrl}
+                  label="View Warcraft Logs wipe report"
+                  source="warcraft_logs"
+                />
+              </dd>
+            </div>
+            <div>
+              <dt>Characters present</dt>
+              <dd>
+                <DossierCharacterNames characters={wipe.characters} />
+              </dd>
+            </div>
+          </dl>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function BossArtwork({ boss }: { boss: Boss }) {
   return boss.imageUrl ? (
     <img
@@ -128,47 +174,53 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
           {firstKills.map((evidence, index) => (
-            <dl
-              className={`dossier-evidence${
-                index === 0 ? " dossier-evidence-first-kill" : ""
-              }`}
+            <div
+              className="dossier-evidence-row"
               key={`${evidence.killedAt}-${evidence.reportUrl ?? index}`}
             >
-              <div>
-                <dt>{index === 0 ? "First kill" : "Kill"}</dt>
-                <dd>
-                  <time dateTime={evidence.killedAt}>
-                    {displayDate(evidence.killedAt)}
-                  </time>
-                </dd>
-              </div>
-              <div>
-                <dt>Guild</dt>
-                <dd>
-                  Guild: {displayGuild(evidence.guild)}
-                  {evidence.guild ? (
-                    <GuildProfileLinks guild={evidence.guild} />
-                  ) : null}
-                </dd>
-              </div>
-              <div>
-                <dt>World rank</dt>
-                <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>Reports</dt>
-                <dd>
-                  <ReportLinks evidence={evidence} />
-                </dd>
-              </div>
-              <div>
-                <dt>Characters present</dt>
-                <dd>
-                  <DossierCharacterNames characters={evidence.characters} />
-                </dd>
-              </div>
-            </dl>
+              <StatusIcon state="kill" />
+              <dl
+                className={`dossier-evidence${
+                  index === 0 ? " dossier-evidence-first-kill" : ""
+                }`}
+              >
+                <div>
+                  <dt>{index === 0 ? "First kill" : "Kill"}</dt>
+                  <dd>
+                    <time dateTime={evidence.killedAt}>
+                      {displayDate(evidence.killedAt)}
+                    </time>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Guild</dt>
+                  <dd>
+                    Guild: {displayGuild(evidence.guild)}
+                    {evidence.guild ? (
+                      <GuildProfileLinks guild={evidence.guild} />
+                    ) : null}
+                  </dd>
+                </div>
+                <div>
+                  <dt>World rank</dt>
+                  <dd>World rank: {evidence.historicWorldRank ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>Reports</dt>
+                  <dd>
+                    <ReportLinks evidence={evidence} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Characters present</dt>
+                  <dd>
+                    <DossierCharacterNames characters={evidence.characters} />
+                  </dd>
+                </div>
+              </dl>
+            </div>
           ))}
+          <WipeEvidenceList wipes={boss.wipes} />
         </section>
       </details>
     </>
@@ -197,32 +249,12 @@ function BossEvidence({ boss }: { boss: Boss }) {
           </div>
           <details>
             <summary>View wipe evidence</summary>
-            <dl className="dossier-evidence">
-              <div>
-                <dt>Attempt</dt>
-                <dd>
-                  <time dateTime={boss.wipe.attemptedAt}>
-                    {displayDate(boss.wipe.attemptedAt)}
-                  </time>
-                </dd>
-              </div>
-              <div>
-                <dt>Report</dt>
-                <dd>
-                  <UpstreamIconLink
-                    href={boss.wipe.reportUrl}
-                    label="View Warcraft Logs wipe report"
-                    source="warcraft_logs"
-                  />
-                </dd>
-              </div>
-              <div>
-                <dt>Characters present</dt>
-                <dd>
-                  <DossierCharacterNames characters={boss.wipe.characters} />
-                </dd>
-              </div>
-            </dl>
+            <section
+              aria-label="Wipe evidence"
+              className="dossier-evidence-list"
+            >
+              <WipeEvidenceList wipes={boss.wipes} />
+            </section>
           </details>
         </>
       );
