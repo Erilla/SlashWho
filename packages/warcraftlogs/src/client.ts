@@ -72,7 +72,6 @@ const reportFightParsesQuery = `
     reportData {
       report(code: $code) {
         code
-        archiveStatus { isArchived isAccessible archiveDate }
         masterData { actors { id name server type } }
         damage: rankings(
           compare: Rankings
@@ -567,18 +566,8 @@ function decodeRankingRows(
   const reportData = data && record(data.reportData);
   const report = reportData && record(reportData.report);
   const code = report && nonEmptyString(report.code);
-  const archiveStatus = report && record(report.archiveStatus);
-  if (!report || code !== scope.reportCode || !archiveStatus) {
+  if (!report || code !== scope.reportCode) {
     return { kind: "limitation", code: "parse_schema_drift" };
-  }
-  if (
-    typeof archiveStatus.isArchived !== "boolean" ||
-    typeof archiveStatus.isAccessible !== "boolean"
-  ) {
-    return { kind: "limitation", code: "parse_schema_drift" };
-  }
-  if (!archiveStatus.isAccessible) {
-    return { kind: "limitation", code: "parse_unavailable" };
   }
   const masterData = record(report.masterData);
   const actors = masterData && masterData.actors;

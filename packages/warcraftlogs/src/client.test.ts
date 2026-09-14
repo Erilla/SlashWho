@@ -161,6 +161,7 @@ function performanceRankings(
     encounterId?: number;
     difficulty?: number;
     characterId?: number;
+    archiveAccessible?: boolean;
   }> = {}
 ): unknown {
   const row = (rankPercent: unknown) => ({
@@ -188,8 +189,8 @@ function performanceRankings(
         report: {
           code: options.code ?? "performance-report",
           archiveStatus: {
-            isArchived: false,
-            isAccessible: true,
+            isArchived: options.archiveAccessible === false,
+            isAccessible: options.archiveAccessible ?? true,
             archiveDate: null
           },
           masterData: {
@@ -441,6 +442,33 @@ describe("Warcraft Logs gateway", () => {
             damage: { state: "available", percentile: 0 },
             healing: { state: "unavailable" },
             bossDamage: { state: "unavailable" }
+          }
+        }
+      ]
+    });
+  });
+
+  it("normalizes rankings even when client credentials cannot access archived report data", async () => {
+    // Break caught: archiveStatus.isAccessible describes raw report-data
+    // access, not the independently returned rankings JSON. Rejecting a valid
+    // rankings payload here makes every historical parse appear unavailable.
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 40, healing: 41, bossDamage: 42 },
+        { archiveAccessible: false }
+      )
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          performance: {
+            damage: { state: "available", percentile: 40 },
+            healing: { state: "available", percentile: 41 },
+            bossDamage: { state: "available", percentile: 42 }
           }
         }
       ]
