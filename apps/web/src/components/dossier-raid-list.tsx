@@ -253,7 +253,7 @@ function BossEvidence({ boss }: { boss: Boss }) {
               aria-label="Wipe evidence"
               className="dossier-evidence-list"
             >
-              <WipeEvidenceList wipes={boss.wipes} />
+              <WipeEvidenceList wipes={boss.wipes ?? [boss.wipe]} />
             </section>
           </details>
         </>
