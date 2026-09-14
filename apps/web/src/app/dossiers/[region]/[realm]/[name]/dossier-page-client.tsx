@@ -2,6 +2,7 @@
 
 import {
   applicantDossierSchema,
+  dossierStartResponseSchema,
   dossierResearchStatusSchema,
   safeApiErrorSchema,
   type ApplicantDossier,
@@ -45,6 +46,7 @@ export function DossierPageClient({
   jobId
 }: DossierPageClientProps) {
   const [dossier, setDossier] = useState(initialDossier);
+  const [activeJobId, setActiveJobId] = useState(jobId);
   const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
@@ -69,29 +71,14 @@ export function DossierPageClient({
     }
 
     async function readInitialDossier() {
-      let response = await fetch(
-        jobId ? `${dossierPath}?scope=initial` : dossierPath,
+      const response = await fetch(`${dossierPath}?scope=initial`,
         {
           cache: "no-store",
           signal: controller.signal
         }
       );
-      let body = await readJson(response);
-      const parsedError = safeApiErrorSchema.safeParse(body);
-      if (
-        !jobId &&
-        response.status === 409 &&
-        parsedError.success &&
-        parsedError.data.error.code === "discovery_not_ready"
-      ) {
-        response = await fetch(`${dossierPath}?scope=initial`, {
-          cache: "no-store",
-          signal: controller.signal
-        });
-        body = await readJson(response);
-      }
+      const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
-      if (!jobId) setStatus(null);
       if (!response.ok) {
         setInitialError(apiError(response, body));
         return;
@@ -104,21 +91,96 @@ export function DossierPageClient({
       }
     }
 
-    if (!initialDossier)
+    if (!initialDossier && activeJobId)
       void readInitialDossier().catch((caught) => {
         if (caught instanceof Error && caught.name === "AbortError") return;
         if (controller.signal.aborted || hasExpandedDossier.current) return;
         setInitialError(
           "The dossier could not be loaded. Please check your connection."
         );
-        if (!jobId) setStatus(null);
       });
 
     return () => controller.abort();
-  }, [dossierPath, initialDossier, jobId]);
+  }, [activeJobId, dossierPath, initialDossier]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (activeJobId || initialDossier) return;
+
+    const controller = new AbortController();
+
+    async function readJson(response: Response): Promise<unknown> {
+      return response.json().catch(() => null);
+    }
+
+    async function readCompletedDossier() {
+      const response = await fetch(dossierPath, {
+        cache: "no-store",
+        signal: controller.signal
+      });
+      const body = await readJson(response);
+      if (controller.signal.aborted) return;
+      if (!response.ok) {
+        setError(apiError(response, body));
+        setStatus(null);
+        return;
+      }
+      const parsed = applicantDossierSchema.safeParse(body);
+      if (!parsed.success) {
+        setError("The dossier returned an unexpected response.");
+      } else {
+        hasExpandedDossier.current = true;
+        setDossier(parsed.data);
+        setInitialError(null);
+        setError(null);
+      }
+      setStatus(null);
+    }
+
+    async function startResearch() {
+      try {
+        const response = await fetch("/api/dossiers", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            characterUrl: `https://raider.io/characters/${identity.region}/${identity.realm}/${identity.name}`
+          }),
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const body = await readJson(response);
+        if (controller.signal.aborted) return;
+        if (!response.ok) {
+          setError(apiError(response, body));
+          setStatus(null);
+          return;
+        }
+        const parsed = dossierStartResponseSchema.safeParse(body);
+        if (!parsed.success) {
+          setError("The applicant research returned an unexpected response.");
+          setStatus(null);
+          return;
+        }
+        if (parsed.data.kind === "job") {
+          setActiveJobId(parsed.data.jobId);
+          setStatus("Researching applicant dossier…");
+          return;
+        }
+        await readCompletedDossier();
+      } catch (caught) {
+        if (caught instanceof Error && caught.name === "AbortError") return;
+        if (controller.signal.aborted) return;
+        setError("The applicant research could not be started.");
+        setStatus(null);
+      }
+    }
+
+    void startResearch();
+
+    return () => controller.abort();
+  }, [activeJobId, dossierPath, identity, initialDossier]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
 
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -165,7 +227,7 @@ export function DossierPageClient({
 
     async function pollJob() {
       try {
-        const response = await fetch(`/api/dossiers/jobs/${jobId}`, {
+        const response = await fetch(`/api/dossiers/jobs/${activeJobId}`, {
           cache: "no-store",
           signal: controller.signal
         });
@@ -210,7 +272,7 @@ export function DossierPageClient({
       controller.abort();
       if (timeout) clearTimeout(timeout);
     };
-  }, [dossierPath, jobId]);
+  }, [activeJobId, dossierPath]);
 
   useEffect(() => {
     if (dossier?.research.state !== "gathering") return;
