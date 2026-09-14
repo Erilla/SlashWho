@@ -290,6 +290,15 @@ it("shows first-kill metadata and lists every kill in chronological order", () =
   expect(screen.getByText("View kill evidence")).toBeVisible();
   expect(screen.getAllByText("First kill")).toHaveLength(1);
   expect(screen.getByText("Kill")).toBeInTheDocument();
+  const evidenceRows = screen.getAllByText(/^(First kill|Kill)$/, {
+    selector: "dt"
+  });
+  expect(evidenceRows[0]?.closest(".dossier-evidence")).toHaveClass(
+    "dossier-evidence-first-kill"
+  );
+  expect(evidenceRows[1]?.closest(".dossier-evidence")).not.toHaveClass(
+    "dossier-evidence-first-kill"
+  );
   expect(
     screen.getByRole("region", { hidden: true, name: "Kill evidence" })
   ).toBeInTheDocument();

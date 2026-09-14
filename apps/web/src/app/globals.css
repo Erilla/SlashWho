@@ -704,6 +704,11 @@ a {
   padding: 0.8rem;
 }
 
+.dossier-evidence-first-kill {
+  border: 2px solid var(--success);
+  padding: 0.75rem;
+}
+
 .dossier-evidence div {
   min-width: 0;
 }
