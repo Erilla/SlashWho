@@ -66,7 +66,7 @@ a {
   display: flex;
   min-height: var(--header-height);
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   padding: 0 2rem;
 }
 
@@ -74,6 +74,25 @@ a {
   display: inline-flex;
   color: var(--accent);
   border-radius: 0.4rem;
+}
+
+.site-nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.site-nav-link {
+  border-radius: 0.4rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  transition: color 140ms ease;
+}
+
+.site-nav-link:hover,
+.site-nav-link:focus-visible {
+  color: var(--text);
 }
 
 .header-logo:hover,
@@ -126,12 +145,67 @@ a {
 
 .search-form {
   width: 100%;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.search-mode {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.search-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #b9b9c7;
+  font-size: 0.9rem;
 }
 
 .search-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.625rem;
+}
+
+.search-structured-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.search-field label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #b9b9c7;
+  font-size: 0.8rem;
+}
+
+.search-field {
+  display: grid;
+}
+
+.search-select {
+  min-height: 3.35rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 1rem;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.search-select:hover {
+  border-color: #414152;
+}
+
+.search-select[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 
 .search-input {
@@ -1018,6 +1092,69 @@ a {
   cursor: pointer;
 }
 
+.changelog-subheading {
+  margin: 0 0 1.3rem;
+  color: var(--muted);
+  font-size: 0.87rem;
+  letter-spacing: 0.05em;
+}
+
+.changelog-list {
+  display: grid;
+  gap: 1rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.changelog-entry {
+  border-top: 1px solid var(--border);
+  padding: 1.15rem 0;
+}
+
+.changelog-entry-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.changelog-entry-heading strong {
+  max-width: min(100%, 44ch);
+}
+
+.changelog-entry time {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.changelog-entry-meta {
+  margin: 0.5rem 0 0.15rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.changelog-entry-meta span {
+  color: var(--muted);
+}
+
+.changelog-entry-meta strong {
+  color: var(--text);
+}
+
+.changelog-commit-link {
+  color: var(--accent);
+}
+
+.changelog-links {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
 @media (width > 48rem) {
   .dossier-layout {
     align-items: stretch;
@@ -1094,6 +1231,10 @@ a {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .search-structured-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .search-button {
     width: 100%;
   }
@@ -1124,4 +1265,8 @@ a {
   .dossier-raid-heading {
     min-height: 6.5rem;
   }
+}
+
+.dossier-search {
+  margin-bottom: 1.5rem;
 }

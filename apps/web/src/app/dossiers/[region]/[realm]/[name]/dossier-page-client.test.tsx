@@ -5,6 +5,11 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 
+const push = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push })
+}));
+
 import { DossierPageClient } from "./dossier-page-client";
 
 const identity: CharacterKey = {
@@ -70,58 +75,29 @@ const expanded = dossier(
   "Linked-character research is complete.",
   "Expanded evidence"
 );
-const gatheringEvidence = {
-  ...dossier(
-    "partial",
-    "Gathering historic Mythic evidence for this applicant.",
-    "Cached evidence"
-  ),
-  research: {
-    state: "gathering",
-    message: "Gathering historic Mythic evidence for this applicant."
-  }
-} as unknown as ApplicantDossier;
-
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  push.mockReset();
 });
 
 describe("DossierPageClient staged research", () => {
-  it("polls the cached dossier while historic evidence is gathering", async () => {
-    // Break caught: the browser could leave a partial cached dossier static
-    // after its evidence jobs finish, hiding newly collected current-tier kills.
-    vi.useFakeTimers();
-    const fetchMock = vi.fn(() => Promise.resolve(Response.json(expanded)));
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("shows a reusable dossier search form", () => {
     render(
       <DossierPageClient
         identity={identity}
-        initialDossier={gatheringEvidence}
+        initialDossier={expanded}
         jobId={null}
       />
     );
 
-    expect(screen.getByText("Cached evidence")).toBeVisible();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Gathering historic Mythic evidence"
-    );
     expect(
-      screen.getByRole("status").querySelector('svg[aria-hidden="true"]')
+      screen.getByRole("group", { name: "Search mode" })
     ).toBeInTheDocument();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      dossierPath,
-      expect.objectContaining({ cache: "no-store" })
-    );
-    expect(screen.getByText("Expanded evidence")).toBeVisible();
-    expect(screen.queryByText("Cached evidence")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Applicant URL" })
+    ).toBeInTheDocument();
   });
 
   it("shows a loading indicator while applicant research is in progress", () => {

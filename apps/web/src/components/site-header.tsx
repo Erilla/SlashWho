@@ -8,6 +8,11 @@ export function SiteHeader() {
       <Link href="/" className="header-logo" aria-label="SlashWho home">
         <Logo className="header-logo-mark" />
       </Link>
+      <nav aria-label="Primary" className="site-nav">
+        <Link href="/changelog" className="site-nav-link">
+          Changelog
+        </Link>
+      </nav>
     </header>
   );
 }
