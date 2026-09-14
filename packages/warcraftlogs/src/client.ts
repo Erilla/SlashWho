@@ -560,7 +560,8 @@ function rankingIdentity(
 
 function decodeRankingRows(
   value: unknown,
-  scope: RankingScope
+  scope: RankingScope,
+  requestedKey: CharacterKey
 ):
   | Readonly<{
       identities: readonly RankingIdentity[];
@@ -648,10 +649,25 @@ function decodeRankingRows(
       }
     }
   }
-  if (identities.size > MAX_RANKING_IDENTITIES) {
+  const requestedIdentities = [...identities.values()].filter(
+    (identity) =>
+      normalizedIdentity(identity.name) ===
+        normalizedIdentity(requestedKey.name) &&
+      normalizedRealm(identity.realm) === normalizedRealm(requestedKey.realm) &&
+      normalizedIdentity(identity.region) ===
+        normalizedIdentity(requestedKey.region)
+  );
+  if (requestedIdentities.length > MAX_RANKING_IDENTITIES) {
     return { kind: "limitation", code: "parse_schema_drift" };
   }
-  return { identities: [...identities.values()], rows, actors };
+  const requestedIds = new Set(
+    requestedIdentities.map((identity) => identity.id)
+  );
+  return {
+    identities: requestedIdentities,
+    rows: rows.filter((row) => requestedIds.has(row.characterId)),
+    actors
+  };
 }
 
 function rankingCharacterIdentityQuery(
@@ -1014,7 +1030,7 @@ export function createWarcraftLogsClient(
         parseLimitation = toParseLimitation(rankings);
         break;
       }
-      const decoded = decodeRankingRows(rankings.value, group);
+      const decoded = decodeRankingRows(rankings.value, group, key);
       if (isLimitation(decoded)) {
         parseLimitation = decoded;
         break;
