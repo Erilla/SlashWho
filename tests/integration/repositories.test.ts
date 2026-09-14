@@ -186,6 +186,46 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("persists every distinct wipe fight for one boss", async () => {
+    // Break caught: a per-boss uniqueness key silently dropped earlier wipes,
+    // even though the dossier must show the complete report history.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [
+        mythicWipe(),
+        mythicWipe({
+          attemptedAt: "2026-08-04T10:00:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=2"
+        })
+      ],
+      completedAt: new Date("2026-08-04T12:00:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.getCompleted(rootKey)
+    ).resolves.toMatchObject({
+      wipes: [
+        expect.objectContaining({
+          fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=1"
+        }),
+        expect.objectContaining({
+          fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=2"
+        })
+      ]
+    });
+  });
+
   it("atomically publishes a complete replacement evidence scan", async () => {
     // Break caught: a reader could observe a completed run with only part of
     // its normalized WCL fights after a worker crashes during persistence.

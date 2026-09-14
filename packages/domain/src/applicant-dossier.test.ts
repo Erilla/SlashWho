@@ -401,6 +401,46 @@ describe("applicant dossier", () => {
     expect(dossier.limitations[0].code).toBe("private");
   });
 
+  it("attaches all boss wipes after kill evidence from newest to oldest", () => {
+    // Break caught: a confirmed kill could discard its wipes or leave them in
+    // source order, hiding the most recent progression attempt.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      wipes: [
+        wipe(root, {
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8,
+          attemptedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/older#fight=2"
+        }),
+        wipe(root, {
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8,
+          attemptedAt: "2024-10-04T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/latest#fight=4"
+        })
+      ],
+      limitations: []
+    });
+
+    const raid = dossier.raids.find(
+      (candidate) => candidate.raidName === "Nerub-ar Palace"
+    )!;
+    const boss = raid.bosses.find(
+      (candidate) => candidate.bossName === "Queen Ansurek"
+    )!;
+    expect(verifiedKill(boss).wipes).toMatchObject([
+      { attemptedAt: "2024-10-04T20:00:00.000Z" },
+      { attemptedAt: "2024-10-02T20:00:00.000Z" }
+    ]);
+  });
+
   it("keeps each character's distinct first kill for the same boss", () => {
     // Break caught: selecting only the dossier-wide earliest kill hid an alt's
     // later, distinct report instead of retaining its own first-kill evidence.
@@ -730,7 +770,7 @@ describe("applicant dossier", () => {
     expect(dossier.raids[0]?.raidId).toBe("1273");
   });
 
-  it("merges Cutting Edge dates using the earliest completion and all qualifying characters", () => {
+  it("uses the earliest Cutting Edge completion without character attribution", () => {
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter, altCharacter],
@@ -738,18 +778,15 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "40254",
-          completedAt: "2025-02-14T20:30:00.000Z",
-          character: altKey
+          completedAt: "2025-02-14T20:30:00.000Z"
         },
         {
           achievementId: "1",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ],
       limitations: []
@@ -760,7 +797,6 @@ describe("applicant dossier", () => {
         achievementId: "40254",
         achievementName: "Cutting Edge: Queen Ansurek",
         completedAt: "2025-01-14T20:30:00.000Z",
-        characters: [root, altKey],
         iconUrl: "https://render.worldofwarcraft.com/eu/icons/56/5779391.jpg"
       })
     ]);
@@ -862,13 +898,11 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "41297",
-          completedAt: "2025-05-14T20:30:00.000Z",
-          character: root
+          completedAt: "2025-05-14T20:30:00.000Z"
         }
       ]
     });
@@ -878,7 +912,7 @@ describe("applicant dossier", () => {
     ]);
   });
 
-  it("preserves canonical identities for same-named Cutting Edge characters", () => {
+  it("does not retain character identity on Cutting Edge evidence", () => {
     const sameNamedAlt: CharacterKey = {
       region: "us",
       realm: "illidan",
@@ -891,14 +925,13 @@ describe("applicant dossier", () => {
       cuttingEdges: [
         {
           achievementId: "40254",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          character: sameNamedAlt
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ],
       limitations: []
     });
 
-    expect(dossier.cuttingEdges[0]!.characters).toEqual([sameNamedAlt]);
+    expect(dossier.cuttingEdges[0]).not.toHaveProperty("characters");
   });
 
   it("keeps the full verified Raider.IO boss slug when a name includes a subtitle", () => {

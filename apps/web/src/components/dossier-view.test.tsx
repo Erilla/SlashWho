@@ -93,11 +93,7 @@ const dossier: ApplicantDossier = {
       description:
         "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
       iconUrl: null,
-      completedAt: "2025-01-14T20:30:00.000Z",
-      characters: [
-        { region: "eu", realm: "silvermoon", name: "ryii" },
-        { region: "eu", realm: "draenor", name: "ryalts" }
-      ]
+      completedAt: "2025-01-14T20:30:00.000Z"
     }
   ],
   limitations: [
@@ -150,8 +146,7 @@ const sameNamedDossier: ApplicantDossier = {
   ],
   cuttingEdges: [
     {
-      ...dossier.cuttingEdges[0]!,
-      characters: [sameNamedPriest.key]
+      ...dossier.cuttingEdges[0]!
     }
   ],
   limitations: [
@@ -283,8 +278,8 @@ describe("DossierPageClient", () => {
     const mageMentions = screen.getAllByText("Ryii");
     const priestMentions = screen.getAllByText("Ryalts");
 
-    expect(mageMentions).toHaveLength(7);
-    expect(priestMentions).toHaveLength(5);
+    expect(mageMentions).toHaveLength(6);
+    expect(priestMentions).toHaveLength(4);
     for (const mention of mageMentions) {
       expect(mention).toHaveClass("dossier-character-name--mage");
     }
@@ -314,13 +309,6 @@ describe("DossierPageClient", () => {
     const connectedMentions = within(connectedCharacters).getAllByText("Ryii");
     expect(connectedMentions[0]).toHaveClass("dossier-character-name--mage");
     expect(connectedMentions[1]).toHaveClass("dossier-character-name--priest");
-
-    const cuttingEdgeCard = screen
-      .getByRole("heading", { name: "Cutting Edge: Queen Ansurek" })
-      .closest("li") as HTMLLIElement;
-    expect(within(cuttingEdgeCard).getByText("Ryii")).toHaveClass(
-      "dossier-character-name--priest"
-    );
 
     const firstKill = document.querySelector<HTMLParagraphElement>(
       ".dossier-boss-first-kill"

@@ -61,8 +61,15 @@
     {
       "idx": 8,
       "version": "7",
+      "when": 1789383000000,
+      "tag": "0008_character_mythic_wipe_fights",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
       "when": 1789389053262,
-      "tag": "0008_character_kill_parses",
+      "tag": "0009_character_kill_parses",
       "breakpoints": true
     }
   ]

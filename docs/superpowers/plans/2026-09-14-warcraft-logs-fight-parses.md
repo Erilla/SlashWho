@@ -221,8 +221,8 @@ Commit: `feat: normalize Warcraft Logs fight parses`
 - Modify: `packages/database/src/schema.ts`
 - Modify: `packages/database/src/postgres-repositories.ts`
 - Modify: `tests/integration/repositories.test.ts`
-- Create: `packages/database/drizzle/0008_character_kill_parses.sql`
-- Create: `packages/database/drizzle/meta/0008_snapshot.json`
+- Create: `packages/database/drizzle/0009_character_kill_parses.sql`
+- Create: `packages/database/drizzle/meta/0009_snapshot.json`
 - Modify: `packages/database/drizzle/meta/_journal.json`
 - Modify: `packages/application/src/applicant-evidence-job-handler.test.ts`
 - Modify: `packages/application/src/applicant-evidence-job-handler.ts`
@@ -511,7 +511,7 @@ push the smallest tested fix, and wait until every required check succeeds.
 
 Deploy both worker and web from the branch using the linked `test`
 environment. Wait for both deployments to reach `SUCCESS`. Apply migration
-`0008` through the normal web release command; do not run ad-hoc SQL.
+`0009` through the normal web release command; do not run ad-hoc SQL.
 
 - [ ] **Step 8: Verify the deployed test surface**
 

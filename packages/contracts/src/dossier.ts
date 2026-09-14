@@ -74,6 +74,14 @@ const dossierBossMetadata = {
   imageUrl: z.url().nullable()
 };
 
+const dossierWipeSchema = z
+  .object({
+    attemptedAt: z.iso.datetime(),
+    reportUrl: z.url(),
+    characters: z.array(characterKeySchema).min(1)
+  })
+  .strict();
+
 export const dossierBossSchema = z.discriminatedUnion("state", [
   z
     .object({
@@ -81,20 +89,16 @@ export const dossierBossSchema = z.discriminatedUnion("state", [
       state: z.literal("kill"),
       firstKill: dossierFirstKillSchema,
       firstKills: z.array(dossierFirstKillSchema).min(1).optional(),
-      bestParses: z.array(applicantDossierCharacterParsesSchema)
+      bestParses: z.array(applicantDossierCharacterParsesSchema),
+      wipes: z.array(dossierWipeSchema).optional()
     })
     .strict(),
   z
     .object({
       ...dossierBossMetadata,
       state: z.literal("wipe"),
-      wipe: z
-        .object({
-          attemptedAt: z.iso.datetime(),
-          reportUrl: z.url(),
-          characters: z.array(characterKeySchema).min(1)
-        })
-        .strict()
+      wipe: dossierWipeSchema,
+      wipes: z.array(dossierWipeSchema).min(1).optional()
     })
     .strict(),
   z.object({ ...dossierBossMetadata, state: z.literal("no_logs") }).strict(),
@@ -117,8 +121,7 @@ export const dossierCuttingEdgeSchema = z
     achievementName: z.string().min(1),
     description: z.string().min(1),
     iconUrl: z.url().nullable(),
-    completedAt: z.iso.datetime(),
-    characters: z.array(characterKeySchema).min(1)
+    completedAt: z.iso.datetime()
   })
   .strict();
 

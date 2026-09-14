@@ -461,10 +461,9 @@ export const characterMythicWipes = pgTable(
     fightUrl: text("fight_url").notNull()
   },
   (table) => [
-    uniqueIndex("character_mythic_wipes_run_boss_idx").on(
+    uniqueIndex("character_mythic_wipes_run_fight_idx").on(
       table.evidenceRunId,
-      table.raidId,
-      table.bossId
+      table.fightUrl
     ),
     index("character_mythic_wipes_run_idx").on(table.evidenceRunId)
   ]

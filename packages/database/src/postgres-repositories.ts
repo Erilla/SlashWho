@@ -2027,16 +2027,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           }
           const wipes = new Map<string, (typeof input.wipes)[number]>();
           for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
-            const identifier = `${wipe.raidId}\0${wipe.bossId}`;
-            const current = wipes.get(identifier);
-            if (
-              !current ||
-              wipe.attemptedAt > current.attemptedAt ||
-              (wipe.attemptedAt === current.attemptedAt &&
-                wipe.fightUrl < current.fightUrl)
-            ) {
-              wipes.set(identifier, wipe);
-            }
+            wipes.set(wipe.fightUrl, wipe);
           }
           for (const { kill, performance } of kills.values()) {
             await client.query(

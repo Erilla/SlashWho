@@ -884,9 +884,9 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("selects the latest wipe with a stable report tie-break", async () => {
-    // Break caught: equal-time wipe selection must not depend on the order in
-    // which Warcraft Logs returns otherwise equivalent reports.
+  it("retains every wipe newest-first with a stable report tie-break", async () => {
+    // Break caught: keeping only the latest wipe hides earlier progression
+    // evidence, while ties must not depend on upstream report order.
     const report = (code: string, endTime: number) => ({
       code,
       startTime: 1_706_918_400_000,
@@ -949,6 +949,14 @@ describe("Warcraft Logs gateway", () => {
         {
           attemptedAt: "2024-02-03T00:05:00.000Z",
           fightUrl: "https://www.warcraftlogs.com/reports/a-report#fight=1"
+        },
+        {
+          attemptedAt: "2024-02-03T00:05:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/z-report#fight=1"
+        },
+        {
+          attemptedAt: "2024-02-03T00:02:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/older-report#fight=1"
         }
       ]
     });

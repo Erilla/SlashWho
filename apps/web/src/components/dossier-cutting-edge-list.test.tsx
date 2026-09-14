@@ -98,16 +98,14 @@ it.each([
             achievementName: "Cutting Edge: Queen Ansurek",
             description: "Defeat Queen Ansurek on Mythic Difficulty.",
             iconUrl: null,
-            completedAt: "2025-01-14T20:30:00.000Z",
-            characters: [ryii, ryalts, anotheralt]
+            completedAt: "2025-01-14T20:30:00.000Z"
           },
           {
             achievementId: "19350",
             achievementName: "Cutting Edge: Fyrakk the Blazing",
             description: "Defeat Fyrakk on Mythic Difficulty.",
             iconUrl: null,
-            completedAt: "2024-03-14T20:30:00.000Z",
-            characters: [ryii]
+            completedAt: "2024-03-14T20:30:00.000Z"
           }
         ].slice(0, count)}
         limitations={[]}
@@ -128,7 +126,7 @@ it.each([
   }
 );
 
-it("renders an official Cutting Edge achievement with its completion date and characters", () => {
+it("renders an official account-wide Cutting Edge achievement without character attribution", () => {
   renderWithDossierCharacters(
     <DossierCuttingEdgeList
       cuttingEdges={[
@@ -138,8 +136,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
           description:
             "Defeat Queen Ansurek in Nerub-ar Palace on Mythic Difficulty.",
           iconUrl: "https://render.example/40254.jpg",
-          completedAt: "2025-01-14T20:30:00.000Z",
-          characters: [ryii, ryalts]
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ]}
       limitations={[]}
@@ -150,9 +147,7 @@ it("renders an official Cutting Edge achievement with its completion date and ch
     screen.getByRole("heading", { name: "Historic Cutting Edge" })
   ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
-  expect(screen.getByText("Ryii").parentElement).toHaveTextContent(
-    /Ryii.*Ryalts/
-  );
+  expect(screen.queryByText("Ryii")).not.toBeInTheDocument();
   expect(
     screen.getByAltText("Cutting Edge: Queen Ansurek icon")
   ).toHaveAttribute("src", "https://render.example/40254.jpg");
@@ -170,8 +165,7 @@ it("exposes overflowing Cutting Edge achievements as a keyboard-scrollable list"
           achievementName: "Cutting Edge: Queen Ansurek",
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
-          completedAt: "2025-01-14T20:30:00.000Z",
-          characters: [ryii]
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ]}
       limitations={[]}
@@ -193,8 +187,7 @@ it("renders fallback artwork when an official achievement icon is unavailable", 
           achievementName: "Cutting Edge: Queen Ansurek",
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
-          completedAt: "2025-01-14T20:30:00.000Z",
-          characters: [ryii]
+          completedAt: "2025-01-14T20:30:00.000Z"
         }
       ]}
       limitations={[]}
@@ -216,16 +209,14 @@ it("renders catalogue-ordered gaps as not recorded between earned achievements",
           achievementName: "Cutting Edge: Queen Ansurek",
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
-          completedAt: "2025-01-14T20:30:00.000Z",
-          characters: [ryii]
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "41625",
           achievementName: "Cutting Edge: Dimensius, the All-Devouring",
           description: "Defeat Dimensius on Mythic Difficulty.",
           iconUrl: null,
-          completedAt: "2025-10-14T20:30:00.000Z",
-          characters: [ryii]
+          completedAt: "2025-10-14T20:30:00.000Z"
         }
       ]}
       limitations={[]}
@@ -256,16 +247,14 @@ it("does not infer a missing achievement when Blizzard evidence is limited", () 
           achievementName: "Cutting Edge: Queen Ansurek",
           description: "Defeat Queen Ansurek on Mythic Difficulty.",
           iconUrl: null,
-          completedAt: "2025-01-14T20:30:00.000Z",
-          characters: [ryii]
+          completedAt: "2025-01-14T20:30:00.000Z"
         },
         {
           achievementId: "41625",
           achievementName: "Cutting Edge: Dimensius, the All-Devouring",
           description: "Defeat Dimensius on Mythic Difficulty.",
           iconUrl: null,
-          completedAt: "2025-10-14T20:30:00.000Z",
-          characters: [ryii]
+          completedAt: "2025-10-14T20:30:00.000Z"
         }
       ]}
       limitations={[

@@ -15,6 +15,7 @@ import {
   formatCharacterDisplayName,
   canonicalCharacterId,
   lookupCuttingEdgeAchievement,
+  isAccountWideCuttingEdgeAchievement,
   lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
@@ -66,6 +67,9 @@ type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   wipes: readonly DossierWipeEvidence[];
   warcraftLogsComplete: boolean;
+  limitations: readonly DossierLimitation[];
+}>;
+type CuttingEdgeEvidenceResult = Readonly<{
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
@@ -145,6 +149,32 @@ function isAbort(error: unknown, signal?: AbortSignal): boolean {
   );
 }
 
+function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
 function blizzardLimitationCode(
   error: unknown
 ): "not_found" | "schema_drift" | "unavailable" {
@@ -198,7 +228,6 @@ async function gatherCharacterEvidence(
   options: {
     repositories: Pick<Repositories, "evidence">;
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     freshnessCutoff: Date;
     signal?: AbortSignal;
   }
@@ -217,16 +246,6 @@ async function gatherCharacterEvidence(
       queueJobId
     );
   }
-  const blizzard = await options.blizzard
-    .getCompletedAchievements(character.key, options.signal)
-    .then((achievements) => ({ kind: "evidence" as const, achievements }))
-    .catch((error: unknown) => {
-      if (isAbort(error, options.signal)) throw error;
-      return {
-        kind: "limitation" as const,
-        code: blizzardLimitationCode(error)
-      };
-    });
   const limitations: DossierLimitation[] = [];
   const completed = reservation.completed;
   if (completed?.run.limitationCode) {
@@ -243,9 +262,6 @@ async function gatherCharacterEvidence(
       )
     );
   }
-  if (blizzard.kind === "limitation") {
-    limitations.push(limitation("blizzard", character.key, blizzard.code));
-  }
   return {
     limitations,
     kills:
@@ -257,15 +273,43 @@ async function gatherCharacterEvidence(
       completed?.run.status === "complete" &&
       completed.run.limitationCode === null &&
       completed.wipeCapable,
-    cuttingEdges:
-      blizzard.kind === "evidence"
-        ? blizzard.achievements.map((achievement) => ({
-            ...achievement,
-            character: character.key
-          }))
-        : [],
     gathering: reservation.kind !== "fresh"
   };
+}
+
+async function gatherCuttingEdgeEvidence(
+  subjects: readonly DossierSubject[],
+  options: {
+    blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+    signal?: AbortSignal;
+  }
+): Promise<CuttingEdgeEvidenceResult> {
+  const cuttingEdges: DossierCuttingEdgeEvidence[] = [];
+  const limitations: DossierLimitation[] = [];
+  let fingerprintAccountEstablished = false;
+  for (const character of subjects) {
+    if (character.source === "fingerprint" && fingerprintAccountEstablished)
+      continue;
+    try {
+      const achievements = await options.blizzard.getCompletedAchievements(
+        character.key,
+        options.signal
+      );
+      const supported = achievements.filter((achievement) =>
+        isAccountWideCuttingEdgeAchievement(achievement.achievementId)
+      );
+      cuttingEdges.push(...supported);
+      if (character.source !== "claimed" && supported.length > 0) {
+        fingerprintAccountEstablished = true;
+      }
+    } catch (error) {
+      if (isAbort(error, options.signal)) throw error;
+      limitations.push(
+        limitation("blizzard", character.key, blizzardLimitationCode(error))
+      );
+    }
+  }
+  return { cuttingEdges, limitations };
 }
 
 function serializeDossierSubject(character: DossierSubject) {
@@ -399,19 +443,25 @@ async function assembleDossier(options: {
   freshnessCutoff: Date;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
-  const evidence = await Promise.all(
-    options.subjects.map((character) =>
-      gatherCharacterEvidence(character, {
-        repositories: options.repositories,
-        queue: options.queue,
-        blizzard: options.blizzard,
-        freshnessCutoff: options.freshnessCutoff,
-        signal: options.signal
-      })
-    )
-  );
+  const [evidence, cuttingEdgeEvidence] = await Promise.all([
+    Promise.all(
+      options.subjects.map((character) =>
+        gatherCharacterEvidence(character, {
+          repositories: options.repositories,
+          queue: options.queue,
+          freshnessCutoff: options.freshnessCutoff,
+          signal: options.signal
+        })
+      )
+    ),
+    gatherCuttingEdgeEvidence(options.subjects, {
+      blizzard: options.blizzard,
+      signal: options.signal
+    })
+  ]);
   const limitations = [
     ...evidence.flatMap((item) => item.limitations),
+    ...cuttingEdgeEvidence.limitations,
     ...options.skippedSubjects.map((character) =>
       limitation("warcraft_logs", character.key, "request_cap")
     )
@@ -436,7 +486,7 @@ async function assembleDossier(options: {
     completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
       item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
     ),
-    cuttingEdges: evidence.flatMap((item) => item.cuttingEdges),
+    cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
     limitations: [...limitations, ...ranked.limitations]
   });
   return applicantDossierSchema.parse({
@@ -491,9 +541,8 @@ export function createApplicantDossierService(options: {
   const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
     async getCompletedAchievements(key, signal) {
       signal?.throwIfAborted();
-      const result = await achievements(
-        `${key.region}/${key.realm}/${key.name}`,
-        async () => {
+      const result = await awaitWithAbort(
+        achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
           const rows = await options.blizzard.getCompletedAchievements(
             key,
             AbortSignal.timeout(15_000)
@@ -506,9 +555,9 @@ export function createApplicantDossierService(options: {
               achievementId,
               completedAt
             }));
-        }
+        }),
+        signal
       );
-      signal?.throwIfAborted();
       return result;
     }
   };

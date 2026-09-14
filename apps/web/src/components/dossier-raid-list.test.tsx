@@ -415,6 +415,61 @@ it("keeps the chronological first-kill summary coherent while listing events lat
   ]);
 });
 
+it("lists green kill rows before grey wipes ordered newest to oldest", async () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "wipe-order",
+            raidName: "Wipe Order Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                wipes: [
+                  {
+                    attemptedAt: "2025-02-14T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/latest#fight=4",
+                    characters: [ryii]
+                  },
+                  {
+                    attemptedAt: "2025-02-12T20:30:00.000Z",
+                    reportUrl:
+                      "https://www.warcraftlogs.com/reports/older#fight=2",
+                    characters: [ryii]
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View kill evidence"));
+  const rows = screen.getAllByText(/First kill|Wipe/, { selector: "dt" });
+  expect(rows.map((row) => row.textContent)).toEqual([
+    "First kill",
+    "Wipe",
+    "Wipe"
+  ]);
+  expect(
+    screen.getAllByRole("img", { name: "Verified Mythic kill" })
+  ).not.toHaveLength(0);
+  expect(
+    screen.getAllByRole("img", { name: "Mythic wipe found" })
+  ).toHaveLength(2);
+  const dates = screen.getAllByText(/12|14 Feb 2025/, { selector: "time" });
+  expect(dates.map((date) => date.textContent)).toEqual([
+    "14 Feb 2025",
+    "12 Feb 2025"
+  ]);
+});
+
 it("renders kill, wipe, no-log, and incomplete states with accessible labels", async () => {
   renderWithDossierCharacters(
     <DossierRaidList
@@ -439,7 +494,18 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
                   { region: "eu", realm: "silvermoon", name: "ryii" },
                   { region: "eu", realm: "draenor", name: "ryalts" }
                 ]
-              }
+              },
+              wipes: [
+                {
+                  attemptedAt: "2025-02-14T20:30:00.000Z",
+                  reportUrl:
+                    "https://www.warcraftlogs.com/reports/wipe#fight=12",
+                  characters: [
+                    { region: "eu", realm: "silvermoon", name: "ryii" },
+                    { region: "eu", realm: "draenor", name: "ryalts" }
+                  ]
+                }
+              ]
             },
             {
               bossId: "no-logs",
@@ -462,9 +528,11 @@ it("renders kill, wipe, no-log, and incomplete states with accessible labels", a
   );
 
   expect(
-    screen.getByRole("img", { name: "Verified Mythic kill" })
+    screen.getAllByRole("img", { name: "Verified Mythic kill" })[0]
   ).toBeVisible();
-  expect(screen.getByRole("img", { name: "Mythic wipe found" })).toBeVisible();
+  expect(
+    screen.getAllByRole("img", { name: "Mythic wipe found" })[0]
+  ).toBeVisible();
   expect(
     screen.getByRole("img", { name: "No qualifying public logs found" })
   ).toBeVisible();

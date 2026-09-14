@@ -2,7 +2,6 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 import { buildBoundedCuttingEdgeSequence } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
-import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierMediaFallback } from "./dossier-media-fallback";
 
 type DossierCuttingEdgeListProps = Readonly<{
@@ -124,11 +123,6 @@ export function DossierCuttingEdgeList({
                           timeZone: "UTC"
                         }).format(new Date(entry.achievement.completedAt))}
                       </time>
-                    </p>
-                    <p>
-                      <DossierCharacterNames
-                        characters={entry.achievement.characters}
-                      />
                     </p>
                   </>
                 )}
