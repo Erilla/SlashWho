@@ -165,6 +165,7 @@ export type CharacterMythicKillParseMetric =
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
 
 export type CharacterMythicKillPerformance = Readonly<{
+  spec?: Readonly<{ name: string; iconUrl: string }> | null;
   damage: CharacterMythicKillParseMetric;
   healing: CharacterMythicKillParseMetric;
   bossDamage: CharacterMythicKillParseMetric;

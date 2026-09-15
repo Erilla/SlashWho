@@ -116,6 +116,8 @@ interface CharacterMythicKillRow {
   guild_name: string | null;
   guild_realm: string | null;
   historic_world_rank: number | null;
+  spec_name: string | null;
+  spec_icon_url: string | null;
   damage_parse_state: CharacterMythicKillParseMetric["state"];
   damage_percentile: number | null;
   healing_parse_state: CharacterMythicKillParseMetric["state"];
@@ -353,6 +355,10 @@ function mapCharacterMythicKill(
         : { name: row.guild_name, realm: row.guild_realm! },
     historicWorldRank: row.historic_world_rank,
     performance: {
+      spec:
+        row.spec_name === null || row.spec_icon_url === null
+          ? null
+          : { name: row.spec_name, iconUrl: row.spec_icon_url },
       damage: mapParseMetric(row.damage_parse_state, row.damage_percentile),
       healing: mapParseMetric(row.healing_parse_state, row.healing_percentile),
       bossDamage: mapParseMetric(
@@ -413,6 +419,7 @@ function parseMetricValues(metric: unknown): {
 }
 
 function parsePerformanceValues(performance: unknown): {
+  spec: CharacterMythicKillPerformance["spec"];
   damage: ReturnType<typeof parseMetricValues>;
   healing: ReturnType<typeof parseMetricValues>;
   bossDamage: ReturnType<typeof parseMetricValues>;
@@ -422,6 +429,12 @@ function parsePerformanceValues(performance: unknown): {
   }
   const candidate = performance as Partial<CharacterMythicKillPerformance>;
   return {
+    spec:
+      candidate.spec &&
+      typeof candidate.spec.name === "string" &&
+      typeof candidate.spec.iconUrl === "string"
+        ? candidate.spec
+        : null,
     damage: parseMetricValues(candidate.damage),
     healing: parseMetricValues(candidate.healing),
     bossDamage: parseMetricValues(candidate.bossDamage)
@@ -467,7 +480,8 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, historic_world_rank, damage_parse_state,
+            guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
+            damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile
      FROM character_mythic_kills
@@ -515,7 +529,7 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, historic_world_rank,
+            guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile
      FROM character_mythic_kills
@@ -2136,9 +2150,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
                  report_url, fight_url, guild_name, guild_realm, historic_world_rank,
-                 damage_parse_state, damage_percentile, healing_parse_state,
+                 spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
               [
                 runId,
                 kill.fightUrl,
@@ -2155,6 +2169,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
                 kill.historicWorldRank ?? null,
+                performance.spec?.name ?? null,
+                performance.spec?.iconUrl ?? null,
                 performance.damage.state,
                 performance.damage.percentile,
                 performance.healing.state,

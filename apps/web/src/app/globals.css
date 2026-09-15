@@ -925,27 +925,18 @@ a {
   gap: 0.4rem 0.55rem;
 }
 
-.dossier-parse-character-spec {
-  color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 760;
-  min-width: 5.5rem;
-}
-
 .dossier-parse-metric {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.08rem;
-  border: 1px solid currentColor;
-  border-radius: 999px;
   line-height: 1.1;
   overflow-wrap: anywhere;
-  padding: 0.22rem 0.5rem;
   text-decoration: none;
 }
 
 .dossier-parse-metric-label {
+  color: var(--muted);
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -953,8 +944,16 @@ a {
 }
 
 .dossier-parse-metric-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.85rem;
   font-weight: 780;
+}
+
+.dossier-parse-spec-icon {
+  border-radius: 0.15rem;
+  object-fit: cover;
 }
 
 .dossier-parse-spinner {

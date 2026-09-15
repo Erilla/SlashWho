@@ -33,6 +33,7 @@ export type WarcraftLogsParseMetric =
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
 
 export type WarcraftLogsPerformance = Readonly<{
+  spec?: Readonly<{ name: string; iconUrl: string }> | null;
   damage: WarcraftLogsParseMetric;
   healing: WarcraftLogsParseMetric;
   bossDamage: WarcraftLogsParseMetric;
