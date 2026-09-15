@@ -249,10 +249,14 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
     name: "First kill parses"
   });
   await expect(
-    latestEventParses.getByRole("link", { name: "Damage 100 percentile (Fire)" })
+    latestEventParses.getByRole("link", {
+      name: "Damage 100 percentile (Fire)"
+    })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
   await expect(
-    firstEventParses.getByRole("link", { name: "Damage 99.2 percentile (Fire)" })
+    firstEventParses.getByRole("link", {
+      name: "Damage 99.2 percentile (Fire)"
+    })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
   await expect(
     latestEventParses.getByRole("group", { name: "Laterparse parses" })
