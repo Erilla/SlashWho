@@ -1,0 +1,126 @@
+{
+  "source": "raiderio-raiding-static-data",
+  "generatedAt": "2026-09-15T15:22:20.082Z",
+  "windows": {
+    "aberrus-the-shadowed-crucible": {
+      "startsAt": "2023-05-09T15:00:00.000Z",
+      "endsAt": "2023-11-15T23:00:00.000Z"
+    },
+    "amirdrassil-the-dreams-hope": {
+      "startsAt": "2023-11-14T15:00:00.000Z",
+      "endsAt": "2024-04-24T23:00:00.000Z"
+    },
+    "antorus-the-burning-throne": {
+      "startsAt": "2017-11-28T15:00:00.000Z",
+      "endsAt": "2018-07-18T23:00:00.000Z"
+    },
+    "awakened-aberrus-the-shadowed-crucible": {
+      "startsAt": "2024-04-30T15:00:00.000Z",
+      "endsAt": "2024-08-26T22:00:00.000Z"
+    },
+    "awakened-amirdrassil-the-dreams-hope": {
+      "startsAt": "2024-05-07T15:00:00.000Z",
+      "endsAt": "2024-08-26T22:00:00.000Z"
+    },
+    "awakened-vault-of-the-incarnates": {
+      "startsAt": "2024-04-23T15:00:00.000Z",
+      "endsAt": "2024-08-26T22:00:00.000Z"
+    },
+    "battle-of-dazaralor": {
+      "startsAt": "2019-01-22T15:00:00.000Z",
+      "endsAt": "2019-07-10T23:00:00.000Z"
+    },
+    "blackrock-depths": {
+      "startsAt": "2024-10-22T15:00:00.000Z",
+      "endsAt": "2025-01-08T23:00:00.000Z"
+    },
+    "castle-nathria": {
+      "startsAt": "2020-12-08T15:00:00.000Z",
+      "endsAt": "2021-06-30T23:00:00.000Z"
+    },
+    "crucible-of-storms": {
+      "startsAt": "2019-04-16T15:00:00.000Z",
+      "endsAt": "2019-07-10T23:00:00.000Z"
+    },
+    "fated-castle-nathria": {
+      "startsAt": "2022-08-02T15:00:00.000Z",
+      "endsAt": "2022-11-28T23:00:00.000Z"
+    },
+    "fated-sanctum-of-domination": {
+      "startsAt": "2022-08-09T15:00:00.000Z",
+      "endsAt": "2022-11-28T23:00:00.000Z"
+    },
+    "fated-sepulcher-of-the-first-ones": {
+      "startsAt": "2022-08-16T15:00:00.000Z",
+      "endsAt": "2022-11-28T23:00:00.000Z"
+    },
+    "liberation-of-undermine": {
+      "startsAt": "2025-03-04T15:00:00.000Z",
+      "endsAt": "2025-08-13T23:00:00.000Z"
+    },
+    "manaforge-omega": {
+      "startsAt": "2025-08-12T15:00:00.000Z",
+      "endsAt": "2026-03-02T22:00:00.000Z"
+    },
+    "nerubar-palace": {
+      "startsAt": "2024-09-10T15:00:00.000Z",
+      "endsAt": "2025-03-05T23:00:00.000Z"
+    },
+    "nyalotha-the-waking-city": {
+      "startsAt": "2020-01-21T15:00:00.000Z",
+      "endsAt": "2020-10-14T23:00:00.000Z"
+    },
+    "sanctum-of-domination": {
+      "startsAt": "2021-07-06T15:00:00.000Z",
+      "endsAt": "2022-02-23T23:00:00.000Z"
+    },
+    "sepulcher-of-the-first-ones": {
+      "startsAt": "2022-03-01T15:00:00.000Z",
+      "endsAt": "2022-08-03T23:00:00.000Z"
+    },
+    "sporefall": {
+      "startsAt": "2026-06-16T15:00:00.000Z",
+      "endsAt": "2026-08-19T23:00:00.000Z"
+    },
+    "the-emerald-nightmare": {
+      "startsAt": "2016-09-20T07:00:00.000Z",
+      "endsAt": "2017-01-17T23:00:00.000Z"
+    },
+    "the-eternal-palace": {
+      "startsAt": "2019-07-09T15:00:00.000Z",
+      "endsAt": "2020-01-22T23:00:00.000Z"
+    },
+    "the-nighthold": {
+      "startsAt": "2017-01-17T15:00:00.000Z",
+      "endsAt": "2017-06-14T23:00:00.000Z"
+    },
+    "the-tidebound-grotto": {
+      "startsAt": "2026-08-18T15:00:00.000Z",
+      "endsAt": null
+    },
+    "the-venomous-abyss": {
+      "startsAt": "2026-08-18T15:00:00.000Z",
+      "endsAt": null
+    },
+    "tier-mn-1": {
+      "startsAt": "2026-03-17T15:00:00.000Z",
+      "endsAt": "2026-08-19T23:00:00.000Z"
+    },
+    "tomb-of-sargeras": {
+      "startsAt": "2017-06-20T15:00:00.000Z",
+      "endsAt": "2017-11-29T23:00:00.000Z"
+    },
+    "trial-of-valor": {
+      "startsAt": "2016-11-08T15:00:00.000Z",
+      "endsAt": "2017-06-14T23:00:00.000Z"
+    },
+    "uldir": {
+      "startsAt": "2018-09-04T15:00:00.000Z",
+      "endsAt": "2019-01-23T23:00:00.000Z"
+    },
+    "vault-of-the-incarnates": {
+      "startsAt": "2022-12-13T15:00:00.000Z",
+      "endsAt": "2023-05-10T23:00:00.000Z"
+    }
+  }
+}

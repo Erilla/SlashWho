@@ -408,6 +408,10 @@ export function buildApplicantDossier(
     cuttingEdges.set(key, entry);
   }
   const allKills: DossierKillEvidence[] = [];
+  // One row per character and reason, not per discarded kill. A farming alt
+  // produces hundreds of out-of-window kills, and repeating the same sentence
+  // for each of them buries every other limitation in the dossier.
+  const withheldKillReasons = new Map<string, DossierLimitation>();
   for (const suppliedKill of input.kills) {
     const metadata = catalogueEncounter(suppliedKill);
     if (metadata === null) continue;
@@ -415,18 +419,19 @@ export function buildApplicantDossier(
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
     const eligible = currentness(kill.killedAt, kill.raidId);
     if (eligible !== true) {
-      limitations.push({
-        source: "warcraft_logs",
-        character: kill.character,
-        code:
-          eligible === false
-            ? "current_content_evidence_withheld"
-            : "current_content_window_unknown"
-      });
+      const code =
+        eligible === false
+          ? "current_content_evidence_withheld"
+          : "current_content_window_unknown";
+      withheldKillReasons.set(
+        `${code} ${canonicalCharacterId(kill.character)}`,
+        { source: "warcraft_logs", character: kill.character, code }
+      );
       continue;
     }
     allKills.push(kill);
   }
+  limitations.push(...withheldKillReasons.values());
   const byBoss = new Map<string, DossierKillEvidence[]>();
   for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");

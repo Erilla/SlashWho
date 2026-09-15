@@ -1202,3 +1202,108 @@ describe("applicant dossier", () => {
     ]);
   });
 });
+
+describe("historic tier current-content windows", () => {
+  // Break caught: Sepulcher of the First Ones had no generated current-content
+  // window, so currentness() could not judge a 2022 kill and every Mythic kill
+  // in the tier was discarded while its wipes from the same reports stayed. A
+  // reviewer saw a raider who only ever wiped.
+  it("shows a Sepulcher kill earned while the tier was current", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "1195",
+          raidName: "Sepulcher of the First Ones",
+          bossId: "2458",
+          bossName: "Vigilant Guardian",
+          journalBossId: "2458",
+          bossOrder: 1,
+          isFinalBoss: false,
+          killedAt: "2022-04-13T20:00:00.000Z"
+        })
+      ],
+      wipes: [],
+      limitations: []
+    });
+    const sepulcher = dossier.raids.find(
+      (raid) => raid.raidName === "Sepulcher of the First Ones"
+    );
+    expect(
+      sepulcher?.bosses
+        .filter((boss) => boss.state === "kill")
+        .map((boss) => boss.bossName)
+    ).toEqual(["Vigilant Guardian"]);
+    expect(
+      dossier.limitations.filter((limitation) =>
+        limitation.code.startsWith("current_content_")
+      )
+    ).toEqual([]);
+  });
+
+  it("still withholds a legacy clear earned after the tier closed", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "1195",
+          raidName: "Sepulcher of the First Ones",
+          bossId: "2458",
+          bossName: "Vigilant Guardian",
+          journalBossId: "2458",
+          bossOrder: 1,
+          isFinalBoss: false,
+          killedAt: "2025-01-01T20:00:00.000Z"
+        })
+      ],
+      wipes: [],
+      limitations: []
+    });
+    const sepulcher = dossier.raids.find(
+      (raid) => raid.raidName === "Sepulcher of the First Ones"
+    );
+    expect(sepulcher?.bosses.some((boss) => boss.state === "kill")).toBe(false);
+    expect(dossier.limitations.map((limitation) => limitation.code)).toEqual([
+      "current_content_evidence_withheld"
+    ]);
+  });
+});
+
+// Break caught: the gate pushed one limitation per discarded kill, so a farming
+// alt produced hundreds of identical rows that buried every other limitation.
+it("reports one withheld-evidence limitation per character and reason", () => {
+  const legacy = (killedAt: string, bossId: string) =>
+    kill(root, {
+      raidId: "1195",
+      raidName: "Sepulcher of the First Ones",
+      bossId,
+      bossName: "Vigilant Guardian",
+      journalBossId: bossId,
+      bossOrder: 1,
+      isFinalBoss: false,
+      killedAt
+    });
+  const dossier = buildApplicantDossier({
+    root,
+    characters: [rootCharacter, altCharacter],
+    kills: [
+      legacy("2025-01-01T20:00:00.000Z", "2458"),
+      legacy("2025-01-02T20:00:00.000Z", "2465"),
+      legacy("2025-01-03T20:00:00.000Z", "2470"),
+      { ...legacy("2025-01-04T20:00:00.000Z", "2458"), character: altKey }
+    ],
+    wipes: [],
+    limitations: []
+  });
+  expect(
+    dossier.limitations.map((limitation) => [
+      limitation.character?.name,
+      limitation.code
+    ])
+  ).toEqual([
+    ["ryii", "current_content_evidence_withheld"],
+    ["ryalts", "current_content_evidence_withheld"]
+  ]);
+});

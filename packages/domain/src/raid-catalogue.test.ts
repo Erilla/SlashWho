@@ -5,6 +5,8 @@ import {
   lookupRaidBossByName,
   lookupRaiderIoBoss,
   lookupRaidByName,
+  lookupRaidCurrentContentWindow,
+  raidsWithoutCurrentContentWindow,
   supportedRaidCatalogue
 } from "./raid-catalogue";
 
@@ -125,4 +127,27 @@ it("matches a unique generated raid name independently of its boss", () => {
     raiderIoRaidSlug: "nerubar-palace",
     imageUrl: expect.stringMatching(/^https:\/\//)
   });
+});
+
+// Break caught: a catalogued raid with no current-content window silently
+// discards every Mythic kill in that raid, because currentness() cannot
+// judge it. A new tier must fail here rather than in a reviewer's dossier.
+it("covers every catalogued raid with a current-content window", () => {
+  const uncovered = supportedRaidCatalogue()
+    .filter((raid) => lookupRaidCurrentContentWindow(raid.raidId) === null)
+    .map((raid) => raid.raidId)
+    .sort();
+  expect(uncovered).toEqual([...raidsWithoutCurrentContentWindow].sort());
+});
+
+it("orders every current-content window start before its end", () => {
+  const inverted = supportedRaidCatalogue().flatMap((raid) => {
+    const window = lookupRaidCurrentContentWindow(raid.raidId);
+    return window !== null &&
+      window.endsAt !== null &&
+      Date.parse(window.startsAt) >= Date.parse(window.endsAt)
+      ? [raid.raidId]
+      : [];
+  });
+  expect(inverted).toEqual([]);
 });
