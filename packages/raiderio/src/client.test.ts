@@ -365,6 +365,29 @@ describe("Raider.IO gateway", () => {
     expect(throttles).toEqual([{ retryAfterMs: 5_000 }]);
   });
 
+  it("keeps a throwing onThrottle from changing the thrown failure", async () => {
+    // Break caught: an unguarded reporting callback could replace RaiderIoError
+    // with whatever the logger threw, degrading a rate_limited limitation into
+    // an unavailable upstream.
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response("", { status: 429, headers: { "Retry-After": "5" } }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50,
+      onThrottle: () => {
+        throw new Error("logger-exploded-marker");
+      }
+    });
+
+    const request = client.getCharacter(sentinel);
+    await expect(request).rejects.toMatchObject({
+      kind: "transient",
+      status: 429,
+      retryAfterMs: 5_000
+    });
+    await expect(request).rejects.not.toThrow(/logger-exploded-marker/);
+  });
+
   it("does not report a private profile as throttling", async () => {
     // The 403 response carries Retry-After so the only thing preventing
     // onThrottle from firing is the 403 early-return running ahead of the
