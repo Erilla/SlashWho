@@ -14,6 +14,8 @@ type DossierCharacterListProps = Readonly<{
   root: DossierCharacter["key"];
   /** Refreshes and announces the dossier once a character has been linked. */
   onCharacterAdded?: (added: AddedConnectedCharacter) => void;
+  /** Read-only views, such as the demo dossier, hide the add action. */
+  canAddCharacters?: boolean;
 }>;
 
 function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
@@ -42,7 +44,8 @@ const evidenceStateLabel = {
 export function DossierCharacterList({
   characters,
   onCharacterAdded,
-  root
+  root,
+  canAddCharacters = true
 }: DossierCharacterListProps) {
   const listRef = useRef<HTMLUListElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -156,20 +159,24 @@ export function DossierCharacterList({
           </li>
         ))}
       </ul>
-      <button
-        className="search-button dossier-character-add-trigger"
-        onClick={() => setIsAdding(true)}
-        type="button"
-      >
-        Add character
-      </button>
-      <AddConnectedCharacterDialog
-        connectedCharacters={characters.map((character) => character.key)}
-        onAdded={(added) => onCharacterAdded?.(added)}
-        onClose={() => setIsAdding(false)}
-        open={isAdding}
-        root={root}
-      />
+      {canAddCharacters ? (
+        <>
+          <button
+            className="search-button dossier-character-add-trigger"
+            onClick={() => setIsAdding(true)}
+            type="button"
+          >
+            Add character
+          </button>
+          <AddConnectedCharacterDialog
+            connectedCharacters={characters.map((character) => character.key)}
+            onAdded={(added) => onCharacterAdded?.(added)}
+            onClose={() => setIsAdding(false)}
+            open={isAdding}
+            root={root}
+          />
+        </>
+      ) : null}
     </section>
   );
 }

@@ -29,6 +29,8 @@ type DossierPageClientProps = Readonly<{
   identity: CharacterKey;
   initialDossier: ApplicantDossier | null;
   jobId: string | null;
+  /** The demo dossier is read-only, so it offers no way to link characters. */
+  canAddCharacters?: boolean;
 }>;
 
 const activeJobStates = new Set(["queued", "running", "retrying"]);
@@ -47,7 +49,8 @@ function apiError(response: Response, body: unknown): string {
 export function DossierPageClient({
   identity,
   initialDossier,
-  jobId
+  jobId,
+  canAddCharacters = true
 }: DossierPageClientProps) {
   const [dossier, setDossier] = useState(initialDossier);
   const [activeJobId, setActiveJobId] = useState(jobId);
@@ -505,6 +508,7 @@ export function DossierPageClient({
         {dossier ? (
           <div className="dossier-layout">
             <DossierCharacterList
+              canAddCharacters={canAddCharacters}
               characters={dossier.characters}
               onCharacterAdded={(added) => {
                 const name = formatCharacterDisplayName(added.key.name);
