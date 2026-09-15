@@ -83,6 +83,18 @@ const partiallyExpanded = dossier(
   "Additional linked characters may exist; this dossier is not exhaustive.",
   "Partial evidence"
 );
+const rateLimited = {
+  ...expanded,
+  limitations: [
+    {
+      source: "raiderio" as const,
+      character: null,
+      code: "rate_limited" as const,
+      message: "Raider.IO is temporarily rate limited.",
+      retryAt: "2026-09-15T12:02:05.000Z"
+    }
+  ]
+};
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -91,6 +103,25 @@ afterEach(() => {
 });
 
 describe("DossierPageClient staged research", () => {
+  it("shows a provider reset countdown at the top of the dossier", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={rateLimited}
+        jobId={null}
+      />
+    );
+
+    const heading = screen
+      .getByRole("heading", { name: "Ryii" })
+      .closest("header");
+    expect(heading).not.toBeNull();
+    expect(heading).toHaveTextContent("Raider.IO limit resets in 2m 5s");
+  });
+
   it("moves the identity into the centered header after the heading scrolls away", async () => {
     let observe: ((entries: IntersectionObserverEntry[]) => void) | undefined;
     vi.stubGlobal(

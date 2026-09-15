@@ -18,6 +18,7 @@ import {
 import { DossierCuttingEdgeList } from "../../../../../components/dossier-cutting-edge-list";
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
+import { DossierRateLimitCountdown } from "../../../../../components/dossier-rate-limit-countdown";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
 import { CharacterProfileLinks } from "../../../../../components/profile-links";
 
@@ -420,6 +421,15 @@ export function DossierPageClient({
             <p className="identity-meta">
               {identity.region.toUpperCase()} · {identity.realm}
             </p>
+            {dossier?.limitations.map((limitation, index) =>
+              limitation.retryAt ? (
+                <DossierRateLimitCountdown
+                  key={`${limitation.source}-${limitation.code}-${index}`}
+                  retryAt={limitation.retryAt}
+                  source={limitation.source}
+                />
+              ) : null
+            )}
           </div>
           <CharacterProfileLinks
             character={{ key: identity, displayName: rootDisplayName }}
