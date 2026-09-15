@@ -29,6 +29,7 @@ export type {
   ApplicantDossierService,
   CreateDossierCommand,
   CreateDossierResult,
+  DossierGatewayOverrides,
   ReadDossierResult
 } from "./applicant-dossier-service";
 export { createMeasurementScope } from "./measurement";
@@ -58,3 +59,8 @@ export {
   serializeJobStatus,
   serializeSnapshot
 } from "./serializers";
+export {
+  decryptCredential,
+  encryptCredential,
+  parseEncryptionKey
+} from "./credential-encryption";

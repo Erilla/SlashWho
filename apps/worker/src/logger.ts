@@ -44,6 +44,24 @@ const sensitiveKeys = new Set([
   "accesstoken",
   "refreshtoken",
   "token",
+  // Visitor-supplied upstream credentials. Unlike the web service, this
+  // logger is a denylist, so a credential reaching a record is censored only
+  // if its key is named here. No record is supposed to carry one -- the
+  // evidence handler decrypts into a local and never spreads the run -- so
+  // this is the backstop for a field added later, not the primary control.
+  "clientid",
+  "clientsecret",
+  "accesskey",
+  "apikey",
+  "secret",
+  "credential",
+  "credentials",
+  // Matching is exact on the normalized key, so the provider-prefixed names
+  // the evidence run actually uses need naming in their own right.
+  "wclclientid",
+  "wclclientsecret",
+  "wclclientidencrypted",
+  "wclclientsecretencrypted",
   "fingerprint",
   "fingerprintscore",
   "matchscore",

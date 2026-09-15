@@ -549,11 +549,15 @@ type RankingIdentity = Readonly<{
   realm: string;
   region: string;
 }>;
+type SpecIdentity = Readonly<{
+  className: string | null;
+  specName: string;
+}>;
 type RankingRow = Readonly<{
   metric: RankingMetricName;
   fightId: number;
   characterId: number;
-  spec: string | null;
+  spec: SpecIdentity | null;
   percentile: number | null;
 }>;
 type RankingScope = Readonly<{
@@ -696,12 +700,18 @@ function decodeRankingRows(
           }
           identities.set(identity.id, identity);
           const rankPercent = record(characterValue)?.rankPercent;
-          const spec = nonEmptyString(record(characterValue)?.spec);
+          const specName = nonEmptyString(record(characterValue)?.spec);
           rows.push({
             metric,
             fightId,
             characterId: identity.id,
-            spec,
+            spec:
+              specName === null
+                ? null
+                : {
+                    className: reportedClassName(record(characterValue)?.class),
+                    specName
+                  },
             percentile:
               typeof rankPercent === "number" &&
               Number.isFinite(rankPercent) &&
@@ -825,8 +835,15 @@ function decodeCanonicalIdentityIds(
   return ids;
 }
 
-function characterRankingPercentile(value: unknown): WarcraftLogsParseMetric {
+type CharacterRanking = Readonly<{
+  metric: WarcraftLogsParseMetric;
+  /** The specialisation carried by the rank that supplied the percentile. */
+  spec: SpecIdentity | null;
+}>;
+
+function characterRankingPercentile(value: unknown): CharacterRanking {
   let best: number | undefined;
+  let bestSpec: SpecIdentity | null = null;
   const visit = (candidate: unknown): void => {
     if (Array.isArray(candidate)) {
       for (const item of candidate) visit(item);
@@ -839,63 +856,165 @@ function characterRankingPercentile(value: unknown): WarcraftLogsParseMetric {
       typeof rankPercent === "number" &&
       Number.isFinite(rankPercent) &&
       rankPercent >= 0 &&
-      rankPercent <= 100
+      rankPercent <= 100 &&
+      (best === undefined || rankPercent > best)
     ) {
-      best = Math.max(best ?? rankPercent, rankPercent);
+      best = rankPercent;
+      const specName = nonEmptyString(object.spec);
+      bestSpec =
+        specName === null
+          ? null
+          : { className: reportedClassName(object.class), specName };
     }
     for (const nested of Object.values(object)) visit(nested);
   };
   visit(value);
   return best === undefined
-    ? { state: "unavailable" }
-    : { state: "available", percentile: best };
+    ? { metric: { state: "unavailable" }, spec: null }
+    : { metric: { state: "available", percentile: best }, spec: bestSpec };
 }
 
-const specIconNames: Readonly<Record<string, string>> = {
-  Arcane: "spell_holy_magicalsentry",
-  Arms: "ability_warrior_savageblow",
-  Assassination: "ability_rogue_deadlybrew",
-  Augmentation: "classicon_evoker_augmentation",
-  Balance: "spell_nature_starfall",
-  BeastMastery: "ability_hunter_bestialdiscipline",
-  Blood: "spell_shadow_vampiricaura",
-  Brewmaster: "spell_monk_brewmaster_spec",
-  Destruction: "spell_shadow_rainoffire",
-  Devastation: "classicon_evoker_devastation",
-  Discipline: "spell_holy_powerinfusion",
-  Elemental: "spell_nature_lightning",
-  Enhancement: "spell_shaman_maelstromweapon",
-  Feral: "ability_druid_ferociousbite",
-  Fire: "spell_fire_firebolt",
-  Frost: "spell_frost_frostbolt",
-  Fury: "ability_warrior_furiousresolve",
-  Guardian: "ability_racial_bearform",
-  Havoc: "ability_demonhunter_doublejump",
-  Holy: "spell_holy_holybolt",
-  Marksmanship: "ability_hunter_focusedaim",
-  Mistweaver: "spell_monk_mistweaver_spec",
-  Outlaw: "ability_rogue_rollthebones",
-  Preservation: "classicon_evoker_preservation",
-  Protection: "ability_paladin_shieldofthetemplar",
-  Retribution: "spell_holy_auraoflight",
-  Restoration: "spell_nature_healingtouch",
-  Shadow: "spell_shadow_shadowform",
-  Subtlety: "ability_rogue_shadowdance",
-  Survival: "ability_hunter_mongoosebite",
-  Unholy: "spell_shadow_animatedead",
-  Vengeance: "ability_demonhunter_spectralsight",
-  Windwalker: "spell_monk_windwalker_spec"
+// Keyed by class then specialisation, because four specialisation names are
+// shared by two classes each (Frost, Holy, Protection, Restoration) and a
+// name-only lookup silently hands one class the other's icon.
+const specIconNames: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  DeathKnight: {
+    Blood: "spell_deathknight_bloodpresence",
+    Frost: "spell_deathknight_frostpresence",
+    Unholy: "spell_deathknight_unholypresence"
+  },
+  DemonHunter: {
+    Devourer: "classicon_demonhunter_void",
+    Havoc: "ability_demonhunter_specdps",
+    Vengeance: "ability_demonhunter_spectank"
+  },
+  Druid: {
+    Balance: "spell_nature_starfall",
+    Feral: "ability_druid_catform",
+    Guardian: "ability_racial_bearform",
+    Restoration: "spell_nature_healingtouch"
+  },
+  Evoker: {
+    Augmentation: "classicon_evoker_augmentation",
+    Devastation: "classicon_evoker_devastation",
+    Preservation: "classicon_evoker_preservation"
+  },
+  Hunter: {
+    BeastMastery: "ability_hunter_bestialdiscipline",
+    Marksmanship: "ability_hunter_focusedaim",
+    Survival: "ability_hunter_camouflage"
+  },
+  Mage: {
+    Arcane: "spell_holy_magicalsentry",
+    Fire: "spell_fire_firebolt02",
+    Frost: "spell_frost_frostbolt02"
+  },
+  Monk: {
+    Brewmaster: "spell_monk_brewmaster_spec",
+    Mistweaver: "spell_monk_mistweaver_spec",
+    Windwalker: "spell_monk_windwalker_spec"
+  },
+  Paladin: {
+    Holy: "spell_holy_holybolt",
+    Protection: "ability_paladin_shieldofthetemplar",
+    Retribution: "spell_holy_auraoflight"
+  },
+  Priest: {
+    Discipline: "spell_holy_powerwordshield",
+    Holy: "spell_holy_guardianspirit",
+    Shadow: "spell_shadow_shadowwordpain"
+  },
+  Rogue: {
+    Assassination: "ability_rogue_deadlybrew",
+    Outlaw: "ability_rogue_waylay",
+    Subtlety: "ability_stealth"
+  },
+  Shaman: {
+    Elemental: "spell_nature_lightning",
+    Enhancement: "spell_shaman_improvedstormstrike",
+    Restoration: "spell_nature_magicimmunity"
+  },
+  Warlock: {
+    Affliction: "spell_shadow_deathcoil",
+    Demonology: "spell_shadow_metamorphosis",
+    Destruction: "spell_shadow_rainoffire"
+  },
+  Warrior: {
+    Arms: "ability_warrior_savageblow",
+    Fury: "ability_warrior_innerrage",
+    Protection: "ability_warrior_defensivestance"
+  }
 };
 
+// Warcraft Logs does not always report a class alongside a specialisation. A
+// name that belongs to exactly one class stays resolvable on its own; a shared
+// name without a class resolves to nothing, because a guess renders a
+// confidently wrong icon.
+const unambiguousSpecIconNames: ReadonlyMap<string, string> = (() => {
+  const counts = new Map<string, string | null>();
+  for (const specs of Object.values(specIconNames)) {
+    for (const [specName, iconName] of Object.entries(specs)) {
+      counts.set(specName, counts.has(specName) ? null : iconName);
+    }
+  }
+  return new Map(
+    [...counts].flatMap(([specName, iconName]) =>
+      iconName === null ? [] : [[specName, iconName] as const]
+    )
+  );
+})();
+
+// Warcraft Logs reports a rank's class as a numeric class id, not a name.
+// Verified against `gameData { classes { id name } }`.
+const warcraftLogsClassNames: Readonly<Record<number, string>> = {
+  1: "DeathKnight",
+  2: "Druid",
+  3: "Hunter",
+  4: "Mage",
+  5: "Monk",
+  6: "Paladin",
+  7: "Priest",
+  8: "Rogue",
+  9: "Shaman",
+  10: "Warlock",
+  11: "Warrior",
+  12: "DemonHunter",
+  13: "Evoker"
+};
+
+function reportedClassName(value: unknown): string | null {
+  if (typeof value === "number") {
+    return warcraftLogsClassNames[value] ?? null;
+  }
+  return nonEmptyString(value);
+}
+
+function specKey(value: string): string {
+  return value.replaceAll(/[^\p{L}\p{N}]/gu, "");
+}
+
+/**
+ * Resolves the icon for a rank's specialisation. Warcraft Logs rarely reports a
+ * class on its ranks, so `knownClassName` — the class the caller already holds
+ * for this character, which cannot change — settles the four specialisation
+ * names that two classes share.
+ */
 function specPerformance(
-  value: string | null
+  identity: SpecIdentity | null,
+  knownClassName?: string
 ): WarcraftLogsPerformance["spec"] {
-  if (value === null) return null;
-  const iconName = specIconNames[value.replaceAll(" ", "")];
+  if (identity === null) return null;
+  const specName = specKey(identity.specName);
+  const className = specKey(identity.className ?? knownClassName ?? "");
+  const iconName =
+    (className === "" ? undefined : specIconNames[className]?.[specName]) ??
+    unambiguousSpecIconNames.get(specName);
   return iconName === undefined
     ? null
     : {
-        name: value,
+        name: identity.specName,
         iconUrl: `https://wow.zamimg.com/images/wow/icons/medium/${iconName}.jpg`
       };
 }
@@ -904,7 +1023,8 @@ function decodeCharacterEncounterRankings(
   value: unknown,
   key: CharacterKey,
   bossId: string,
-  difficulty: number
+  difficulty: number,
+  knownClassName?: string
 ): WarcraftLogsPerformance | WarcraftLogsLimitation {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
@@ -926,24 +1046,42 @@ function decodeCharacterEncounterRankings(
   if (typeof bossId !== "string" || !Number.isSafeInteger(difficulty)) {
     return { kind: "limitation", code: "parse_schema_drift" };
   }
+  const damage = characterRankingPercentile(character.damage);
+  const healing = characterRankingPercentile(character.healing);
+  const bossDamage = characterRankingPercentile(character.bossDamage);
+  // A character can hold ranks under several specialisations for one encounter.
+  // The strongest rank is the one the dossier shows, so its specialisation is
+  // the one the icon must describe.
+  const best = [damage, healing, bossDamage].reduce<CharacterRanking | null>(
+    (chosen, ranking) => {
+      if (ranking.metric.state !== "available") return chosen;
+      if (chosen === null || chosen.metric.state !== "available")
+        return ranking;
+      return ranking.metric.percentile > chosen.metric.percentile
+        ? ranking
+        : chosen;
+    },
+    null
+  );
   return {
-    spec: null,
-    damage: characterRankingPercentile(character.damage),
-    healing: characterRankingPercentile(character.healing),
-    bossDamage: characterRankingPercentile(character.bossDamage)
+    spec: specPerformance(best?.spec ?? null, knownClassName),
+    damage: damage.metric,
+    healing: healing.metric,
+    bossDamage: bossDamage.metric
   };
 }
 
 function normalizedPerformance(
   rows: readonly RankingRow[],
   requestedIds: readonly number[],
-  fightIds: readonly number[]
+  fightIds: readonly number[],
+  knownClassName?: string
 ): ReadonlyMap<number, WarcraftLogsPerformance> | WarcraftLogsLimitation {
   const performance = new Map<number, WarcraftLogsPerformance>(
     fightIds.map((fightId) => [fightId, unavailablePerformance()])
   );
   const values = new Map<string, number>();
-  const specs = new Map<number, string>();
+  const specs = new Map<number, SpecIdentity>();
   for (const row of rows) {
     if (row.spec !== null) specs.set(row.fightId, row.spec);
     if (!requestedIds.includes(row.characterId) || row.percentile === null) {
@@ -957,7 +1095,7 @@ function normalizedPerformance(
   }
   for (const [fightId, initial] of performance) {
     performance.set(fightId, {
-      spec: specPerformance(specs.get(fightId) ?? null),
+      spec: specPerformance(specs.get(fightId) ?? null, knownClassName),
       damage: values.has(`${fightId}:damage`)
         ? { state: "available", percentile: values.get(`${fightId}:damage`)! }
         : initial.damage,
@@ -1139,6 +1277,7 @@ export function createWarcraftLogsClient(
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      className?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1311,7 +1450,8 @@ export function createWarcraftLogsClient(
               const performance = normalizedPerformance(
                 decoded.rows,
                 requestedIds,
-                group.fightIds
+                group.fightIds,
+                options.className
               );
               if (isLimitation(performance)) {
                 parseLimitation = performance;
@@ -1369,7 +1509,8 @@ export function createWarcraftLogsClient(
             rankings.value,
             key,
             bossId,
-            difficulty
+            difficulty,
+            options.className
           );
           if (isLimitation(performance)) return;
           for (const [fightUrl, kill] of kills) {
@@ -1378,7 +1519,7 @@ export function createWarcraftLogsClient(
             kills.set(fightUrl, {
               ...kill,
               performance: {
-                spec: kill.performance.spec ?? null,
+                spec: kill.performance.spec ?? performance.spec,
                 damage:
                   kill.performance.damage.state === "unavailable"
                     ? performance.damage

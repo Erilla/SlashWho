@@ -132,8 +132,29 @@ describe("PostgreSQL repositories", () => {
       characters,
       suppressed_characters,
       negative_character_cache,
-      rate_limit_events
+      rate_limit_events,
+      manual_dossier_connections
       CASCADE`);
+  });
+
+  it("carries the character's class onto a claimed evidence run", async () => {
+    // Break caught: Warcraft Logs omits a class on its ranks, so evidence
+    // collection needs the stored class to settle shared specialisation names.
+    await seedCompleteSnapshot(repositories);
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    const claimed = await repositories.evidence.claim(reservation.run.id, 1);
+
+    expect(claimed?.className).toBe("Mage");
+    await expect(
+      repositories.evidence.find(reservation.run.id)
+    ).resolves.toMatchObject({ className: "Mage" });
   });
 
   it("retains the last completed evidence while a stale character refresh is active", async () => {
@@ -297,7 +318,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 6,
+      evidenceVersion: 8,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
@@ -640,6 +661,223 @@ describe("PostgreSQL repositories", () => {
         )
       ).rejects.toMatchObject({ code: "23514" });
     }
+  });
+
+  it("stores encrypted WCL credentials only when the reservation creates a new run", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    expect(reservation.kind).toBe("reserved");
+    expect(reservation.run.wclClientIdEncrypted).toBe("encrypted-id");
+    expect(reservation.run.wclClientSecretEncrypted).toBe("encrypted-secret");
+  });
+
+  it("clears encrypted WCL credentials when a run is published", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter2"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      completedAt: new Date()
+    });
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBeNull();
+    expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("clears encrypted WCL credentials when a run fails", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter3"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    await repositories.evidence.fail(reservation.run.id, "some_error");
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBeNull();
+    expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("clears stale encrypted WCL credentials left behind by an abandoned run", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter4"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    // Simulate the job never reaching publish()/fail() (a crash, a timeout,
+    // the process being killed) by backdating created_at past the window.
+    await pool.query(
+      `UPDATE character_evidence_runs SET created_at = $2 WHERE id = $1`,
+      [reservation.run.id, new Date(Date.now() - 2 * 60 * 60_000)]
+    );
+
+    const removed = await repositories.evidence.clearStaleCredentials(
+      new Date(Date.now() - 60 * 60_000)
+    );
+
+    expect(removed).toBe(1);
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBeNull();
+    expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("leaves credentials on runs created after the cutoff untouched", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter5"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+
+    const removed = await repositories.evidence.clearStaleCredentials(
+      new Date(Date.now() - 60 * 60_000)
+    );
+
+    expect(removed).toBe(0);
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBe("encrypted-id");
+    expect(found?.wclClientSecretEncrypted).toBe("encrypted-secret");
+  });
+
+  describe("manual dossier connections", () => {
+    const pendingKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "undiscovered"
+    } as const;
+
+    it("links a character that has not been discovered yet", async () => {
+      // Break caught: the insert used to join `characters` twice, so a target
+      // with no row yielded no rows and was reported as a duplicate. A
+      // reviewer could not link a character before its discovery finished.
+      await seedCompleteSnapshot(repositories);
+
+      await expect(
+        repositories.manualConnections.add(rootKey, pendingKey)
+      ).resolves.toBe("added");
+
+      const listed = await repositories.manualConnections.list(rootKey);
+      expect(listed).toEqual([
+        {
+          key: pendingKey,
+          displayName: "undiscovered",
+          className: null,
+          level: 0,
+          raiderIoUrl:
+            "https://raider.io/characters/eu/silvermoon/undiscovered",
+          pending: true
+        }
+      ]);
+    });
+
+    it("reports a repeated link as a duplicate rather than adding it twice", async () => {
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, pendingKey);
+
+      await expect(
+        repositories.manualConnections.add(rootKey, pendingKey)
+      ).resolves.toBe("duplicate");
+      expect(await repositories.manualConnections.list(rootKey)).toHaveLength(
+        1
+      );
+    });
+
+    it("resolves the character once discovery creates it", async () => {
+      // Break caught: the link is stored by key, so it has to pick up the real
+      // display name, class and level on its own as soon as the character
+      // exists, with no second write and no backfill step.
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, altKey);
+
+      expect(await repositories.manualConnections.list(rootKey)).toMatchObject([
+        { pending: true, className: null, level: 0 }
+      ]);
+
+      const run = await repositories.runs.createOrReuse(altKey, "anonymous");
+      await repositories.runs.markRunning(run.id);
+      const snapshot = await repositories.snapshots.create({
+        runId: run.id,
+        rootKey: altKey,
+        state: "complete",
+        limitationCode: null,
+        refreshedAt: new Date(),
+        characters: [observation(altKey, "Other")]
+      });
+      await repositories.runs.complete(run.id, snapshot.id);
+
+      expect(await repositories.manualConnections.list(rootKey)).toEqual([
+        {
+          key: altKey,
+          displayName: "Other",
+          className: "Mage",
+          level: 80,
+          raiderIoUrl: "https://raider.io/characters/us/area-52/other",
+          pending: false
+        }
+      ]);
+    });
+
+    it("withholds a connection whose character has an active removal request", async () => {
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, pendingKey);
+      await repositories.suppressions.suppress(pendingKey, "removal", null);
+
+      expect(await repositories.manualConnections.list(rootKey)).toEqual([]);
+    });
   });
 
   afterAll(async () => {

@@ -136,4 +136,36 @@ describe("worker logger", () => {
       expect(value, `${key} was redacted`).not.toBe("[Redacted]");
     }
   });
+
+  it("censors a visitor's upstream credential under every key that could carry one", () => {
+    // Break caught: this logger is a denylist, so a credential field added to
+    // a worker record later would be printed verbatim. The evidence job now
+    // handles visitor-supplied Warcraft Logs keys, which makes this the
+    // highest-stakes name set in the file.
+    const marker = "visitor-supplied-secret-value";
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      clientId: marker,
+      clientSecret: marker,
+      accessKey: marker,
+      apiKey: marker,
+      secret: marker,
+      credentials: marker,
+      run: {
+        wclClientId: marker,
+        wclClientSecret: marker,
+        wclClientIdEncrypted: marker,
+        wclClientSecretEncrypted: marker,
+        credential: marker
+      }
+    });
+
+    expect(lines[0]).toContain("evidence_job");
+    expect(lines[0]).not.toContain(marker);
+  });
 });

@@ -5,16 +5,21 @@ import {
   createApplicantEvidenceJobHandler,
   type ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";
+import { encryptCredential, parseEncryptionKey } from "./credential-encryption";
 
+const encryptionKey = parseEncryptionKey("a".repeat(64));
 const key = { region: "eu" as const, realm: "silvermoon", name: "rinn" };
 const run = {
   id: "00000000-0000-4000-8000-000000000001",
   key,
   status: "queued" as const,
-  createdAt: new Date("2026-09-13T12:00:00.000Z")
+  createdAt: new Date("2026-09-13T12:00:00.000Z"),
+  wclClientIdEncrypted: null,
+  wclClientSecretEncrypted: null,
+  className: null as string | null
 };
 
-function store(): ApplicantEvidenceStore & {
+function store(activeRun: typeof run = run): ApplicantEvidenceStore & {
   published: Array<{
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
@@ -27,10 +32,10 @@ function store(): ApplicantEvidenceStore & {
   return {
     published,
     async find(id) {
-      return id === run.id ? run : null;
+      return id === activeRun.id ? activeRun : null;
     },
     async claim(id) {
-      return id === run.id ? run : null;
+      return id === activeRun.id ? activeRun : null;
     },
     async publish(runId, result) {
       published.push({ runId, result });
@@ -261,6 +266,89 @@ describe("applicant evidence job handler", () => {
     ]);
   });
 
+  it("builds a per-run gateway from encrypted run credentials when present", async () => {
+    // Break caught: a visitor-supplied WCL credential could be ignored in
+    // favor of the worker's own shared client, or leaked unencrypted.
+    const perRunGateway = {
+      getFirstKillReports: vi.fn().mockResolvedValue({
+        kind: "evidence",
+        kills: [],
+        wipes: [],
+        limitation: null,
+        parseLimitation: null
+      })
+    };
+    const createWarcraftLogsGateway = vi.fn().mockReturnValue(perRunGateway);
+    const evidence = {
+      claim: vi.fn().mockResolvedValue({
+        id: "run-1",
+        key: { region: "eu", realm: "silvermoon", name: "Testcharacter" },
+        status: "running",
+        createdAt: new Date(),
+        wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
+        wclClientSecretEncrypted: encryptCredential(
+          "user-secret",
+          encryptionKey
+        )
+      }),
+      publish: vi.fn().mockResolvedValue(undefined),
+      find: vi.fn(),
+      fail: vi.fn()
+    };
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports: vi.fn() }, // must NOT be called
+      createWarcraftLogsGateway,
+      decryptionKey: encryptionKey,
+      requestCap: 80,
+      parseRequestCap: 8
+    });
+
+    await handler.execute("run-1", {
+      attempt: 1,
+      maxAttempts: 1,
+      signal: new AbortController().signal
+    });
+
+    expect(createWarcraftLogsGateway).toHaveBeenCalledWith({
+      clientId: "user-id",
+      clientSecret: "user-secret"
+    });
+    expect(perRunGateway.getFirstKillReports).toHaveBeenCalled();
+  });
+
+  it("passes the character's known class to the gateway", async () => {
+    // Break caught: Warcraft Logs omits a class on its ranks, so without this
+    // the four specialisation names shared by two classes resolve to no icon.
+    const evidence = store({ ...run, className: "Death Knight" });
+    const getFirstKillReports = vi.fn(async () => ({
+      kind: "evidence" as const,
+      kills: [],
+      wipes: []
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports } as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports"
+      >,
+      requestCap: 500,
+      parseRequestCap: 8,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({ className: "Death Knight" })
+    );
+  });
+
   describe("evidence_job record", () => {
     // Fixtures local to this describe block: the brief's tests exercise
     // runIds ("run-1".."run-4") that the module-level `run`/`store()` fixture
@@ -455,6 +543,46 @@ describe("applicant evidence job handler", () => {
 
       expect(records).toHaveLength(1);
       expect(records[0]).toMatchObject({ outcome: "unexpected_error" });
+    });
+
+    it("keeps a run's decrypted credentials out of the record entirely", async () => {
+      // Break caught: the record is assembled beside the claimed run, so a
+      // field spread from it — or a debugging aid left behind — could put a
+      // visitor's Warcraft Logs secret into the worker's log stream. This is
+      // the one place where an observability record and a user credential
+      // meet, so it is asserted rather than assumed.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        evidence: evidenceStore({
+          claim: async (id) => ({
+            ...run,
+            id,
+            wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
+            wclClientSecretEncrypted: encryptCredential(
+              "user-secret",
+              encryptionKey
+            )
+          })
+        }),
+        createWarcraftLogsGateway: () => ({
+          getFirstKillReports: async () => ({
+            kind: "evidence" as const,
+            kills: [],
+            wipes: []
+          })
+        }),
+        decryptionKey: encryptionKey,
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-8");
+
+      expect(records).toHaveLength(1);
+      const serialized = JSON.stringify(records[0]);
+      expect(serialized).not.toContain("user-id");
+      expect(serialized).not.toContain("user-secret");
+      expect(serialized).not.toContain("wclClient");
     });
   });
 });

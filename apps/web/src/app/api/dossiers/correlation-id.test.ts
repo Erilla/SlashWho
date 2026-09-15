@@ -187,7 +187,8 @@ const dossiers = createApplicantDossierService({
   queue: { enqueueCharacterEvidence: vi.fn() },
   blizzard: { getCompletedAchievements: vi.fn() } as never,
   raiderio: { getMythicBossRankings: vi.fn(), getCharacter: vi.fn() } as never,
-  config
+  config,
+  evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "k")
 });
 
 vi.mock("../../../server/container", () => ({

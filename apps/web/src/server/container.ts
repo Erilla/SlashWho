@@ -60,6 +60,7 @@ export type WebContainerDependencies = Readonly<{
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
     config: ApplicationConfig;
+    evidenceJobCredentialEncryptionKey: Buffer;
     onCacheEvent?: (source: string, event: string) => void;
   }): ApplicantDossierService;
 }>;
@@ -118,7 +119,9 @@ export async function createWebContainer(
             retryAfterMs: event.retryAfterMs ?? null
           })
       }),
-      config: config.application
+      config: config.application,
+      evidenceJobCredentialEncryptionKey:
+        config.dossier.evidenceJobCredentialEncryptionKey
     });
     return {
       searches,

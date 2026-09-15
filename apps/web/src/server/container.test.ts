@@ -61,7 +61,8 @@ it("migrates and initializes the durable queue before serving searches", async (
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         blizzardClientId: "blizzard-client-id",
-        blizzardClientSecret: "blizzard-client-secret"
+        blizzardClientSecret: "blizzard-client-secret",
+        evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
       }
     },
     {
@@ -161,7 +162,8 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         blizzardClientId: "blizzard-client-id",
-        blizzardClientSecret: "blizzard-client-secret"
+        blizzardClientSecret: "blizzard-client-secret",
+        evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
       }
     },
     {
@@ -261,7 +263,8 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
         raiderIoBaseUrl: "https://raider.io",
         raiderIoTimeoutMs: 10_000,
         blizzardClientId: "blizzard-client-id",
-        blizzardClientSecret: "blizzard-client-secret"
+        blizzardClientSecret: "blizzard-client-secret",
+        evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "k")
       }
     },
     {

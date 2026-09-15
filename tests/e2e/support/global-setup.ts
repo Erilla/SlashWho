@@ -133,7 +133,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       BLIZZARD_BASE_URL: blizzard.baseUrl,
       WARCRAFT_LOGS_CLIENT_ID: "e2e-warcraft-logs-client-id",
       WARCRAFT_LOGS_CLIENT_SECRET: "e2e-warcraft-logs-client-secret",
-      WARCRAFT_LOGS_BASE_URL: warcraftLogs.baseUrl
+      WARCRAFT_LOGS_BASE_URL: warcraftLogs.baseUrl,
+      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
     };
 
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {

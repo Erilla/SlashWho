@@ -50,6 +50,11 @@ _Avoid_: Confidence, provenance score, match strength
 
 **Manual connection**:
 A durable, directional relationship explicitly added from one applicant dossier
-to another discovered character. It is distinct from snapshot-discovered links
+to a character key. It is recorded before that character has been discovered,
+so it may name a character SlashWho holds nothing about yet; until discovery
+creates it the connection is **pending** and carries no class or level rather
+than an invented one. Adding it starts a discovery run rooted at that
+character, so its own Raider.IO alts and Blizzard guild-roster fingerprint
+matches join the dossier as well. It is distinct from snapshot-discovered links
 and is excluded when the target has an active removal request.
-_Avoid_: Verified manual alt, ownership claim
+_Avoid_: Verified manual alt, ownership claim, manual alt list

@@ -1,5 +1,5 @@
 import type { PublicErrorCode } from "@slashwho/contracts";
-import type { CharacterKey } from "@slashwho/domain";
+import { toRaiderIoUrl, type CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
@@ -99,6 +99,9 @@ interface EvidenceRunRow {
   created_at: Date;
   started_at: Date | null;
   completed_at: Date | null;
+  wcl_client_id_encrypted: string | null;
+  wcl_client_secret_encrypted: string | null;
+  class_name: string | null;
 }
 
 interface CharacterMythicKillRow {
@@ -145,7 +148,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 6;
+const CURRENT_EVIDENCE_VERSION = 8;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -313,6 +316,16 @@ function mapRun(row: RunRow): DiscoveryRun {
   };
 }
 
+// The character's class lives on `characters`, keyed identically to an evidence
+// run. Evidence collection needs it to settle the four specialisation names that
+// two classes share, so every run projection carries it.
+function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
+  return `(SELECT c.class_name FROM characters c
+             WHERE c.region = ${alias}.region
+               AND c.realm_slug = ${alias}.realm_slug
+               AND c.normalized_name = ${alias}.normalized_name) AS class_name`;
+}
+
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
   return {
     id: row.id,
@@ -330,7 +343,10 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     errorCode: row.error_code,
     createdAt: row.created_at,
     startedAt: row.started_at,
-    completedAt: row.completed_at
+    completedAt: row.completed_at,
+    wclClientIdEncrypted: row.wcl_client_id_encrypted,
+    wclClientSecretEncrypted: row.wcl_client_secret_encrypted,
+    className: row.class_name
   };
 }
 
@@ -466,7 +482,8 @@ async function loadCompletedEvidence(
     `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
             evidence_version, attempt, limitation_code, parse_limitation_code,
             retry_after_at, error_code, created_at, started_at,
-            completed_at
+            completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+            ${evidenceRunClassNameSql()}
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
        AND status IN ('complete', 'partial')
@@ -1453,15 +1470,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
     manualConnections: {
       async add(root, character) {
+        // The connected side is a key, so this records the link whether or not
+        // the character has been discovered yet. Only the root must exist.
         const result = await pool.query(
           `INSERT INTO manual_dossier_connections
-             (root_character_id, connected_character_id)
-           SELECT root.id, connected.id
+             (root_character_id, connected_region, connected_realm_slug,
+              connected_normalized_name)
+           SELECT root.id, $4, $5, $6
            FROM characters root
-           JOIN characters connected
-             ON connected.region = $4
-            AND connected.realm_slug = $5
-            AND connected.normalized_name = $6
            WHERE root.region = $1
              AND root.realm_slug = $2
              AND root.normalized_name = $3
@@ -1480,34 +1496,64 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       },
 
       async list(root) {
-        const result = await pool.query<SnapshotCharacterRow>(
-          `SELECT connected.id AS character_id,
-                  connected.region,
-                  connected.realm_slug,
-                  connected.normalized_name,
+        const result = await pool.query<{
+          region: string;
+          realm_slug: string;
+          normalized_name: string;
+          display_name: string | null;
+          class_name: string | null;
+          level: number | null;
+          raider_io_url: string | null;
+        }>(
+          // Left join: a connection linked before discovery has no character
+          // row yet, and must still be listed so the dossier can show it as
+          // being researched.
+          `SELECT connection.connected_region AS region,
+                  connection.connected_realm_slug AS realm_slug,
+                  connection.connected_normalized_name AS normalized_name,
                   connected.display_name,
                   connected.class_name,
                   connected.level,
-                  connected.raider_io_url,
-                  'input'::discovery_source AS discovery_source,
-                  0 AS display_order
+                  connected.raider_io_url
            FROM manual_dossier_connections connection
            JOIN characters owner ON owner.id = connection.root_character_id
-           JOIN characters connected ON connected.id = connection.connected_character_id
+           LEFT JOIN characters connected
+             ON connected.region = connection.connected_region
+            AND connected.realm_slug = connection.connected_realm_slug
+            AND connected.normalized_name = connection.connected_normalized_name
            WHERE owner.region = $1
              AND owner.realm_slug = $2
              AND owner.normalized_name = $3
              AND NOT EXISTS (
                SELECT 1 FROM suppressed_characters suppression
-               WHERE suppression.region = connected.region
-                 AND suppression.realm_slug = connected.realm_slug
-                 AND suppression.normalized_name = connected.normalized_name
+               WHERE suppression.region = connection.connected_region
+                 AND suppression.realm_slug = connection.connected_realm_slug
+                 AND suppression.normalized_name = connection.connected_normalized_name
                  AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
              )
-           ORDER BY connection.created_at, connected.id`,
+           ORDER BY connection.created_at,
+                    connection.connected_region,
+                    connection.connected_realm_slug,
+                    connection.connected_normalized_name`,
           [root.region, root.realm, root.name]
         );
-        return result.rows.map(mapSnapshotCharacter);
+        return result.rows.map((row) => {
+          const key = {
+            region: row.region as CharacterKey["region"],
+            realm: row.realm_slug,
+            name: row.normalized_name
+          };
+          return {
+            key,
+            displayName: row.display_name ?? row.normalized_name,
+            className: row.class_name,
+            // Level orders the dossier's characters. An undiscovered character
+            // has none, and sorts last rather than claiming a rank.
+            level: row.level ?? 0,
+            raiderIoUrl: row.raider_io_url ?? toRaiderIoUrl(key),
+            pending: row.display_name === null
+          };
+        });
       }
     },
 
@@ -1979,7 +2025,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
-      async reserve({ key, freshnessCutoff, at }) {
+      async reserve({ key, freshnessCutoff, at, credentials }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -2014,7 +2060,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const active = await client.query<EvidenceRunRow>(
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                    ${evidenceRunClassNameSql()}
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
                AND status IN ('queued', 'running', 'retrying')
@@ -2033,12 +2080,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-              (region, realm_slug, normalized_name)
-             VALUES ($1, $2, $3)
+              (region, realm_slug, normalized_name, wcl_client_id_encrypted, wcl_client_secret_encrypted)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                       completed_at`,
-            [key.region, key.realm, key.name]
+                       completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                       ${evidenceRunClassNameSql()}`,
+            [
+              key.region,
+              key.realm,
+              key.name,
+              credentials?.wclClientIdEncrypted ?? null,
+              credentials?.wclClientSecretEncrypted ?? null
+            ]
           );
           await client.query("COMMIT");
           return {
@@ -2058,7 +2112,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                   attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                  completed_at
+                  completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                  ${evidenceRunClassNameSql()}
            FROM character_evidence_runs WHERE id = $1`,
           [id]
         );
@@ -2078,7 +2133,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              AND status IN ('queued', 'running', 'retrying')
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                      attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                     completed_at`,
+                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                     ${evidenceRunClassNameSql()}`,
           [id, attempt]
         );
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
@@ -2220,7 +2276,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
-                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7
+                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
+                 wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
               runId,
@@ -2249,7 +2306,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           throw new RangeError("character_evidence_error_invalid");
         const result = await pool.query(
           `UPDATE character_evidence_runs
-           SET status = 'failed', error_code = $2, completed_at = now()
+           SET status = 'failed', error_code = $2, completed_at = now(),
+               wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
            WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
           [id, code]
         );
@@ -2269,7 +2327,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              run.id, run.region, run.realm_slug, run.normalized_name,
              run.queue_job_id, run.status, run.attempt, run.limitation_code,
              run.parse_limitation_code,
-             run.error_code, run.created_at, run.started_at, run.completed_at
+             run.error_code, run.created_at, run.started_at, run.completed_at,
+             run.wcl_client_id_encrypted, run.wcl_client_secret_encrypted,
+             ${evidenceRunClassNameSql("run")}
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])
              AS requested(region, realm_slug, normalized_name)
@@ -2286,6 +2346,20 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           ]
         );
         return result.rows.map(mapEvidenceRun);
+      },
+
+      async clearStaleCredentials(cutoff) {
+        if (Number.isNaN(cutoff.valueOf())) {
+          throw new RangeError("character_evidence_credential_cutoff_invalid");
+        }
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
+           WHERE created_at < $1
+             AND (wcl_client_id_encrypted IS NOT NULL OR wcl_client_secret_encrypted IS NOT NULL)`,
+          [cutoff]
+        );
+        return result.rowCount ?? 0;
       }
     },
 

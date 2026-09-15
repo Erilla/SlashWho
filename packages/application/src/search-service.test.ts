@@ -222,6 +222,9 @@ function policyFixture(
       },
       async listStatus() {
         return [];
+      },
+      async clearStaleCredentials() {
+        return 0;
       }
     },
     fingerprintSweeps: {

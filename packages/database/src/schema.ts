@@ -162,15 +162,24 @@ export const snapshotCharacters = pgTable(
   ]
 );
 
+/**
+ * The connected side is stored as a character key rather than a row reference,
+ * so a reviewer can link a character before it has been discovered. Reading a
+ * connection left-joins `characters` on that key: the row appears as soon as
+ * discovery creates it, and no placeholder character has to be invented.
+ *
+ * Self-connection is guarded in the dossier service; a CHECK constraint cannot
+ * compare the root's id against the connected key across tables.
+ */
 export const manualDossierConnections = pgTable(
   "manual_dossier_connections",
   {
     rootCharacterId: uuid("root_character_id")
       .notNull()
       .references(() => characters.id, { onDelete: "cascade" }),
-    connectedCharacterId: uuid("connected_character_id")
-      .notNull()
-      .references(() => characters.id, { onDelete: "cascade" }),
+    connectedRegion: text("connected_region").notNull(),
+    connectedRealmSlug: text("connected_realm_slug").notNull(),
+    connectedNormalizedName: text("connected_normalized_name").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull()
@@ -178,12 +187,13 @@ export const manualDossierConnections = pgTable(
   (table) => [
     primaryKey({
       name: "manual_dossier_connections_pkey",
-      columns: [table.rootCharacterId, table.connectedCharacterId]
-    }),
-    check(
-      "manual_dossier_connections_distinct_characters_check",
-      sql`${table.rootCharacterId} <> ${table.connectedCharacterId}`
-    )
+      columns: [
+        table.rootCharacterId,
+        table.connectedRegion,
+        table.connectedRealmSlug,
+        table.connectedNormalizedName
+      ]
+    })
   ]
 );
 
@@ -387,6 +397,8 @@ export const characterEvidenceRuns = pgTable(
     attempt: integer("attempt").default(0).notNull(),
     limitationCode: text("limitation_code"),
     parseLimitationCode: text("parse_limitation_code"),
+    wclClientIdEncrypted: text("wcl_client_id_encrypted"),
+    wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true })

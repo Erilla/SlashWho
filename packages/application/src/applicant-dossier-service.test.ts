@@ -13,10 +13,12 @@ import type { CharacterKey } from "@slashwho/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
+import { decryptCredential } from "./credential-encryption";
 import { createApplicantDossierService } from "./applicant-dossier-service";
 import { createMeasurementScope } from "./measurement";
 import { createSearchService } from "./search-service";
 
+const encryptionKey = Buffer.alloc(32, "k");
 const root = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
 const alt = { region: "eu", realm: "silvermoon", name: "ryalts" } as const;
 const third = { region: "eu", realm: "silvermoon", name: "third" } as const;
@@ -248,7 +250,8 @@ function fixture(
     queue: { enqueueCharacterEvidence },
     blizzard,
     raiderio,
-    config
+    config,
+    evidenceJobCredentialEncryptionKey: encryptionKey
   });
   return {
     dossiers,
@@ -722,7 +725,8 @@ describe("applicant dossier service", () => {
         RaiderIoGateway,
         "getMythicBossRankings" | "getCharacter"
       >,
-      config
+      config,
+      evidenceJobCredentialEncryptionKey: encryptionKey
     });
     const scope = createMeasurementScope();
 
@@ -748,7 +752,7 @@ describe("applicant dossier service", () => {
     const scope = createMeasurementScope(monotonic);
 
     const startedAt = monotonic();
-    const result = await dossiers.read(root, undefined, scope);
+    const result = await dossiers.read(root, undefined, undefined, scope);
     const durationMs = monotonic() - startedAt;
 
     expect(result.kind).toBe("ready");
@@ -775,7 +779,7 @@ describe("applicant dossier service", () => {
     const { dossiers } = fixture();
     const scope = createMeasurementScope();
 
-    await dossiers.readInitial(root, undefined, scope);
+    await dossiers.readInitial(root, undefined, undefined, scope);
 
     expect(scope.totals().dbCalls).toBeGreaterThan(0);
   });
@@ -1434,7 +1438,7 @@ describe("applicant dossier service", () => {
       isTournamentProfile: false
     });
 
-    await dossiers.readInitial(root, undefined, scope);
+    await dossiers.readInitial(root, undefined, undefined, scope);
 
     expect(scope.totals()).toMatchObject({
       raiderIoCharacterMs: 12,
@@ -1477,9 +1481,9 @@ describe("applicant dossier service", () => {
         };
       });
 
-      const first = dossiers.read(root, undefined, scopeA);
+      const first = dossiers.read(root, undefined, undefined, scopeA);
       await vi.waitFor(() => expect(firstStarted).toBe(true));
-      const second = dossiers.read(root, undefined, scopeB);
+      const second = dossiers.read(root, undefined, undefined, scopeB);
       // Let the second call's own microtasks run far enough to reach and
       // queue behind the first call's admitted (but still blocked) request.
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1501,8 +1505,8 @@ describe("applicant dossier service", () => {
     const scopeB = createMeasurementScope(() => 0);
     const { dossiers } = fixture();
 
-    await dossiers.readInitial(root, undefined, scopeA);
-    await dossiers.readInitial(root, undefined, scopeB);
+    await dossiers.readInitial(root, undefined, undefined, scopeA);
+    await dossiers.readInitial(root, undefined, undefined, scopeB);
 
     expect(scopeA.totals().cacheMisses).toBeGreaterThan(0);
     expect(scopeA.totals().cacheHits).toBeUndefined();
@@ -1513,5 +1517,342 @@ describe("applicant dossier service", () => {
   it("behaves identically when no scope is supplied", async () => {
     const { dossiers } = fixture();
     await expect(dossiers.read(root)).resolves.toBeDefined();
+  });
+
+  it("encrypts supplied Warcraft Logs credentials into every evidence reservation", async () => {
+    // Break caught: a visitor's Warcraft Logs secret could reach the durable
+    // evidence run in plain text, or never reach the worker at all.
+    const { dossiers, repositories } = fixture();
+
+    await dossiers.read(root, undefined, {
+      wclCredentials: {
+        clientId: "user-client-id",
+        clientSecret: "user-secret"
+      }
+    });
+
+    const credentials = vi
+      .mocked(repositories.evidence.reserve)
+      .mock.calls.map(([input]) => input.credentials!);
+    expect(credentials).toHaveLength(2);
+    for (const pair of credentials) {
+      expect(pair.wclClientIdEncrypted).not.toBe("user-client-id");
+      expect(pair.wclClientSecretEncrypted).not.toBe("user-secret");
+      expect(decryptCredential(pair.wclClientIdEncrypted, encryptionKey)).toBe(
+        "user-client-id"
+      );
+      expect(
+        decryptCredential(pair.wclClientSecretEncrypted, encryptionKey)
+      ).toBe("user-secret");
+    }
+  });
+
+  it("keeps supplied credentials out of every measured total", async () => {
+    // Break caught: threading a measurement scope alongside the credential
+    // overrides could fold a key into the record the boundary emits. Totals
+    // are numeric by construction; this proves the construction holds on the
+    // path that actually carries a visitor's secret.
+    const scope = createMeasurementScope(() => 0);
+    const { dossiers } = fixture();
+
+    await dossiers.read(
+      root,
+      undefined,
+      {
+        wclCredentials: {
+          clientId: "user-client-id",
+          clientSecret: "user-secret"
+        }
+      },
+      scope
+    );
+
+    const totals = scope.totals();
+    expect(Object.keys(totals).length).toBeGreaterThan(0);
+    for (const value of Object.values(totals)) {
+      expect(typeof value).toBe("number");
+    }
+    expect(JSON.stringify(totals)).not.toContain("user-client-id");
+    expect(JSON.stringify(totals)).not.toContain("user-secret");
+  });
+
+  it("reserves evidence without credentials when the visitor supplies none", async () => {
+    const { dossiers, repositories } = fixture();
+
+    await dossiers.read(root);
+
+    expect(
+      vi.mocked(repositories.evidence.reserve).mock.calls[0]![0].credentials
+    ).toBeNull();
+  });
+
+  it("serves supplied gateways without reading or writing the shared caches", async () => {
+    // Break caught: results fetched under one visitor's own API keys could be
+    // cached and served to every other visitor, or could be answered from a
+    // cache those keys never populated.
+    const { dossiers, blizzard, raiderio } = fixture();
+    await dossiers.read(root);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+
+    const overrides = {
+      blizzard: {
+        getCompletedAchievements: vi
+          .fn()
+          .mockResolvedValue([
+            { achievementId: "41297", completedAt: "2025-03-01T20:30:00.000Z" }
+          ])
+      },
+      raiderio: {
+        getCharacter: vi.fn(),
+        getMythicBossRankings: vi.fn().mockResolvedValue({
+          kind: "rankings",
+          rows: [
+            {
+              rank: 99,
+              guildName: "Example Guild",
+              guildRealm: "silvermoon",
+              guildRegion: "eu",
+              firstDefeated: "2024-10-01T20:00:00.000Z"
+            }
+          ]
+        })
+      }
+    };
+
+    await expect(
+      dossiers.read(root, undefined, overrides)
+    ).resolves.toMatchObject({
+      dossier: {
+        cuttingEdges: [{ achievementId: "41297" }],
+        raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 99 })])
+      }
+    });
+    expect(overrides.blizzard.getCompletedAchievements).toHaveBeenCalledTimes(
+      1
+    );
+    expect(overrides.raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+
+    // The shared caches still hold only the constructor gateways' results.
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      dossier: {
+        cuttingEdges: [{ achievementId: "40254" }],
+        raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 2 })])
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks initial eligibility with a supplied Raider.IO gateway", async () => {
+    const { dossiers, raiderio } = fixture();
+    const override = {
+      getCharacter: vi.fn().mockResolvedValue({
+        key: root,
+        displayName: "Ryii",
+        className: "Mage",
+        level: 80,
+        ownerId: null,
+        profileGuess: null,
+        declaredMain: null,
+        isTournamentProfile: true
+      }),
+      getMythicBossRankings: vi.fn()
+    };
+
+    await expect(
+      dossiers.readInitial(root, undefined, { raiderio: override })
+    ).resolves.toEqual({ kind: "not_ready" });
+    expect(override.getCharacter).toHaveBeenCalledTimes(1);
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
+  });
+});
+
+describe("manually connected characters", () => {
+  const manualKey = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "manual"
+  } as const;
+  const manualAlt = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "manualalt"
+  } as const;
+
+  it("links a queued character so no second attempt is needed", async () => {
+    // Break caught: addConnectedCharacter used to return early for anything
+    // that was not already a fresh snapshot, so a queued character was
+    // researched and never linked. The reviewer had to add it twice.
+    const { dossiers, repositories, search } = fixture();
+    (search.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+      kind: "job",
+      jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+      status: "queued"
+    });
+
+    await expect(
+      dossiers.addConnectedCharacter(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        headers
+      })
+    ).resolves.toMatchObject({ kind: "job" });
+
+    expect(repositories.manualConnections.add).toHaveBeenCalledWith(
+      root,
+      manualKey
+    );
+  });
+
+  it("does not link a character whose search never started", async () => {
+    const { dossiers, repositories, search } = fixture();
+    (search.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+      kind: "rate_limited",
+      retryAfterSeconds: 30
+    });
+
+    await expect(
+      dossiers.addConnectedCharacter(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        headers
+      })
+    ).resolves.toMatchObject({ kind: "rate_limited" });
+
+    expect(repositories.manualConnections.add).not.toHaveBeenCalled();
+  });
+
+  it("lists a character linked before discovery without inventing its details", async () => {
+    // Break caught: connections used to require an existing character row, so a
+    // pending link could not be stored at all, and a placeholder row would have
+    // fabricated a class and level for the dossier to colour and rank.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "manual",
+        className: null,
+        level: 0,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: true
+      }
+    ]);
+    // An undiscovered character has no evidence run, so its reservation is a
+    // new one rather than a fresh cached result.
+    const reserve = repositories.evidence.reserve as ReturnType<typeof vi.fn>;
+    const reserveFresh = reserve.getMockImplementation() as (request: {
+      key: CharacterKey;
+    }) => Promise<unknown>;
+    reserve.mockImplementation(async (request: { key: CharacterKey }) =>
+      request.key.name === "manual"
+        ? {
+            kind: "reserved",
+            run: {
+              id: "10000000-0000-4000-8000-000000000041",
+              key: manualKey,
+              queueJobId: null,
+              status: "queued",
+              attempt: 1,
+              limitationCode: null,
+              parseLimitationCode: null,
+              errorCode: null,
+              createdAt: new Date("2026-09-15T12:00:00.000Z"),
+              startedAt: null,
+              completedAt: null
+            },
+            completed: null
+          }
+        : reserveFresh(request)
+    );
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    // The spinner in the connected list is driven by these two states, and
+    // showing the character as being researched is the point of linking it
+    // before discovery has run.
+    expect(
+      result.dossier.characters.find(
+        (character) => character.key.name === "manual"
+      )
+    ).toMatchObject({
+      className: null,
+      source: "manually_added",
+      evidenceState: "waiting",
+      researchState: "gathering"
+    });
+    expect(repositories.snapshots.getCurrent).not.toHaveBeenCalledWith(
+      manualKey
+    );
+  });
+
+  it("merges the characters discovered from a manually connected character", async () => {
+    // Break caught: adding a character starts a discovery run rooted at it,
+    // which walks its Raider.IO alts and fingerprints its Blizzard guild
+    // roster. Those characters belong in this dossier, not only in that
+    // character's own.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "Manual",
+        className: "Warrior",
+        level: 80,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: false
+      }
+    ]);
+    (
+      repositories.snapshots.getCurrent as ReturnType<typeof vi.fn>
+    ).mockImplementation(async (key: CharacterKey) =>
+      key.name === "manual"
+        ? {
+            ...storedSnapshot([
+              {
+                characterId: "10000000-0000-4000-8000-000000000031",
+                key: manualKey,
+                displayName: "Manual",
+                className: "Warrior",
+                level: 80,
+                raiderIoUrl:
+                  "https://raider.io/characters/eu/silvermoon/manual",
+                source: "input",
+                displayOrder: 0
+              },
+              {
+                characterId: "10000000-0000-4000-8000-000000000032",
+                key: manualAlt,
+                displayName: "Manualalt",
+                className: "Rogue",
+                level: 80,
+                raiderIoUrl:
+                  "https://raider.io/characters/eu/silvermoon/manualalt",
+                source: "fingerprint",
+                displayOrder: 1
+              }
+            ]),
+            rootKey: manualKey
+          }
+        : storedSnapshot()
+    );
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    const names = result.dossier.characters.map(
+      (character) => character.key.name
+    );
+    expect(names).toContain("manual");
+    expect(names).toContain("manualalt");
+    expect(
+      result.dossier.characters.find(
+        (character) => character.key.name === "manualalt"
+      )
+    ).toMatchObject({ source: "fingerprint_derived" });
   });
 });

@@ -28,6 +28,12 @@ import { Pool } from "pg";
 import type { WorkerConfig } from "./config";
 import type { WorkerHealth } from "./health-server";
 
+// Ciphertext for an abandoned evidence run's WCL credentials should not
+// outlive the run by more than this window. Normal completion (`publish` or
+// `fail`) clears these columns immediately; this is only the backstop for a
+// job that never reaches either.
+const STALE_EVIDENCE_CREDENTIAL_RETENTION_MS = 60 * 60_000;
+
 type RuntimePool = {
   query(text: string): Promise<unknown>;
   end(): Promise<void>;
@@ -234,6 +240,22 @@ export async function createWorkerRuntime(
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
       warcraftLogs: dependencies.createEvidenceGateway(config, logger),
+      // A run carrying a visitor's own credentials gets its own client, and it
+      // reports throttling exactly as the shared one does: the record names the
+      // provider and the delay only, never whose key was in use.
+      createWarcraftLogsGateway: (credentials) =>
+        createWarcraftLogsClient({
+          fetch: globalThis.fetch,
+          clientId: credentials.clientId,
+          clientSecret: credentials.clientSecret,
+          onThrottle: (event) =>
+            logger?.info({
+              event: "upstream_throttle",
+              provider: "warcraftlogs",
+              retryAfterMs: event.retryAfterMs ?? null
+            })
+        }),
+      decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: config.evidenceRequestCap,
       parseRequestCap: config.evidenceParseRequestCap,
       ...(logger ? { logger } : {})
@@ -292,11 +314,13 @@ export async function createWorkerRuntime(
     });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
-      const removedEvidenceRuns = await (
-        repositories.evidence as unknown as {
-          cleanupExpired(at?: Date): Promise<number>;
-        }
-      ).cleanupExpired();
+      const removedEvidenceRuns =
+        await repositories.evidence.clearStaleCredentials(
+          new Date(Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS)
+        );
+      // On the injected logger rather than console.info: this record now passes
+      // through the worker's redaction like every other one. It carries a count
+      // only — never a credential, a run id or a character key.
       logger?.info({ event: "evidence_cache_cleanup", removedEvidenceRuns });
       await recoverPendingSearches(repositories, initializedQueue);
     });
