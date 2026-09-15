@@ -39,6 +39,12 @@ export function SearchForm() {
 
   const showStructuredFields = character.trim() !== "";
 
+  function resetFields() {
+    setCharacter("");
+    setName("");
+    setRealm("");
+  }
+
   function onCharacterChange(value: string) {
     setCharacter(value);
     try {
@@ -96,11 +102,13 @@ export function SearchForm() {
         router.push(
           `/dossiers/${identity.region}/${identity.realm}/${identity.name}?job=${parsed.data.jobId}`
         );
+        resetFields();
         return;
       }
       router.push(
         `/dossiers/${identity.region}/${identity.realm}/${identity.name}`
       );
+      resetFields();
     } catch {
       setError(
         "The search could not be started. Please check your connection."

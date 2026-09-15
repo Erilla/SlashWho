@@ -37,6 +37,8 @@ for (const applicantUrl of applicantUrls) {
     await expect(page.locator("main").getByLabel("Character/URL")).toHaveCount(
       0
     );
+    await expect(page.getByLabel("Character/URL")).toHaveValue("");
+    await expect(page.getByLabel("Realm")).not.toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Historic Cutting Edge" })
     ).toBeVisible();

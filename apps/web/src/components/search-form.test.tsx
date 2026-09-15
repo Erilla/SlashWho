@@ -72,6 +72,106 @@ describe("SearchForm", () => {
     );
   });
 
+  it("clears the character and realm fields after a successful navigation", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            kind: "job",
+            jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+            status: "queued"
+          }),
+          { status: 202, headers: { "content-type": "application/json" } }
+        )
+      )
+    );
+    render(<SearchForm />);
+
+    const character = screen.getByRole("textbox", { name: "Character/URL" });
+    await user.type(character, "Ryii");
+    await user.type(
+      screen.getByRole("textbox", { name: "Realm" }),
+      "Silvermoon"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
+
+    expect(push).toHaveBeenCalled();
+    expect(character).toHaveValue("");
+    expect(
+      screen.queryByRole("textbox", { name: "Realm" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps entered values when the request fails", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network down"))
+    );
+    render(<SearchForm />);
+
+    const character = screen.getByRole("textbox", { name: "Character/URL" });
+    await user.type(character, "Ryii");
+    const realm = screen.getByRole("textbox", { name: "Realm" });
+    await user.type(realm, "Silvermoon");
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
+
+    expect(push).not.toHaveBeenCalled();
+    expect(character).toHaveValue("Ryii");
+    expect(realm).toHaveValue("Silvermoon");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The search could not be started. Please check your connection."
+    );
+  });
+
+  it("keeps entered values while the research request is still pending", async () => {
+    const user = userEvent.setup();
+    let resolveFetch: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+      )
+    );
+    render(<SearchForm />);
+
+    const character = screen.getByRole("textbox", { name: "Character/URL" });
+    await user.type(character, "Ryii");
+    const realm = screen.getByRole("textbox", { name: "Realm" });
+    await user.type(realm, "Silvermoon");
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
+
+    expect(push).not.toHaveBeenCalled();
+    expect(character).toHaveValue("Ryii");
+    expect(realm).toHaveValue("Silvermoon");
+
+    resolveFetch(
+      new Response(
+        JSON.stringify({
+          kind: "job",
+          jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+          status: "queued"
+        }),
+        { status: 202, headers: { "content-type": "application/json" } }
+      )
+    );
+    await vi.waitFor(() => expect(push).toHaveBeenCalled());
+    expect(character).toHaveValue("");
+    expect(
+      screen.queryByRole("textbox", { name: "Realm" })
+    ).not.toBeInTheDocument();
+  });
+
   it("resolves a pasted profile URL into the character fields", async () => {
     const user = userEvent.setup();
     render(<SearchForm />);
@@ -178,14 +278,14 @@ describe("SearchForm", () => {
     const user = userEvent.setup();
     render(<SearchForm />);
 
-    await user.type(
-      screen.getByRole("textbox", { name: "Character/URL" }),
-      "Ryii"
-    );
+    const character = screen.getByRole("textbox", { name: "Character/URL" });
+    await user.type(character, "Ryii");
     await user.click(
       screen.getByRole("button", { name: "Research applicant" })
     );
 
+    expect(push).not.toHaveBeenCalled();
+    expect(character).toHaveValue("Ryii");
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Enter a valid character URL, or character name, realm, and region."
     );
