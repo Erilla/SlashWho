@@ -46,18 +46,96 @@ const raiderIoRaidSlugs = new Map<string, string>([
   ["1320", "the-venomous-abyss"]
 ]);
 
-// Raider.IO's raiding static data is the schedule source: it publishes each
-// raid's opening and closing per region, so the windows are generated rather
-// than transcribed. Windows are [start, end) in UTC and a null end means the
-// tier has no announced close. An absent entry is unknown, never legacy — the
-// raid-catalogue guard test keeps that set to the raids Raider.IO does not
-// serve, so a new tier fails the build instead of silently discarding kills.
-const currentContentWindows = new Map<string, RaidCurrentContentWindow>(
+// Reviewed Mythic unlock windows, curated from Blizzard's season and raid
+// announcements. Blizzard publishes unlock dates rather than one global instant
+// valid in every region, so each is stored at 00:00:00Z to keep the boundary
+// reproducible. A null end means no close had been reviewed yet, not that the
+// tier never closes. See
+// docs/research/2026-09-14-raid-current-content-windows.md.
+const reviewedContentWindows = new Map<string, RaidCurrentContentWindow>([
+  [
+    "1273",
+    { startsAt: "2024-09-17T00:00:00.000Z", endsAt: "2025-03-04T00:00:00.000Z" }
+  ],
+  [
+    "1296",
+    { startsAt: "2025-03-04T00:00:00.000Z", endsAt: "2025-08-12T00:00:00.000Z" }
+  ],
+  [
+    "1302",
+    { startsAt: "2025-08-12T00:00:00.000Z", endsAt: "2026-03-17T00:00:00.000Z" }
+  ],
+  ["1305", { startsAt: "2026-05-20T00:00:00.000Z", endsAt: null }],
+  ["1307", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
+  ["1308", { startsAt: "2026-03-31T00:00:00.000Z", endsAt: null }],
+  ["1314", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
+  ["1317", { startsAt: "2026-08-19T00:00:00.000Z", endsAt: null }],
+  ["1320", { startsAt: "2026-08-01T00:00:00.000Z", endsAt: null }]
+]);
+
+// Raider.IO's raiding static data publishes each raid's opening and closing per
+// region, which is the only schedule reaching back past Nerub-ar Palace. It is
+// generated rather than transcribed, so a new tier cannot be missed by
+// omission.
+const generatedContentWindows = new Map<string, RaidCurrentContentWindow>(
   [...raiderIoRaidSlugs].flatMap(([journalRaidId, raiderIoRaidSlug]) => {
     const window: RaidCurrentContentWindow | undefined =
       currentContentWindowSnapshot.windows[
         raiderIoRaidSlug as keyof typeof currentContentWindowSnapshot.windows
       ];
+    return window ? [[journalRaidId, window] as const] : [];
+  })
+);
+
+/**
+ * The widest window both sources support: the earliest known opening and the
+ * latest known close.
+ *
+ * The two boundaries are not symmetric. A start earlier than the true Mythic
+ * unlock cannot admit anything, because no Mythic kill predates Mythic opening,
+ * whereas a start later than the unlock withholds real kills — so the earlier
+ * start always wins. An end later than the true close does admit legacy farm
+ * clears, but an end earlier than the close withholds real progression kills,
+ * so the later known end wins. A null end is unknown rather than infinite: it
+ * yields to any dated close, and survives only when neither source has one.
+ */
+function widestContentWindow(
+  reviewed: RaidCurrentContentWindow | undefined,
+  generated: RaidCurrentContentWindow | undefined
+): RaidCurrentContentWindow | null {
+  if (!reviewed) return generated ?? null;
+  if (!generated) return reviewed;
+  const ends = [reviewed.endsAt, generated.endsAt].flatMap((endsAt) =>
+    endsAt === null ? [] : [endsAt]
+  );
+  return {
+    startsAt:
+      Date.parse(reviewed.startsAt) <= Date.parse(generated.startsAt)
+        ? reviewed.startsAt
+        : generated.startsAt,
+    endsAt:
+      ends.length === 0
+        ? null
+        : ends.reduce((latest, endsAt) =>
+            Date.parse(endsAt) > Date.parse(latest) ? endsAt : latest
+          )
+  };
+}
+
+// An absent entry is unknown, never legacy — the raid-catalogue guard test
+// keeps that set to the raids Raider.IO does not serve, so a new tier fails the
+// build instead of silently discarding kills.
+const currentContentWindows = new Map<string, RaidCurrentContentWindow>(
+  [
+    ...new Set([
+      ...reviewedContentWindows.keys(),
+      ...generatedContentWindows.keys()
+    ])
+  ].flatMap((journalRaidId) => {
+    const window = widestContentWindow(
+      reviewedContentWindows.get(journalRaidId),
+      generatedContentWindows.get(journalRaidId)
+    );
     return window ? [[journalRaidId, window] as const] : [];
   })
 );
