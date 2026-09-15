@@ -37,6 +37,8 @@ export function SearchForm() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
+  const showStructuredFields = character.trim() !== "";
+
   function onCharacterChange(value: string) {
     setCharacter(value);
     try {
@@ -110,7 +112,13 @@ export function SearchForm() {
 
   return (
     <form className="search-form" onSubmit={submit} noValidate>
-      <div className="search-structured-grid">
+      <div
+        className={
+          showStructuredFields
+            ? "search-structured-grid"
+            : "search-structured-grid search-structured-grid-collapsed"
+        }
+      >
         <div className="search-field">
           <input
             className="search-input"
@@ -129,50 +137,54 @@ export function SearchForm() {
             disabled={pending}
           />
         </div>
-        <div className="search-field">
-          <input
-            className="search-input"
-            id="character-realm"
-            name="characterRealm"
-            type="text"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="Realm"
-            aria-label="Realm"
-            value={realm}
-            onChange={(event) => {
-              setRealm(event.currentTarget.value);
-              setName(character);
-              setError(null);
-            }}
-            aria-invalid={error !== null}
-            aria-describedby={error ? "character-search-error" : undefined}
-            disabled={pending}
-          />
-        </div>
+        {showStructuredFields ? (
+          <div className="search-field">
+            <input
+              className="search-input"
+              id="character-realm"
+              name="characterRealm"
+              type="text"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="Realm"
+              aria-label="Realm"
+              value={realm}
+              onChange={(event) => {
+                setRealm(event.currentTarget.value);
+                setName(character);
+                setError(null);
+              }}
+              aria-invalid={error !== null}
+              aria-describedby={error ? "character-search-error" : undefined}
+              disabled={pending}
+            />
+          </div>
+        ) : null}
         <div className="search-field search-region-field">
-          <select
-            className="search-select"
-            id="character-region"
-            name="characterRegion"
-            aria-label="Region"
-            value={region}
-            onChange={(event) => {
-              setRegion(event.currentTarget.value as Region);
-              setName(character);
-              setError(null);
-            }}
-            aria-invalid={error !== null}
-            aria-describedby={error ? "character-search-error" : undefined}
-            disabled={pending}
-          >
-            {supportedRegions.map((supportedRegion) => (
-              <option key={supportedRegion} value={supportedRegion}>
-                {supportedRegion.toUpperCase()}
-              </option>
-            ))}
-          </select>
+          {showStructuredFields ? (
+            <select
+              className="search-select"
+              id="character-region"
+              name="characterRegion"
+              aria-label="Region"
+              value={region}
+              onChange={(event) => {
+                setRegion(event.currentTarget.value as Region);
+                setName(character);
+                setError(null);
+              }}
+              aria-invalid={error !== null}
+              aria-describedby={error ? "character-search-error" : undefined}
+              disabled={pending}
+            >
+              {supportedRegions.map((supportedRegion) => (
+                <option key={supportedRegion} value={supportedRegion}>
+                  {supportedRegion.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <button
             className="search-button"
             type="submit"
