@@ -36,6 +36,7 @@ import type {
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache } from "./bounded-cache";
 import { createConcurrencyLimiter } from "./concurrency";
+import type { MeasurementScope } from "./measurement";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -48,16 +49,25 @@ export type ReadDossierResult =
   { kind: "ready"; dossier: ContractApplicantDossier } | { kind: "not_ready" };
 
 export interface ApplicantDossierService {
-  start(input: CreateDossierCommand): Promise<CreateDossierResult>;
+  start(
+    input: CreateDossierCommand,
+    scope?: MeasurementScope
+  ): Promise<CreateDossierResult>;
   addConnectedCharacter(
     root: CharacterKey,
-    input: CreateDossierCommand
+    input: CreateDossierCommand,
+    scope?: MeasurementScope
   ): Promise<CreateSearchResult | { kind: "linked" | "duplicate" }>;
   readInitial(
     key: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    scope?: MeasurementScope
   ): Promise<ReadDossierResult>;
-  read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
+  read(
+    key: CharacterKey,
+    signal?: AbortSignal,
+    scope?: MeasurementScope
+  ): Promise<ReadDossierResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -618,8 +628,16 @@ export function createApplicantDossierService(options: {
     maxEntries: 1_000,
     observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
   });
+  // One scope per in-flight call. The service is a singleton, so the active
+  // scope is passed to the factories below instead of being captured.
+  const limiterScopes = new Set<MeasurementScope>();
   const providerConcurrency = createConcurrencyLimiter(
-    options.config.DOSSIER_PROVIDER_CONCURRENCY
+    options.config.DOSSIER_PROVIDER_CONCURRENCY,
+    {
+      onWait: (ms) => {
+        for (const scope of limiterScopes) scope.observe("limiterWaitMs", ms);
+      }
+    }
   );
   const rankings = createBoundedCache<
     Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
@@ -628,58 +646,74 @@ export function createApplicantDossierService(options: {
     maxEntries: 256,
     observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
   });
-  const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
-    async getCompletedAchievements(key, signal) {
-      signal?.throwIfAborted();
-      const result = await awaitWithAbort(
-        achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
-          const rows = await options.blizzard.getCompletedAchievements(
-            key,
-            AbortSignal.timeout(15_000)
-          );
-          return rows
-            .filter(
-              (row) => lookupCuttingEdgeAchievement(row.achievementId) !== null
-            )
-            .map(({ achievementId, completedAt }) => ({
-              achievementId,
-              completedAt
-            }));
-        }),
-        signal
-      );
-      return result;
-    }
-  };
-  const raiderio: Pick<RaiderIoGateway, "getMythicBossRankings"> = {
-    async getMythicBossRankings(boss, signal) {
-      signal?.throwIfAborted();
-      try {
-        const result = await rankings(rankingKey(boss), async () => {
-          const response = await options.raiderio.getMythicBossRankings(
-            boss,
-            AbortSignal.timeout(15_000)
-          );
-          if (response.kind !== "rankings") {
-            options.onCacheEvent?.(
-              "raiderio_rankings",
-              `failure_${response.code}`
-            );
-            throw new RankingLookupFailure(response);
-          }
-          return response;
-        });
+  function measuredBlizzard(
+    scope?: MeasurementScope
+  ): Pick<BlizzardGateway, "getCompletedAchievements"> {
+    return {
+      async getCompletedAchievements(key, signal) {
         signal?.throwIfAborted();
-        return result;
-      } catch (error) {
-        signal?.throwIfAborted();
-        if (error instanceof RankingLookupFailure) return error.result;
-        return { kind: "limitation", code: "unavailable" };
+        return awaitWithAbort(
+          achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
+            const run = async () =>
+              options.blizzard.getCompletedAchievements(
+                key,
+                AbortSignal.timeout(15_000)
+              );
+            const rows = scope
+              ? await scope.time("blizzard", run)
+              : await run();
+            return rows
+              .filter(
+                (row) =>
+                  lookupCuttingEdgeAchievement(row.achievementId) !== null
+              )
+              .map(({ achievementId, completedAt }) => ({
+                achievementId,
+                completedAt
+              }));
+          }),
+          signal
+        );
       }
-    }
-  };
+    };
+  }
+  function measuredRaiderIo(
+    scope?: MeasurementScope
+  ): Pick<RaiderIoGateway, "getMythicBossRankings"> {
+    return {
+      async getMythicBossRankings(boss, signal) {
+        signal?.throwIfAborted();
+        try {
+          const result = await rankings(rankingKey(boss), async () => {
+            const run = async () =>
+              options.raiderio.getMythicBossRankings(
+                boss,
+                AbortSignal.timeout(15_000)
+              );
+            const response = scope
+              ? await scope.time("raiderIoRankings", run)
+              : await run();
+            if (response.kind !== "rankings") {
+              options.onCacheEvent?.(
+                "raiderio_rankings",
+                `failure_${response.code}`
+              );
+              throw new RankingLookupFailure(response);
+            }
+            return response;
+          });
+          signal?.throwIfAborted();
+          return result;
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (error instanceof RankingLookupFailure) return error.result;
+          return { kind: "limitation", code: "unavailable" };
+        }
+      }
+    };
+  }
   return {
-    async start(input) {
+    async start(input, _scope) {
       try {
         return options.search.create({
           ...input,
@@ -692,7 +726,7 @@ export function createApplicantDossierService(options: {
       }
     },
 
-    async addConnectedCharacter(root, input) {
+    async addConnectedCharacter(root, input, _scope) {
       let target: CharacterKey;
       try {
         target = parseApplicantCharacterUrl(input.characterUrl);
@@ -713,127 +747,138 @@ export function createApplicantDossierService(options: {
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
-    async readInitial(key, signal) {
-      // Initial evidence precedes the worker's snapshot filter. One bounded
-      // lookup prevents that preview from exposing a tournament root.
-      const timeout = AbortSignal.timeout(15_000);
-      const requestSignal = signal
-        ? AbortSignal.any([signal, timeout])
-        : timeout;
+    async readInitial(key, signal, scope) {
+      if (scope) limiterScopes.add(scope);
       try {
-        requestSignal.throwIfAborted();
-        const character = await options.raiderio.getCharacter(
-          key,
-          requestSignal
-        );
-        requestSignal.throwIfAborted();
-        if (character.isTournamentProfile === true)
+        // Initial evidence precedes the worker's snapshot filter. One bounded
+        // lookup prevents that preview from exposing a tournament root.
+        const timeout = AbortSignal.timeout(15_000);
+        const requestSignal = signal
+          ? AbortSignal.any([signal, timeout])
+          : timeout;
+        try {
+          requestSignal.throwIfAborted();
+          const loadCharacter = async () =>
+            options.raiderio.getCharacter(key, requestSignal);
+          const character = scope
+            ? await scope.time("raiderIoCharacter", loadCharacter)
+            : await loadCharacter();
+          requestSignal.throwIfAborted();
+          if (character.isTournamentProfile === true)
+            return { kind: "not_ready" };
+        } catch {
+          signal?.throwIfAborted();
           return { kind: "not_ready" };
-      } catch {
-        signal?.throwIfAborted();
-        return { kind: "not_ready" };
+        }
+        return {
+          kind: "ready",
+          dossier: await assembleDossier({
+            root: key,
+            subjects: [
+              {
+                key,
+                displayName: key.name,
+                className: null,
+                raiderIoUrl: toRaiderIoUrl(key),
+                source: "submitted"
+              }
+            ],
+            skippedSubjects: [],
+            research: {
+              state: "initial",
+              message:
+                "Linked-character research is still running; this evidence covers only the submitted character."
+            },
+            repositories: options.repositories,
+            queue: options.queue,
+            blizzard: measuredBlizzard(scope),
+            raiderio: measuredRaiderIo(scope),
+            concurrency: providerConcurrency,
+            freshnessCutoff: new Date(
+              Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
+            ),
+            signal: signal ?? new AbortController().signal
+          })
+        };
+      } finally {
+        if (scope) limiterScopes.delete(scope);
       }
-      return {
-        kind: "ready",
-        dossier: await assembleDossier({
-          root: key,
-          subjects: [
-            {
-              key,
-              displayName: key.name,
-              className: null,
-              raiderIoUrl: toRaiderIoUrl(key),
-              source: "submitted"
-            }
-          ],
-          skippedSubjects: [],
-          research: {
-            state: "initial",
-            message:
-              "Linked-character research is still running; this evidence covers only the submitted character."
-          },
-          repositories: options.repositories,
-          queue: options.queue,
-          blizzard,
-          raiderio,
-          concurrency: providerConcurrency,
-          freshnessCutoff: new Date(
-            Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
-          ),
-          signal: signal ?? new AbortController().signal
-        })
-      };
     },
 
-    async read(key, signal) {
-      const snapshot =
-        (await options.repositories.snapshots.getCurrent(key)) ??
-        (await options.repositories.snapshots.getCurrentContainingCharacter?.(
-          key
-        ));
-      if (!snapshot) return { kind: "not_ready" };
+    async read(key, signal, scope) {
+      if (scope) limiterScopes.add(scope);
+      try {
+        const snapshot =
+          (await options.repositories.snapshots.getCurrent(key)) ??
+          (await options.repositories.snapshots.getCurrentContainingCharacter?.(
+            key
+          ));
+        if (!snapshot) return { kind: "not_ready" };
 
-      const seen = new Set(
-        snapshot.characters.map((character) =>
-          canonicalCharacterId(character.key)
+        const seen = new Set(
+          snapshot.characters.map((character) =>
+            canonicalCharacterId(character.key)
+          )
+        );
+        const manual = (
+          await options.repositories.manualConnections.list(snapshot.rootKey)
         )
-      );
-      const manual = (
-        await options.repositories.manualConnections.list(snapshot.rootKey)
-      )
-        .filter((character) => !seen.has(canonicalCharacterId(character.key)))
-        .map((character) => ({
-          ...character,
-          source: "manually_added" as const
-        }));
+          .filter((character) => !seen.has(canonicalCharacterId(character.key)))
+          .map((character) => ({
+            ...character,
+            source: "manually_added" as const
+          }));
 
-      const rootId = canonicalCharacterId(snapshot.rootKey);
-      // Rank before applying the cap so the displayed list and evidence requests
-      // prioritise the same characters without changing the immutable snapshot.
-      const ordered = [...snapshot.characters, ...manual].sort(
-        (left, right) => {
-          const rootOrder =
-            Number(canonicalCharacterId(right.key) === rootId) -
-            Number(canonicalCharacterId(left.key) === rootId);
-          return (
-            rootOrder ||
-            right.level - left.level ||
-            left.key.region.localeCompare(right.key.region, "en") ||
-            left.key.realm.localeCompare(right.key.realm, "en") ||
-            left.key.name.localeCompare(right.key.name, "en")
-          );
-        }
-      );
-      const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
-      const skipped = ordered.slice(selected.length);
-      return {
-        kind: "ready",
-        dossier: await assembleDossier({
-          root: snapshot.rootKey,
-          subjects: selected,
-          skippedSubjects: skipped,
-          research:
-            snapshot.state === "complete"
-              ? {
-                  state: "complete",
-                  message: "Linked-character research is complete."
-                }
-              : {
-                  state: "partial",
-                  message:
-                    "Additional linked characters may exist; this dossier is not exhaustive."
-                },
-          repositories: options.repositories,
-          queue: options.queue,
-          blizzard,
-          raiderio,
-          concurrency: providerConcurrency,
-          freshnessCutoff: new Date(
-            Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
-          ),
-          signal: signal ?? new AbortController().signal
-        })
-      };
+        const rootId = canonicalCharacterId(snapshot.rootKey);
+        // Rank before applying the cap so the displayed list and evidence requests
+        // prioritise the same characters without changing the immutable snapshot.
+        const ordered = [...snapshot.characters, ...manual].sort(
+          (left, right) => {
+            const rootOrder =
+              Number(canonicalCharacterId(right.key) === rootId) -
+              Number(canonicalCharacterId(left.key) === rootId);
+            return (
+              rootOrder ||
+              right.level - left.level ||
+              left.key.region.localeCompare(right.key.region, "en") ||
+              left.key.realm.localeCompare(right.key.realm, "en") ||
+              left.key.name.localeCompare(right.key.name, "en")
+            );
+          }
+        );
+        const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
+        const skipped = ordered.slice(selected.length);
+        return {
+          kind: "ready",
+          dossier: await assembleDossier({
+            root: snapshot.rootKey,
+            subjects: selected,
+            skippedSubjects: skipped,
+            research:
+              snapshot.state === "complete"
+                ? {
+                    state: "complete",
+                    message: "Linked-character research is complete."
+                  }
+                : {
+                    state: "partial",
+                    message:
+                      "Additional linked characters may exist; this dossier is not exhaustive."
+                  },
+            repositories: options.repositories,
+            queue: options.queue,
+            blizzard: measuredBlizzard(scope),
+            raiderio: measuredRaiderIo(scope),
+            concurrency: providerConcurrency,
+            freshnessCutoff: new Date(
+              Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
+            ),
+            signal: signal ?? new AbortController().signal
+          })
+        };
+      } finally {
+        if (scope) limiterScopes.delete(scope);
+      }
     }
   };
 }

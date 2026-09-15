@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
 import { createApplicantDossierService } from "./applicant-dossier-service";
+import { createMeasurementScope } from "./measurement";
 
 const root = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
 const alt = { region: "eu", realm: "silvermoon", name: "ryalts" } as const;
@@ -1135,5 +1136,47 @@ describe("applicant dossier service", () => {
       2,
       expect.objectContaining({ key: alt })
     );
+  });
+
+  it("attributes provider time per operation on readInitial", async () => {
+    const scope = createMeasurementScope(
+      (() => {
+        let index = 0;
+        const steps = [0, 12, 12, 12];
+        return () => steps[Math.min(index++, steps.length - 1)]!;
+      })()
+    );
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getCharacter).mockResolvedValue({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null,
+      isTournamentProfile: false
+    });
+
+    await dossiers.readInitial(root, undefined, scope);
+
+    expect(scope.totals()).toMatchObject({
+      raiderIoCharacterMs: 12,
+      raiderIoCharacterCalls: 1
+    });
+  });
+
+  it("records limiter wait on the scope", async () => {
+    const scope = createMeasurementScope(() => 0);
+    const { dossiers } = fixture();
+
+    await dossiers.read(root, undefined, scope);
+
+    expect(scope.totals().limiterWaitMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("behaves identically when no scope is supplied", async () => {
+    const { dossiers } = fixture();
+    await expect(dossiers.read(root)).resolves.toBeDefined();
   });
 });
