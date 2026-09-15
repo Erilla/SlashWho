@@ -32,6 +32,7 @@ WORKDIR /app/apps/web
 COPY --from=build --chown=node:node /out/migrate /app/migrate
 COPY --from=build --chown=node:node /workspace/apps/web/.next/standalone /app
 COPY --from=build --chown=node:node /workspace/apps/web/.next/static /app/apps/web/.next/static
+COPY --from=build --chown=node:node /workspace/apps/web/public /app/apps/web/public
 
 USER node
 EXPOSE 3000
