@@ -1643,6 +1643,18 @@ a {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .dossier-header-identity {
+    top: 0.55rem;
+    min-height: 0;
+    justify-content: flex-start;
+    gap: 0;
+    line-height: 1.15;
+  }
+
+  .dossier-header-identity .dossier-character-name {
+    font-size: 1rem;
+  }
+
   .search-control {
     grid-template-columns: minmax(0, 1fr);
   }
