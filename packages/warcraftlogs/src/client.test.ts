@@ -167,6 +167,7 @@ function performanceRankings(
     difficulty?: number;
     characterId?: number;
     archiveAccessible?: boolean;
+    spec?: string;
   }> = {}
 ): unknown {
   const row = (rankPercent: unknown) => ({
@@ -182,6 +183,7 @@ function performanceRankings(
             id: options.characterId ?? 2101,
             name: "Sentinel",
             server: { name: "silvermoon", region: "eu" },
+            ...(options.spec === undefined ? {} : { spec: options.spec }),
             rankPercent
           }
         ]
@@ -1263,6 +1265,81 @@ describe("Warcraft Logs gateway", () => {
       state: "available",
       percentile: 91
     });
+  });
+
+  it("enriches kills without a specialisation before ones that have it", async () => {
+    // Break caught: enrichment always walked bosses in discovery order, so a
+    // budget-limited run redid the same prefix and never reached the tail.
+    const requested: number[] = [];
+    const reports = [
+      performanceReport([26], true, "report-one", 3306),
+      performanceReport([27], false, "report-two", 3307)
+    ];
+    let reportPage = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string; encounterID?: number };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        // Only the first report yields a specialisation.
+        return body.variables?.code === "report-one"
+          ? jsonResponse(
+              performanceRankings(
+                { damage: 23, healing: 48, bossDamage: 42 },
+                {
+                  code: "report-one",
+                  fightId: 26,
+                  encounterId: 3306,
+                  spec: "Brewmaster"
+                }
+              )
+            )
+          : emptyRankingsResponse(body.variables?.code ?? "report-two");
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        requested.push(body.variables?.encounterID ?? -1);
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [] },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      const report = reports[reportPage++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 8
+    });
+
+    // 3307 has no specialisation yet, so it must be enriched first.
+    expect(requested[0]).toBe(3307);
+    expect(requested).toContain(3306);
   });
 
   it("bounds concurrent character encounter ranking requests", async () => {

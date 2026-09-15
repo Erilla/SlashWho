@@ -1484,15 +1484,31 @@ export function createWarcraftLogsClient(
     // rankings remain reserved for exact fight evidence and may be empty for
     // archived or otherwise unranked reports.
     if (kills.size > 0) {
-      const bosses = new Map<string, { bossId: string; difficulty: number }>();
+      const bosses = new Map<
+        string,
+        { bossId: string; difficulty: number; enriched: boolean }
+      >();
       for (const kill of kills.values()) {
-        bosses.set(`${kill.bossId}:${kill.difficulty}`, {
+        const bossKey = `${kill.bossId}:${kill.difficulty}`;
+        const known = bosses.get(bossKey);
+        // A boss counts as enriched only once every one of its kills carries a
+        // specialisation, so a partly-enriched boss keeps its place at the front.
+        const enriched =
+          (known?.enriched ?? true) && kill.performance.spec !== null;
+        bosses.set(bossKey, {
           bossId: kill.bossId,
-          difficulty: kill.difficulty
+          difficulty: kill.difficulty,
+          enriched
         });
       }
+      // Budgets, rate limits and timeouts cut this loop short, so spend what
+      // there is on the kills still missing a specialisation. Successive runs
+      // then converge instead of redoing the same prefix.
+      const orderedBosses = [...bosses.values()].sort(
+        (a, b) => Number(a.enriched) - Number(b.enriched)
+      );
       await forEachWithConcurrency(
-        [...bosses.values()],
+        orderedBosses,
         CHARACTER_RANKING_CONCURRENCY,
         async ({ bossId, difficulty }) => {
           const rankings = await graphql(
