@@ -716,10 +716,10 @@ export function createApplicantDossierService(options: {
                 ? await scope.time("raiderIoRankings", run)
                 : await run();
               if (response.kind !== "rankings") {
-                options.onCacheEvent?.(
-                  "raiderio_rankings",
-                  `failure_${response.code}`
-                );
+                // The bounded cache's own "failure" outcome already reaches
+                // the requesting scope via cacheObserver(scope) below, since
+                // this loader throws; a container-level onCacheEvent
+                // notification is no longer wired up to consume this.
                 throw new RankingLookupFailure(response);
               }
               return response;

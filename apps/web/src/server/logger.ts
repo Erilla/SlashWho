@@ -1,6 +1,9 @@
 import pino, { type DestinationStream, type Logger } from "pino";
 
-const allowedFields = new Set([
+// Exported so the logger test can assert every listed field actually
+// survives serialization, without the test's own list drifting from this
+// allowlist (a typo here or there would otherwise pass silently).
+export const allowedFields = new Set([
   "event",
   "correlationId",
   "endpoint",
