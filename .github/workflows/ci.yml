@@ -35,7 +35,34 @@ jobs:
       - run: corepack pnpm format:check
       - run: corepack pnpm lint
       - run: corepack pnpm typecheck
-      - run: corepack pnpm test:unit
+      - run: corepack pnpm exec vitest run --project unit apps/web
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit apps/worker
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/application
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/blizzard
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/contracts
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/database
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/domain
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/raiderio
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit packages/warcraftlogs
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit scripts
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm test:integration
