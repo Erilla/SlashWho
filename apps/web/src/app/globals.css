@@ -246,7 +246,7 @@ a {
 
 .search-region-field .search-select {
   min-height: 3.35rem;
-  width: 100%;
+  width: 6rem;
   padding: 0 0.55rem;
 }
 
@@ -380,9 +380,11 @@ a {
   top: 0;
   left: 50%;
   display: inline-flex;
+  flex-direction: column;
   min-height: var(--header-height);
   align-items: center;
-  gap: 0.55rem;
+  justify-content: center;
+  gap: 0.1rem;
   transform: translateX(-50%);
   color: var(--muted);
   font-size: 0.85rem;
@@ -390,7 +392,12 @@ a {
 }
 
 .dossier-header-identity .dossier-character-name {
-  color: var(--text);
+  font-size: 1.1rem;
+}
+
+.dossier-header-identity > span:last-child {
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 .eyebrow {
