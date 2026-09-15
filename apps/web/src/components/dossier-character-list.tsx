@@ -1,7 +1,10 @@
 import type { DossierCharacter } from "@slashwho/contracts";
 import { useEffect, useRef, useState } from "react";
 
-import { AddConnectedCharacterDialog } from "./add-connected-character-dialog";
+import {
+  AddConnectedCharacterDialog,
+  type AddedConnectedCharacter
+} from "./add-connected-character-dialog";
 
 import { DossierCharacterName } from "./dossier-character-name";
 import { CharacterProfileLinks } from "./profile-links";
@@ -9,8 +12,8 @@ import { CharacterProfileLinks } from "./profile-links";
 type DossierCharacterListProps = Readonly<{
   characters: readonly DossierCharacter[];
   root: DossierCharacter["key"];
-  /** Refetches the dossier once a character has been linked or queued. */
-  onCharacterAdded?: () => void;
+  /** Refreshes and announces the dossier once a character has been linked. */
+  onCharacterAdded?: (added: AddedConnectedCharacter) => void;
 }>;
 
 function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
@@ -162,7 +165,7 @@ export function DossierCharacterList({
       </button>
       <AddConnectedCharacterDialog
         connectedCharacters={characters.map((character) => character.key)}
-        onAdded={() => onCharacterAdded?.()}
+        onAdded={(added) => onCharacterAdded?.(added)}
         onClose={() => setIsAdding(false)}
         open={isAdding}
         root={root}

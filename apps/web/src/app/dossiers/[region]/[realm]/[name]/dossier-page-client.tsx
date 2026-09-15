@@ -8,6 +8,7 @@ import {
   type ApplicantDossier,
   type CharacterKey
 } from "@slashwho/contracts";
+import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
@@ -50,6 +51,7 @@ export function DossierPageClient({
   const [activeJobId, setActiveJobId] = useState(jobId);
   const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
   const [identityHidden, setIdentityHidden] = useState(false);
   const identityRef = useRef<HTMLDivElement>(null);
@@ -482,12 +484,25 @@ export function DossierPageClient({
             {visibleError}
           </p>
         ) : null}
+        {notice ? (
+          <p className="dossier-notice" role="status">
+            {notice}
+          </p>
+        ) : null}
 
         {dossier ? (
           <div className="dossier-layout">
             <DossierCharacterList
               characters={dossier.characters}
-              onCharacterAdded={() => void refreshDossier()}
+              onCharacterAdded={(added) => {
+                const name = formatCharacterDisplayName(added.key.name);
+                setNotice(
+                  added.queued
+                    ? `${name} has been added and is being researched.`
+                    : `${name} has been added to this dossier.`
+                );
+                void refreshDossier();
+              }}
               root={dossier.root}
             />
             <DossierCuttingEdgeList

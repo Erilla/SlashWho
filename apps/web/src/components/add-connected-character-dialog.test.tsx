@@ -133,7 +133,10 @@ it("names a character that is already connected instead of adding it again", asy
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-it("stays open reporting progress while the character is still being researched", async () => {
+it("closes and reports a queued character rather than holding the viewer", async () => {
+  // Break caught: the dialog used to stay open on 202 showing "Researching
+  // connected character…" beside a Cancel that cancelled nothing and a submit
+  // that could re-post. The character now appears in the list instead.
   const user = userEvent.setup();
   vi.stubGlobal(
     "fetch",
@@ -152,12 +155,14 @@ it("stays open reporting progress while the character is still being researched"
     screen.getByRole("button", { name: "Add connected character" })
   );
 
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(onAdded).toHaveBeenCalledWith({
+    key: { region: "eu", realm: "silvermoon", name: "ryalts" },
+    queued: true
+  });
   expect(
-    await screen.findByText("Researching connected character…")
-  ).toBeVisible();
-  expect(screen.getByRole("dialog")).toBeVisible();
-  expect(onClose).not.toHaveBeenCalled();
-  expect(onAdded).toHaveBeenCalled();
+    screen.queryByText("Researching connected character…")
+  ).not.toBeInTheDocument();
 });
 
 it("reports the character as added and closes once it is linked", async () => {
@@ -174,6 +179,10 @@ it("reports the character as added and closes once it is linked", async () => {
   );
 
   await waitFor(() => expect(onAdded).toHaveBeenCalled());
+  expect(onAdded).toHaveBeenCalledWith({
+    key: { region: "eu", realm: "silvermoon", name: "ryalts" },
+    queued: false
+  });
   expect(onClose).toHaveBeenCalled();
 });
 

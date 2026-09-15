@@ -705,11 +705,16 @@ export function createApplicantDossierService(options: {
         ...input,
         characterUrl: toRaiderIoUrl(target)
       });
-      if (result.kind !== "character") return result;
+      // Record the link for a queued character too. Connections are stored by
+      // key, so this survives until discovery creates the character and the
+      // dossier resolves it without a second attempt. Anything other than a
+      // started search — invalid, suppressed, rate limited — links nothing.
+      if (result.kind !== "character" && result.kind !== "job") return result;
       const connection = await options.repositories.manualConnections.add(
         root,
         target
       );
+      if (result.kind === "job") return result;
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
@@ -778,14 +783,33 @@ export function createApplicantDossierService(options: {
           canonicalCharacterId(character.key)
         )
       );
-      const manual = (
-        await options.repositories.manualConnections.list(snapshot.rootKey)
-      )
-        .filter((character) => !seen.has(canonicalCharacterId(character.key)))
-        .map((character) => ({
-          ...character,
-          source: "manually_added" as const
-        }));
+      // A manually connected character is a full participant, not a lone row.
+      // Adding it starts a discovery run rooted at that character, which walks
+      // its Raider.IO alts and fingerprints its Blizzard guild roster, so merge
+      // that snapshot in as well. The root's own snapshot stays untouched: a
+      // dossier is a view of the moment rather than a stored record.
+      // Level only orders the list; it is not part of a dossier subject.
+      type RankedSubject = DossierSubject & Readonly<{ level: number }>;
+      const manual: RankedSubject[] = [];
+      for (const character of await options.repositories.manualConnections.list(
+        snapshot.rootKey
+      )) {
+        const admit = (candidate: RankedSubject) => {
+          const id = canonicalCharacterId(candidate.key);
+          if (seen.has(id)) return;
+          seen.add(id);
+          manual.push(candidate);
+        };
+        admit({ ...character, source: "manually_added" });
+        // An undiscovered character has no snapshot to merge yet. Its own run
+        // is still queued, and the next read picks the characters up.
+        if (character.pending) continue;
+        const connectedSnapshot =
+          await options.repositories.snapshots.getCurrent(character.key);
+        for (const discovered of connectedSnapshot?.characters ?? []) {
+          admit(discovered);
+        }
+      }
 
       const rootId = canonicalCharacterId(snapshot.rootKey);
       // Rank before applying the cap so the displayed list and evidence requests

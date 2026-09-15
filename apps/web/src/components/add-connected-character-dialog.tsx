@@ -21,14 +21,11 @@ const statusId = "add-connected-character-status";
 
 const invalidCharacterMessage =
   "Enter a valid character URL, or character name, realm, and region.";
-const researchingMessage = "Researching connected character…";
 const unreachableMessage =
   "The character could not be added. Please check your connection.";
 
 type Status =
-  | Readonly<{ kind: "idle" }>
-  | Readonly<{ kind: "error"; message: string }>
-  | Readonly<{ kind: "progress"; message: string }>;
+  Readonly<{ kind: "idle" }> | Readonly<{ kind: "error"; message: string }>;
 
 function refusalMessage(response: Response, body: unknown): string {
   const parsed = safeApiErrorSchema.safeParse(body);
@@ -88,13 +85,19 @@ function displayName(key: CharacterKey): string {
   return key.name.charAt(0).toLocaleUpperCase("en-US") + key.name.slice(1);
 }
 
+export type AddedConnectedCharacter = Readonly<{
+  key: CharacterKey;
+  /** True while the character still has to be discovered. */
+  queued: boolean;
+}>;
+
 export type AddConnectedCharacterDialogProps = Readonly<{
   open: boolean;
   root: CharacterKey;
   connectedCharacters: readonly CharacterKey[];
   onClose: () => void;
-  /** Called whenever the dossier should be refetched. */
-  onAdded: () => void;
+  /** Reports the addition so the dossier can refresh and announce it. */
+  onAdded: (added: AddedConnectedCharacter) => void;
 }>;
 
 export function AddConnectedCharacterDialog({
@@ -188,13 +191,10 @@ export function AddConnectedCharacterDialog({
         });
         return;
       }
-      // Either outcome changes the dossier: a job adds the character in a
-      // gathering state, so refresh before deciding whether to stay open.
-      onAdded();
-      if (parsed.data.kind === "job") {
-        setStatus({ kind: "progress", message: researchingMessage });
-        return;
-      }
+      // Both outcomes link the character, so both close. A queued one appears
+      // in the connected list with its research spinner rather than holding
+      // the viewer in a dialog whose Cancel could not cancel anything.
+      onAdded({ key, queued: parsed.data.kind === "job" });
       onClose();
     } catch {
       setStatus({ kind: "error", message: unreachableMessage });
