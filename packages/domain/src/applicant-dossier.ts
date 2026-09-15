@@ -424,7 +424,7 @@ export function buildApplicantDossier(
           ? "current_content_evidence_withheld"
           : "current_content_window_unknown";
       withheldKillReasons.set(
-        `${code} ${canonicalCharacterId(kill.character)}`,
+        `${code}\0${canonicalCharacterId(kill.character)}`,
         { source: "warcraft_logs", character: kill.character, code }
       );
       continue;
