@@ -12,12 +12,9 @@ import {
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-const invalidUrlMessage = "Enter a Raider.IO or Warcraft Logs character URL.";
 const invalidStructuredUrlMessage =
   "Enter a valid character URL, or character name, realm, and region.";
 const defaultRegion: Region = "eu";
-
-type SearchMode = "url" | "structured";
 
 function errorMessage(response: Response, body: unknown): string {
   const parsed = safeApiErrorSchema.safeParse(body);
@@ -33,16 +30,25 @@ function errorMessage(response: Response, body: unknown): string {
 
 export function SearchForm() {
   const router = useRouter();
-  const [mode, setMode] = useState<SearchMode>("url");
-  const [url, setUrl] = useState("");
+  const [character, setCharacter] = useState("");
   const [name, setName] = useState("");
   const [realm, setRealm] = useState("");
   const [region, setRegion] = useState<Region>(defaultRegion);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  function toStructuredCharacterUrl(): string {
-    return `https://www.warcraftlogs.com/character/${region}/${encodeURIComponent(realm)}/${encodeURIComponent(name)}`;
+  function onCharacterChange(value: string) {
+    setCharacter(value);
+    try {
+      const identity = parseApplicantCharacterUrl(value.trim());
+      setCharacter(identity.name);
+      setName(identity.name);
+      setRealm(identity.realm);
+      setRegion(identity.region);
+    } catch {
+      setName(value);
+    }
+    setError(null);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -50,20 +56,17 @@ export function SearchForm() {
     setError(null);
 
     let identity: ReturnType<typeof parseApplicantCharacterUrl>;
-    let characterUrl: string;
     try {
-      if (mode === "url") {
-        characterUrl = url.trim();
-        identity = parseApplicantCharacterUrl(characterUrl);
-      } else {
-        characterUrl = toStructuredCharacterUrl();
-        identity = parseApplicantCharacterUrl(characterUrl);
-      }
+      identity = parseApplicantCharacterUrl(character.trim());
     } catch {
-      setError(
-        mode === "url" ? invalidUrlMessage : invalidStructuredUrlMessage
-      );
-      return;
+      try {
+        identity = parseApplicantCharacterUrl(
+          `https://www.warcraftlogs.com/character/${region}/${encodeURIComponent(realm)}/${encodeURIComponent(name)}`
+        );
+      } catch {
+        setError(invalidStructuredUrlMessage);
+        return;
+      }
     }
 
     const canonicalCharacterUrl = `https://www.warcraftlogs.com/character/${identity.region}/${identity.realm}/${identity.name}`;
@@ -107,140 +110,80 @@ export function SearchForm() {
 
   return (
     <form className="search-form" onSubmit={submit} noValidate>
-      <fieldset className="search-mode">
-        <legend className="visually-hidden">Search mode</legend>
-        <label className="search-mode-option">
+      <div className="search-structured-grid">
+        <div className="search-field">
           <input
-            type="radio"
-            name="search-mode"
-            value="url"
-            checked={mode === "url"}
-            onChange={() => {
-              setMode("url");
-              setError(null);
-            }}
+            className="search-input"
+            id="character-name"
+            name="characterName"
+            type="text"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="Character/URL"
+            aria-label="Character/URL"
+            value={character}
+            onChange={(event) => onCharacterChange(event.currentTarget.value)}
+            aria-invalid={error !== null}
+            aria-describedby={error ? "character-search-error" : undefined}
             disabled={pending}
           />
-          Character URL
-        </label>
-        <label className="search-mode-option">
-          <input
-            type="radio"
-            name="search-mode"
-            value="structured"
-            checked={mode === "structured"}
-            onChange={() => {
-              setMode("structured");
-              setError(null);
-            }}
-            disabled={pending}
-          />
-          Character name + realm
-        </label>
-      </fieldset>
-      {mode === "url" ? (
-        <>
-          <label className="visually-hidden" htmlFor="character-url">
-            Applicant URL
-          </label>
-          <div className="search-control">
-            <input
-              className="search-input"
-              id="character-url"
-              name="characterUrl"
-              type="url"
-              inputMode="url"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="Raider.IO or Warcraft Logs character URL"
-              value={url}
-              onChange={(event) => setUrl(event.currentTarget.value)}
-              aria-invalid={error !== null}
-              aria-describedby={error ? "character-search-error" : undefined}
-              disabled={pending}
-            />
-            <button
-              className="search-button"
-              type="submit"
-              aria-label="Research applicant"
-              title="Research applicant"
-              disabled={pending}
-            >
-              {pending ? "…" : "→"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="search-structured-grid">
-          <div className="search-field">
-            <label htmlFor="character-name">Character name</label>
-            <input
-              className="search-input"
-              id="character-name"
-              name="characterName"
-              type="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="Ryii"
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-              aria-invalid={error !== null}
-              aria-describedby={error ? "character-search-error" : undefined}
-              disabled={pending}
-            />
-          </div>
-          <div className="search-field">
-            <label htmlFor="character-realm">Realm</label>
-            <input
-              className="search-input"
-              id="character-realm"
-              name="characterRealm"
-              type="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="silvermoon"
-              value={realm}
-              onChange={(event) => setRealm(event.currentTarget.value)}
-              aria-invalid={error !== null}
-              aria-describedby={error ? "character-search-error" : undefined}
-              disabled={pending}
-            />
-          </div>
-          <div className="search-field search-region-field">
-            <label htmlFor="character-region">Region</label>
-            <select
-              className="search-select"
-              id="character-region"
-              name="characterRegion"
-              value={region}
-              onChange={(event) =>
-                setRegion(event.currentTarget.value as Region)
-              }
-              aria-invalid={error !== null}
-              aria-describedby={error ? "character-search-error" : undefined}
-              disabled={pending}
-            >
-              {supportedRegions.map((supportedRegion) => (
-                <option key={supportedRegion} value={supportedRegion}>
-                  {supportedRegion.toUpperCase()}
-                </option>
-              ))}
-            </select>
-            <button
-              className="search-button"
-              type="submit"
-              aria-label="Research applicant"
-              title="Research applicant"
-              disabled={pending}
-            >
-              {pending ? "…" : "→"}
-            </button>
-          </div>
         </div>
-      )}
+        <div className="search-field">
+          <input
+            className="search-input"
+            id="character-realm"
+            name="characterRealm"
+            type="text"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="Realm"
+            aria-label="Realm"
+            value={realm}
+            onChange={(event) => {
+              setRealm(event.currentTarget.value);
+              setName(character);
+              setError(null);
+            }}
+            aria-invalid={error !== null}
+            aria-describedby={error ? "character-search-error" : undefined}
+            disabled={pending}
+          />
+        </div>
+        <div className="search-field search-region-field">
+          <select
+            className="search-select"
+            id="character-region"
+            name="characterRegion"
+            aria-label="Region"
+            value={region}
+            onChange={(event) => {
+              setRegion(event.currentTarget.value as Region);
+              setName(character);
+              setError(null);
+            }}
+            aria-invalid={error !== null}
+            aria-describedby={error ? "character-search-error" : undefined}
+            disabled={pending}
+          >
+            {supportedRegions.map((supportedRegion) => (
+              <option key={supportedRegion} value={supportedRegion}>
+                {supportedRegion.toUpperCase()}
+              </option>
+            ))}
+          </select>
+          <button
+            className="search-button"
+            type="submit"
+            aria-label="Research applicant"
+            title="Research applicant"
+            disabled={pending}
+          >
+            {pending ? "…" : "→"}
+          </button>
+        </div>
+      </div>
       <p
         className="form-error"
         id="character-search-error"
