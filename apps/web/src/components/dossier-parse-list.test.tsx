@@ -16,6 +16,7 @@ type ApplicantDossierCharacterParses = KillBoss["bestParses"][number];
 const parses = [
   {
     character: "Ryii",
+    classSpec: "Fire",
     damage: {
       state: "available",
       percentile: 87.19,
@@ -36,6 +37,7 @@ it("presents every character metric with source links and accessible unavailable
   expect(screen.getByText("First kill parses")).toBeVisible();
   expect(screen.queryByText(/rankings\./)).not.toBeInTheDocument();
   expect(screen.getByRole("group", { name: "Ryii parses" })).toBeVisible();
+  expect(screen.getByText("Fire")).toBeVisible();
   expect(screen.queryByText("Ryii")).not.toBeInTheDocument();
   const damage = screen.getByRole("link", {
     name: "Damage 87.1 percentile"
@@ -45,16 +47,14 @@ it("presents every character metric with source links and accessible unavailable
     "https://www.warcraftlogs.com/reports/damage#fight=8"
   );
   expect(damage).toHaveClass("dossier-parse-metric--purple");
+  expect(screen.getAllByText("-")).toHaveLength(2);
+  expect(screen.getByText("Healing")).toBeVisible();
+  expect(screen.getByText("Boss Damage")).toBeVisible();
   expect(
-    damage.querySelector(".upstream-link-icon--warcraft-logs")
-  ).toBeInTheDocument();
-  expect(screen.getByText("Healing not applicable")).toBeVisible();
-  expect(screen.getByText("Boss damage unavailable")).toBeVisible();
-  expect(
-    screen.queryByRole("link", { name: "Healing not applicable" })
+    screen.queryByRole("link", { name: "Healing" })
   ).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("link", { name: "Boss damage unavailable" })
+    screen.queryByRole("link", { name: "Boss Damage" })
   ).not.toBeInTheDocument();
 });
 
@@ -80,4 +80,26 @@ it("uses ordinal percentile labels for whole-number parse values", () => {
   expect(
     screen.getByRole("link", { name: "Damage 100th percentile" })
   ).toHaveClass("dossier-parse-metric--gold");
+});
+
+it("shows a spinner for unavailable metrics while research is gathering", () => {
+  render(
+    <DossierParseList
+      label="Best shown parses"
+      loading
+      parses={[
+        {
+          ...parses[0],
+          damage: { state: "unavailable" },
+          healing: { state: "not_applicable" },
+          bossDamage: { state: "unavailable" }
+        }
+      ]}
+    />
+  );
+
+  expect(screen.getAllByRole("status", { name: "Loading parse" })).toHaveLength(
+    2
+  );
+  expect(screen.getAllByText("-")).toHaveLength(1);
 });
