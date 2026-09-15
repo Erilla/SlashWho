@@ -8,7 +8,7 @@ import {
   type ApplicantDossier,
   type CharacterKey
 } from "@slashwho/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
@@ -65,6 +65,20 @@ export function DossierPageClient({
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
     [identity]
   );
+
+  // A manually connected character changes the dossier immediately, so read it
+  // back rather than reloading the page and discarding the polls in flight.
+  const refreshDossier = useCallback(async () => {
+    const response = await fetch(dossierPath, { cache: "no-store" });
+    if (!response.ok) return;
+    const body: unknown = await response.json().catch(() => null);
+    const parsed = applicantDossierSchema.safeParse(body);
+    if (!parsed.success) return;
+    hasExpandedDossier.current = true;
+    setDossier(parsed.data);
+    setInitialError(null);
+    setError(null);
+  }, [dossierPath]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -473,6 +487,7 @@ export function DossierPageClient({
           <div className="dossier-layout">
             <DossierCharacterList
               characters={dossier.characters}
+              onCharacterAdded={() => void refreshDossier()}
               root={dossier.root}
             />
             <DossierCuttingEdgeList

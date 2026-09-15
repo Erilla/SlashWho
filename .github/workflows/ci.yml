@@ -67,6 +67,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm test:integration
       - run: corepack pnpm build
-      - run: corepack pnpm playwright test tests/e2e/search.spec.ts
+      - run: corepack pnpm playwright test tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts
       - run: docker build -f Dockerfile.web -t slashwho-web:ci .
       - run: docker build -f Dockerfile.worker -t slashwho-worker:ci .
