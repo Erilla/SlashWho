@@ -19,7 +19,7 @@
   --parse-orange: #ff8000;
   --parse-pink: #e268a8;
   --parse-gold: #e5cc80;
-  --header-height: 4.5rem;
+  --header-height: 4rem;
   font-family:
     Inter,
     ui-sans-serif,
@@ -223,7 +223,7 @@ a {
   grid-template-columns:
     minmax(9rem, 12rem)
     minmax(10rem, 12rem)
-    auto;
+    minmax(8.425rem, auto);
   gap: 0.625rem;
   justify-content: center;
 }
@@ -245,14 +245,14 @@ a {
 }
 
 .search-region-field .search-select {
-  min-height: 3.35rem;
+  min-height: 2.5rem;
   width: 6rem;
   padding: 0 0.55rem;
 }
 
 .search-structured-grid .search-input,
 .search-structured-grid .search-button {
-  min-height: 2.8rem;
+  min-height: 2.5rem;
 }
 
 .search-select {
@@ -1599,7 +1599,7 @@ a {
     align-self: flex-start;
   }
   :root {
-    --header-height: 7.75rem;
+    --header-height: 6.75rem;
   }
 
   .home-shell {
