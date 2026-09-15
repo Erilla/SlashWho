@@ -24,6 +24,13 @@ it("exposes supported raids newest-first with bosses in natural order", () => {
   expect(supportedRaidCatalogue()[0]?.raidName).toBe(originalName);
 });
 
+it("does not publish the Dragon Isles world-boss container as a raid", () => {
+  expect(lookupRaidByName("Dragon Isles")).toBeNull();
+  expect(
+    supportedRaidCatalogue().some((raid) => raid.raidName === "Dragon Isles")
+  ).toBe(false);
+});
+
 it.each([
   ["Sporefall", "sporefall"],
   ["The Tidebound Grotto", "the-tidebound-grotto"],
