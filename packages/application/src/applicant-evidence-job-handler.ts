@@ -19,6 +19,7 @@ export type ApplicantEvidenceRun = Readonly<{
   createdAt: Date;
   wclClientIdEncrypted: string | null;
   wclClientSecretEncrypted: string | null;
+  className?: string | null;
 }>;
 
 export type ApplicantEvidenceStore = {
@@ -115,6 +116,7 @@ export function createApplicantEvidenceJobHandler(
       const response = await gateway.getFirstKillReports(run.key, {
         requestCap: options.requestCap,
         parseRequestCap: options.parseRequestCap,
+        ...(run.className ? { className: run.className } : {}),
         signal: activeContext.signal
       });
       activeContext.signal.throwIfAborted();

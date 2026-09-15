@@ -97,6 +97,8 @@ export interface WarcraftLogsGateway {
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      /** The character's known class, used to settle shared specialisation names. */
+      className?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

@@ -940,15 +940,21 @@ function specKey(value: string): string {
   return value.replaceAll(/[^\p{L}\p{N}]/gu, "");
 }
 
+/**
+ * Resolves the icon for a rank's specialisation. Warcraft Logs rarely reports a
+ * class on its ranks, so `knownClassName` — the class the caller already holds
+ * for this character, which cannot change — settles the four specialisation
+ * names that two classes share.
+ */
 function specPerformance(
-  identity: SpecIdentity | null
+  identity: SpecIdentity | null,
+  knownClassName?: string
 ): WarcraftLogsPerformance["spec"] {
   if (identity === null) return null;
   const specName = specKey(identity.specName);
-  const className =
-    identity.className === null ? null : specKey(identity.className);
+  const className = specKey(identity.className ?? knownClassName ?? "");
   const iconName =
-    (className === null ? undefined : specIconNames[className]?.[specName]) ??
+    (className === "" ? undefined : specIconNames[className]?.[specName]) ??
     unambiguousSpecIconNames.get(specName);
   return iconName === undefined
     ? null
@@ -962,7 +968,8 @@ function decodeCharacterEncounterRankings(
   value: unknown,
   key: CharacterKey,
   bossId: string,
-  difficulty: number
+  difficulty: number,
+  knownClassName?: string
 ): WarcraftLogsPerformance | WarcraftLogsLimitation {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
@@ -1002,7 +1009,7 @@ function decodeCharacterEncounterRankings(
     null
   );
   return {
-    spec: specPerformance(best?.spec ?? null),
+    spec: specPerformance(best?.spec ?? null, knownClassName),
     damage: damage.metric,
     healing: healing.metric,
     bossDamage: bossDamage.metric
@@ -1012,7 +1019,8 @@ function decodeCharacterEncounterRankings(
 function normalizedPerformance(
   rows: readonly RankingRow[],
   requestedIds: readonly number[],
-  fightIds: readonly number[]
+  fightIds: readonly number[],
+  knownClassName?: string
 ): ReadonlyMap<number, WarcraftLogsPerformance> | WarcraftLogsLimitation {
   const performance = new Map<number, WarcraftLogsPerformance>(
     fightIds.map((fightId) => [fightId, unavailablePerformance()])
@@ -1032,7 +1040,7 @@ function normalizedPerformance(
   }
   for (const [fightId, initial] of performance) {
     performance.set(fightId, {
-      spec: specPerformance(specs.get(fightId) ?? null),
+      spec: specPerformance(specs.get(fightId) ?? null, knownClassName),
       damage: values.has(`${fightId}:damage`)
         ? { state: "available", percentile: values.get(`${fightId}:damage`)! }
         : initial.damage,
@@ -1214,6 +1222,7 @@ export function createWarcraftLogsClient(
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      className?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1386,7 +1395,8 @@ export function createWarcraftLogsClient(
               const performance = normalizedPerformance(
                 decoded.rows,
                 requestedIds,
-                group.fightIds
+                group.fightIds,
+                options.className
               );
               if (isLimitation(performance)) {
                 parseLimitation = performance;
@@ -1444,7 +1454,8 @@ export function createWarcraftLogsClient(
             rankings.value,
             key,
             bossId,
-            difficulty
+            difficulty,
+            options.className
           );
           if (isLimitation(performance)) return;
           for (const [fightUrl, kill] of kills) {
