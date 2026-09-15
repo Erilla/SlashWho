@@ -103,6 +103,105 @@ it("ignores failed deployment statuses", async () => {
   expect(changelog.entries).toHaveLength(0);
 });
 
+it("includes deployments with a success before a later inactive status", async () => {
+  const fetch = vi.fn(async (value: RequestInfo | URL) => {
+    const url = String(value);
+    if (url.includes("/deployments?environment=production")) {
+      return jsonResponse([
+        {
+          id: 45,
+          sha: "new456",
+          created_at: "2026-09-14T10:00:00Z",
+          statuses_url:
+            "https://api.github.com/repos/acme/repo/deployments/45/statuses"
+        },
+        {
+          id: 46,
+          sha: "old123",
+          created_at: "2026-09-14T09:00:00Z",
+          statuses_url:
+            "https://api.github.com/repos/acme/repo/deployments/46/statuses"
+        }
+      ]);
+    }
+    if (url.endsWith("/deployments/45/statuses?per_page=100"))
+      return jsonResponse([
+        { state: "success", created_at: "2026-09-14T10:01:00Z" }
+      ]);
+    if (url.endsWith("/deployments/46/statuses?per_page=100"))
+      return jsonResponse([
+        { state: "inactive", created_at: "2026-09-14T09:02:00Z" },
+        { state: "success", created_at: "2026-09-14T09:01:00Z" }
+      ]);
+    return jsonResponse({ commit: { message: "Deployment" } });
+  });
+  const changelog = await loadDeploymentChangelog({
+    repository: "acme/repo",
+    environments: ["production"],
+    fetch
+  });
+  expect(changelog.kind).toBe("available");
+  if (changelog.kind === "unavailable") throw new Error("unreachable");
+  expect(changelog.entries.map((entry) => entry.commit)).toEqual([
+    "new456",
+    "old123"
+  ]);
+});
+
+it("keeps empty and partial upstream responses available", async () => {
+  const fetch = vi.fn(async (value: RequestInfo | URL) => {
+    const url = String(value);
+    return url.includes("/deployments?environment=production")
+      ? jsonResponse([
+          { id: 50, sha: "", created_at: "invalid", statuses_url: "" }
+        ])
+      : jsonResponse({}, 404);
+  });
+  const changelog = await loadDeploymentChangelog({
+    repository: "acme/repo",
+    environments: ["production"],
+    fetch
+  });
+  expect(changelog).toMatchObject({ kind: "available", entries: [] });
+});
+
+it("paginates deployment history when a page is full", async () => {
+  const fetch = vi.fn(async (value: RequestInfo | URL) => {
+    const url = String(value);
+    const page = url.match(/page=(\d+)/)?.[1];
+    if (page === "1" || page === "2") {
+      const id = page === "1" ? 61 : 62;
+      return jsonResponse([
+        {
+          id,
+          sha: `commit${page}`,
+          created_at: `2026-09-14T0${page}:00:00Z`,
+          statuses_url: `https://api.github.com/repos/acme/repo/deployments/${id}/statuses`
+        }
+      ]);
+    }
+    if (page === "3") return jsonResponse([]);
+    if (url.includes("/statuses?per_page=100"))
+      return jsonResponse([
+        { state: "success", created_at: "2026-09-14T10:01:00Z" }
+      ]);
+    return jsonResponse({ commit: { message: "Deployment" } });
+  });
+  const changelog = await loadDeploymentChangelog({
+    repository: "acme/repo",
+    environments: ["production"],
+    maxEntries: 2,
+    maxDeploymentsPerEnvironment: 1,
+    fetch
+  });
+  expect(changelog.kind).toBe("available");
+  if (changelog.kind === "unavailable") throw new Error("unreachable");
+  expect(changelog.entries.map((entry) => entry.commit)).toEqual([
+    "commit2",
+    "commit1"
+  ]);
+});
+
 it("returns unavailable if repository is not configured", async () => {
   const changelog = await loadDeploymentChangelog({ environment: {} });
   expect(changelog.kind).toBe("unavailable");
