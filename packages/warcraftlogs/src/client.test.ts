@@ -168,6 +168,7 @@ function performanceRankings(
     characterId?: number;
     archiveAccessible?: boolean;
     spec?: string;
+    class?: string | number;
   }> = {}
 ): unknown {
   const row = (rankPercent: unknown) => ({
@@ -183,8 +184,9 @@ function performanceRankings(
             id: options.characterId ?? 2101,
             name: "Sentinel",
             server: { name: "silvermoon", region: "eu" },
+            rankPercent,
             ...(options.spec === undefined ? {} : { spec: options.spec }),
-            rankPercent
+            ...(options.class === undefined ? {} : { class: options.class })
           }
         ]
       }
@@ -714,21 +716,6 @@ describe("Warcraft Logs gateway", () => {
           )
         );
       }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [] },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
       if (body.query.includes("RankingCharacterIdentities")) {
         return jsonResponse({
           data: {
@@ -885,37 +872,120 @@ describe("Warcraft Logs gateway", () => {
     );
   });
 
-  it("fills capped report groups from character encounter rankings", async () => {
-    // Break caught: a character with more report groups than the cap still
-    // needs best-shown ranking values even when exact later fights are skipped.
-    let reportCalls = 0;
+  it("hydrates every boss in a report with a single ranking request", async () => {
+    // Break caught: scoping a ranking request to one encounter spent a request
+    // per boss, exhausting the parse cap and leaving later kills unhydrated.
+    const twoBossReport = {
+      data: {
+        characterData: {
+          character: {
+            server: { normalizedName: "Silvermoon" },
+            recentReports: {
+              data: [
+                {
+                  code: "raid-night",
+                  startTime: 1_706_918_400_000,
+                  zone: {
+                    id: 1047,
+                    name: "Fixture",
+                    encounters: [
+                      { id: 3306, journalID: 3306 },
+                      { id: 3307, journalID: 3307 }
+                    ]
+                  },
+                  masterData: {
+                    actors: [
+                      {
+                        id: 1001,
+                        name: "Sentinel",
+                        server: "Silvermoon",
+                        type: "Player"
+                      }
+                    ]
+                  },
+                  fights: [
+                    {
+                      id: 26,
+                      encounterID: 3306,
+                      name: "Boss One",
+                      startTime: 1,
+                      endTime: 2,
+                      kill: true,
+                      difficulty: 5,
+                      friendlyPlayers: [1001]
+                    },
+                    {
+                      id: 27,
+                      encounterID: 3307,
+                      name: "Boss Two",
+                      startTime: 3,
+                      endTime: 4,
+                      kill: true,
+                      difficulty: 5,
+                      friendlyPlayers: [1001]
+                    }
+                  ]
+                }
+              ],
+              has_more_pages: false
+            }
+          }
+        }
+      }
+    };
+    const rankingRow = (
+      fightId: number,
+      encounterId: number,
+      rankPercent: number
+    ) => ({
+      fightID: fightId,
+      encounter: { id: encounterId },
+      difficulty: 5,
+      roles: {
+        tanks: { characters: [] },
+        healers: { characters: [] },
+        dps: {
+          characters: [
+            {
+              id: 2101,
+              name: "Sentinel",
+              server: { name: "silvermoon", region: "eu" },
+              rankPercent
+            }
+          ]
+        }
+      }
+    });
+    let rankingRequests = 0;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
       const body = JSON.parse(String(init?.body)) as {
         query: string;
-        variables?: { code?: string; fightIDs?: number[] };
+        variables?: { fightIDs?: number[] };
       };
       if (body.query.includes("ReportFightParses")) {
-        return jsonResponse(
-          performanceRankings(
-            { damage: 0, healing: 0, bossDamage: 0 },
-            {
-              code: body.variables?.code,
-              fightId: body.variables?.fightIDs?.[0]
-            }
-          )
-        );
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
+        rankingRequests += 1;
+        expect(body.variables?.fightIDs).toEqual([26, 27]);
         return jsonResponse({
           data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [{ rankPercent: 91 }] },
-                healing: { data: [{ rankPercent: 82 }] },
-                bossDamage: { data: [{ rankPercent: 87 }] }
+            reportData: {
+              report: {
+                code: "raid-night",
+                masterData: {
+                  actors: [
+                    {
+                      id: 1001,
+                      name: "Sentinel",
+                      server: "Silvermoon",
+                      type: "Player"
+                    }
+                  ]
+                },
+                damage: {
+                  data: [rankingRow(26, 3306, 61), rankingRow(27, 3307, 94)]
+                },
+                healing: { data: [] },
+                bossDamage: { data: [] }
               }
             }
           }
@@ -934,36 +1004,152 @@ describe("Warcraft Logs gateway", () => {
           }
         });
       }
-      reportCalls++;
-      return jsonResponse(
-        performanceReport(
-          [26 + reportCalls],
-          reportCalls < 2,
-          `report-${reportCalls}`
-        )
-      );
+      return jsonResponse(twoBossReport);
     });
 
     const result = await client.getFirstKillReports(key, {
-      requestCap: 2,
-      parseRequestCap: 2
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+    expect(rankingRequests).toBe(1);
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(
+      new Map(
+        result.kills.map((kill) => [kill.fightId, kill.performance.damage])
+      )
+    ).toEqual(
+      new Map([
+        [26, { state: "available", percentile: 61 }],
+        [27, { state: "available", percentile: 94 }]
+      ])
+    );
+  });
+
+  it("gives repeat kills of one boss their own parse rather than the best", async () => {
+    // Break caught: filling every kill of a boss from a character-wide best
+    // made a first kill's parse identical to the strongest later kill.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("ReportFightParses")) {
+        const row = (fightId: number, rankPercent: number) => ({
+          fightID: fightId,
+          encounter: { id: 3306 },
+          difficulty: 5,
+          roles: {
+            tanks: { characters: [] },
+            healers: { characters: [] },
+            dps: {
+              characters: [
+                {
+                  id: 2101,
+                  name: "Sentinel",
+                  server: { name: "silvermoon", region: "eu" },
+                  rankPercent
+                }
+              ]
+            }
+          }
+        });
+        return jsonResponse({
+          data: {
+            reportData: {
+              report: {
+                code: "performance-report",
+                masterData: {
+                  actors: [
+                    {
+                      id: 1001,
+                      name: "Sentinel",
+                      server: "Silvermoon",
+                      type: "Player"
+                    }
+                  ]
+                },
+                damage: { data: [row(26, 12), row(27, 98)] },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26, 27]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
     });
     expect(result.kind).toBe("evidence");
     if (result.kind !== "evidence") return;
     expect(
-      result.kills.some(
-        (kill) =>
-          kill.performance.damage.state === "available" &&
-          kill.performance.damage.percentile === 91 &&
-          kill.performance.healing.state === "available" &&
-          kill.performance.healing.percentile === 82 &&
-          kill.performance.bossDamage.state === "available" &&
-          kill.performance.bossDamage.percentile === 87
+      new Map(
+        result.kills.map((kill) => [kill.fightId, kill.performance.damage])
       )
-    ).toBe(true);
+    ).toEqual(
+      new Map([
+        [26, { state: "available", percentile: 12 }],
+        [27, { state: "available", percentile: 98 }]
+      ])
+    );
   });
 
-  it("fills best rankings when a report ranking response has no rows", async () => {
+  it("ignores a ranking row that contradicts its fight's encounter", async () => {
+    // Break caught: the request no longer filters by encounter or difficulty,
+    // so a row describing another boss must not be attributed to this kill.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("ReportFightParses")) {
+        return jsonResponse(
+          performanceRankings(
+            { damage: 91, healing: 91, bossDamage: 91 },
+            { encounterId: 9999 }
+          )
+        );
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 8 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [{ performance: { damage: { state: "unavailable" } } }]
+    });
+  });
+
+  it("leaves a parse unavailable when its report returns no ranking rows", async () => {
+    // Break caught: substituting a character-wide best for a missing report
+    // ranking showed a percentile that never belonged to this fight.
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
       const body = JSON.parse(String(init?.body)) as {
@@ -972,21 +1158,6 @@ describe("Warcraft Logs gateway", () => {
       };
       if (body.query.includes("ReportFightParses")) {
         return emptyRankingsResponse(body.variables?.code ?? "report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [{ rankPercent: 91 }] },
-                healing: { data: [{ rankPercent: 82 }] },
-                bossDamage: { data: [{ rankPercent: 87 }] }
-              }
-            }
-          }
-        });
       }
       return jsonResponse(performanceReport([26]));
     });
@@ -998,47 +1169,25 @@ describe("Warcraft Logs gateway", () => {
       kills: [
         {
           performance: {
-            damage: { state: "available", percentile: 91 },
-            healing: { state: "available", percentile: 82 },
-            bossDamage: { state: "available", percentile: 87 }
+            spec: null,
+            damage: { state: "unavailable" },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
           }
         }
       ]
     });
   });
 
-  it("carries the specialisation from character encounter rankings", async () => {
-    // Break caught: character encounter rankings are the dominant parse source,
-    // so discarding their spec left most kills without a specialisation icon.
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("ReportFightParses")) {
-        return emptyRankingsResponse("performance-report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: {
-                  data: [{ rankPercent: 40, class: "Priest", spec: "Shadow" }]
-                },
-                healing: {
-                  data: [
-                    { rankPercent: 91, class: "Priest", spec: "Discipline" }
-                  ]
-                },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      return jsonResponse(performanceReport([26]));
-    });
+  it("carries the specialisation reported alongside a fight's parse", async () => {
+    // Break caught: discarding the spec on a ranking row left the kill without
+    // a specialisation icon.
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 40, healing: 91, bossDamage: 42 },
+        { class: "Priest", spec: "Discipline" }
+      )
+    );
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
@@ -1056,33 +1205,12 @@ describe("Warcraft Logs gateway", () => {
   it("resolves same-named specialisations using the character class", async () => {
     // Break caught: keying icons by spec name alone gave Frost Death Knights
     // the Frost Mage icon, and the same for Holy, Protection and Restoration.
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("ReportFightParses")) {
-        return emptyRankingsResponse("performance-report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: {
-                  data: [
-                    { rankPercent: 91, class: "DeathKnight", spec: "Frost" }
-                  ]
-                },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      return jsonResponse(performanceReport([26]));
-    });
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 91, healing: null, bossDamage: null },
+        { class: "DeathKnight", spec: "Frost" }
+      )
+    );
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
@@ -1100,33 +1228,12 @@ describe("Warcraft Logs gateway", () => {
   it("resolves warlock specialisations missing from the icon table", async () => {
     // Break caught: Affliction and Demonology were absent, so every Warlock
     // parse rendered without an icon.
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("ReportFightParses")) {
-        return emptyRankingsResponse("performance-report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: {
-                  data: [
-                    { rankPercent: 91, class: "Warlock", spec: "Affliction" }
-                  ]
-                },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      return jsonResponse(performanceReport([26]));
-    });
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 91, healing: null, bossDamage: null },
+        { class: "Warlock", spec: "Affliction" }
+      )
+    );
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
@@ -1145,29 +1252,12 @@ describe("Warcraft Logs gateway", () => {
     // Break caught: Warcraft Logs does not report a class on its ranks, so
     // Frost, Holy, Protection and Restoration resolved to no icon at all. A
     // character's class cannot change, so the caller's known class settles it.
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("ReportFightParses")) {
-        return emptyRankingsResponse("performance-report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [{ rankPercent: 91, spec: "Frost" }] },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      return jsonResponse(performanceReport([26]));
-    });
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 91, healing: null, bossDamage: null },
+        { spec: "Frost" }
+      )
+    );
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
@@ -1187,31 +1277,12 @@ describe("Warcraft Logs gateway", () => {
     // Break caught: Warcraft Logs reports `class` as a numeric class id (4 is
     // Mage), so reading it as a name silently ignored it. The per-rank class is
     // the more specific claim; the known class is only a fallback.
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("ReportFightParses")) {
-        return emptyRankingsResponse("performance-report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: {
-                  data: [{ rankPercent: 91, class: 4, spec: "Frost" }]
-                },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      return jsonResponse(performanceReport([26]));
-    });
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 91, healing: null, bossDamage: null },
+        { spec: "Frost", class: 4 }
+      )
+    );
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
@@ -1230,29 +1301,12 @@ describe("Warcraft Logs gateway", () => {
   it("leaves an ambiguous specialisation unset when no class is known", async () => {
     // Break caught: guessing a class for a shared spec name shows a confidently
     // wrong icon; omitting it is the honest outcome.
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("ReportFightParses")) {
-        return emptyRankingsResponse("performance-report");
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [{ rankPercent: 91, spec: "Frost" }] },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      return jsonResponse(performanceReport([26]));
-    });
+    const { client } = performanceClient(
+      performanceRankings(
+        { damage: 91, healing: null, bossDamage: null },
+        { spec: "Frost" }
+      )
+    );
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
@@ -1265,123 +1319,6 @@ describe("Warcraft Logs gateway", () => {
       state: "available",
       percentile: 91
     });
-  });
-
-  it("enriches kills without a specialisation before ones that have it", async () => {
-    // Break caught: enrichment always walked bosses in discovery order, so a
-    // budget-limited run redid the same prefix and never reached the tail.
-    const requested: number[] = [];
-    const reports = [
-      performanceReport([26], true, "report-one", 3306),
-      performanceReport([27], false, "report-two", 3307)
-    ];
-    let reportPage = 0;
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as {
-        query: string;
-        variables?: { code?: string; encounterID?: number };
-      };
-      if (body.query.includes("ReportFightParses")) {
-        // Only the first report yields a specialisation.
-        return body.variables?.code === "report-one"
-          ? jsonResponse(
-              performanceRankings(
-                { damage: 23, healing: 48, bossDamage: 42 },
-                {
-                  code: "report-one",
-                  fightId: 26,
-                  encounterId: 3306,
-                  spec: "Brewmaster"
-                }
-              )
-            )
-          : emptyRankingsResponse(body.variables?.code ?? "report-two");
-      }
-      if (body.query.includes("RankingCharacterIdentities")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character0: {
-                id: 2101,
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } }
-              }
-            }
-          }
-        });
-      }
-      if (body.query.includes("CharacterEncounterRankings")) {
-        requested.push(body.variables?.encounterID ?? -1);
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [] },
-                healing: { data: [] },
-                bossDamage: { data: [] }
-              }
-            }
-          }
-        });
-      }
-      const report = reports[reportPage++];
-      if (!report) throw new Error("unexpected_report_page");
-      return jsonResponse(report);
-    });
-
-    await client.getFirstKillReports(key, {
-      requestCap: 3,
-      parseRequestCap: 8
-    });
-
-    // 3307 has no specialisation yet, so it must be enriched first.
-    expect(requested[0]).toBe(3307);
-    expect(requested).toContain(3306);
-  });
-
-  it("bounds concurrent character encounter ranking requests", async () => {
-    let reportPage = 0;
-    let activeRankings = 0;
-    let maximumActiveRankings = 0;
-    const reports = [
-      performanceReport([26], true, "report-one", 3306),
-      performanceReport([27], true, "report-two", 3307),
-      performanceReport([28], false, "report-three", 3308)
-    ];
-    const { client } = clientFor(async (url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as { query: string };
-      if (body.query.includes("CharacterEncounterRankings")) {
-        activeRankings++;
-        maximumActiveRankings = Math.max(maximumActiveRankings, activeRankings);
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        activeRankings--;
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                name: "Sentinel",
-                server: { slug: "silvermoon", region: { slug: "eu" } },
-                damage: { data: [{ rankPercent: 91 }] },
-                healing: { data: [{ rankPercent: 82 }] },
-                bossDamage: { data: [{ rankPercent: 87 }] }
-              }
-            }
-          }
-        });
-      }
-      const report = reports[reportPage++];
-      if (!report) throw new Error("unexpected_report_page");
-      return jsonResponse(report);
-    });
-
-    await expect(
-      client.getFirstKillReports(key, { requestCap: 3, parseRequestCap: 1 })
-    ).resolves.toMatchObject({ kind: "evidence" });
-    expect(maximumActiveRankings).toBeLessThanOrEqual(2);
   });
 
   it("paginates public reports and retains every distinct Mythic kill", async () => {
@@ -1482,7 +1419,7 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
-    expect(fetch).toHaveBeenCalledTimes(8);
+    expect(fetch).toHaveBeenCalledTimes(6);
   });
 
   it("emits only participant-attributed boss kills and ignores trash fights", async () => {
@@ -2195,7 +2132,7 @@ describe("Warcraft Logs gateway", () => {
       client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 10 })
     ).resolves.toMatchObject({ kind: "evidence" });
 
-    expect(fetch).toHaveBeenCalledTimes(11);
+    expect(fetch).toHaveBeenCalledTimes(7);
   });
 
   it("refreshes the OAuth token sixty seconds before its reported expiry", async () => {
@@ -2238,10 +2175,10 @@ describe("Warcraft Logs gateway", () => {
         parseRequestCap: 10
       });
 
-      expect(fetch).toHaveBeenCalledTimes(17);
+      expect(fetch).toHaveBeenCalledTimes(11);
       expect(authorizations).toEqual([
-        ...Array.from({ length: 10 }, () => "Bearer token-1"),
-        ...Array.from({ length: 5 }, () => "Bearer token-2")
+        ...Array.from({ length: 6 }, () => "Bearer token-1"),
+        ...Array.from({ length: 3 }, () => "Bearer token-2")
       ]);
     } finally {
       vi.useRealTimers();
@@ -2470,7 +2407,7 @@ describe("Warcraft Logs gateway", () => {
       kills: expect.any(Array),
       limitation: { kind: "limitation", code: "request_cap" }
     });
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("retains collected kills if a later report page is malformed", async () => {

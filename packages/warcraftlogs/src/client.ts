@@ -17,7 +17,6 @@ const MYTHIC_DIFFICULTY = 5;
 const REPORTS_PER_PAGE = 10;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const MAX_RANKING_IDENTITIES = 50;
-const CHARACTER_RANKING_CONCURRENCY = 2;
 
 const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
@@ -64,69 +63,34 @@ const recentReportsQuery = `
   }
 `;
 
+// Scoped to the report and its exact fight IDs, but deliberately not to a
+// single encounter or difficulty: the schema widens the result when those
+// filters are omitted, so one request covers every boss killed on a raid
+// night. Each returned row still carries its own encounter and difficulty,
+// which the decoder checks against the fight it claims to describe.
 const reportFightParsesQuery = `
-  query ReportFightParses(
-    $code: String!
-    $fightIDs: [Int!]!
-    $encounterID: Int!
-    $difficulty: Int!
-  ) {
+  query ReportFightParses($code: String!, $fightIDs: [Int!]!) {
     reportData {
       report(code: $code) {
         code
         masterData { actors { id name server type } }
         damage: rankings(
           compare: Rankings
-          difficulty: $difficulty
-          encounterID: $encounterID
           fightIDs: $fightIDs
           playerMetric: dps
           timeframe: Historical
         )
         healing: rankings(
           compare: Rankings
-          difficulty: $difficulty
-          encounterID: $encounterID
           fightIDs: $fightIDs
           playerMetric: hps
           timeframe: Historical
         )
         bossDamage: rankings(
           compare: Rankings
-          difficulty: $difficulty
-          encounterID: $encounterID
           fightIDs: $fightIDs
           playerMetric: bossdps
           timeframe: Historical
-        )
-      }
-    }
-  }
-`;
-
-const characterEncounterRankingsQuery = `
-  query CharacterEncounterRankings(
-    $name: String!
-    $serverSlug: String!
-    $serverRegion: String!
-    $encounterID: Int!
-    $difficulty: Int!
-  ) {
-    characterData {
-      character(name: $name, serverSlug: $serverSlug, serverRegion: $serverRegion) {
-        name
-        server { slug region { slug } }
-        damage: encounterRankings(
-          compare: Rankings difficulty: $difficulty encounterID: $encounterID
-          metric: dps timeframe: Historical partition: -1
-        )
-        healing: encounterRankings(
-          compare: Rankings difficulty: $difficulty encounterID: $encounterID
-          metric: hps timeframe: Historical partition: -1
-        )
-        bossDamage: encounterRankings(
-          compare: Rankings difficulty: $difficulty encounterID: $encounterID
-          metric: bossdps timeframe: Historical partition: -1
         )
       }
     }
@@ -568,11 +532,18 @@ type RankingRow = Readonly<{
   spec: SpecIdentity | null;
   percentile: number | null;
 }>;
+/**
+ * One report's worth of parse hydration. A report is the unit of request
+ * because `Report.rankings` returns every requested fight in a single call;
+ * `fights` records what each fight is expected to be so a returned row can be
+ * rejected if it describes a different encounter or difficulty.
+ */
 type RankingScope = Readonly<{
   reportCode: string;
-  encounterId: number;
-  difficulty: number;
-  fightIds: readonly number[];
+  fights: ReadonlyMap<
+    number,
+    Readonly<{ encounterId: number; difficulty: number }>
+  >;
   earliestKilledAt: string;
 }>;
 
@@ -660,7 +631,6 @@ function decodeRankingRows(
 
   const identities = new Map<number, RankingIdentity>();
   const rows: RankingRow[] = [];
-  const fightIds = new Set(scope.fightIds);
   for (const metric of [
     "damage",
     "healing",
@@ -681,10 +651,15 @@ function decodeRankingRows(
       if (!fightId || !encounterId || !difficulty || !roles) {
         return { kind: "limitation", code: "parse_schema_drift" };
       }
+      // A row is kept only when it describes a fight this scope asked for and
+      // agrees with that fight's own encounter and difficulty. Rows for other
+      // fights are ignored rather than rejected: omitting the encounter and
+      // difficulty filters widens the response by design.
+      const expected = scope.fights.get(fightId);
       if (
-        !fightIds.has(fightId) ||
-        encounterId !== scope.encounterId ||
-        difficulty !== scope.difficulty
+        !expected ||
+        encounterId !== expected.encounterId ||
+        difficulty !== expected.difficulty
       ) {
         continue;
       }
@@ -843,45 +818,6 @@ function decodeCanonicalIdentityIds(
   return ids;
 }
 
-type CharacterRanking = Readonly<{
-  metric: WarcraftLogsParseMetric;
-  /** The specialisation carried by the rank that supplied the percentile. */
-  spec: SpecIdentity | null;
-}>;
-
-function characterRankingPercentile(value: unknown): CharacterRanking {
-  let best: number | undefined;
-  let bestSpec: SpecIdentity | null = null;
-  const visit = (candidate: unknown): void => {
-    if (Array.isArray(candidate)) {
-      for (const item of candidate) visit(item);
-      return;
-    }
-    const object = record(candidate);
-    if (!object) return;
-    const rankPercent = object.rankPercent;
-    if (
-      typeof rankPercent === "number" &&
-      Number.isFinite(rankPercent) &&
-      rankPercent >= 0 &&
-      rankPercent <= 100 &&
-      (best === undefined || rankPercent > best)
-    ) {
-      best = rankPercent;
-      const specName = nonEmptyString(object.spec);
-      bestSpec =
-        specName === null
-          ? null
-          : { className: reportedClassName(object.class), specName };
-    }
-    for (const nested of Object.values(object)) visit(nested);
-  };
-  visit(value);
-  return best === undefined
-    ? { metric: { state: "unavailable" }, spec: null }
-    : { metric: { state: "available", percentile: best }, spec: bestSpec };
-}
-
 // Keyed by class then specialisation, because four specialisation names are
 // shared by two classes each (Frost, Holy, Protection, Restoration) and a
 // name-only lookup silently hands one class the other's icon.
@@ -1027,58 +963,6 @@ function specPerformance(
       };
 }
 
-function decodeCharacterEncounterRankings(
-  value: unknown,
-  key: CharacterKey,
-  bossId: string,
-  difficulty: number,
-  knownClassName?: string
-): WarcraftLogsPerformance | WarcraftLogsLimitation {
-  const envelope = record(value);
-  const data = envelope && record(envelope.data);
-  const characterData = data && record(data.characterData);
-  const character = characterData && record(characterData.character);
-  const server = character && record(character.server);
-  const region = server && record(server.region);
-  if (
-    !character ||
-    normalizedIdentity(nonEmptyString(character.name) ?? "") !==
-      normalizedIdentity(key.name) ||
-    normalizedRealm(nonEmptyString(server?.slug) ?? "") !==
-      normalizedRealm(key.realm) ||
-    normalizedIdentity(nonEmptyString(region?.slug) ?? "") !==
-      normalizedIdentity(key.region)
-  ) {
-    return { kind: "limitation", code: "parse_schema_drift" };
-  }
-  if (typeof bossId !== "string" || !Number.isSafeInteger(difficulty)) {
-    return { kind: "limitation", code: "parse_schema_drift" };
-  }
-  const damage = characterRankingPercentile(character.damage);
-  const healing = characterRankingPercentile(character.healing);
-  const bossDamage = characterRankingPercentile(character.bossDamage);
-  // A character can hold ranks under several specialisations for one encounter.
-  // The strongest rank is the one the dossier shows, so its specialisation is
-  // the one the icon must describe.
-  const best = [damage, healing, bossDamage].reduce<CharacterRanking | null>(
-    (chosen, ranking) => {
-      if (ranking.metric.state !== "available") return chosen;
-      if (chosen === null || chosen.metric.state !== "available")
-        return ranking;
-      return ranking.metric.percentile > chosen.metric.percentile
-        ? ranking
-        : chosen;
-    },
-    null
-  );
-  return {
-    spec: specPerformance(best?.spec ?? null, knownClassName),
-    damage: damage.metric,
-    healing: healing.metric,
-    bossDamage: bossDamage.metric
-  };
-}
-
 function normalizedPerformance(
   rows: readonly RankingRow[],
   requestedIds: readonly number[],
@@ -1130,22 +1014,6 @@ function hasMoreReportPages(value: unknown): boolean | null {
   return recentReports && typeof recentReports.has_more_pages === "boolean"
     ? recentReports.has_more_pages
     : null;
-}
-
-async function forEachWithConcurrency<T>(
-  values: readonly T[],
-  concurrency: number,
-  task: (value: T) => Promise<void>
-): Promise<void> {
-  let nextIndex = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      while (nextIndex < values.length) {
-        const value = values[nextIndex++];
-        if (value !== undefined) await task(value);
-      }
-    })
-  );
 }
 
 export function createWarcraftLogsClient(
@@ -1346,15 +1214,21 @@ export function createWarcraftLogsClient(
 
     let parseLimitation: WarcraftLogsLimitation | undefined;
     const groups = new Map<string, RankingScope>();
+    // Grouped by report alone. A raid night's kills share one report, and one
+    // ranking request returns all of them, so grouping any finer would spend a
+    // request per boss for data the first request already carried.
     for (const kill of kills.values()) {
-      const groupKey = `${kill.reportCode}:${kill.bossId}:${kill.difficulty}`;
-      const existing = groups.get(groupKey);
+      const existing = groups.get(kill.reportCode);
+      const fight = {
+        encounterId: Number(kill.bossId),
+        difficulty: kill.difficulty
+      };
       groups.set(
-        groupKey,
+        kill.reportCode,
         existing
           ? {
               ...existing,
-              fightIds: [...existing.fightIds, kill.fightId],
+              fights: new Map(existing.fights).set(kill.fightId, fight),
               earliestKilledAt:
                 kill.killedAt < existing.earliestKilledAt
                   ? kill.killedAt
@@ -1362,9 +1236,7 @@ export function createWarcraftLogsClient(
             }
           : {
               reportCode: kill.reportCode,
-              encounterId: Number(kill.bossId),
-              difficulty: kill.difficulty,
-              fightIds: [kill.fightId],
+              fights: new Map([[kill.fightId, fight]]),
               earliestKilledAt: kill.killedAt
             }
       );
@@ -1381,10 +1253,10 @@ export function createWarcraftLogsClient(
     for (const group of [...groups.values()].sort(
       (a, b) =>
         a.earliestKilledAt.localeCompare(b.earliestKilledAt) ||
-        a.reportCode.localeCompare(b.reportCode) ||
-        a.encounterId - b.encounterId
+        a.reportCode.localeCompare(b.reportCode)
     )) {
-      // Reserve one request for the shared canonical identity lookup.
+      // Reserve one request for the shared canonical identity lookup, so a cap
+      // of N spends N-1 requests on rankings and one on identities.
       if (parseRequests + 1 >= options.parseRequestCap) {
         parseLimitation = { kind: "limitation", code: "parse_request_cap" };
         break;
@@ -1392,12 +1264,7 @@ export function createWarcraftLogsClient(
       parseRequests += 1;
       const rankings = await graphql(
         reportFightParsesQuery,
-        {
-          code: group.reportCode,
-          fightIDs: group.fightIds,
-          encounterID: group.encounterId,
-          difficulty: group.difficulty
-        },
+        { code: group.reportCode, fightIDs: [...group.fights.keys()] },
         options.signal
       ).catch((error: unknown) => {
         if (options.signal?.reason?.name !== "TimeoutError") throw error;
@@ -1458,7 +1325,7 @@ export function createWarcraftLogsClient(
               const performance = normalizedPerformance(
                 decoded.rows,
                 requestedIds,
-                group.fightIds,
+                [...group.fights.keys()],
                 options.className
               );
               if (isLimitation(performance)) {
@@ -1478,89 +1345,6 @@ export function createWarcraftLogsClient(
             }
         }
       }
-    }
-
-    // Character-level rankings are the complete best-shown source. Report
-    // rankings remain reserved for exact fight evidence and may be empty for
-    // archived or otherwise unranked reports.
-    if (kills.size > 0) {
-      const bosses = new Map<
-        string,
-        { bossId: string; difficulty: number; enriched: boolean }
-      >();
-      for (const kill of kills.values()) {
-        const bossKey = `${kill.bossId}:${kill.difficulty}`;
-        const known = bosses.get(bossKey);
-        // A boss counts as enriched only once every one of its kills carries a
-        // specialisation, so a partly-enriched boss keeps its place at the front.
-        const enriched =
-          (known?.enriched ?? true) && kill.performance.spec !== null;
-        bosses.set(bossKey, {
-          bossId: kill.bossId,
-          difficulty: kill.difficulty,
-          enriched
-        });
-      }
-      // Budgets, rate limits and timeouts cut this loop short, so spend what
-      // there is on the kills still missing a specialisation. Successive runs
-      // then converge instead of redoing the same prefix.
-      const orderedBosses = [...bosses.values()].sort(
-        (a, b) => Number(a.enriched) - Number(b.enriched)
-      );
-      await forEachWithConcurrency(
-        orderedBosses,
-        CHARACTER_RANKING_CONCURRENCY,
-        async ({ bossId, difficulty }) => {
-          const rankings = await graphql(
-            characterEncounterRankingsQuery,
-            {
-              name: key.name,
-              serverSlug: key.realm,
-              serverRegion: key.region,
-              encounterID: Number(bossId),
-              difficulty
-            },
-            options.signal
-          ).catch((error: unknown) => {
-            if (options.signal?.reason?.name !== "TimeoutError") throw error;
-            return {
-              kind: "limitation" as const,
-              code: "unavailable" as const
-            };
-          });
-          if (rankings.kind !== "success") return;
-          const performance = decodeCharacterEncounterRankings(
-            rankings.value,
-            key,
-            bossId,
-            difficulty,
-            options.className
-          );
-          if (isLimitation(performance)) return;
-          for (const [fightUrl, kill] of kills) {
-            if (kill.bossId !== bossId || kill.difficulty !== difficulty)
-              continue;
-            kills.set(fightUrl, {
-              ...kill,
-              performance: {
-                spec: kill.performance.spec ?? performance.spec,
-                damage:
-                  kill.performance.damage.state === "unavailable"
-                    ? performance.damage
-                    : kill.performance.damage,
-                healing:
-                  kill.performance.healing.state === "unavailable"
-                    ? performance.healing
-                    : kill.performance.healing,
-                bossDamage:
-                  kill.performance.bossDamage.state === "unavailable"
-                    ? performance.bossDamage
-                    : kill.performance.bossDamage
-              }
-            });
-          }
-        }
-      );
     }
 
     const sortedKills = [...kills.values()].sort(

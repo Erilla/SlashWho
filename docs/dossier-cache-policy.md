@@ -23,8 +23,11 @@ report/fight links as evidence; it never stores ranking JSON or API request
 URLs.
 
 WCL first discovers retained kill evidence within `EVIDENCE_REQUEST_CAP` (500
-pages by default), then hydrates report-scoped parse groups within the separate
-`EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). Ranking payloads are
+pages by default), then hydrates parses one report at a time within the
+separate `EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). A report is the
+unit of hydration because one ranking request returns every requested fight in
+that report, so a raid night's bosses cost one request rather than one each.
+Ranking payloads are
 filtered to identities matching the requested character before the bounded
 canonical lookup, so unrelated ranked players cannot exhaust attribution
 capacity or invalidate an otherwise usable parse. The cap includes the
