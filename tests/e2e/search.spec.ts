@@ -24,17 +24,17 @@ for (const applicantUrl of applicantUrls) {
       name: "ryii"
     });
     await page.goto("/");
-    await page.getByLabel("Applicant URL").fill(applicantUrl);
+    await page.getByLabel("Character/URL").fill(applicantUrl);
     await page.getByRole("button", { name: "Research applicant" }).click();
 
     await expect(page).toHaveURL(
       /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
     );
-    await expect(page.getByLabel("Applicant URL")).toHaveCount(1);
+    await expect(page.getByLabel("Character/URL")).toHaveCount(1);
     await expect(
       page.getByRole("button", { name: "Research applicant" })
     ).toHaveCount(1);
-    await expect(page.locator("main").getByLabel("Applicant URL")).toHaveCount(
+    await expect(page.locator("main").getByLabel("Character/URL")).toHaveCount(
       0
     );
     await expect(
@@ -91,7 +91,7 @@ test("shows submitted-character evidence while queued discovery is held", async 
   await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/hold`);
   await page.goto("/");
   await page
-    .getByLabel("Applicant URL")
+    .getByLabel("Character/URL")
     .fill("https://raider.io/characters/eu/silvermoon/queued");
   await page.getByRole("button", { name: "Research applicant" }).click();
 

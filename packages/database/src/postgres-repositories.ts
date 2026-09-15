@@ -355,9 +355,10 @@ function mapCharacterMythicKill(
         : { name: row.guild_name, realm: row.guild_realm! },
     historicWorldRank: row.historic_world_rank,
     performance: {
-      ...(row.spec_name === null || row.spec_icon_url === null
-        ? {}
-        : { spec: { name: row.spec_name, iconUrl: row.spec_icon_url } }),
+      spec:
+        row.spec_name === null || row.spec_icon_url === null
+          ? null
+          : { name: row.spec_name, iconUrl: row.spec_icon_url },
       damage: mapParseMetric(row.damage_parse_state, row.damage_percentile),
       healing: mapParseMetric(row.healing_parse_state, row.healing_percentile),
       bossDamage: mapParseMetric(

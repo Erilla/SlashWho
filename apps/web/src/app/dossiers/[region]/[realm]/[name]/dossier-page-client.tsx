@@ -50,6 +50,8 @@ export function DossierPageClient({
   const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
+  const [identityHidden, setIdentityHidden] = useState(false);
+  const identityRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState(
     initialDossier
       ? null
@@ -396,11 +398,21 @@ export function DossierPageClient({
         }
       : research;
 
+  useEffect(() => {
+    const target = identityRef.current;
+    if (!target || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => {
+      setIdentityHidden(!(entry?.isIntersecting ?? true));
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <DossierCharacterProvider characters={dossier?.characters ?? []}>
       <main className="page-shell dossier-page">
         <header className="dossier-heading">
-          <div>
+          <div ref={identityRef}>
             <p className="eyebrow">Applicant dossier</p>
             <h1>
               <DossierCharacterName character={identity} />
@@ -413,6 +425,18 @@ export function DossierPageClient({
             character={{ key: identity, displayName: rootDisplayName }}
           />
         </header>
+        {identityHidden ? (
+          <div
+            className="dossier-header-identity"
+            role="status"
+            aria-label="Current character"
+          >
+            <DossierCharacterName character={identity} />
+            <span>
+              {identity.region.toUpperCase()} · {identity.realm}
+            </span>
+          </div>
+        ) : null}
 
         {visibleResearch ? (
           <DossierResearchState research={visibleResearch} />
