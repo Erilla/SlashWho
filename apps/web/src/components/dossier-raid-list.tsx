@@ -350,6 +350,7 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
                         <DossierParseList
                           label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
                           parses={evidence.parses}
+                          showCharacterName={false}
                         />
                       </dd>
                     </div>
