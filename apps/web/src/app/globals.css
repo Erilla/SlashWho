@@ -1086,10 +1086,6 @@ a {
   fill: currentColor;
 }
 
-.upstream-link-icon--raiderio path:last-child {
-  fill: var(--surface-raised);
-}
-
 .dossier-report-links {
   display: flex;
   flex-wrap: wrap;
