@@ -1,5 +1,7 @@
 import { applicantDossierSchema } from "@slashwho/contracts";
 
+import { loadWebConfig } from "../../../../../../server/config";
+import { readCredentialOverrides } from "../../../../../../server/credential-headers";
 import { getContainer } from "../../../../../../server/container";
 import {
   apiError,
@@ -37,10 +39,11 @@ export async function GET(
       await searches.authorizePublicRead(request.headers)
     );
     if (denied) return denied;
+    const overrides = readCredentialOverrides(request.headers, loadWebConfig());
     const result =
       new URL(request.url).searchParams.get("scope") === "initial"
-        ? await dossiers.readInitial(parsed.key, request.signal)
-        : await dossiers.read(parsed.key, request.signal);
+        ? await dossiers.readInitial(parsed.key, request.signal, overrides)
+        : await dossiers.read(parsed.key, request.signal, overrides);
     if (result.kind === "not_ready") return apiError("discovery_not_ready");
     return Response.json(applicantDossierSchema.parse(result.dossier), {
       headers: { "cache-control": "no-store" }

@@ -37,17 +37,21 @@ let readAllowed:
   { allowed: true } | { allowed: false; retryAfterSeconds: number };
 let readCalls = 0;
 let readInitialCalls = 0;
+let lastReadOverrides: unknown;
+let lastReadInitialOverrides: unknown;
 
 const dossiers = {
   async start() {
     return started;
   },
-  async read() {
+  async read(_key: unknown, _signal: unknown, overrides: unknown) {
     readCalls += 1;
+    lastReadOverrides = overrides;
     return read;
   },
-  async readInitial() {
+  async readInitial(_key: unknown, _signal: unknown, overrides: unknown) {
     readInitialCalls += 1;
+    lastReadInitialOverrides = overrides;
     return readInitial;
   }
 };
@@ -72,6 +76,24 @@ const searches = {
 
 vi.mock("../../../server/container", () => ({
   getContainer: async () => ({ dossiers, searches })
+}));
+
+vi.mock("../../../server/config", () => ({
+  loadWebConfig: () => ({
+    databaseUrl: "postgresql://slashwho:secret@db.internal/slashwho",
+    application: {
+      PUBLIC_READS_PER_MINUTE: 60,
+      BOT_API_KEY: "b".repeat(32),
+      RATE_LIMIT_HASH_SECRET: "r".repeat(32)
+    },
+    dossier: {
+      raiderIoBaseUrl: "https://raider.io",
+      raiderIoTimeoutMs: 10_000,
+      blizzardClientId: "blizzard-client-id",
+      blizzardClientSecret: "blizzard-client-secret",
+      evidenceJobCredentialEncryptionKey: Buffer.alloc(32)
+    }
+  })
 }));
 
 import { POST } from "./route";
@@ -115,6 +137,8 @@ beforeEach(() => {
   readAllowed = { allowed: true };
   readCalls = 0;
   readInitialCalls = 0;
+  lastReadOverrides = undefined;
+  lastReadInitialOverrides = undefined;
 });
 
 describe("POST /api/dossiers", () => {
@@ -268,6 +292,25 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
       "discovery_not_ready"
     );
+  });
+
+  it("builds a Blizzard gateway override from visitor-supplied credential headers", async () => {
+    // Break caught: a visitor's own Blizzard credentials could be silently
+    // dropped instead of being used for that request's evidence gathering.
+    const response = await GET(
+      new Request("https://slashwho.example/api/dossiers/eu/silvermoon/ryii", {
+        headers: {
+          "x-real-ip": "203.0.113.8",
+          "x-blizzard-client-id": "visitor-id",
+          "x-blizzard-client-secret": "visitor-secret"
+        }
+      }),
+      characterContext
+    );
+
+    expect(response.status).toBe(200);
+    expect(readCalls).toBe(1);
+    expect(lastReadOverrides).toMatchObject({ blizzard: expect.anything() });
   });
 });
 

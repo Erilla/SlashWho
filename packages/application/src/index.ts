@@ -27,6 +27,7 @@ export type {
   ApplicantDossierService,
   CreateDossierCommand,
   CreateDossierResult,
+  DossierGatewayOverrides,
   ReadDossierResult
 } from "./applicant-dossier-service";
 export { createRateLimiter } from "./rate-limit";
