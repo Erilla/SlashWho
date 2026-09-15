@@ -82,7 +82,7 @@ a {
   inset-inline: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 1rem;
   min-height: var(--header-height);
@@ -105,8 +105,17 @@ a {
   gap: 1rem;
 }
 
-.header-search {
+/* The scrolled dossier identity is portalled in here so the header grid, rather
+   than a viewport-centred overlay, decides how the space is shared. */
+.header-identity {
   grid-column: 3 / 4;
+  display: flex;
+  min-width: 0;
+  justify-content: center;
+}
+
+.header-search {
+  grid-column: 4 / 5;
   width: min(100%, 31rem);
   justify-self: end;
 }
@@ -393,20 +402,23 @@ a {
 }
 
 .dossier-header-identity {
-  position: fixed;
-  z-index: 11;
-  top: 0;
-  left: 50%;
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
-  min-height: var(--header-height);
+  min-width: 0;
   align-items: center;
   justify-content: center;
   gap: 0.1rem;
-  transform: translateX(-50%);
   color: var(--muted);
   font-size: 0.85rem;
+  text-align: center;
   pointer-events: none;
+}
+
+.dossier-header-identity > * {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dossier-header-identity .dossier-character-name {
@@ -1682,16 +1694,20 @@ a {
   }
 
   .site-header {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "brand nav"
-      "search search";
+      "brand identity nav"
+      "search search search";
     row-gap: 0.55rem;
     padding: 0.55rem 1.25rem;
   }
 
   .header-logo {
     grid-area: brand;
+  }
+
+  .header-identity {
+    grid-area: identity;
   }
 
   .site-nav {
@@ -1709,9 +1725,6 @@ a {
   }
 
   .dossier-header-identity {
-    top: 0.55rem;
-    min-height: 0;
-    justify-content: flex-start;
     gap: 0;
     line-height: 1.15;
   }

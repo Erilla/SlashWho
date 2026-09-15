@@ -9,6 +9,7 @@ import {
   type CharacterKey
 } from "@slashwho/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
@@ -21,6 +22,7 @@ import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierRateLimitCountdown } from "../../../../../components/dossier-rate-limit-countdown";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
 import { CharacterProfileLinks } from "../../../../../components/profile-links";
+import { headerIdentitySlotId } from "../../../../../components/site-header";
 
 type DossierPageClientProps = Readonly<{
   identity: CharacterKey;
@@ -52,6 +54,7 @@ export function DossierPageClient({
   const [error, setError] = useState<string | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
   const [identityHidden, setIdentityHidden] = useState(false);
+  const [identitySlot, setIdentitySlot] = useState<HTMLElement | null>(null);
   const identityRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState(
     initialDossier
@@ -423,6 +426,24 @@ export function DossierPageClient({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    setIdentitySlot(document.getElementById(headerIdentitySlotId));
+  }, []);
+
+  // The header owns this slot, so the identity is laid out by the header grid
+  // instead of floating over whatever the header happens to hold.
+  const identityBadge = (
+    <div
+      className="dossier-header-identity"
+      role="status"
+      aria-label="Current character"
+    >
+      <DossierCharacterName character={identity} />
+      <span>
+        {identity.region.toUpperCase()} · {identity.realm}
+      </span>
+    </div>
+  );
   return (
     <DossierCharacterProvider characters={dossier?.characters ?? []}>
       <main className="page-shell dossier-page">
@@ -449,18 +470,9 @@ export function DossierPageClient({
             character={{ key: identity, displayName: rootDisplayName }}
           />
         </header>
-        {identityHidden ? (
-          <div
-            className="dossier-header-identity"
-            role="status"
-            aria-label="Current character"
-          >
-            <DossierCharacterName character={identity} />
-            <span>
-              {identity.region.toUpperCase()} · {identity.realm}
-            </span>
-          </div>
-        ) : null}
+        {identityHidden && identitySlot
+          ? createPortal(identityBadge, identitySlot)
+          : null}
 
         {visibleResearch ? (
           <DossierResearchState research={visibleResearch} />
