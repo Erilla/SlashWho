@@ -668,8 +668,56 @@ describe("DossierPageClient connected-character additions", () => {
     expect(
       await screen.findByRole("heading", { name: "Expanded evidence" })
     ).toBeVisible();
+    // Break caught: the dialog closes on submit, so the dossier itself has to
+    // confirm the addition or nothing tells the reviewer it worked.
+    expect(
+      await screen.findByText("Ryalts has been added to this dossier.")
+    ).toBeVisible();
     expect(
       fetchMock.mock.calls.filter(([input]) => String(input) === dossierPath)
     ).not.toHaveLength(0);
+  });
+});
+
+describe("DossierPageClient queued connected characters", () => {
+  it("announces a queued character as being researched", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL | RequestInfo) =>
+        String(input).endsWith("/connected-characters")
+          ? new Response(
+              JSON.stringify({
+                kind: "job",
+                jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+                status: "queued"
+              }),
+              { status: 202, headers: { "content-type": "application/json" } }
+            )
+          : new Response(JSON.stringify(expanded), {
+              status: 200,
+              headers: { "content-type": "application/json" }
+            })
+      )
+    );
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={initial}
+        jobId={null}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add character" }));
+    await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+    await user.paste("https://raider.io/characters/eu/silvermoon/Ryalts");
+    await user.click(
+      screen.getByRole("button", { name: "Add connected character" })
+    );
+
+    expect(
+      await screen.findByText("Ryalts has been added and is being researched.")
+    ).toBeVisible();
   });
 });
