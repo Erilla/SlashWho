@@ -219,3 +219,26 @@ it("shows scanning and waiting states without leaving a spinner on completed sca
     screen.queryByRole("img", { name: /scan complete/i })
   ).not.toBeInTheDocument();
 });
+
+it("uses compact matching controls for manually adding a connected character", () => {
+  render(
+    <DossierCharacterList
+      characters={[]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  const form = screen
+    .getByRole("textbox", {
+      name: "Connected character URL"
+    })
+    .closest("form");
+  expect(form).toHaveClass("dossier-character-add-form");
+
+  const input = screen.getByRole("textbox", {
+    name: "Connected character URL"
+  });
+  const button = screen.getByRole("button", { name: "Add character" });
+  expect(input).toHaveClass("dossier-character-add-control");
+  expect(button).toHaveClass("dossier-character-add-control");
+});
