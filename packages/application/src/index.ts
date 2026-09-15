@@ -29,6 +29,8 @@ export type {
   CreateDossierResult,
   ReadDossierResult
 } from "./applicant-dossier-service";
+export { createMeasurementScope } from "./measurement";
+export type { MeasurementScope } from "./measurement";
 export { createRateLimiter } from "./rate-limit";
 export type {
   RateLimitDecision,
