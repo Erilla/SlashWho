@@ -29,6 +29,12 @@ function databaseUrl(): string {
   return value;
 }
 
+const seedSpec = {
+  name: "Fire",
+  iconUrl:
+    "https://wow.zamimg.com/images/wow/icons/medium/spell_fire_firebolt.jpg"
+} as const;
+
 export async function releaseUpstreamCharacterRead(): Promise<void> {
   const baseUrl = process.env.E2E_RAIDER_IO_BASE_URL;
   if (!baseUrl) throw new Error("e2e_fixture_base_url_unavailable");
@@ -120,6 +126,7 @@ export async function seedCharacterEvidence(
                       guild: { name: "Arachnid", realm: "silvermoon" },
                       historicWorldRank: 147,
                       performance: {
+                        spec: seedSpec,
                         damage: {
                           state: "available" as const,
                           percentile: 87.19
@@ -144,6 +151,7 @@ export async function seedCharacterEvidence(
                       guild: { name: "Arachnid", realm: "silvermoon" },
                       historicWorldRank: 147,
                       performance: {
+                        spec: seedSpec,
                         damage: {
                           state: "available" as const,
                           percentile: 99.29
@@ -171,6 +179,7 @@ export async function seedCharacterEvidence(
                       guild: { name: "Arachnid", realm: "silvermoon" },
                       historicWorldRank: 147,
                       performance: {
+                        spec: seedSpec,
                         damage: {
                           state: "available" as const,
                           percentile: 100
@@ -199,6 +208,7 @@ export async function seedCharacterEvidence(
                       guild: { name: "Arachnid", realm: "silvermoon" },
                       historicWorldRank: 212,
                       performance: {
+                        spec: seedSpec,
                         damage: { state: "unavailable" as const },
                         healing: { state: "unavailable" as const },
                         bossDamage: { state: "unavailable" as const }

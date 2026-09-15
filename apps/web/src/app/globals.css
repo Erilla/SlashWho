@@ -916,7 +916,14 @@ a {
   list-style: none;
 }
 
-.dossier-parse-list li,
+.dossier-parse-list li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+}
+
 .dossier-parse-metrics {
   display: flex;
   min-width: 0;

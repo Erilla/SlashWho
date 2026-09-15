@@ -1348,6 +1348,7 @@ export function createWarcraftLogsClient(
             kills.set(fightUrl, {
               ...kill,
               performance: {
+                spec: kill.performance.spec ?? null,
                 damage:
                   kill.performance.damage.state === "unavailable"
                     ? performance.damage
