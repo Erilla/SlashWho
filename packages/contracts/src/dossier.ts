@@ -17,6 +17,13 @@ export const dossierSourceLabelSchema = z.enum([
   "manually_added"
 ]);
 
+export const dossierEvidenceStateSchema = z.enum([
+  "waiting",
+  "scanning",
+  "complete",
+  "partial"
+]);
+
 export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
@@ -24,6 +31,8 @@ export const dossierCharacterSchema = z
     className: z.string().min(1).nullable(),
     raiderIoUrl: z.url(),
     source: dossierSourceLabelSchema,
+    evidenceState: dossierEvidenceStateSchema.optional(),
+    /** @deprecated Use evidenceState for the precise scan state. */
     researchState: z.enum(["complete", "gathering"]).optional()
   })
   .strict();
@@ -185,6 +194,7 @@ export const applicantDossierSchema = z
 
 export type CharacterKey = z.infer<typeof characterKeySchema>;
 export type DossierSourceLabel = z.infer<typeof dossierSourceLabelSchema>;
+export type DossierEvidenceState = z.infer<typeof dossierEvidenceStateSchema>;
 export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
 export type DossierCuttingEdge = z.infer<typeof dossierCuttingEdgeSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;

@@ -330,6 +330,12 @@ export function DossierPageClient({
     let stopped = false;
     let attempt = 0;
 
+    function schedulePoll() {
+      const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
+      attempt += 1;
+      timeout = setTimeout(() => void pollEvidence(), delay);
+    }
+
     async function pollEvidence() {
       try {
         const response = await fetch(dossierPath, {
@@ -338,6 +344,10 @@ export function DossierPageClient({
         });
         const body = await response.json().catch(() => null);
         if (!response.ok) {
+          if (response.status === 429 || response.status >= 500) {
+            schedulePoll();
+            return;
+          }
           setError(apiError(response, body));
           return;
         }
@@ -350,13 +360,11 @@ export function DossierPageClient({
         setInitialError(null);
         setError(null);
         if (parsed.data.research.state !== "gathering") return;
-        const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
-        attempt += 1;
-        timeout = setTimeout(() => void pollEvidence(), delay);
+        schedulePoll();
       } catch (caught) {
         if (caught instanceof Error && caught.name === "AbortError") return;
         if (!stopped) {
-          setError("The applicant evidence status could not be loaded.");
+          schedulePoll();
         }
       }
     }

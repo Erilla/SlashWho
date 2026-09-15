@@ -150,6 +150,11 @@ describe("character evidence queue", () => {
       collectCharacterEvidenceQueueName,
       expect.objectContaining({ policy: "exclusive" })
     );
+    expect(queueFakes.work).toHaveBeenCalledWith(
+      collectCharacterEvidenceQueueName,
+      expect.objectContaining({ localConcurrency: 3 }),
+      expect.any(Function)
+    );
     expect(queueFakes.send).toHaveBeenCalledWith(
       collectCharacterEvidenceQueueName,
       { runId },

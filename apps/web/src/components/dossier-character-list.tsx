@@ -27,6 +27,11 @@ const sourceLabel: Record<DossierCharacter["source"], string> = {
   manually_added: "Manually added"
 };
 
+const evidenceStateLabel = {
+  waiting: "Evidence waiting to be scanned",
+  scanning: "Evidence currently being scanned"
+} as const;
+
 export function DossierCharacterList({
   characters,
   root
@@ -110,7 +115,8 @@ export function DossierCharacterList({
             <div>
               <div className="dossier-character-name-line">
                 <DossierCharacterName character={character} />
-                {character.researchState === "gathering" ? (
+                {!character.evidenceState &&
+                character.researchState === "gathering" ? (
                   <svg
                     aria-label={`Research gathering for ${character.displayName}`}
                     className="dossier-loading-spinner dossier-character-spinner"
@@ -132,6 +138,34 @@ export function DossierCharacterList({
               <span className="source-badge">
                 {sourceLabel[character.source]}
               </span>
+              {character.evidenceState === "scanning" ? (
+                <span
+                  aria-label={evidenceStateLabel.scanning}
+                  className="dossier-evidence-state dossier-evidence-state--scanning"
+                  role="img"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8" />
+                  </svg>
+                  <span className="visually-hidden">
+                    {evidenceStateLabel.scanning}
+                  </span>
+                </span>
+              ) : character.evidenceState === "waiting" ? (
+                <span
+                  aria-label={evidenceStateLabel.waiting}
+                  className="dossier-evidence-state dossier-evidence-state--waiting"
+                  role="img"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                  <span className="visually-hidden">
+                    {evidenceStateLabel.waiting}
+                  </span>
+                </span>
+              ) : null}
             </div>
           </li>
         ))}
