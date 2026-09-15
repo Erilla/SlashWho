@@ -48,7 +48,8 @@ it("migrates and initializes the durable queue before serving searches", async (
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
-        DOSSIER_CHARACTER_CAP: 12
+        DOSSIER_CHARACTER_CAP: 12,
+        DOSSIER_PROVIDER_CONCURRENCY: 4
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
@@ -147,7 +148,8 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
-        DOSSIER_CHARACTER_CAP: 12
+        DOSSIER_CHARACTER_CAP: 12,
+        DOSSIER_PROVIDER_CONCURRENCY: 4
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
