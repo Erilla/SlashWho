@@ -179,3 +179,71 @@ test("fits the dialog inside a narrow viewport without overflow", async ({
     )
   ).toBe(true);
 });
+
+async function actionGeometry(page: import("playwright/test").Page) {
+  return page.locator(".dossier-character-add-actions").evaluate((actions) => {
+    const buttons = [...actions.querySelectorAll("button")];
+    const cancel = buttons.find((button) => button.textContent === "Cancel")!;
+    const submit = buttons.find(
+      (button) => button.textContent === "Add connected character"
+    )!;
+    const read = (element: HTMLElement) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        left: Math.round(bounds.left),
+        right: Math.round(bounds.right),
+        centerY: Math.round(bounds.top + bounds.height / 2),
+        height: Math.round(bounds.height),
+        fontSize: Number.parseFloat(getComputedStyle(element).fontSize)
+      };
+    };
+    return { cancel: read(cancel), submit: read(submit) };
+  });
+}
+
+for (const [label, width] of [
+  ["desktop", 1280],
+  ["mobile", 390]
+] as const) {
+  test(`lays Cancel and the submit side by side at ${label} width`, async ({
+    page
+  }) => {
+    // Break caught: at 20px the two labels needed 367px inside a 318px dialog,
+    // so flex-wrap stacked Cancel on top of the submit at phone widths.
+    await page.setViewportSize({ width, height: 900 });
+    const trigger = await openDossierWithDialog(page, `rowat${label}`);
+    await trigger.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    const { cancel, submit } = await actionGeometry(page);
+
+    expect(Math.abs(cancel.centerY - submit.centerY)).toBeLessThanOrEqual(1);
+    expect(cancel.right).toBeLessThan(submit.left);
+  });
+}
+
+test("keeps the dialog actions and the add trigger compact", async ({
+  page
+}) => {
+  // Break caught: the buttons inherited the header search's 20px display type
+  // and 3.35rem height, and the trigger stretched the full panel width.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const trigger = await openDossierWithDialog(page, "compactbuttons");
+
+  const triggerBox = await trigger.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      width: Math.round(bounds.width),
+      fontSize: Number.parseFloat(getComputedStyle(element).fontSize)
+    };
+  });
+  expect(triggerBox.fontSize).toBeLessThanOrEqual(16);
+  expect(triggerBox.width).toBeLessThanOrEqual(180);
+
+  await trigger.click();
+  const { cancel, submit } = await actionGeometry(page);
+  for (const action of [cancel, submit]) {
+    expect(action.fontSize).toBeLessThanOrEqual(16);
+    expect(action.height).toBeLessThanOrEqual(40);
+  }
+});

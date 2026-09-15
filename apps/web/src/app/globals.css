@@ -486,11 +486,17 @@ a {
   list-style: none;
 }
 
-.dossier-character-add-trigger {
+/* The panel is a flex column above 48rem and .search-button is full width
+   below it, so the trigger needs both its own width and its own alignment to
+   stay a compact action rather than a panel-wide bar. */
+.dossier-character-panel .dossier-character-add-trigger {
+  align-self: flex-start;
+  width: fit-content;
   margin-top: 1rem;
-  min-height: 2.4rem;
-  padding-inline: 0.9rem;
-  width: auto;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding-inline: 0.85rem;
+  font-size: 0.95rem;
 }
 
 .dossier-character-add-dialog {
@@ -525,14 +531,19 @@ a {
 
 .dossier-character-add-actions {
   display: flex;
+  /* Cancel sits left and the submit right. Wrapping stays available so an
+     extreme text size degrades to two rows instead of overflowing. */
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 0.625rem;
 }
 
 .dossier-character-add-actions .search-button {
   width: auto;
-  padding-inline: 0.9rem;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding-inline: 0.85rem;
+  font-size: 0.95rem;
 }
 
 .dossier-scroll-hint {
