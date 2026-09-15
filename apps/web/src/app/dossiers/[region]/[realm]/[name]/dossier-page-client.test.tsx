@@ -11,6 +11,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push })
 }));
 
+import { headerIdentitySlotId } from "../../../../../components/site-header";
+
 import { DossierPageClient } from "./dossier-page-client";
 
 const identity: CharacterKey = {
@@ -125,6 +127,12 @@ describe("DossierPageClient staged research", () => {
   });
 
   it("moves the identity into the centered header after the heading scrolls away", async () => {
+    // The badge is portalled into the slot the site header owns, so the header
+    // grid keeps it clear of the search controls.
+    const headerSlot = document.createElement("div");
+    headerSlot.id = headerIdentitySlotId;
+    document.body.append(headerSlot);
+
     let observe: ((entries: IntersectionObserverEntry[]) => void) | undefined;
     vi.stubGlobal(
       "IntersectionObserver",
@@ -152,9 +160,11 @@ describe("DossierPageClient staged research", () => {
       observe?.([{ isIntersecting: false } as IntersectionObserverEntry])
     );
 
-    expect(
-      await screen.findByRole("status", { name: "Current character" })
-    ).toHaveTextContent("RyiiEU · silvermoon");
+    const badge = await screen.findByRole("status", {
+      name: "Current character"
+    });
+    expect(badge).toHaveTextContent("RyiiEU · silvermoon");
+    expect(headerSlot).toContainElement(badge);
   });
 
   it("shows a loading indicator while applicant research is in progress", () => {
