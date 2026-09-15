@@ -99,6 +99,8 @@ interface EvidenceRunRow {
   created_at: Date;
   started_at: Date | null;
   completed_at: Date | null;
+  wcl_client_id_encrypted: string | null;
+  wcl_client_secret_encrypted: string | null;
 }
 
 interface CharacterMythicKillRow {
@@ -330,7 +332,9 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     errorCode: row.error_code,
     createdAt: row.created_at,
     startedAt: row.started_at,
-    completedAt: row.completed_at
+    completedAt: row.completed_at,
+    wclClientIdEncrypted: row.wcl_client_id_encrypted,
+    wclClientSecretEncrypted: row.wcl_client_secret_encrypted
   };
 }
 
@@ -466,7 +470,7 @@ async function loadCompletedEvidence(
     `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
             evidence_version, attempt, limitation_code, parse_limitation_code,
             retry_after_at, error_code, created_at, started_at,
-            completed_at
+            completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
        AND status IN ('complete', 'partial')
@@ -1979,7 +1983,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
-      async reserve({ key, freshnessCutoff, at }) {
+      async reserve({ key, freshnessCutoff, at, credentials }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -2014,7 +2018,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const active = await client.query<EvidenceRunRow>(
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
                AND status IN ('queued', 'running', 'retrying')
@@ -2033,12 +2037,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-              (region, realm_slug, normalized_name)
-             VALUES ($1, $2, $3)
+              (region, realm_slug, normalized_name, wcl_client_id_encrypted, wcl_client_secret_encrypted)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                       completed_at`,
-            [key.region, key.realm, key.name]
+                       completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted`,
+            [
+              key.region,
+              key.realm,
+              key.name,
+              credentials?.wclClientIdEncrypted ?? null,
+              credentials?.wclClientSecretEncrypted ?? null
+            ]
           );
           await client.query("COMMIT");
           return {
@@ -2058,7 +2068,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                   attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                  completed_at
+                  completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted
            FROM character_evidence_runs WHERE id = $1`,
           [id]
         );
@@ -2078,7 +2088,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              AND status IN ('queued', 'running', 'retrying')
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                      attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                     completed_at`,
+                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted`,
           [id, attempt]
         );
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
@@ -2220,7 +2230,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
-                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7
+                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
+                 wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
               runId,
@@ -2249,7 +2260,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           throw new RangeError("character_evidence_error_invalid");
         const result = await pool.query(
           `UPDATE character_evidence_runs
-           SET status = 'failed', error_code = $2, completed_at = now()
+           SET status = 'failed', error_code = $2, completed_at = now(),
+               wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
            WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
           [id, code]
         );
@@ -2269,7 +2281,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              run.id, run.region, run.realm_slug, run.normalized_name,
              run.queue_job_id, run.status, run.attempt, run.limitation_code,
              run.parse_limitation_code,
-             run.error_code, run.created_at, run.started_at, run.completed_at
+             run.error_code, run.created_at, run.started_at, run.completed_at,
+             run.wcl_client_id_encrypted, run.wcl_client_secret_encrypted
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])
              AS requested(region, realm_slug, normalized_name)

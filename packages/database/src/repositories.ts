@@ -158,6 +158,8 @@ export interface CharacterEvidenceRun {
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  wclClientIdEncrypted: string | null;
+  wclClientSecretEncrypted: string | null;
 }
 
 export type CharacterMythicKillParseMetric =
@@ -238,6 +240,10 @@ export interface EvidenceRepository {
     key: CharacterKey;
     freshnessCutoff: Date;
     at: Date;
+    credentials?: {
+      wclClientIdEncrypted: string;
+      wclClientSecretEncrypted: string;
+    } | null;
   }): Promise<EvidenceReservationResult>;
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
