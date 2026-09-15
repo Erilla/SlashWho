@@ -227,10 +227,16 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
     bestParses.getByRole("link", { name: "Damage 100th percentile" })
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
   await expect(
-    firstKillParses.getByText("Healing not applicable")
+    firstKillParses
+      .locator(".dossier-parse-metric")
+      .filter({ hasText: "Healing" })
+      .getByText("-", { exact: true })
   ).toBeVisible();
   await expect(
-    firstKillParses.getByText("Boss damage unavailable")
+    firstKillParses
+      .locator(".dossier-parse-metric")
+      .filter({ hasText: "Boss Damage" })
+      .getByText("-", { exact: true })
   ).toBeVisible();
 
   await boss.getByText("View kill evidence").click();
@@ -260,6 +266,12 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(
     firstEventParses.getByText("Parsecheck", { exact: true })
   ).toHaveCount(0);
+  await expect(
+    firstKillParses.getByText("Parsecheck", { exact: true })
+  ).toBeVisible();
+  await expect(
+    bestParses.getByText("Laterparse", { exact: true })
+  ).toBeVisible();
   await expect(latestEventParses.locator("xpath=ancestor::dl")).not.toHaveClass(
     /dossier-evidence-first-kill/
   );

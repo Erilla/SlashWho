@@ -15,19 +15,19 @@ export function UpstreamIcon({
     source === "warcraft_logs" ? "warcraft-logs" : source
   }`;
 
-  if (source === "raiderio") {
-    return (
-      <svg aria-hidden="true" className={className} viewBox="0 0 24 24">
-        <path d="M12 2.5 20 7v10l-8 4.5L4 17V7l8-4.5Z" />
-        <path d="m8 15 4-7 4 7-4-2-4 2Z" />
-      </svg>
-    );
-  }
-
   return (
-    <svg aria-hidden="true" className={className} viewBox="0 0 24 24">
-      <path d="M4 19V9h4v10H4Zm6 0V4h4v15h-4Zm6 0v-7h4v7h-4Z" />
-    </svg>
+    <img
+      alt=""
+      aria-hidden="true"
+      className={className}
+      height="24"
+      src={
+        source === "warcraft_logs"
+          ? "/brand/warcraft-logs-mark.png"
+          : "/brand/raiderio-mark.png"
+      }
+      width="24"
+    />
   );
 }
 

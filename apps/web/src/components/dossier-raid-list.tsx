@@ -329,7 +329,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                     <div>
                       <dt>Guild</dt>
                       <dd>
-                        Guild: {displayGuild(evidence.guild)}
+                        {displayGuild(evidence.guild)}
                         {evidence.guild ? (
                           <GuildProfileLinks guild={evidence.guild} />
                         ) : null}
@@ -360,6 +360,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                           label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
                           loading={loading}
                           parses={evidence.parses}
+                          showCharacterName={false}
                         />
                       </dd>
                     </div>

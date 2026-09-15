@@ -29,7 +29,7 @@ const parses = [
 
 afterEach(cleanup);
 
-it("presents every character metric with source links and accessible unavailable states", () => {
+it("presents every character name and metric with source links and accessible unavailable states", () => {
   // Break caught: reviewer-facing parse evidence could lose its precise fight
   // source, rely on colour alone, or imply that unavailable data is a score.
   render(<DossierParseList label="First kill parses" parses={parses} />);
@@ -38,7 +38,7 @@ it("presents every character metric with source links and accessible unavailable
   expect(screen.queryByText(/rankings\./)).not.toBeInTheDocument();
   expect(screen.getByRole("group", { name: "Ryii parses" })).toBeVisible();
   expect(screen.getByText("Fire")).toBeVisible();
-  expect(screen.queryByText("Ryii")).not.toBeInTheDocument();
+  expect(screen.getByText("Ryii")).toBeVisible();
   const damage = screen.getByRole("link", {
     name: "Damage 87.1 percentile"
   });
@@ -56,6 +56,19 @@ it("presents every character metric with source links and accessible unavailable
   expect(
     screen.queryByRole("link", { name: "Boss Damage" })
   ).not.toBeInTheDocument();
+});
+
+it("can omit the visible character name while retaining accessible attribution", () => {
+  render(
+    <DossierParseList
+      label="Kill parses"
+      parses={parses}
+      showCharacterName={false}
+    />
+  );
+
+  expect(screen.queryByText("Ryii")).not.toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Ryii parses" })).toBeVisible();
 });
 
 it("uses ordinal percentile labels for whole-number parse values", () => {

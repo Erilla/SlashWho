@@ -249,9 +249,16 @@ describe("DossierPageClient", () => {
       );
     expect(
       within(screen.getByText("Sikran").closest("article")!).getByText(
-        "Guild: —"
+        "Guild",
+        { selector: "dt" }
       )
     ).toBeVisible();
+    const sikranGuildLabel = within(
+      screen.getByText("Sikran").closest("article")!
+    ).getByText("Guild", { selector: "dt" });
+    expect(
+      sikranGuildLabel.parentElement?.querySelector("dd")
+    ).toHaveTextContent(/^—$/);
     expect(
       within(screen.getByText("Sikran").closest("article")!).getAllByText(
         "World rank: —"
