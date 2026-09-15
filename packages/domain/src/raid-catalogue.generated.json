@@ -1,6 +1,6 @@
 {
   "source": "blizzard-journal",
-  "generatedAt": "2026-09-12T20:32:58.940Z",
+  "generatedAt": "2026-09-15T16:00:08.033Z",
   "region": "eu",
   "locale": "en_GB",
   "raids": [
@@ -19,7 +19,7 @@
           "journalBossId": "849",
           "bossName": "The Fallen Protectors",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-48918.jpg"
         },
         {
           "journalBossId": "866",
@@ -55,7 +55,7 @@
           "journalBossId": "856",
           "bossName": "Kor'kron Dark Shaman",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-49176.jpg"
         },
         {
           "journalBossId": "850",
@@ -73,7 +73,7 @@
           "journalBossId": "870",
           "bossName": "Spoils of Pandaria",
           "bossOrder": 11,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-51173.jpg"
         },
         {
           "journalBossId": "851",
@@ -91,7 +91,7 @@
           "journalBossId": "853",
           "bossName": "Paragons of the Klaxxi",
           "bossOrder": 14,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-48674.jpg"
         },
         {
           "journalBossId": "869",
@@ -110,13 +110,13 @@
           "journalBossId": "1202",
           "bossName": "Oregorger",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-54317.jpg"
         },
         {
           "journalBossId": "1155",
           "bossName": "Hans'gar and Franzok",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-53576.jpg"
         },
         {
           "journalBossId": "1122",
@@ -146,7 +146,7 @@
           "journalBossId": "1154",
           "bossName": "The Blast Furnace",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-53470.jpg"
         },
         {
           "journalBossId": "1162",
@@ -158,7 +158,7 @@
           "journalBossId": "1203",
           "bossName": "The Iron Maidens",
           "bossOrder": 9,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-53982.jpg"
         },
         {
           "journalBossId": "959",
@@ -201,7 +201,7 @@
           "journalBossId": "1148",
           "bossName": "Twin Ogron",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-54385.jpg"
         },
         {
           "journalBossId": "1153",
@@ -226,7 +226,7 @@
           "journalBossId": "1426",
           "bossName": "Hellfire Assault",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-63404.jpg"
         },
         {
           "journalBossId": "1425",
@@ -244,7 +244,7 @@
           "journalBossId": "1432",
           "bossName": "Hellfire High Council",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-62826.jpg"
         },
         {
           "journalBossId": "1396",
@@ -268,7 +268,7 @@
           "journalBossId": "1427",
           "bossName": "Socrethar the Eternal",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-61925.jpg"
         },
         {
           "journalBossId": "1391",
@@ -317,7 +317,7 @@
           "journalBossId": "1738",
           "bossName": "Il'gynoth, Heart of Corruption",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-69115.jpg"
         },
         {
           "journalBossId": "1744",
@@ -335,7 +335,7 @@
           "journalBossId": "1704",
           "bossName": "Dragons of Nightmare",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-67748.jpg"
         },
         {
           "journalBossId": "1750",
@@ -408,7 +408,7 @@
           "journalBossId": "1743",
           "bossName": "Grand Magistrix Elisande",
           "bossOrder": 9,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-69082.jpg"
         },
         {
           "journalBossId": "1737",
@@ -458,7 +458,7 @@
           "journalBossId": "1867",
           "bossName": "Demonic Inquisition",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-74282.jpg"
         },
         {
           "journalBossId": "1856",
@@ -470,7 +470,7 @@
           "journalBossId": "1903",
           "bossName": "Sisters of the Moon",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-74874.jpg"
         },
         {
           "journalBossId": "1861",
@@ -519,13 +519,13 @@
           "journalBossId": "1987",
           "bossName": "Felhounds of Sargeras",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-77004.jpg"
         },
         {
           "journalBossId": "1997",
           "bossName": "Antoran High Command",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-78817.jpg"
         },
         {
           "journalBossId": "1985",
@@ -537,7 +537,7 @@
           "journalBossId": "2025",
           "bossName": "Eonar the Life-Binder",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-79794.jpg"
         },
         {
           "journalBossId": "2009",
@@ -555,7 +555,7 @@
           "journalBossId": "1986",
           "bossName": "The Coven of Shivarra",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-76919.jpg"
         },
         {
           "journalBossId": "1983",
@@ -604,7 +604,7 @@
           "journalBossId": "2169",
           "bossName": "Zek'voz, Herald of N'Zoth",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-85193.jpg"
         },
         {
           "journalBossId": "2166",
@@ -616,7 +616,7 @@
           "journalBossId": "2195",
           "bossName": "Zul, Reborn",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-84351.jpg"
         },
         {
           "journalBossId": "2194",
@@ -641,37 +641,37 @@
           "journalBossId": "2333",
           "bossName": "Champion of the Light",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-88795.jpg"
         },
         {
           "journalBossId": "2344",
           "bossName": "Champion of the Light",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-88796.jpg"
         },
         {
           "journalBossId": "2325",
           "bossName": "Grong, the Jungle Lord",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-88863.jpg"
         },
         {
           "journalBossId": "2340",
           "bossName": "Grong, the Revenant",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-89250.jpg"
         },
         {
           "journalBossId": "2323",
           "bossName": "Jadefire Masters",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-89008.jpg"
         },
         {
           "journalBossId": "2341",
           "bossName": "Jadefire Masters",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-89012.jpg"
         },
         {
           "journalBossId": "2342",
@@ -683,7 +683,7 @@
           "journalBossId": "2330",
           "bossName": "Conclave of the Chosen",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-89050.jpg"
         },
         {
           "journalBossId": "2335",
@@ -701,7 +701,7 @@
           "journalBossId": "2337",
           "bossName": "Stormwall Blockade",
           "bossOrder": 11,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-90322.jpg"
         },
         {
           "journalBossId": "2343",
@@ -720,13 +720,13 @@
           "journalBossId": "2328",
           "bossName": "The Restless Cabal",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-88850.jpg"
         },
         {
           "journalBossId": "2332",
           "bossName": "Uu'nat, Harbinger of the Void",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-88864.jpg"
         }
       ]
     },
@@ -769,13 +769,13 @@
           "journalBossId": "2359",
           "bossName": "The Queen's Court",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-92223.jpg"
         },
         {
           "journalBossId": "2349",
           "bossName": "Za'qul, Harbinger of Ny'alotha",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-90895.jpg"
         },
         {
           "journalBossId": "2361",
@@ -794,7 +794,7 @@
           "journalBossId": "2368",
           "bossName": "Wrathion, the Black Emperor",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-93334.jpg"
         },
         {
           "journalBossId": "2365",
@@ -806,7 +806,7 @@
           "journalBossId": "2369",
           "bossName": "The Prophet Skitra",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-93448.jpg"
         },
         {
           "journalBossId": "2377",
@@ -818,7 +818,7 @@
           "journalBossId": "2372",
           "bossName": "The Hivemind",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-93287.jpg"
         },
         {
           "journalBossId": "2367",
@@ -836,7 +836,7 @@
           "journalBossId": "2374",
           "bossName": "Il'gynoth, Corruption Reborn",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-93513.jpg"
         },
         {
           "journalBossId": "2370",
@@ -848,19 +848,19 @@
           "journalBossId": "2364",
           "bossName": "Ra-den the Despoiled",
           "bossOrder": 10,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-93871.jpg"
         },
         {
           "journalBossId": "2366",
           "bossName": "Carapace of N'Zoth",
           "bossOrder": 11,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-94720.jpg"
         },
         {
           "journalBossId": "2375",
           "bossName": "N'Zoth the Corruptor",
           "bossOrder": 12,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-93507.jpg"
         }
       ]
     },
@@ -885,13 +885,13 @@
           "journalBossId": "2422",
           "bossName": "Sun King's Salvation",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-94482.jpg"
         },
         {
           "journalBossId": "2418",
           "bossName": "Artificer Xy'mox",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-95375.jpg"
         },
         {
           "journalBossId": "2428",
@@ -909,7 +909,7 @@
           "journalBossId": "2426",
           "bossName": "The Council of Blood",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-96835.jpg"
         },
         {
           "journalBossId": "2394",
@@ -921,7 +921,7 @@
           "journalBossId": "2425",
           "bossName": "Stone Legion Generals",
           "bossOrder": 9,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-95721.jpg"
         },
         {
           "journalBossId": "2424",
@@ -946,13 +946,13 @@
           "journalBossId": "2442",
           "bossName": "The Eye of the Jailer",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-100237.jpg"
         },
         {
           "journalBossId": "2439",
           "bossName": "The Nine",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-100852.jpg"
         },
         {
           "journalBossId": "2444",
@@ -1013,7 +1013,7 @@
           "journalBossId": "2465",
           "bossName": "Skolex, the Insatiable Ravener",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-101983.jpg"
         },
         {
           "journalBossId": "2470",
@@ -1025,25 +1025,25 @@
           "journalBossId": "2459",
           "bossName": "Dausegne, the Fallen Oracle",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-101913.jpg"
         },
         {
           "journalBossId": "2460",
           "bossName": "Prototype Pantheon",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-102179.jpg"
         },
         {
           "journalBossId": "2461",
           "bossName": "Lihuvim, Principal Architect",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-102124.jpg"
         },
         {
           "journalBossId": "2463",
           "bossName": "Halondrus the Reclaimer",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-105587.jpg"
         },
         {
           "journalBossId": "2469",
@@ -1055,7 +1055,7 @@
           "journalBossId": "2457",
           "bossName": "Lords of Dread",
           "bossOrder": 9,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-99100.jpg"
         },
         {
           "journalBossId": "2467",
@@ -1092,13 +1092,13 @@
           "journalBossId": "2486",
           "bossName": "The Primal Council",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-107599.jpg"
         },
         {
           "journalBossId": "2482",
           "bossName": "Sennarth, the Cold Breath",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-106348.jpg"
         },
         {
           "journalBossId": "2502",
@@ -1135,7 +1135,7 @@
           "journalBossId": "2564",
           "bossName": "Gnarlroot",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-113866.jpg"
         },
         {
           "journalBossId": "2554",
@@ -1153,7 +1153,7 @@
           "journalBossId": "2555",
           "bossName": "Council of Dreams",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-114021.jpg"
         },
         {
           "journalBossId": "2553",
@@ -1165,7 +1165,7 @@
           "journalBossId": "2556",
           "bossName": "Nymue, Weaver of the Cycle",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-112829.jpg"
         },
         {
           "journalBossId": "2563",
@@ -1177,7 +1177,7 @@
           "journalBossId": "2565",
           "bossName": "Tindral Sageswift, Seer of the Flame",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-114456.jpg"
         },
         {
           "journalBossId": "2519",
@@ -1196,37 +1196,37 @@
           "journalBossId": "2522",
           "bossName": "Kazzara, the Hellforged",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-111505.jpg"
         },
         {
           "journalBossId": "2529",
           "bossName": "The Amalgamation Chamber",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-111850.jpg"
         },
         {
           "journalBossId": "2530",
           "bossName": "The Forgotten Experiments",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-111623.jpg"
         },
         {
           "journalBossId": "2524",
           "bossName": "Assault of the Zaqali",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-111276.jpg"
         },
         {
           "journalBossId": "2525",
           "bossName": "Rashok, the Elder",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-112109.jpg"
         },
         {
           "journalBossId": "2532",
           "bossName": "The Vigilant Steward, Zskarn",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-111477.jpg"
         },
         {
           "journalBossId": "2527",
@@ -1238,7 +1238,7 @@
           "journalBossId": "2523",
           "bossName": "Echo of Neltharion",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-111794.jpg"
         },
         {
           "journalBossId": "2520",
@@ -1269,7 +1269,7 @@
           "journalBossId": "2599",
           "bossName": "Sikran, Captain of the Sureki",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-116257.jpg"
         },
         {
           "journalBossId": "2609",
@@ -1293,7 +1293,7 @@
           "journalBossId": "2608",
           "bossName": "The Silken Court",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-118997.jpg"
         },
         {
           "journalBossId": "2602",
@@ -1312,13 +1312,13 @@
           "journalBossId": "2639",
           "bossName": "Vexie and the Geargrinders",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-122476.jpg"
         },
         {
           "journalBossId": "2640",
           "bossName": "Cauldron of Carnage",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-121214.jpg"
         },
         {
           "journalBossId": "2641",
@@ -1342,13 +1342,13 @@
           "journalBossId": "2644",
           "bossName": "The One-Armed Bandit",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-122886.jpg"
         },
         {
           "journalBossId": "2645",
           "bossName": "Mug'Zee, Heads of Security",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-124110.jpg"
         },
         {
           "journalBossId": "2646",
@@ -1391,7 +1391,7 @@
           "journalBossId": "2688",
           "bossName": "The Soul Hunters",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-127562.jpg"
         },
         {
           "journalBossId": "2747",
@@ -1409,7 +1409,7 @@
           "journalBossId": "2691",
           "bossName": "Dimensius, the All-Devouring",
           "bossOrder": 8,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-128867.jpg"
         }
       ]
     },
@@ -1453,19 +1453,19 @@
           "journalBossId": "2735",
           "bossName": "Vaelgor & Ezzorak",
           "bossOrder": 4,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-131632.jpg"
         },
         {
           "journalBossId": "2737",
           "bossName": "Lightblinded Vanguard",
           "bossOrder": 5,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-131523.jpg"
         },
         {
           "journalBossId": "2738",
           "bossName": "Crown of the Cosmos",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-129430.jpg"
         }
       ]
     },
@@ -1484,7 +1484,7 @@
           "journalBossId": "2740",
           "bossName": "Midnight Falls",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-129561.jpg"
         }
       ]
     },
@@ -1497,7 +1497,7 @@
           "journalBossId": "2795",
           "bossName": "Chimaerus the Undreamt God",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-136680.jpg"
         }
       ]
     },
@@ -1523,19 +1523,19 @@
           "journalBossId": "2888",
           "bossName": "Nek'zali the Soulcoiler",
           "bossOrder": 1,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-142077.jpg"
         },
         {
           "journalBossId": "2874",
           "bossName": "Entombed Sentinels",
           "bossOrder": 2,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-143437.jpg"
         },
         {
           "journalBossId": "2894",
           "bossName": "The Lost Explorers",
           "bossOrder": 3,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-143824.jpg"
         },
         {
           "journalBossId": "2882",
@@ -1553,13 +1553,13 @@
           "journalBossId": "2887",
           "bossName": "The Twin Fangs",
           "bossOrder": 6,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-140993.jpg"
         },
         {
           "journalBossId": "2883",
           "bossName": "The Coiled Altar",
           "bossOrder": 7,
-          "imageUrl": null
+          "imageUrl": "https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-142472.jpg"
         },
         {
           "journalBossId": "2895",
