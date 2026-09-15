@@ -943,17 +943,23 @@ describe("discovery job handler", () => {
     expect(JSON.stringify(events)).not.toContain(marker);
   });
 
-  it("records correlation, queue wait, and provider totals", async () => {
+  it("records correlation id, exact queue wait, and provider totals", async () => {
     // Break caught: a job's correlation id and its time spent waiting in the
-    // queue could go unattributed even though the queue payload carries them.
+    // queue could go unattributed even though the queue payload carries them,
+    // and Raider.IO/db time could go unattributed even though the record
+    // carries a bucket for each.
     const repositories = createMemoryRepositories();
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
     const records: Array<Record<string, unknown>> = [];
+    const enqueuedAt = new Date("2026-08-05T07:59:59.000Z");
+    const startedAt = new Date("2026-08-05T08:00:00.000Z");
 
     const handler = createDiscoveryJobHandler({
       repositories,
       gateway: new MutableGateway(),
       requestCap: 12,
+      now: () => startedAt,
+      monotonic: () => 0,
       logger: {
         info(record) {
           records.push(record);
@@ -966,14 +972,19 @@ describe("discovery job handler", () => {
       maxAttempts: 3,
       signal: new AbortController().signal,
       correlationId: "c1",
-      enqueuedAt: new Date(Date.now() - 1_000).toISOString()
+      enqueuedAt: enqueuedAt.toISOString()
     });
 
     expect(records[0]).toMatchObject({
       event: "discovery_run",
-      correlationId: "c1"
+      correlationId: "c1",
+      queueWaitMs: 1_000,
+      raiderIoCalls: 1,
+      raiderIoMs: expect.any(Number),
+      raiderIoMaxCallMs: expect.any(Number),
+      dbCalls: expect.any(Number),
+      dbMs: expect.any(Number)
     });
-    expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(900);
   });
 
   it("reports a null queue wait for a job with no enqueue time", async () => {
@@ -985,7 +996,6 @@ describe("discovery job handler", () => {
       repositories,
       gateway: new MutableGateway(),
       requestCap: 12,
-      now: () => new Date("2026-08-05T08:00:00.000Z"),
       logger: {
         info(record) {
           records.push(record);

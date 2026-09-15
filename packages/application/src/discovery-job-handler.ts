@@ -91,7 +91,7 @@ type DiscoveryRunRecord = {
   fingerprintReservedRequests: number;
   fingerprintUsedRequests: number;
   fingerprintDurationMs: number;
-} & Record<string, unknown>;
+};
 
 export type RetryableDiscoveryError = Error & {
   retryable: true;
@@ -201,6 +201,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       if (!run) return;
 
       const observedAt = monotonic();
+      const startedAt = now();
       const scope = createMeasurementScope(monotonic);
       const repositories = measuredRepositories(options.repositories, scope);
       const record: DiscoveryRunRecord = {
@@ -216,7 +217,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         characterCount: 0,
         durationMs: 0,
         correlationId: context.correlationId ?? null,
-        queueWaitMs: queueWaitMs(context.enqueuedAt, new Date()),
+        queueWaitMs: queueWaitMs(context.enqueuedAt, startedAt),
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
@@ -225,7 +226,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
       try {
         context.signal.throwIfAborted();
-        const executionTime = now();
+        const executionTime = startedAt;
         if (
           executionTime.getTime() - run.createdAt.getTime() >=
           maxJobLifetimeMs
