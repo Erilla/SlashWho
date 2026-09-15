@@ -701,6 +701,11 @@ a {
   white-space: nowrap;
 }
 
+.dossier-parse-character {
+  display: inline-block;
+  min-width: 4.5rem;
+}
+
 .dossier-character-name--death-knight {
   color: #ed405b;
 }
