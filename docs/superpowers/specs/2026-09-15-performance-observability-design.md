@@ -105,7 +105,8 @@ Buckets are per-provider on the discovery and evidence paths: `raiderio`,
 
 Two accumulators are not call buckets and carry a duration only, with no call
 count or longest-call value: `limiterWaitMs`, the time spent awaiting admission
-at the provider limiter, and `rateLimitWaitMs`, defined in the section below.
+at the provider limiter. Throttling is reported separately as `rateLimitHits`
+and `retryAfterMaxMs`, defined in the section below.
 
 The database bucket is named `db` rather than `database`, and its call count is
 `dbQueries` rather than `dbCalls`, so its fields read `dbMs`, `dbQueries`, and
@@ -130,32 +131,37 @@ judge whether raising the limiter would help.
 
 ## Rate limit and retry separation
 
-All three upstream clients already compute a backoff delay
+All three clients parse a `Retry-After` header
 (`packages/blizzard/src/client.ts:41`, `packages/raiderio/src/client.ts:118`,
-`packages/warcraftlogs/src/client.ts:210`). Time spent parked on a 429 currently
-has nowhere to go but the provider bucket, where it is indistinguishable from
-genuine upstream latency.
+`packages/warcraftlogs/src/client.ts:210`) and return the delay to the caller as
+part of a failure or limitation. None of them sleeps, and none of them retries
+internally — verified by the absence of any `setTimeout`, `sleep`, or
+`await new Promise` in all three files.
 
-This distinction is load-bearing. Slow responses, rate-limit backoff, and
-excessive fan-out lead to three different remedies — caching, raising a request
-cap, and reducing concurrency respectively — so conflating them is the most
-likely way this instrumentation could actively mislead an operator.
+This matters for the design. There is no in-client sleep hiding inside the
+provider buckets, so those buckets already hold request time only and require no
+subtraction. The waiting that does occur happens between pg-boss delivery
+attempts, where it is already visible through the existing `attempt` field and
+the new `queueWaitMs` below.
 
-Each client therefore gains one optional callback, invoked with the milliseconds
-it is about to sleep and the fact that a retry occurred. The clients gain no
-other knowledge: they do not receive a scope, a logger, or a correlation ID, and
-the callback is optional so existing construction sites are unaffected. The
-boundary accumulates these into `rateLimitWaitMs` and `retryCount`.
+What is genuinely missing is whether throttling is happening at all. A run can
+be slow because an upstream is throttling the service into repeated delivery
+attempts, and no current field distinguishes that from an upstream simply being
+slow — remedies that differ completely, since one calls for raising a request
+cap or reducing fan-out and the other for caching.
 
-Because the measured seam wraps a client call from the outside, the elapsed time
-it observes necessarily includes any sleep that occurred inside. The boundary
-therefore subtracts the sleep reported by the callback from the provider bucket,
-so that the bucket holds time genuinely spent awaiting upstream responses and
-`rateLimitWaitMs` holds the rest. The two are additive, never overlapping.
+Each client therefore gains one optional `onThrottle({ retryAfterMs })`
+callback, invoked where it already detects a throttled response. The clients
+gain no other knowledge: no scope, no logger, no correlation ID. The callback is
+optional, so existing construction sites are unaffected. The boundary
+accumulates these into two fields: `rateLimitHits`, the number of throttled
+responses observed, and `retryAfterMaxMs`, the largest delay an upstream asked
+for.
 
-`retryCount` counts upstream client retries and must not be confused with the
-existing `attempt` field on `discovery_run`, which counts pg-boss delivery
-attempts. A single delivery attempt may contain many upstream retries.
+There is deliberately no `retryCount` field. Since the clients do not retry, the
+only retry count that exists is the pg-boss delivery attempt already recorded as
+`attempt`, and adding a second similarly-named field would invite exactly the
+confusion it appears to resolve.
 
 ## Queue wait
 
@@ -198,21 +204,21 @@ values per bucket defined above — total milliseconds, call count, and longest
 single call — named `<bucket>Ms`, `<bucket>Calls`, and `<bucket>MaxCallMs`.
 
 **`http_request`** (extended) gains the per-operation provider buckets,
-`dbMs`, `dbQueries`, `dbMaxQueryMs`, `limiterWaitMs`, `rateLimitWaitMs`,
-`retryCount`,
+`dbMs`, `dbQueries`, `dbMaxQueryMs`, `limiterWaitMs`, `rateLimitHits`,
+`retryAfterMaxMs`,
 `runJoined`, and the folded cache totals `cacheHits`, `cacheMisses`,
 `cacheShared`, `cacheFailures`, and `cacheCapacity`. Every existing field is
 retained.
 
 **`discovery_run`** (extended) gains the per-provider buckets, `dbMs`,
-`dbQueries`, `dbMaxQueryMs`, `rateLimitWaitMs`, `retryCount`, `queueWaitMs`,
-and `correlationId`. Every existing field is retained, including the canonical
+`dbQueries`, `dbMaxQueryMs`, `rateLimitHits`, `retryAfterMaxMs`,
+`queueWaitMs`, and `correlationId`. Every existing field is retained, including the canonical
 character key.
 
 **`evidence_job`** (new) carries `runId`, `correlationId`, `durationMs`,
 `queueWaitMs`, `outcome`, `warcraftLogsMs`, `warcraftLogsCalls`,
 `warcraftLogsMaxCallMs`, `dbMs`, `dbQueries`, `dbMaxQueryMs`,
-`rateLimitWaitMs`, `retryCount`, `requestCapUsed`, and `limitationCode`. The evidence path currently emits
+`rateLimitHits`, `retryAfterMaxMs`, `requestCapUsed`, and `limitationCode`. The evidence path currently emits
 nothing whatsoever, so this record is the single largest coverage gain in the
 design.
 
