@@ -885,13 +885,79 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
-        dbCalls: 6,
+        dbCalls: 7,
         dbMaxCallMs: 0,
         raiderIoMs: 0,
-        raiderIoCalls: 1,
+        raiderIoCalls: 2,
         raiderIoMaxCallMs: 0
       }
     ]);
+  });
+
+  it("keeps provider and database buckets disjoint within the run duration", async () => {
+    // Break caught: timing the orchestrating domain function instead of the
+    // gateway counted every suppression check and fingerprint write inside the
+    // provider buckets as well as in dbMs, so raiderIoMs + blizzardMs + dbMs
+    // could exceed durationMs and an operator comparing a discovery_run with an
+    // http_request record -- where the same field names are disjoint -- was
+    // misled about which subsystem dominated the run.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+    // Every clock read advances, so any nested region would be double counted
+    // and break the inequality rather than silently reading as zero.
+    let tick = 0;
+    // An admitted sweep is the demanding case: it runs Blizzard calls and, via
+    // the fingerprint budget callback, a database write inside one of them.
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted" as const,
+      reservationId: "reservation-disjoint",
+      requestCap: 300
+    });
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [
+      {
+        key: fingerprintKey,
+        displayName: "Fingerprint Match",
+        className: "Priest",
+        level: 80
+      }
+    ];
+    const fingerprint = achievementFingerprint();
+    blizzardGateway.fingerprints.set(keyId(rootKey), fingerprint);
+    blizzardGateway.fingerprints.set(keyId(fingerprintKey), fingerprint);
+    // The two database calls the domain functions make from inside the provider
+    // phases dominate the clock, so counting either of them in a provider
+    // bucket as well as in dbMs pushes the sum past durationMs.
+    repositories.suppressions.isActive = async () => {
+      tick += 1_000;
+      return false;
+    };
+    repositories.fingerprintSweeps.recordRequest = async () => {
+      tick += 1_000;
+    };
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway,
+      logger: {
+        info(record) {
+          records.push(record);
+        }
+      },
+      monotonic: () => tick++
+    }).execute(run.id, delivery());
+
+    const record = records[0]!;
+    const value = (field: string) => (record[field] as number | undefined) ?? 0;
+
+    expect(record.outcome).toBe("snapshot");
+    expect(value("raiderIoCalls")).toBeGreaterThan(0);
+    expect(value("blizzardCalls")).toBeGreaterThan(0);
+    expect(value("dbCalls")).toBeGreaterThan(0);
+    expect(value("durationMs")).toBeGreaterThan(0);
+    expect(
+      value("raiderIoMs") + value("blizzardMs") + value("dbMs")
+    ).toBeLessThanOrEqual(value("durationMs"));
   });
 
   it("records a failure outcome without upstream detail", async () => {
@@ -933,7 +999,7 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
-        dbCalls: 3,
+        dbCalls: 4,
         dbMaxCallMs: 0,
         raiderIoMs: 0,
         raiderIoCalls: 1,
@@ -979,7 +1045,7 @@ describe("discovery job handler", () => {
       event: "discovery_run",
       correlationId: "c1",
       queueWaitMs: 1_000,
-      raiderIoCalls: 1,
+      raiderIoCalls: 2,
       raiderIoMs: expect.any(Number),
       raiderIoMaxCallMs: expect.any(Number),
       dbCalls: expect.any(Number),

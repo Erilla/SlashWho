@@ -3,7 +3,10 @@ import type {
   JobTelemetry,
   Repositories
 } from "@slashwho/database";
-import type { BlizzardGateway } from "@slashwho/blizzard";
+import type {
+  BlizzardGateway,
+  BlizzardProfileRequestObserver
+} from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
   deduplicateCharacters,
@@ -15,8 +18,83 @@ import {
 
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
-import { createMeasurementScope } from "./measurement";
+import {
+  createMeasurementScope,
+  type ExcludeFromBucket,
+  type MeasurementScope
+} from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+
+/**
+ * Provider timing belongs on the gateway, not on the orchestrating domain
+ * function: `discoverCharacter` and `discoverFingerprintMatches` also consult
+ * the suppression list and the fingerprint sweep tables, and timing them whole
+ * would count that database work inside the provider bucket as well as `dbMs`.
+ * Wrapping the gateway keeps the buckets disjoint, matching the decorators the
+ * dossier service already builds per request.
+ */
+function scopedRaiderIoGateway(
+  gateway: RaiderIoGateway,
+  scope: MeasurementScope
+): RaiderIoGateway {
+  return {
+    getCharacter: (key, signal) =>
+      scope.time("raiderIo", () => gateway.getCharacter(key, signal)),
+    getClaimedCharacters: (ownerId, signal) =>
+      scope.time("raiderIo", () =>
+        gateway.getClaimedCharacters(ownerId, signal)
+      ),
+    resolveProfileGuess: (value, signal) =>
+      scope.time("raiderIo", () => gateway.resolveProfileGuess(value, signal))
+  };
+}
+
+function scopedBlizzardGateway(
+  gateway: BlizzardGateway,
+  scope: MeasurementScope
+): BlizzardGateway {
+  // The fingerprint budget is recorded through a callback the client invokes
+  // mid-request, so that one database write is the only nesting that cannot be
+  // hoisted out of the provider call; it is excluded from `blizzardMs` and
+  // still counted in `dbMs`.
+  const excludeObserver = (
+    excluded: ExcludeFromBucket,
+    onProfileRequest?: BlizzardProfileRequestObserver
+  ): BlizzardProfileRequestObserver | undefined =>
+    onProfileRequest === undefined
+      ? undefined
+      : () =>
+          excluded(async () => {
+            await onProfileRequest();
+          });
+
+  return {
+    getGuildRoster: (root, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getGuildRoster(
+          root,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      ),
+    getAchievementFingerprint: (key, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getAchievementFingerprint(
+          key,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      ),
+    getCompletedAchievements: (key, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getCompletedAchievements(
+          key,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      )
+  };
+}
 
 /**
  * The work context a caller passes to `execute`. Widened with `JobTelemetry`
@@ -183,9 +261,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       runId: string,
       workContext?: DiscoveryExecutionContext
     ): Promise<void> {
+      // Created before the first query so the run lookup and claim reach
+      // `dbCalls` too; nothing else about the run depends on its lifetime.
+      // `observedAt` moves up with it so `durationMs` still spans every
+      // measured call and the buckets stay within it.
+      const observedAt = monotonic();
+      const scope = createMeasurementScope(monotonic);
+      const repositories = measuredRepositories(options.repositories, scope);
+
       let context = workContext;
       if (!context) {
-        const existing = await options.repositories.runs.find(runId);
+        const existing = await repositories.runs.find(runId);
         if (!existing) throw new Error("discovery_run_not_found");
         if (existing.status === "complete" || existing.status === "failed") {
           return;
@@ -197,13 +283,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         };
       }
 
-      const run = await options.repositories.runs.claim(runId, context.attempt);
+      const run = await repositories.runs.claim(runId, context.attempt);
       if (!run) return;
 
-      const observedAt = monotonic();
       const startedAt = now();
-      const scope = createMeasurementScope(monotonic);
-      const repositories = measuredRepositories(options.repositories, scope);
       const record: DiscoveryRunRecord = {
         event: "discovery_run",
         runId,
@@ -236,12 +319,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           return;
         }
 
-        let outcome: DiscoveryOutcome = await scope.time("raiderIo", () =>
-          discoverCharacter(run.rootKey, options.gateway, {
+        let outcome: DiscoveryOutcome = await discoverCharacter(
+          run.rootKey,
+          scopedRaiderIoGateway(options.gateway, scope),
+          {
             requestCap: options.requestCap,
             isSuppressed: (key) => repositories.suppressions.isActive(key),
             signal: context.signal
-          })
+          }
         );
         context.signal.throwIfAborted();
         const persistenceTime = now();
@@ -334,7 +419,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               };
               try {
                 const adaptedGateway = createBlizzardFingerprintAdapter(
-                  blizzardGateway,
+                  scopedBlizzardGateway(blizzardGateway, scope),
                   {
                     requestCap: admission.requestCap,
                     recordRequest: async () => {
@@ -356,8 +441,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     }
                   }
                 );
-                const sweep = await scope.time("blizzard", () =>
-                  discoverFingerprintMatches(run.rootKey, adaptedGateway, {
+                const sweep = await discoverFingerprintMatches(
+                  run.rootKey,
+                  adaptedGateway,
+                  {
                     requestCap: Number.MAX_SAFE_INTEGER,
                     minimumCommon: fingerprint.minimumCommon,
                     minimumIdenticalPercent:
@@ -365,7 +452,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     isSuppressed: (key) =>
                       repositories.suppressions.isActive(key),
                     signal: context.signal
-                  })
+                  }
                 );
 
                 if (sweep.kind === "failure") {

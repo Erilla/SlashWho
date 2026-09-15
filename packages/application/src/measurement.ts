@@ -8,9 +8,22 @@
  * Field names are derived uniformly from a prefix so that no rename map is
  * needed here or in the analysis script.
  */
+/**
+ * Runs `inner` inside an enclosing `time` frame without charging its duration
+ * to that frame's bucket. The only legitimate use is a callback an upstream
+ * client invokes mid-request (Blizzard's profile-request observer, which writes
+ * to the database), where the nested work cannot be hoisted out of the call.
+ * Kept as a per-frame parameter rather than ambient state so concurrent timed
+ * calls cannot interfere with one another.
+ */
+export type ExcludeFromBucket = <R>(inner: () => Promise<R>) => Promise<R>;
+
 export type MeasurementScope = {
   /** Times `work` against `prefix`, recording duration even when it throws. */
-  time<T>(prefix: string, work: () => Promise<T>): Promise<T>;
+  time<T>(
+    prefix: string,
+    work: (excluded: ExcludeFromBucket) => Promise<T>
+  ): Promise<T>;
   /** Adds to a running total, e.g. `limiterWaitMs`. */
   observe(field: string, value: number): void;
   /** Keeps the largest value seen, e.g. `retryAfterMaxMs`. */
@@ -36,12 +49,24 @@ export function createMeasurementScope(
   return {
     async time(prefix, work) {
       const startedAt = monotonic();
+      let excludedMs = 0;
+      const excluded: ExcludeFromBucket = async (inner) => {
+        const innerStartedAt = monotonic();
+        try {
+          return await inner();
+        } finally {
+          excludedMs += Math.max(0, monotonic() - innerStartedAt);
+        }
+      };
       try {
-        return await work();
+        return await work(excluded);
       } finally {
         // finally, not a catch: a timed-out or failed upstream call is the
         // expensive case and must still contribute its duration.
-        const elapsed = Math.max(0, Math.round(monotonic() - startedAt));
+        const elapsed = Math.max(
+          0,
+          Math.round(monotonic() - startedAt - excludedMs)
+        );
         add(`${prefix}Ms`, elapsed);
         add(`${prefix}Calls`, 1);
         const maxField = `${prefix}MaxCallMs`;
