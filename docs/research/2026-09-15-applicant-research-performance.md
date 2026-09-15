@@ -19,7 +19,7 @@ These records carry the canonical public character key. They never carry an owne
 **Two things the numbers do not tell you:**
 
 - A bounded-cache "shared" outcome — a request that joins an in-flight load already under way rather than starting its own — increments `cacheShared` but records no provider time for that call, even though the request genuinely waited on the load. Provider duration buckets therefore under-attribute time for requests that share a load; do not read a low `raiderIoRankingsMs` as evidence that ranking lookups are cheap when `cacheShared` is nonzero.
-- A `*Calls` count counts measurement spans, not HTTP requests. Every span is now taken around a single gateway method, so on the discovery path `raiderIoCalls` and `blizzardCalls` do count one upstream call each; a span that ends in a cache hit, however, still counts as one span without an HTTP request behind it.
+- A `*Calls` count counts measurement spans, not HTTP requests. Every span is now taken around a single gateway method, which is closer to one upstream call than it used to be but is still not the same thing: a gateway method may issue several HTTP requests internally — `getGuildRoster` makes up to three — and a span that ends in a cache hit counts as one span with no HTTP request behind it at all. Read `*Calls` as "times we asked a provider for something", never as a request count.
 
 Capture at least 20 representative dossier requests for each scenario:
 
