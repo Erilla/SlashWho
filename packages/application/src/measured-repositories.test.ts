@@ -41,7 +41,7 @@ describe("measuredRepositories", () => {
   });
 
   it("forwards arguments", async () => {
-    const getCurrent = vi.fn(async (_key: string) => null);
+    const getCurrent = vi.fn<(key: string) => Promise<null>>(async () => null);
     const measured = measuredRepositories(
       { snapshots: { getCurrent } },
       createMeasurementScope(clock([0, 1]))

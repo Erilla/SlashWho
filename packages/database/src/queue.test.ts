@@ -11,7 +11,7 @@ const queueFakes = vi.hoisted(() => {
   return {
     createQueue: vi.fn(async () => {}),
     updateQueue: vi.fn(async () => {}),
-    send: vi.fn(async (..._args: unknown[]) => "job-id"),
+    send: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "job-id"),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     work: vi.fn(async (name, _options, handler) => {
