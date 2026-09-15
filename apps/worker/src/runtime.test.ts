@@ -127,11 +127,14 @@ function runtimeFakes() {
     negativeCache: vi.fn(async () => 3),
     suppressions: vi.fn(async () => 4),
     fingerprintRequests: vi.fn(async () => 5),
-    evidence: vi.fn(async () => 6)
+    evidence: vi.fn(async (cutoff: Date) => {
+      void cutoff;
+      return 6;
+    })
   };
   const repositories = {
     evidence: {
-      cleanupExpired: cleanup.evidence,
+      clearStaleCredentials: cleanup.evidence,
       async find() {
         return null;
       },
@@ -489,6 +492,11 @@ describe("worker runtime", () => {
     expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
     expect(fakes.cleanup.fingerprintRequests).toHaveBeenCalledOnce();
     expect(fakes.cleanup.evidence).toHaveBeenCalledOnce();
+    const [cutoff] = fakes.cleanup.evidence.mock.calls[0] as [Date];
+    expect(cutoff).toBeInstanceOf(Date);
+    const ageMs = Date.now() - cutoff.getTime();
+    expect(ageMs).toBeGreaterThanOrEqual(60 * 60_000 - 5_000);
+    expect(ageMs).toBeLessThan(60 * 60_000 + 5_000);
     await runtime.stop();
   });
 

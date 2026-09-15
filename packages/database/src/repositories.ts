@@ -263,6 +263,15 @@ export interface EvidenceRepository {
   fail(id: string, code: string): Promise<void>;
   getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
+  /**
+   * Clears any lingering encrypted WCL credential columns from evidence runs
+   * created before `cutoff`. `publish` and `fail` already clear these columns
+   * on every normal completion path; this is the backstop for a run whose job
+   * never reaches either (a crash, a timeout, a killed process between
+   * `claim()` and `publish()`/`fail()`), so ciphertext never outlives the run
+   * by more than the retention window. Returns the number of rows cleared.
+   */
+  clearStaleCredentials(cutoff: Date): Promise<number>;
 }
 
 export type FingerprintAdmission =

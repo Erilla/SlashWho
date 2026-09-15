@@ -2299,6 +2299,20 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           ]
         );
         return result.rows.map(mapEvidenceRun);
+      },
+
+      async clearStaleCredentials(cutoff) {
+        if (Number.isNaN(cutoff.valueOf())) {
+          throw new RangeError("character_evidence_credential_cutoff_invalid");
+        }
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
+           WHERE created_at < $1
+             AND (wcl_client_id_encrypted IS NOT NULL OR wcl_client_secret_encrypted IS NOT NULL)`,
+          [cutoff]
+        );
+        return result.rowCount ?? 0;
       }
     },
 
