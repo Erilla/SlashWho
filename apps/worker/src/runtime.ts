@@ -235,7 +235,8 @@ export async function createWorkerRuntime(
       evidence,
       warcraftLogs: dependencies.createEvidenceGateway(config, logger),
       requestCap: config.evidenceRequestCap,
-      parseRequestCap: config.evidenceParseRequestCap
+      parseRequestCap: config.evidenceParseRequestCap,
+      ...(logger ? { logger } : {})
     });
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);
@@ -296,9 +297,7 @@ export async function createWorkerRuntime(
           cleanupExpired(at?: Date): Promise<number>;
         }
       ).cleanupExpired();
-      console.info(
-        JSON.stringify({ event: "evidence_cache_cleanup", removedEvidenceRuns })
-      );
+      logger?.info({ event: "evidence_cache_cleanup", removedEvidenceRuns });
       await recoverPendingSearches(repositories, initializedQueue);
     });
     await initializedQueue.work(async (payload, context) => {
@@ -309,7 +308,7 @@ export async function createWorkerRuntime(
       });
     });
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
-      await evidenceHandler.execute(payload.runId, context);
+      await evidenceHandler.execute(payload, context);
     });
     ready = true;
 

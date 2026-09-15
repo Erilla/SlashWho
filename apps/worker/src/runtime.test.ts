@@ -473,12 +473,14 @@ describe("worker runtime", () => {
         }
       ).evidence
     });
-    await fakes.evidenceWorkHandler?.(
-      { runId: "00000000-0000-4000-8000-000000000006" },
-      context
-    );
+    const payload = {
+      runId: "00000000-0000-4000-8000-000000000006",
+      correlationId: "c1",
+      enqueuedAt: "2026-09-13T12:00:00.000Z"
+    };
+    await fakes.evidenceWorkHandler?.(payload, context);
     expect(fakes.evidenceHandler.execute).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000006",
+      payload,
       context
     );
     await runtime.stop();

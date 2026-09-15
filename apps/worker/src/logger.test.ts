@@ -105,4 +105,34 @@ describe("worker logger", () => {
     expect(captured).toContain("fingerprint_event");
     expect(captured).not.toContain(marker);
   });
+
+  it("keeps the evidence_job performance fields", () => {
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      runId: "run-1",
+      correlationId: "c1",
+      durationMs: 50,
+      queueWaitMs: 2_000,
+      warcraftLogsMs: 40,
+      warcraftLogsCalls: 1,
+      warcraftLogsMaxCallMs: 40,
+      dbMs: 10,
+      dbCalls: 2,
+      dbMaxCallMs: 6,
+      rateLimitHits: 1,
+      retryAfterMaxMs: 3_000,
+      requestCapUsed: 80,
+      killCount: 4
+    });
+
+    const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(record)) {
+      expect(value, `${key} was redacted`).not.toBe("[Redacted]");
+    }
+  });
 });

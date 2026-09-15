@@ -3,6 +3,7 @@ export { createApplicantEvidenceJobHandler } from "./applicant-evidence-job-hand
 export type {
   ApplicantEvidenceJobHandler,
   ApplicantEvidenceJobHandlerOptions,
+  ApplicantEvidenceJobInput,
   ApplicantEvidenceRun,
   ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";

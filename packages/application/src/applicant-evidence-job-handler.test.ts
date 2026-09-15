@@ -260,4 +260,119 @@ describe("applicant evidence job handler", () => {
       }
     ]);
   });
+
+  describe("evidence_job record", () => {
+    // Fixtures local to this describe block: the brief's tests exercise
+    // runIds ("run-1".."run-4") that the module-level `run`/`store()` fixture
+    // above does not recognize, so claim() here accepts any runId.
+    function evidenceStore(
+      overrides: Partial<ApplicantEvidenceStore> = {}
+    ): ApplicantEvidenceStore {
+      return {
+        async find(id) {
+          return id === run.id ? run : null;
+        },
+        async claim(id) {
+          return { ...run, id };
+        },
+        async publish() {},
+        async fail() {},
+        ...overrides
+      };
+    }
+
+    function baseOptions() {
+      return {
+        evidence: evidenceStore(),
+        warcraftLogs: {
+          getFirstKillReports: async () => ({
+            kind: "evidence" as const,
+            kills: [],
+            wipes: []
+          })
+        },
+        requestCap: 500,
+        parseRequestCap: 8
+      };
+    }
+
+    it("emits one evidence_job record per run", async () => {
+      // Break caught: the evidence job could run without ever recording its
+      // duration, outcome, or queue wait, leaving it invisible in production.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        logger: { info: (record) => records.push(record) },
+        monotonic: (() => {
+          let index = 0;
+          const steps = [0, 50, 50, 50];
+          return () => steps[Math.min(index++, steps.length - 1)]!;
+        })()
+      });
+
+      await handler.execute(
+        {
+          runId: "run-1",
+          correlationId: "c1",
+          enqueuedAt: new Date(Date.now() - 2_000).toISOString()
+        },
+        { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+      );
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        event: "evidence_job",
+        runId: "run-1",
+        correlationId: "c1",
+        outcome: "complete",
+        warcraftLogsCalls: 1
+      });
+      expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(1_900);
+    });
+
+    it("records a limitation outcome", async () => {
+      // Break caught: a rate-limited run could be recorded with no way to
+      // tell it apart from a successful one.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        warcraftLogs: {
+          getFirstKillReports: async () => ({
+            kind: "limitation" as const,
+            code: "rate_limited" as const
+          })
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-2");
+
+      expect(records[0]).toMatchObject({
+        outcome: "limitation",
+        limitationCode: "rate_limited"
+      });
+    });
+
+    it("records a run that was never claimed", async () => {
+      // Break caught: a run another worker already claimed could disappear
+      // from observability instead of being recorded as skipped.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        evidence: evidenceStore({ claim: async () => null }),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-3");
+
+      expect(records[0]).toMatchObject({ outcome: "not_claimed" });
+    });
+
+    it("emits nothing when no logger is supplied", async () => {
+      // Break caught: adding the record could accidentally require a logger,
+      // breaking existing callers that construct the handler without one.
+      const handler = createApplicantEvidenceJobHandler(baseOptions());
+      await expect(handler.execute("run-4")).resolves.toBeUndefined();
+    });
+  });
 });
