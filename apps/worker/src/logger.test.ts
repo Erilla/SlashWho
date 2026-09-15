@@ -124,8 +124,9 @@ describe("worker logger", () => {
       dbMs: 10,
       dbCalls: 2,
       dbMaxCallMs: 6,
-      rateLimitHits: 1,
-      retryAfterMaxMs: 3_000,
+      outcome: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
       requestCapUsed: 80,
       killCount: 4
     });

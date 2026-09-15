@@ -374,5 +374,87 @@ describe("applicant evidence job handler", () => {
       const handler = createApplicantEvidenceJobHandler(baseOptions());
       await expect(handler.execute("run-4")).resolves.toBeUndefined();
     });
+
+    it("records a partial outcome exactly once", async () => {
+      // Break caught: evidence gathered alongside a partial limitation could
+      // be recorded with a stale "unknown" outcome, or emitted twice, if an
+      // added early return or a duplicated logger call crept into this path.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        warcraftLogs: {
+          getFirstKillReports: async () => ({
+            kind: "evidence" as const,
+            limitation: {
+              kind: "limitation" as const,
+              code: "rate_limited" as const
+            },
+            parseLimitation: {
+              kind: "limitation" as const,
+              code: "parse_request_cap" as const
+            },
+            kills: [],
+            wipes: []
+          })
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-5");
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        outcome: "partial",
+        limitationCode: "rate_limited",
+        parseLimitationCode: "parse_request_cap",
+        killCount: 0
+      });
+    });
+
+    it("records a cancelled outcome exactly once and still propagates the abort", async () => {
+      // Break caught: an aborted run could be recorded with the wrong
+      // outcome, emitted more than once, or have its abort silently
+      // swallowed by the finally block, hiding cancellation from the queue.
+      const records: Array<Record<string, unknown>> = [];
+      const controller = new AbortController();
+      controller.abort(new Error("aborted"));
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(
+        handler.execute("run-6", {
+          attempt: 1,
+          maxAttempts: 3,
+          signal: controller.signal
+        })
+      ).rejects.toThrow("aborted");
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ outcome: "cancelled" });
+    });
+
+    it("records an unexpected_error outcome exactly once and rethrows it unchanged", async () => {
+      // Break caught: a failure while publishing could be recorded with the
+      // wrong outcome, emitted more than once, or have the original error
+      // swallowed or replaced, which would stop pg-boss from retrying it.
+      const records: Array<Record<string, unknown>> = [];
+      const failure = new Error("publish_failed");
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        evidence: evidenceStore({
+          publish: async () => {
+            throw failure;
+          }
+        }),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(handler.execute("run-7")).rejects.toBe(failure);
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ outcome: "unexpected_error" });
+    });
   });
 });
