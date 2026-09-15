@@ -2,6 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 
@@ -613,5 +614,52 @@ describe("DossierPageClient staged research", () => {
 
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
+  });
+});
+
+describe("DossierPageClient connected-character additions", () => {
+  it("refetches the dossier when a character is added", async () => {
+    // Break caught: the panel used to call window.location.reload(), which
+    // discarded the dialog's progress message and every poll already in
+    // flight. The addition has to refresh through the dossier state instead.
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(
+      async (input: URL | RequestInfo, init?: RequestInit) => {
+        if (String(input).endsWith("/connected-characters")) {
+          void init;
+          return new Response(JSON.stringify({ kind: "ready" }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        return new Response(JSON.stringify(expanded), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={initial}
+        jobId={null}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add character" }));
+    await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+    await user.paste("https://raider.io/characters/eu/silvermoon/Ryalts");
+    await user.click(
+      screen.getByRole("button", { name: "Add connected character" })
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Expanded evidence" })
+    ).toBeVisible();
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input) === dossierPath)
+    ).not.toHaveLength(0);
   });
 });

@@ -4,17 +4,17 @@ import {
   dossierStartResponseSchema,
   safeApiErrorSchema
 } from "@slashwho/contracts";
-import {
-  parseApplicantCharacterUrl,
-  supportedRegions,
-  type Region
-} from "@slashwho/domain";
+import { parseApplicantCharacterUrl } from "@slashwho/domain";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import {
+  CharacterIdentityFields,
+  emptyCharacterIdentity
+} from "./character-identity-fields";
+
 const invalidStructuredUrlMessage =
   "Enter a valid character URL, or character name, realm, and region.";
-const defaultRegion: Region = "eu";
 
 function errorMessage(response: Response, body: unknown): string {
   const parsed = safeApiErrorSchema.safeParse(body);
@@ -30,33 +30,14 @@ function errorMessage(response: Response, body: unknown): string {
 
 export function SearchForm() {
   const router = useRouter();
-  const [character, setCharacter] = useState("");
-  const [name, setName] = useState("");
-  const [realm, setRealm] = useState("");
-  const [region, setRegion] = useState<Region>(defaultRegion);
+  const [identity, setIdentity] = useState(emptyCharacterIdentity);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-
-  const showStructuredFields = character.trim() !== "";
+  const { character, name, realm, region } = identity;
 
   function resetFields() {
-    setCharacter("");
-    setName("");
-    setRealm("");
-  }
-
-  function onCharacterChange(value: string) {
-    setCharacter(value);
-    try {
-      const identity = parseApplicantCharacterUrl(value.trim());
-      setCharacter(identity.name);
-      setName(identity.name);
-      setRealm(identity.realm);
-      setRegion(identity.region);
-    } catch {
-      setName(value);
-    }
-    setError(null);
+    // The region is a standing preference rather than part of the query.
+    setIdentity({ ...emptyCharacterIdentity, region });
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -120,90 +101,27 @@ export function SearchForm() {
 
   return (
     <form className="search-form" onSubmit={submit} noValidate>
-      <div
-        className={
-          showStructuredFields
-            ? "search-structured-grid"
-            : "search-structured-grid search-structured-grid-collapsed"
-        }
+      <CharacterIdentityFields
+        disabled={pending}
+        errorId={error ? "character-search-error" : undefined}
+        idPrefix="character"
+        invalid={error !== null}
+        onChange={(next) => {
+          setIdentity(next);
+          setError(null);
+        }}
+        value={identity}
       >
-        <div className="search-field">
-          <input
-            className="search-input"
-            id="character-name"
-            name="characterName"
-            type="text"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="Character/URL"
-            aria-label="Character/URL"
-            value={character}
-            onChange={(event) => onCharacterChange(event.currentTarget.value)}
-            aria-invalid={error !== null}
-            aria-describedby={error ? "character-search-error" : undefined}
-            disabled={pending}
-          />
-        </div>
-        {showStructuredFields ? (
-          <div className="search-field">
-            <input
-              className="search-input"
-              id="character-realm"
-              name="characterRealm"
-              type="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="Realm"
-              aria-label="Realm"
-              value={realm}
-              onChange={(event) => {
-                setRealm(event.currentTarget.value);
-                setName(character);
-                setError(null);
-              }}
-              aria-invalid={error !== null}
-              aria-describedby={error ? "character-search-error" : undefined}
-              disabled={pending}
-            />
-          </div>
-        ) : null}
-        <div className="search-field search-region-field">
-          {showStructuredFields ? (
-            <select
-              className="search-select"
-              id="character-region"
-              name="characterRegion"
-              aria-label="Region"
-              value={region}
-              onChange={(event) => {
-                setRegion(event.currentTarget.value as Region);
-                setName(character);
-                setError(null);
-              }}
-              aria-invalid={error !== null}
-              aria-describedby={error ? "character-search-error" : undefined}
-              disabled={pending}
-            >
-              {supportedRegions.map((supportedRegion) => (
-                <option key={supportedRegion} value={supportedRegion}>
-                  {supportedRegion.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          <button
-            className="search-button"
-            type="submit"
-            aria-label="Research applicant"
-            title="Research applicant"
-            disabled={pending}
-          >
-            {pending ? "…" : "→"}
-          </button>
-        </div>
-      </div>
+        <button
+          className="search-button"
+          type="submit"
+          aria-label="Research applicant"
+          title="Research applicant"
+          disabled={pending}
+        >
+          {pending ? "…" : "→"}
+        </button>
+      </CharacterIdentityFields>
       <p
         className="form-error"
         id="character-search-error"

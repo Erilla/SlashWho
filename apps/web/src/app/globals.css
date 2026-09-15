@@ -486,13 +486,53 @@ a {
   list-style: none;
 }
 
-.dossier-character-panel > .search-form {
-  padding-top: 1rem;
+.dossier-character-add-trigger {
+  margin-top: 1rem;
+  min-height: 2.4rem;
+  padding-inline: 0.9rem;
+  width: auto;
 }
 
-.dossier-character-add-control.search-input,
-.dossier-character-add-control.search-button {
-  min-height: 2.8rem;
+.dossier-character-add-dialog {
+  /* Never wider than a narrow viewport, so the fields cannot overflow it. */
+  max-width: min(26rem, calc(100vw - 2rem));
+  width: 100%;
+  margin: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 1.25rem;
+}
+
+.dossier-character-add-dialog::backdrop {
+  background: rgb(9 9 15 / 70%);
+}
+
+.dossier-character-add-dialog .section-heading {
+  margin-top: 0;
+}
+
+/* The dialog has room for a full-width entry row at any viewport width. */
+.dossier-character-add-dialog .search-structured-grid,
+.dossier-character-add-dialog .search-structured-grid-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dossier-character-add-dialog .search-region-field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dossier-character-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.625rem;
+}
+
+.dossier-character-add-actions .search-button {
+  width: auto;
+  padding-inline: 0.9rem;
 }
 
 .dossier-scroll-hint {
