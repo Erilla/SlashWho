@@ -31,6 +31,7 @@ export type {
 } from "./applicant-dossier-service";
 export { createMeasurementScope } from "./measurement";
 export type { MeasurementScope } from "./measurement";
+export { measuredRepositories } from "./measured-repositories";
 export { createRateLimiter } from "./rate-limit";
 export type {
   RateLimitDecision,
