@@ -506,6 +506,18 @@ async function loadCompletedEvidence(
   };
 }
 
+export function isEvidenceFresh(
+  completedAt: Date,
+  retryAfterAt: Date | null,
+  freshnessCutoff: Date,
+  at = new Date()
+): boolean {
+  return (
+    completedAt >= freshnessCutoff &&
+    (retryAfterAt === null || retryAfterAt > at)
+  );
+}
+
 async function loadPositiveEvidenceForPartial(
   client: Queryable,
   key: CharacterKey
@@ -1984,7 +1996,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             completed.evidenceVersion !== undefined &&
             completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION &&
             completed.run.completedAt !== null &&
-            completed.run.completedAt >= freshnessCutoff
+            isEvidenceFresh(
+              completed.run.completedAt,
+              completed.run.retryAfterAt,
+              freshnessCutoff,
+              at
+            )
           ) {
             await client.query("COMMIT");
             return {
