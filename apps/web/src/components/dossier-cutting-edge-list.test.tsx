@@ -262,7 +262,8 @@ it("does not infer a missing achievement when Blizzard evidence is limited", () 
           source: "blizzard",
           character: { region: "eu", realm: "silvermoon", name: "ryalts" },
           code: "unavailable",
-          message: "Blizzard achievement data could not be read."
+          message: "Blizzard achievement data could not be read.",
+          observedAt: "2026-09-15T12:00:00.000Z"
         }
       ]}
     />

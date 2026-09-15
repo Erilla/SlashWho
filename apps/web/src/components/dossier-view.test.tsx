@@ -102,7 +102,8 @@ const dossier: ApplicantDossier = {
       character: { region: "eu", realm: "draenor", name: "ryalts" },
       code: "unavailable",
       message:
-        "Warcraft Logs evidence is incomplete because the source is temporarily unavailable."
+        "Warcraft Logs evidence is incomplete because the source is temporarily unavailable.",
+      observedAt: "2026-09-15T12:00:00.000Z"
     }
   ]
 };

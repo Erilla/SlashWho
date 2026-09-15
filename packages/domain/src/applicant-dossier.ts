@@ -61,6 +61,7 @@ export type DossierLimitation = Readonly<{
   source: "raiderio" | "warcraft_logs" | "blizzard";
   character: CharacterKey | null;
   code: string;
+  observedAt?: string;
   retryAt?: string;
 }>;
 export type DossierCuttingEdgeEvidence = Readonly<{

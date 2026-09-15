@@ -149,12 +149,14 @@ function limitation(
   source: EvidenceSource,
   character: CharacterKey,
   code: string,
+  observedAt: Date = new Date(),
   retryAfterAt?: Date | null
 ): DossierLimitation {
   return {
     source,
     character,
     code: contractLimitationCode(code),
+    observedAt: observedAt.toISOString(),
     ...(retryAfterAt && !Number.isNaN(retryAfterAt.valueOf())
       ? { retryAt: retryAfterAt.toISOString() }
       : {})
@@ -286,6 +288,7 @@ async function gatherCharacterEvidence(
         "warcraft_logs",
         character.key,
         completed.run.limitationCode,
+        completed.run.completedAt ?? new Date(),
         completed.run.retryAfterAt
       )
     );
@@ -296,6 +299,7 @@ async function gatherCharacterEvidence(
         "warcraft_logs",
         character.key,
         completed.run.parseLimitationCode,
+        completed.run.completedAt ?? new Date(),
         completed.run.retryAfterAt
       )
     );
@@ -355,6 +359,7 @@ async function gatherCuttingEdgeEvidence(
           "blizzard",
           character.key,
           blizzardLimitationCode(error),
+          new Date(),
           retryAfterAt(error)
         )
       );
@@ -477,6 +482,7 @@ async function enrichHistoricRanks(options: {
           source: "raiderio",
           character: null,
           code: result.code,
+          observedAt: new Date().toISOString(),
           ...(result.retryAfterMs === undefined
             ? {}
             : {
@@ -537,7 +543,7 @@ async function assembleDossier(options: {
     ...evidence.flatMap((item) => item.limitations),
     ...cuttingEdgeEvidence.limitations,
     ...options.skippedSubjects.map((character) =>
-      limitation("warcraft_logs", character.key, "request_cap")
+      limitation("warcraft_logs", character.key, "request_cap", new Date())
     )
   ];
   const ranked = await enrichHistoricRanks({
@@ -578,6 +584,7 @@ async function assembleDossier(options: {
     ),
     limitations: dossier.limitations.map((item) => ({
       ...item,
+      observedAt: item.observedAt ?? new Date().toISOString(),
       code: contractLimitationCode(item.code),
       message: limitationMessage(item.source, contractLimitationCode(item.code))
     }))
