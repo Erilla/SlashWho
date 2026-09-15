@@ -22,6 +22,7 @@ export type DossierKillParseMetric =
   | Readonly<{ state: "available"; percentile: number }>
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
 export type DossierKillPerformance = Readonly<{
+  spec?: Readonly<{ name: string; iconUrl: string }> | null;
   damage: DossierKillParseMetric;
   healing: DossierKillParseMetric;
   bossDamage: DossierKillParseMetric;
@@ -97,7 +98,7 @@ export type ApplicantDossierParseMetric =
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
 export type ApplicantDossierCharacterParses = Readonly<{
   character: string;
-  classSpec?: string | null;
+  spec?: Readonly<{ name: string; iconUrl: string }> | null;
   damage: ApplicantDossierParseMetric;
   healing: ApplicantDossierParseMetric;
   bossDamage: ApplicantDossierParseMetric;
@@ -332,7 +333,9 @@ function aggregateEventParses(
     return [
       {
         character: character.displayName,
-        ...(character.className ? { classSpec: character.className } : {}),
+        ...(selectParseSpec(characterKills) === null
+          ? {}
+          : { spec: selectParseSpec(characterKills) }),
         damage: selectParseMetric(
           characterKills.map((kill) =>
             parseCandidate(kill, kill.performance.damage)
@@ -351,6 +354,19 @@ function aggregateEventParses(
       }
     ];
   });
+}
+
+function selectParseSpec(
+  kills: readonly DossierKillEvidence[]
+): Readonly<{ name: string; iconUrl: string }> | null {
+  return (
+    kills
+      .map((kill) => kill.performance.spec)
+      .find(
+        (spec): spec is Readonly<{ name: string; iconUrl: string }> =>
+          spec != null
+      ) ?? null
+  );
 }
 
 function aggregateBossParses(

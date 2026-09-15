@@ -85,6 +85,13 @@
       "when": 1789432559962,
       "tag": "0012_evidence_retry_after",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789470000000,
+      "tag": "0013_character_kill_specs",
+      "breakpoints": true
     }
   ]
 }

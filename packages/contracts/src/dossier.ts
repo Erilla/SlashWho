@@ -60,7 +60,11 @@ export const applicantDossierParseMetricSchema = z.discriminatedUnion("state", [
 export const applicantDossierCharacterParsesSchema = z
   .object({
     character: z.string().min(1),
-    classSpec: z.string().min(1).nullable().optional(),
+    spec: z
+      .object({ name: z.string().min(1), iconUrl: z.url() })
+      .strict()
+      .nullable()
+      .optional(),
     damage: applicantDossierParseMetricSchema,
     healing: applicantDossierParseMetricSchema,
     bossDamage: applicantDossierParseMetricSchema

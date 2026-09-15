@@ -392,6 +392,11 @@ describe("Warcraft Logs gateway", () => {
           fightId: 26,
           difficulty: 5,
           performance: {
+            spec: {
+              name: "Brewmaster",
+              iconUrl:
+                "https://wow.zamimg.com/images/wow/icons/medium/spell_monk_brewmaster_spec.jpg"
+            },
             damage: { state: "available", percentile: 23 },
             healing: { state: "available", percentile: 48 },
             bossDamage: { state: "available", percentile: 42 }

@@ -16,7 +16,11 @@ type ApplicantDossierCharacterParses = KillBoss["bestParses"][number];
 const parses = [
   {
     character: "Ryii",
-    classSpec: "Fire",
+    spec: {
+      name: "Fire",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/spell_fire_firebolt.jpg"
+    },
     damage: {
       state: "available",
       percentile: 87.19,
@@ -37,16 +41,20 @@ it("presents every character name and metric with source links and accessible un
   expect(screen.getByText("First kill parses")).toBeVisible();
   expect(screen.queryByText(/rankings\./)).not.toBeInTheDocument();
   expect(screen.getByRole("group", { name: "Ryii parses" })).toBeVisible();
-  expect(screen.getByText("Fire")).toBeVisible();
+  expect(screen.queryByText("Paladin")).not.toBeInTheDocument();
   expect(screen.getByText("Ryii")).toBeVisible();
   const damage = screen.getByRole("link", {
-    name: "Damage 87.1 percentile"
+    name: "Damage 87.1 percentile (Fire)"
   });
   expect(damage).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/reports/damage#fight=8"
   );
   expect(damage).toHaveClass("dossier-parse-metric--purple");
+  expect(screen.getByAltText("Fire specialization")).toHaveAttribute(
+    "src",
+    "https://wow.zamimg.com/images/wow/icons/medium/spell_fire_firebolt.jpg"
+  );
   expect(screen.getAllByText("-")).toHaveLength(2);
   expect(screen.getByText("Healing")).toBeVisible();
   expect(screen.getByText("Boss Damage")).toBeVisible();
@@ -71,9 +79,7 @@ it("can omit the visible character name while retaining accessible attribution",
   expect(screen.getByRole("group", { name: "Ryii parses" })).toBeVisible();
 });
 
-it("uses ordinal percentile labels for whole-number parse values", () => {
-  // Break caught: whole values could be rendered as ambiguous raw numbers,
-  // leaving assistive-technology users without a percentile explanation.
+it("renders whole-number percentile values without the percentile suffix", () => {
   render(
     <DossierParseList
       label="Best shown parses"
@@ -91,8 +97,9 @@ it("uses ordinal percentile labels for whole-number parse values", () => {
   );
 
   expect(
-    screen.getByRole("link", { name: "Damage 100th percentile" })
+    screen.getByRole("link", { name: "Damage 100 percentile (Fire)" })
   ).toHaveClass("dossier-parse-metric--gold");
+  expect(screen.getByText("100", { exact: true })).toBeVisible();
 });
 
 it("shows a spinner for unavailable metrics while research is gathering", () => {

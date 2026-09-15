@@ -568,11 +568,11 @@ it("keeps the chronological first-kill summary coherent while listing events old
   const firstKillParses = screen
     .getAllByRole("region", { name: "First kill parses" })
     .find((region) =>
-      within(region).queryByRole("link", { name: "Damage 77th percentile" })
+      within(region).queryByRole("link", { name: "Damage 77 percentile" })
     )!;
   expect(
     within(firstKillParses).getByRole("link", {
-      name: "Damage 77th percentile"
+      name: "Damage 77 percentile"
     })
   ).toHaveAttribute(
     "href",
@@ -590,7 +590,7 @@ it("keeps the chronological first-kill summary coherent while listing events old
   expect(
     within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
       "link",
-      { name: "Damage 99th percentile" }
+      { name: "Damage 99 percentile" }
     )
   ).toHaveAttribute(
     "href",
@@ -1133,7 +1133,7 @@ it("shows first-kill and best parse summaries before evidence details are opened
   expect(bestParses).toBeVisible();
   expect(
     within(firstKillParses).getByRole("link", {
-      name: "Damage 87th percentile"
+      name: "Damage 87 percentile"
     })
   ).toHaveAttribute(
     "href",
@@ -1159,7 +1159,7 @@ it("shows first-kill and best parse summaries before evidence details are opened
     screen.getByRole("region", { name: "Kill evidence" })
   ).getByRole("region", { name: "First kill parses" });
   expect(
-    within(eventParses).getByRole("link", { name: "Damage 87th percentile" })
+    within(eventParses).getByRole("link", { name: "Damage 87 percentile" })
   ).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/reports/first#fight=8"

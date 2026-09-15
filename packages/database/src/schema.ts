@@ -433,6 +433,8 @@ export const characterMythicKills = pgTable(
     guildName: text("guild_name"),
     guildRealm: text("guild_realm"),
     historicWorldRank: integer("historic_world_rank"),
+    specName: text("spec_name"),
+    specIconUrl: text("spec_icon_url"),
     damageParseState:
       characterMythicKillParseState("damage_parse_state").notNull(),
     damagePercentile: doublePrecision("damage_percentile"),
