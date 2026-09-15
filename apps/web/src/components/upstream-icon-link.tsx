@@ -9,8 +9,36 @@ type UpstreamIconLinkProps = Readonly<{
 }>;
 
 export function UpstreamIcon({
+  evidenceState,
   source
-}: Pick<UpstreamIconLinkProps, "source">) {
+}: Pick<UpstreamIconLinkProps, "evidenceState" | "source">) {
+  if (evidenceState) {
+    const label = evidenceState === "kill" ? "Kill report" : "Wipe report";
+    return (
+      <svg
+        aria-label={label}
+        className={`upstream-link-icon upstream-link-icon--evidence-${evidenceState}`}
+        fill="none"
+        role="img"
+        viewBox="0 0 16 16"
+      >
+        <title>{label}</title>
+        <rect fill="currentColor" height="14" rx="1.5" width="14" x="1" y="1" />
+        <path
+          d={
+            evidenceState === "kill"
+              ? "m4.5 8 2.5 2.5 4.5-5"
+              : "m5 5 6 6m0-6-6 6"
+          }
+          stroke="var(--surface)"
+          strokeLinecap="square"
+          strokeLinejoin="round"
+          strokeWidth="2"
+        />
+      </svg>
+    );
+  }
+
   const className = `upstream-link-icon upstream-link-icon--${
     source === "warcraft_logs" ? "warcraft-logs" : source
   }`;
@@ -53,7 +81,7 @@ export function UpstreamIconLink({
       title={accessibleLabel}
     >
       {children}
-      <UpstreamIcon source={source} />
+      <UpstreamIcon evidenceState={evidenceState} source={source} />
     </a>
   );
 }

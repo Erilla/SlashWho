@@ -1145,6 +1145,14 @@ a {
   object-fit: contain;
 }
 
+.upstream-link-icon--evidence-kill {
+  color: var(--success);
+}
+
+.upstream-link-icon--evidence-wipe {
+  color: var(--muted);
+}
+
 .dossier-report-links {
   display: flex;
   flex-wrap: wrap;

@@ -120,8 +120,11 @@ it("shows the grouped rank in the summary and retains all distinct report links"
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(
-      link.querySelector(".upstream-link-icon--warcraft-logs")
+      link.querySelector(".upstream-link-icon--evidence-kill")
     ).toBeInTheDocument();
+    expect(
+      link.querySelector(".upstream-link-icon--warcraft-logs")
+    ).not.toBeInTheDocument();
   }
   expect(screen.getAllByText("First kill")).toHaveLength(1);
 });
