@@ -238,7 +238,7 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(
     firstKillParses
       .locator(".dossier-parse-metric")
-      .filter({ hasText: "Boss Damage" })
+      .filter({ hasText: "Boss Dam" })
       .getByText("-", { exact: true })
   ).toBeVisible();
 
