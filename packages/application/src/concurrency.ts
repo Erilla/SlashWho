@@ -18,6 +18,7 @@ export function createConcurrencyLimiter(
   const pending: Array<{
     work: () => Promise<unknown>;
     queuedAt: number;
+    onWait?: (waitedMs: number) => void;
     resolve: (value: unknown) => void;
     reject: (error: unknown) => void;
   }> = [];
@@ -27,7 +28,10 @@ export function createConcurrencyLimiter(
       const item = pending.shift()!;
       active += 1;
       // Reported before the work starts, so the wait never includes it.
-      options.onWait?.(Math.max(0, Math.round(monotonic() - item.queuedAt)));
+      const waitedMs = Math.max(0, Math.round(monotonic() - item.queuedAt));
+      // A per-call onWait replaces the constructor-level one for this call,
+      // so a scope-bound caller never also feeds the shared reporter.
+      (item.onWait ?? options.onWait)?.(waitedMs);
       Promise.resolve()
         .then(item.work)
         .then(item.resolve, item.reject)
@@ -39,11 +43,15 @@ export function createConcurrencyLimiter(
   }
 
   return {
-    run<T>(work: () => Promise<T>): Promise<T> {
+    run<T>(
+      work: () => Promise<T>,
+      onWait?: (waitedMs: number) => void
+    ): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         pending.push({
           work,
           queuedAt: monotonic(),
+          onWait,
           resolve: resolve as (value: unknown) => void,
           reject
         });

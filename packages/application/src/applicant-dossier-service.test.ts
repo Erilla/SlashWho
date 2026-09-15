@@ -63,6 +63,7 @@ function fixture(
     containingSnapshot?: StoredSnapshot | null;
     characterCap?: number;
     warcraftLogsRequestCap?: number;
+    providerConcurrency?: number;
     additionalKills?: readonly StoredCharacterMythicKill[];
     wipes?: readonly StoredCharacterMythicWipe[];
     includeCachedKills?: boolean;
@@ -234,7 +235,10 @@ function fixture(
       : { DOSSIER_CHARACTER_CAP: options.characterCap }),
     ...(options.warcraftLogsRequestCap === undefined
       ? {}
-      : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap })
+      : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap }),
+    ...(options.providerConcurrency === undefined
+      ? {}
+      : { DOSSIER_PROVIDER_CONCURRENCY: options.providerConcurrency })
   });
   const dossiers = createApplicantDossierService({
     repositories,
@@ -1166,13 +1170,56 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("records limiter wait on the scope", async () => {
-    const scope = createMeasurementScope(() => 0);
-    const { dossiers } = fixture();
+  it("attributes limiter admission wait only to the request that actually queued", async () => {
+    // Break caught: a limiter onWait broadcast to every registered scope
+    // instead of the call that actually waited (a metric that misleads is
+    // worse than no metric). The limiter's own clock (performance.now,
+    // uninjectable through the service's public options) is stubbed so the
+    // wait attributed to the queued call is a deterministic, specific value
+    // rather than merely "some positive number".
+    let clock = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    try {
+      const scopeA = createMeasurementScope(() => clock);
+      const scopeB = createMeasurementScope(() => clock);
+      const { dossiers, raiderio } = fixture({ providerConcurrency: 1 });
 
-    await dossiers.read(root, undefined, scope);
+      let releaseFirst!: () => void;
+      let firstStarted = false;
+      vi.mocked(raiderio.getMythicBossRankings).mockImplementation(async () => {
+        firstStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        return {
+          kind: "rankings",
+          rows: [
+            {
+              rank: 2,
+              guildName: "Example Guild",
+              guildRealm: "silvermoon",
+              guildRegion: "eu",
+              firstDefeated: "2024-10-01T20:00:00.000Z"
+            }
+          ]
+        };
+      });
 
-    expect(scope.totals().limiterWaitMs).toBeGreaterThanOrEqual(0);
+      const first = dossiers.read(root, undefined, scopeA);
+      await vi.waitFor(() => expect(firstStarted).toBe(true));
+      const second = dossiers.read(root, undefined, scopeB);
+      // Let the second call's own microtasks run far enough to reach and
+      // queue behind the first call's admitted (but still blocked) request.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      clock = 40;
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      expect(scopeA.totals().limiterWaitMs).toBe(0);
+      expect(scopeB.totals().limiterWaitMs).toBe(40);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("behaves identically when no scope is supplied", async () => {
