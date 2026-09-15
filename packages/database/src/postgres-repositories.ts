@@ -145,7 +145,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 5;
+const CURRENT_EVIDENCE_VERSION = 6;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
