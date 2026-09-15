@@ -137,6 +137,62 @@ describe("PostgreSQL repositories", () => {
       CASCADE`);
   });
 
+  it("keeps enriched parses when a later partial run cannot re-enrich them", async () => {
+    // Break caught: a rate-limited re-collection re-found the same kills without
+    // parse data and overwrote richer stored rows, losing specs and percentiles.
+    const enriched = mythicKill({
+      performance: {
+        spec: {
+          name: "Assassination",
+          iconUrl:
+            "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+        },
+        damage: { state: "available", percentile: 91 },
+        healing: { state: "available", percentile: 82 },
+        bossDamage: { state: "available", percentile: 87 }
+      }
+    });
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "partial",
+      limitationCode: "parse_request_cap",
+      parseLimitationCode: null,
+      kills: [enriched],
+      wipes: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    // The same fight, re-found by a rate-limited run that enriched nothing.
+    const second = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (second.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(second.run.id, {
+      state: "partial",
+      limitationCode: "parse_rate_limited",
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+
+    const stored = await repositories.evidence.getCompleted(rootKey);
+    expect(stored?.kills).toHaveLength(1);
+    expect(stored?.kills[0]?.performance).toMatchObject({
+      spec: { name: "Assassination" },
+      damage: { state: "available", percentile: 91 },
+      healing: { state: "available", percentile: 82 },
+      bossDamage: { state: "available", percentile: 87 }
+    });
+  });
+
   it("carries the character's class onto a claimed evidence run", async () => {
     // Break caught: Warcraft Logs omits a class on its ranks, so evidence
     // collection needs the stored class to settle shared specialisation names.
