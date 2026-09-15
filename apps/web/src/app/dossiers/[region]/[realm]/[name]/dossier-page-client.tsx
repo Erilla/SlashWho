@@ -10,7 +10,10 @@ import {
 } from "@slashwho/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { credentialHeaders, readStoredCredentials } from "../../../../../lib/api-credentials";
+import {
+  credentialHeaders,
+  readStoredCredentials
+} from "../../../../../lib/api-credentials";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
   DossierCharacterName,

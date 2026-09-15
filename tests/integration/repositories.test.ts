@@ -643,7 +643,11 @@ describe("PostgreSQL repositories", () => {
   });
 
   it("stores encrypted WCL credentials only when the reservation creates a new run", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "Testcharacter" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter"
+    } as const;
     const reservation = await repositories.evidence.reserve({
       key,
       freshnessCutoff: new Date(0),
@@ -659,7 +663,11 @@ describe("PostgreSQL repositories", () => {
   });
 
   it("clears encrypted WCL credentials when a run is published", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "Testcharacter2" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter2"
+    } as const;
     const reservation = await repositories.evidence.reserve({
       key,
       freshnessCutoff: new Date(0),
@@ -684,7 +692,11 @@ describe("PostgreSQL repositories", () => {
   });
 
   it("clears encrypted WCL credentials when a run fails", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "Testcharacter3" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter3"
+    } as const;
     const reservation = await repositories.evidence.reserve({
       key,
       freshnessCutoff: new Date(0),

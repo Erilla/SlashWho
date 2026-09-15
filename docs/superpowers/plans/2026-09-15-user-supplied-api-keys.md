@@ -22,10 +22,12 @@
 ### Task 1: Raider.IO client accepts an optional access key
 
 **Files:**
+
 - Modify: `packages/raiderio/src/client.ts`
 - Test: `packages/raiderio/src/client.test.ts`
 
 **Interfaces:**
+
 - Produces: `CreateRaiderIoClientOptions.accessKey?: string` — when set, every request carries `?access_key=<value>` (in addition to any existing query params).
 
 - [ ] **Step 1: Write the failing test**
@@ -102,10 +104,12 @@ git commit -m "feat(raiderio): support an optional access key on every request"
 ### Task 2: Credential encryption utility
 
 **Files:**
+
 - Create: `packages/application/src/credential-encryption.ts`
 - Test: `packages/application/src/credential-encryption.test.ts`
 
 **Interfaces:**
+
 - Produces: `encryptCredential(plaintext: string, key: Buffer): string` and `decryptCredential(ciphertext: string, key: Buffer): string`, plus `parseEncryptionKey(hex: string): Buffer` (validates a 64-hex-char / 32-byte key, throws `invalid_credential_encryption_key` otherwise).
 
 - [ ] **Step 1: Write the failing test**
@@ -202,6 +206,7 @@ git commit -m "feat(application): add AES-256-GCM credential encryption helper"
 ### Task 3: Encryption key in web and worker config
 
 **Files:**
+
 - Modify: `apps/web/src/server/config.ts`
 - Modify: `apps/web/src/server/config.test.ts`
 - Modify: `apps/worker/src/config.ts`
@@ -209,6 +214,7 @@ git commit -m "feat(application): add AES-256-GCM credential encryption helper"
 - Modify: `.env.example`
 
 **Interfaces:**
+
 - Produces: `WebConfig.dossier.evidenceJobCredentialEncryptionKey: Buffer` and `WorkerConfig.evidenceJobCredentialEncryptionKey: Buffer` — both parsed via `parseEncryptionKey` from Task 2.
 
 - [ ] **Step 1: Write the failing tests**
@@ -303,6 +309,7 @@ git commit -m "feat(config): add shared evidence-job credential encryption key"
 ### Task 4: Schema and repository support for encrypted WCL credentials
 
 **Files:**
+
 - Modify: `packages/database/src/schema.ts`
 - Create: `packages/database/drizzle/0014_evidence_run_credentials.sql` (via generation, see Step 3)
 - Modify: `packages/database/src/repositories.ts`
@@ -310,6 +317,7 @@ git commit -m "feat(config): add shared evidence-job credential encryption key"
 - Modify: `packages/database/src/postgres-repositories.test.ts` (or the file that already covers `reserve`/`claim`/`publish`/`fail` — locate it with `grep -rl "evidence.reserve" packages/database/src` first)
 
 **Interfaces:**
+
 - Produces: `CharacterEvidenceRun.wclClientIdEncrypted: string | null`, `CharacterEvidenceRun.wclClientSecretEncrypted: string | null`.
 - Produces: `EvidenceRepository.reserve(input)` gains an optional `credentials?: { wclClientIdEncrypted: string; wclClientSecretEncrypted: string } | null`, applied only when the call creates a new row.
 - Consumes: nothing new from other tasks; this is pure schema/data-access.
@@ -519,10 +527,12 @@ git commit -m "feat(database): store encrypted WCL credentials on character_evid
 ### Task 5: Thread WCL credentials from evidence gathering into `reserve`
 
 **Files:**
+
 - Modify: `packages/application/src/applicant-dossier-service.ts`
 - Modify: `packages/application/src/applicant-dossier-service.test.ts`
 
 **Interfaces:**
+
 - Consumes: `EvidenceRepository.reserve`'s new `credentials` field (Task 4); `encryptCredential`/`parseEncryptionKey` (Task 2).
 - Produces: `gatherCharacterEvidence` and `assembleDossier` accept an optional `wclCredentials?: { clientId: string; clientSecret: string } | null`, threaded down from `read`/`readInitial`.
 
@@ -668,12 +678,14 @@ git commit -m "feat(application): accept per-call Blizzard/Raider.IO/WCL credent
 ### Task 6: Web routes read credential headers and build per-request gateways
 
 **Files:**
+
 - Modify: `apps/web/src/app/api/dossiers/[region]/[realm]/[name]/route.ts`
 - Modify: `apps/web/src/app/api/dossiers/api-contract.test.ts` (or wherever this route's tests live — confirm with `grep -rl "dossiers/\[region\]" apps/web/src/app`)
 - Create: `apps/web/src/server/credential-headers.ts`
 - Create: `apps/web/src/server/credential-headers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createBlizzardClient` (`@slashwho/blizzard`), `createRaiderIoClient` (`@slashwho/raiderio`), `DossierGatewayOverrides` (Task 5).
 - Produces: `readCredentialOverrides(headers: Headers, config: WebConfig): DossierGatewayOverrides` — pure header parsing plus gateway construction, so the route stays thin.
 
@@ -684,7 +696,9 @@ import { describe, expect, it, vi } from "vitest";
 import { readCredentialOverrides } from "./credential-headers";
 import { loadWebConfig } from "./config";
 
-const config = loadWebConfig({ /* the same minimal valid env used by config.test.ts */ });
+const config = loadWebConfig({
+  /* the same minimal valid env used by config.test.ts */
+});
 
 describe("readCredentialOverrides", () => {
   it("returns no overrides when no credential headers are present", () => {
@@ -832,12 +846,14 @@ git commit -m "feat(web): build per-request gateways from visitor-supplied crede
 ### Task 7: Worker decrypts and uses per-run WCL credentials
 
 **Files:**
+
 - Modify: `packages/application/src/applicant-evidence-job-handler.ts`
 - Modify: `packages/application/src/applicant-evidence-job-handler.test.ts`
 - Modify: `apps/worker/src/runtime.ts`
 - Modify: `apps/worker/src/runtime.test.ts`
 
 **Interfaces:**
+
 - Consumes: `decryptCredential` (Task 2), `CharacterEvidenceRun.wclClientIdEncrypted`/`wclClientSecretEncrypted` (Task 4).
 - Produces: `ApplicantEvidenceJobHandlerOptions.createWarcraftLogsGateway?: (credentials: { clientId: string; clientSecret: string }) => Pick<WarcraftLogsGateway, "getFirstKillReports">` and `ApplicantEvidenceJobHandlerOptions.decryptionKey?: Buffer`.
 
@@ -946,7 +962,10 @@ const gateway =
   options.createWarcraftLogsGateway &&
   options.decryptionKey
     ? options.createWarcraftLogsGateway({
-        clientId: decryptCredential(run.wclClientIdEncrypted, options.decryptionKey),
+        clientId: decryptCredential(
+          run.wclClientIdEncrypted,
+          options.decryptionKey
+        ),
         clientSecret: decryptCredential(
           run.wclClientSecretEncrypted,
           options.decryptionKey
@@ -1018,6 +1037,7 @@ git commit -m "feat(worker): decrypt and use per-run WCL credentials when presen
 ### Task 8: Settings page and localStorage credential store
 
 **Files:**
+
 - Create: `apps/web/src/lib/api-credentials.ts`
 - Create: `apps/web/src/lib/api-credentials.test.ts`
 - Create: `apps/web/src/app/settings/page.tsx`
@@ -1025,6 +1045,7 @@ git commit -m "feat(worker): decrypt and use per-run WCL credentials when presen
 - Modify: `apps/web/src/components/site-header.tsx`
 
 **Interfaces:**
+
 - Produces: `readStoredCredentials(): StoredApiCredentials`, `writeStoredCredentials(value: StoredApiCredentials): void`, `clearStoredCredentials(): void`, and `type StoredApiCredentials = { blizzardClientId: string; blizzardClientSecret: string; raiderIoAccessKey: string; wclClientId: string; wclClientSecret: string }` (all fields default to `""`), plus `credentialHeaders(credentials: StoredApiCredentials): HeadersInit` for Task 9 to reuse.
 
 - [ ] **Step 1: Write the failing test**
@@ -1202,14 +1223,18 @@ export default function SettingsPage() {
     setCredentials(readStoredCredentials());
   }, []);
 
-  function field(
-    key: keyof StoredApiCredentials
-  ): { value: string; onChange: (event: React.ChangeEvent<HTMLInputElement>) => void } {
+  function field(key: keyof StoredApiCredentials): {
+    value: string;
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  } {
     return {
       value: credentials[key],
       onChange: (event) => {
         setSaved(false);
-        setCredentials((current) => ({ ...current, [key]: event.target.value }));
+        setCredentials((current) => ({
+          ...current,
+          [key]: event.target.value
+        }));
       }
     };
   }
@@ -1240,18 +1265,30 @@ export default function SettingsPage() {
           <legend>Blizzard</legend>
           <label>
             Client ID
-            <input type="text" autoComplete="off" {...field("blizzardClientId")} />
+            <input
+              type="text"
+              autoComplete="off"
+              {...field("blizzardClientId")}
+            />
           </label>
           <label>
             Client secret
-            <input type="password" autoComplete="off" {...field("blizzardClientSecret")} />
+            <input
+              type="password"
+              autoComplete="off"
+              {...field("blizzardClientSecret")}
+            />
           </label>
         </fieldset>
         <fieldset>
           <legend>Raider.IO</legend>
           <label>
             Access key
-            <input type="password" autoComplete="off" {...field("raiderIoAccessKey")} />
+            <input
+              type="password"
+              autoComplete="off"
+              {...field("raiderIoAccessKey")}
+            />
           </label>
         </fieldset>
         <fieldset>
@@ -1262,7 +1299,11 @@ export default function SettingsPage() {
           </label>
           <label>
             Client secret
-            <input type="password" autoComplete="off" {...field("wclClientSecret")} />
+            <input
+              type="password"
+              autoComplete="off"
+              {...field("wclClientSecret")}
+            />
           </label>
         </fieldset>
         <button type="submit">Save</button>
@@ -1284,7 +1325,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import SettingsPage from "./page";
-import { clearStoredCredentials, readStoredCredentials } from "../../lib/api-credentials";
+import {
+  clearStoredCredentials,
+  readStoredCredentials
+} from "../../lib/api-credentials";
 
 afterEach(() => {
   clearStoredCredentials();
@@ -1329,10 +1373,12 @@ git commit -m "feat(web): add a settings page for browser-local API credentials"
 ### Task 9: Attach credential headers on dossier reads
 
 **Files:**
+
 - Modify: `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.tsx`
 - Modify: `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `readStoredCredentials`, `credentialHeaders` (Task 8).
 
 - [ ] **Step 1: Write the failing test**

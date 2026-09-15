@@ -285,7 +285,10 @@ describe("applicant evidence job handler", () => {
         status: "running",
         createdAt: new Date(),
         wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
-        wclClientSecretEncrypted: encryptCredential("user-secret", encryptionKey)
+        wclClientSecretEncrypted: encryptCredential(
+          "user-secret",
+          encryptionKey
+        )
       }),
       publish: vi.fn().mockResolvedValue(undefined),
       find: vi.fn(),

@@ -275,7 +275,8 @@ export function createRaiderIoClient(
     normalize: (value: unknown) => T,
     signal?: AbortSignal
   ): Promise<T> {
-    if (options.accessKey) url.searchParams.set("access_key", options.accessKey);
+    if (options.accessKey)
+      url.searchParams.set("access_key", options.accessKey);
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
     const requestSignal = signal
       ? AbortSignal.any([signal, timeoutSignal])

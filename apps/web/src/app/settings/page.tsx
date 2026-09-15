@@ -33,7 +33,10 @@ export default function SettingsPage() {
       value: credentials[key],
       onChange: (event) => {
         setSaved(false);
-        setCredentials((current) => ({ ...current, [key]: event.target.value }));
+        setCredentials((current) => ({
+          ...current,
+          [key]: event.target.value
+        }));
       }
     };
   }
@@ -64,18 +67,30 @@ export default function SettingsPage() {
           <legend>Blizzard</legend>
           <label>
             Client ID
-            <input type="text" autoComplete="off" {...field("blizzardClientId")} />
+            <input
+              type="text"
+              autoComplete="off"
+              {...field("blizzardClientId")}
+            />
           </label>
           <label>
             Client secret
-            <input type="password" autoComplete="off" {...field("blizzardClientSecret")} />
+            <input
+              type="password"
+              autoComplete="off"
+              {...field("blizzardClientSecret")}
+            />
           </label>
         </fieldset>
         <fieldset>
           <legend>Raider.IO</legend>
           <label>
             Access key
-            <input type="password" autoComplete="off" {...field("raiderIoAccessKey")} />
+            <input
+              type="password"
+              autoComplete="off"
+              {...field("raiderIoAccessKey")}
+            />
           </label>
         </fieldset>
         <fieldset>
@@ -86,7 +101,11 @@ export default function SettingsPage() {
           </label>
           <label>
             Client secret
-            <input type="password" autoComplete="off" {...field("wclClientSecret")} />
+            <input
+              type="password"
+              autoComplete="off"
+              {...field("wclClientSecret")}
+            />
           </label>
         </fieldset>
         <button type="submit">Save</button>

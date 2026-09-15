@@ -4,7 +4,10 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
-import { clearStoredCredentials, writeStoredCredentials } from "../../../../../lib/api-credentials";
+import {
+  clearStoredCredentials,
+  writeStoredCredentials
+} from "../../../../../lib/api-credentials";
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({

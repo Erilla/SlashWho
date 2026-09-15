@@ -138,7 +138,9 @@ describe("Raider.IO gateway", () => {
 
     await client.getClaimedCharacters("Foo");
 
-    const requestedUrl = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
+    const requestedUrl = new URL(
+      (fetchMock.mock.calls[0]![0] as URL).toString()
+    );
     expect(requestedUrl.searchParams.get("access_key")).toBe("test-access-key");
   });
 
