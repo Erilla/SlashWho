@@ -257,8 +257,13 @@ export function AddConnectedCharacterDialog({
           >
             Cancel
           </button>
-          <button className="search-button" disabled={pending} type="submit">
-            {pending ? "Adding…" : "Add connected character"}
+          <button
+            aria-label="Add connected character"
+            className="search-button"
+            disabled={pending}
+            type="submit"
+          >
+            {pending ? "Adding…" : "Add"}
           </button>
         </div>
       </form>

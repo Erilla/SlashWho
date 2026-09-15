@@ -531,9 +531,11 @@ a {
 
 .dossier-character-add-actions {
   display: flex;
-  /* Cancel sits left and the submit right. Wrapping stays available so an
-     extreme text size degrades to two rows instead of overflowing. */
-  flex-wrap: wrap;
+  /* Cancel sits left and the submit right, and must stay that way. Wrapping
+     was what stacked them: the labels are measured in whatever font the
+     viewer has, so any width that depends on text metrics eventually wraps on
+     a machine without Inter. Never wrap, and let the buttons shrink instead. */
+  flex-wrap: nowrap;
   justify-content: space-between;
   gap: 0.625rem;
 }
