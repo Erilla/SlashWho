@@ -260,6 +260,12 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(
     firstEventParses.getByText("Parsecheck", { exact: true })
   ).toHaveCount(0);
+  await expect(
+    firstKillParses.getByText("Parsecheck", { exact: true })
+  ).toBeVisible();
+  await expect(
+    bestParses.getByText("Laterparse", { exact: true })
+  ).toBeVisible();
   await expect(latestEventParses.locator("xpath=ancestor::dl")).not.toHaveClass(
     /dossier-evidence-first-kill/
   );
