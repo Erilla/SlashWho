@@ -22,6 +22,10 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
         {limitations.map((limitation, index) => (
           <li key={`${limitation.source}-${limitation.code}-${index}`}>
             {limitation.message}
+            {` `}
+            <time dateTime={limitation.observedAt}>
+              Observed {formatObservedAt(limitation.observedAt)}.
+            </time>
             {limitation.character ? (
               <>
                 {" Affected character: "}
@@ -39,4 +43,13 @@ export function DossierLimitations({ limitations }: DossierLimitationsProps) {
       </ul>
     </section>
   );
+}
+
+function formatObservedAt(value: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(value));
 }

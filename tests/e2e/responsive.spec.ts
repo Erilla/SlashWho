@@ -429,6 +429,7 @@ test("keeps overflowing connected characters clear of classic and overlay scroll
       scrollbarGutter: getComputedStyle(element).scrollbarGutter
     }))
   ).toEqual({ paddingInlineEnd: 16, scrollbarGutter: "stable" });
+  await expect(list).toHaveCSS("overflow-x", "hidden");
   await list.focus();
   await page.keyboard.press("PageDown");
   await expect

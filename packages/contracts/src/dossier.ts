@@ -161,6 +161,7 @@ export const dossierLimitationSchema = z
       "current_content_evidence_withheld"
     ]),
     message: z.string().min(1),
+    observedAt: z.iso.datetime(),
     retryAt: z.iso.datetime().optional()
   })
   .strict();

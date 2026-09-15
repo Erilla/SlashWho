@@ -91,6 +91,7 @@ const rateLimited = {
       character: null,
       code: "rate_limited" as const,
       message: "Raider.IO is temporarily rate limited.",
+      observedAt: "2026-09-15T12:00:00.000Z",
       retryAt: "2026-09-15T12:02:05.000Z"
     }
   ]

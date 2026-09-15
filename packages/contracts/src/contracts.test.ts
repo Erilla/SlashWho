@@ -86,7 +86,8 @@ const validDossier = {
       source: "warcraft_logs",
       character: null,
       code: "rate_limited",
-      message: "Warcraft Logs is temporarily rate limited."
+      message: "Warcraft Logs is temporarily rate limited.",
+      observedAt: "2026-09-15T12:00:00.000Z"
     }
   ]
 };
@@ -100,6 +101,7 @@ it("accepts a provider reset timestamp on a rate-limited limitation", () => {
         character: null,
         code: "rate_limited",
         message: "Raider.IO is temporarily rate limited.",
+        observedAt: "2026-09-15T12:00:00.000Z",
         retryAt: "2026-09-15T12:05:00.000Z"
       }
     ]
