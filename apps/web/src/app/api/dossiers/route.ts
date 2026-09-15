@@ -7,7 +7,7 @@ import { getContainer } from "../../../server/container";
 import { apiError, withHttpRequest } from "../../../server/http";
 
 export async function POST(request: Request): Promise<Response> {
-  return withHttpRequest("dossier_start", async (scope) => {
+  return withHttpRequest("dossier_start", async (scope, correlationId) => {
     const body = createDossierRequestSchema.safeParse(
       await request.json().catch(() => null)
     );
@@ -16,7 +16,8 @@ export async function POST(request: Request): Promise<Response> {
     const result = await dossiers.start(
       {
         characterUrl: body.data.characterUrl,
-        headers: request.headers
+        headers: request.headers,
+        correlationId
       },
       scope
     );

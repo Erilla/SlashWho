@@ -16,7 +16,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_connection", async (scope) => {
+  return withHttpRequest("dossier_connection", async (scope, correlationId) => {
     let root: ReturnType<typeof parseCharacterRoute>;
     try {
       root = parseCharacterRoute(await context.params);
@@ -33,7 +33,8 @@ export async function POST(
       root.key,
       {
         characterUrl: body.data.characterUrl,
-        headers: request.headers
+        headers: request.headers,
+        correlationId
       },
       scope
     );

@@ -111,7 +111,7 @@ async function publicResponseCount(
 
 export async function withHttpRequest(
   endpoint: string,
-  action: (scope: MeasurementScope) => Promise<Response>,
+  action: (scope: MeasurementScope, correlationId: string) => Promise<Response>,
   logger: HttpLogger = webLogger,
   clock: () => number = performance.now.bind(performance)
 ): Promise<Response> {
@@ -121,7 +121,7 @@ export async function withHttpRequest(
   let response: Response;
   let failure: string | undefined;
   try {
-    response = await action(scope);
+    response = await action(scope, correlationId);
   } catch (error) {
     failure = errorName(error);
     response = apiError("search_failed");

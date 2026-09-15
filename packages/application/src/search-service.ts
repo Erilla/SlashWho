@@ -329,7 +329,7 @@ export function createSearchService(options: {
           runId: reservation.run.id,
           key,
           correlationId: input.correlationId,
-          enqueuedAt: new Date().toISOString()
+          enqueuedAt: now().toISOString()
         });
       } catch {
         await repositories.searchReservations.cancel(reservation.run.id);

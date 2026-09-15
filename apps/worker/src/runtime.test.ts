@@ -546,7 +546,9 @@ describe("worker runtime", () => {
     expect(fakes.fingerprintAdmissions).toEqual([waitingRunId]);
     expect(fakes.admissionHandler).toBeTypeOf("function");
     await fakes.admissionHandler?.(waitingRunId);
-    expect(fakes.enqueued).toEqual([{ runId: waitingRunId, key }]);
+    expect(fakes.enqueued).toEqual([
+      { runId: waitingRunId, key, enqueuedAt: expect.any(String) }
+    ]);
     expect(fakes.handler.execute).not.toHaveBeenCalled();
     await runtime.stop();
   });
@@ -601,7 +603,9 @@ describe("worker runtime", () => {
 
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
-    expect(fakes.enqueued).toEqual([{ runId, key }]);
+    expect(fakes.enqueued).toEqual([
+      { runId, key, enqueuedAt: expect.any(String) }
+    ]);
     expect(fakes.dispatchedFingerprintRuns).toEqual([runId]);
     await runtime.stop();
   });

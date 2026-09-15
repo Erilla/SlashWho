@@ -426,21 +426,18 @@ describe("search freshness policy", () => {
 
 describe("job telemetry", () => {
   it("carries a correlation id and a fresh enqueuedAt onto the discovery job", async () => {
+    // The service injects its clock (options.now) rather than reading the
+    // system clock directly, so this asserts against that injected time.
     const fixture = policyFixture();
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-09-15T10:00:00.000Z"));
-      await fixture.service.create({
-        ...fixture.command,
-        correlationId: "corr-1"
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+
+    await fixture.service.create({
+      ...fixture.command,
+      correlationId: "corr-1"
+    });
 
     expect(fixture.enqueuedPayloads[0]).toMatchObject({
       correlationId: "corr-1",
-      enqueuedAt: "2026-09-15T10:00:00.000Z"
+      enqueuedAt: now.toISOString()
     });
   });
 

@@ -216,7 +216,14 @@ export async function createWorkerRuntime(
     const dispatchAdmittedFingerprintRun = async (runId: string) => {
       const run = await repositories.runs.find(runId);
       if (!run) return;
-      await initializedQueue.enqueue({ runId, key: run.rootKey });
+      // No correlationId is available here: this dispatch is a background
+      // fingerprint-admission follow-up, not the continuation of an HTTP
+      // request, so it stays absent rather than being invented.
+      await initializedQueue.enqueue({
+        runId,
+        key: run.rootKey,
+        enqueuedAt: new Date().toISOString()
+      });
       await repositories.fingerprintSweeps.markDispatched(runId, new Date());
     };
     for (let offset = 0; ;) {
