@@ -16,7 +16,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_connection", async () => {
+  return withHttpRequest("dossier_connection", async (scope) => {
     let root: ReturnType<typeof parseCharacterRoute>;
     try {
       root = parseCharacterRoute(await context.params);
@@ -29,10 +29,17 @@ export async function POST(
     );
     if (!body.success) return apiError("invalid_character_url");
     const { dossiers } = await getContainer();
-    const result = await dossiers.addConnectedCharacter(root.key, {
-      characterUrl: body.data.characterUrl,
-      headers: request.headers
-    });
+    const result = await dossiers.addConnectedCharacter(
+      root.key,
+      {
+        characterUrl: body.data.characterUrl,
+        headers: request.headers
+      },
+      scope
+    );
+    if ("joinedExistingRun" in result && result.joinedExistingRun) {
+      scope.mark("runJoined");
+    }
     if (result.kind === "linked" || result.kind === "duplicate") {
       return Response.json(
         dossierStartResponseSchema.parse({ kind: "ready" }),

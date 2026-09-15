@@ -1,4 +1,8 @@
-import type { PublicReadAuthorizationResult } from "@slashwho/application";
+import {
+  createMeasurementScope,
+  type MeasurementScope,
+  type PublicReadAuthorizationResult
+} from "@slashwho/application";
 import {
   publicErrorHttpStatus,
   publicErrorMessages,
@@ -107,16 +111,17 @@ async function publicResponseCount(
 
 export async function withHttpRequest(
   endpoint: string,
-  action: () => Promise<Response>,
+  action: (scope: MeasurementScope) => Promise<Response>,
   logger: HttpLogger = webLogger,
   clock: () => number = performance.now.bind(performance)
 ): Promise<Response> {
   const correlationId = randomUUID();
+  const scope = createMeasurementScope(clock);
   const startedAt = clock();
   let response: Response;
   let failure: string | undefined;
   try {
-    response = await action();
+    response = await action(scope);
   } catch (error) {
     failure = errorName(error);
     response = apiError("search_failed");
@@ -129,6 +134,7 @@ export async function withHttpRequest(
     endpoint,
     status: response.status,
     durationMs: Math.max(0, Math.round(clock() - startedAt)),
+    ...scope.totals(),
     ...(count === undefined ? {} : { count }),
     ...(failure === undefined ? {} : { errorName: failure })
   });

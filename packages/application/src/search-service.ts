@@ -46,6 +46,7 @@ export type CreateSearchResult =
       statusUrl: string;
       characterUrl: string;
       staleCharacter: CharacterResource | null;
+      joinedExistingRun: boolean;
     }
   | { kind: "not_found"; code: "character_not_found" | "suppressed_character" }
   | { kind: "invalid"; code: "invalid_character_url" }
@@ -69,7 +70,8 @@ const searchJobResultSchema = z
     status: z.enum(["queued", "running", "retrying"]),
     statusUrl: z.string().startsWith("/api/v1/searches/"),
     characterUrl: z.string().startsWith("/characters/"),
-    staleCharacter: characterResourceSchema.nullable()
+    staleCharacter: characterResourceSchema.nullable(),
+    joinedExistingRun: z.boolean()
   })
   .strict();
 
@@ -188,7 +190,8 @@ export function createSearchService(options: {
       status,
       statusUrl: response.statusUrl,
       characterUrl: response.characterUrl,
-      staleCharacter
+      staleCharacter,
+      joinedExistingRun: reservation.kind === "active"
     });
   }
 

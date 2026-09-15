@@ -90,10 +90,6 @@ export async function createWebContainer(
       config: config.application
     });
     const dossiers = dependencies.createApplicantDossierService({
-      onCacheEvent: (source, event) =>
-        console.info(
-          JSON.stringify({ event: "dossier_cache", source, outcome: event })
-        ),
       repositories,
       search: searches,
       queue: initializedQueue,

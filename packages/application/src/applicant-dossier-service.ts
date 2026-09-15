@@ -34,7 +34,7 @@ import type {
 } from "@slashwho/raiderio";
 
 import type { ApplicationConfig } from "./config";
-import { createBoundedCache } from "./bounded-cache";
+import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { createConcurrencyLimiter } from "./concurrency";
 import type { MeasurementScope } from "./measurement";
 import type {
@@ -601,6 +601,27 @@ async function assembleDossier(options: {
   });
 }
 
+// Maps a bounded cache's per-call outcome onto the requesting scope's own
+// counters. Attributed per call (via the cache's optional per-call observer
+// parameter), never broadcast to every scope sharing the process-wide cache
+// instance -- the same defect already fixed for the concurrency limiter.
+const cacheField: Record<string, string> = {
+  hit: "cacheHits",
+  miss: "cacheMisses",
+  shared: "cacheShared",
+  failure: "cacheFailures",
+  capacity: "cacheCapacity"
+};
+
+function cacheObserver(
+  scope?: MeasurementScope
+): ((event: BoundedCacheOutcome) => void) | undefined {
+  if (!scope) return undefined;
+  return (event) => {
+    scope.increment(cacheField[event] ?? "cacheFailures");
+  };
+}
+
 class RankingLookupFailure extends Error {
   constructor(
     readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
@@ -648,25 +669,29 @@ export function createApplicantDossierService(options: {
       async getCompletedAchievements(key, signal) {
         signal?.throwIfAborted();
         return awaitWithAbort(
-          achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
-            const run = async () =>
-              options.blizzard.getCompletedAchievements(
-                key,
-                AbortSignal.timeout(15_000)
-              );
-            const rows = scope
-              ? await scope.time("blizzard", run)
-              : await run();
-            return rows
-              .filter(
-                (row) =>
-                  lookupCuttingEdgeAchievement(row.achievementId) !== null
-              )
-              .map(({ achievementId, completedAt }) => ({
-                achievementId,
-                completedAt
-              }));
-          }),
+          achievements(
+            `${key.region}/${key.realm}/${key.name}`,
+            async () => {
+              const run = async () =>
+                options.blizzard.getCompletedAchievements(
+                  key,
+                  AbortSignal.timeout(15_000)
+                );
+              const rows = scope
+                ? await scope.time("blizzard", run)
+                : await run();
+              return rows
+                .filter(
+                  (row) =>
+                    lookupCuttingEdgeAchievement(row.achievementId) !== null
+                )
+                .map(({ achievementId, completedAt }) => ({
+                  achievementId,
+                  completedAt
+                }));
+            },
+            cacheObserver(scope)
+          ),
           signal
         );
       }
@@ -679,24 +704,28 @@ export function createApplicantDossierService(options: {
       async getMythicBossRankings(boss, signal) {
         signal?.throwIfAborted();
         try {
-          const result = await rankings(rankingKey(boss), async () => {
-            const run = async () =>
-              options.raiderio.getMythicBossRankings(
-                boss,
-                AbortSignal.timeout(15_000)
-              );
-            const response = scope
-              ? await scope.time("raiderIoRankings", run)
-              : await run();
-            if (response.kind !== "rankings") {
-              options.onCacheEvent?.(
-                "raiderio_rankings",
-                `failure_${response.code}`
-              );
-              throw new RankingLookupFailure(response);
-            }
-            return response;
-          });
+          const result = await rankings(
+            rankingKey(boss),
+            async () => {
+              const run = async () =>
+                options.raiderio.getMythicBossRankings(
+                  boss,
+                  AbortSignal.timeout(15_000)
+                );
+              const response = scope
+                ? await scope.time("raiderIoRankings", run)
+                : await run();
+              if (response.kind !== "rankings") {
+                options.onCacheEvent?.(
+                  "raiderio_rankings",
+                  `failure_${response.code}`
+                );
+                throw new RankingLookupFailure(response);
+              }
+              return response;
+            },
+            cacheObserver(scope)
+          );
           signal?.throwIfAborted();
           return result;
         } catch (error) {

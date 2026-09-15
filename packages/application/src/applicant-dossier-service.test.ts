@@ -539,7 +539,8 @@ describe("applicant dossier service", () => {
       status: "running",
       statusUrl: "/api/v1/searches/00000000-0000-4000-8000-000000000010",
       characterUrl: "/characters/eu/silvermoon/ryii",
-      staleCharacter: null
+      staleCharacter: null,
+      joinedExistingRun: true
     } as const;
     vi.mocked(search.create).mockResolvedValue(active);
 
@@ -1220,6 +1221,22 @@ describe("applicant dossier service", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("attributes cache outcomes to the request that actually observed them", async () => {
+    // Break caught: a broadcast cache observer would credit every active
+    // scope with every outcome instead of the call that actually produced it.
+    const scopeA = createMeasurementScope(() => 0);
+    const scopeB = createMeasurementScope(() => 0);
+    const { dossiers } = fixture();
+
+    await dossiers.readInitial(root, undefined, scopeA);
+    await dossiers.readInitial(root, undefined, scopeB);
+
+    expect(scopeA.totals().cacheMisses).toBeGreaterThan(0);
+    expect(scopeA.totals().cacheHits).toBeUndefined();
+    expect(scopeB.totals().cacheHits).toBeGreaterThan(0);
+    expect(scopeB.totals().cacheMisses).toBeUndefined();
   });
 
   it("behaves identically when no scope is supplied", async () => {

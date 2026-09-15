@@ -9,7 +9,29 @@ const allowedFields = new Set([
   "count",
   // The error class only. Messages, bodies, URLs, and payloads stay out by
   // construction: any field not named here is dropped before serialization.
-  "errorName"
+  "errorName",
+  // Performance totals. Integers and booleans only -- never identity.
+  "raiderIoRankingsMs",
+  "raiderIoRankingsCalls",
+  "raiderIoRankingsMaxCallMs",
+  "raiderIoCharacterMs",
+  "raiderIoCharacterCalls",
+  "raiderIoCharacterMaxCallMs",
+  "blizzardMs",
+  "blizzardCalls",
+  "blizzardMaxCallMs",
+  "dbMs",
+  "dbCalls",
+  "dbMaxCallMs",
+  "limiterWaitMs",
+  "rateLimitHits",
+  "retryAfterMaxMs",
+  "runJoined",
+  "cacheHits",
+  "cacheMisses",
+  "cacheShared",
+  "cacheFailures",
+  "cacheCapacity"
 ]);
 
 function allowlistedLog(
