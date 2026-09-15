@@ -347,7 +347,15 @@ function serializeDossierSubject(
           : character.source === "fingerprint"
             ? ("fingerprint_derived" as const)
             : ("raiderio_declared" as const),
-    ...(evidenceState ? { evidenceState } : {})
+    ...(evidenceState
+      ? {
+          evidenceState,
+          researchState:
+            evidenceState === "complete" || evidenceState === "partial"
+              ? ("complete" as const)
+              : ("gathering" as const)
+        }
+      : {})
   };
 }
 

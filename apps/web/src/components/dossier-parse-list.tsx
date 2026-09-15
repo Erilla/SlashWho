@@ -1,7 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
-import { DossierCharacterNameByName } from "./dossier-character-name";
 import { parseColour } from "./parse-colour";
+import { UpstreamIcon } from "./upstream-icon-link";
 
 type KillBoss = Extract<
   ApplicantDossier["raids"][number]["bosses"][number],
@@ -64,6 +64,7 @@ function ParseMetric({
       rel="noopener noreferrer"
       target="_blank"
     >
+      <UpstreamIcon source="warcraft_logs" />
       {label}
     </a>
   );
@@ -83,7 +84,6 @@ export function DossierParseList({ label, parses }: DossierParseListProps) {
               key={parse.character}
               role="group"
             >
-              <DossierCharacterNameByName name={parse.character} />
               <span className="dossier-parse-metrics">
                 <ParseMetric metric={parse.damage} name="Damage" />
                 <ParseMetric metric={parse.healing} name="Healing" />

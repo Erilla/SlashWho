@@ -31,7 +31,9 @@ export const dossierCharacterSchema = z
     className: z.string().min(1).nullable(),
     raiderIoUrl: z.url(),
     source: dossierSourceLabelSchema,
-    evidenceState: dossierEvidenceStateSchema.optional()
+    evidenceState: dossierEvidenceStateSchema.optional(),
+    /** @deprecated Use evidenceState for the precise scan state. */
+    researchState: z.enum(["complete", "gathering"]).optional()
   })
   .strict();
 

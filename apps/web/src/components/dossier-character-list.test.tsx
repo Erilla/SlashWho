@@ -60,20 +60,63 @@ it("keeps submitted-character links in the dossier header and shows both profile
       name: "View Ryii on Raider.IO (opens in a new tab)"
     })
   ).not.toBeInTheDocument();
+  const raiderIoLink = screen.getByRole("link", {
+    name: "View Ryalts on Raider.IO (opens in a new tab)"
+  });
+  expect(raiderIoLink).toHaveAttribute(
+    "href",
+    "https://raider.io/characters/eu/draenor/ryalts"
+  );
+  expect(raiderIoLink).toHaveClass("upstream-icon-link");
   expect(
-    screen.getByRole("link", {
-      name: "View Ryalts on Raider.IO (opens in a new tab)"
-    })
-  ).toHaveAttribute("href", "https://raider.io/characters/eu/draenor/ryalts");
-  expect(
-    screen.getByRole("link", {
-      name: "View Ryalts on Warcraft Logs (opens in a new tab)"
-    })
-  ).toHaveAttribute(
+    raiderIoLink.querySelector(".upstream-link-icon--raiderio")
+  ).toBeInTheDocument();
+
+  const warcraftLogsLink = screen.getByRole("link", {
+    name: "View Ryalts on Warcraft Logs (opens in a new tab)"
+  });
+  expect(warcraftLogsLink).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/character/eu/draenor/ryalts"
   );
+  expect(warcraftLogsLink).toHaveClass("upstream-icon-link");
+  expect(
+    warcraftLogsLink.querySelector(".upstream-link-icon--warcraft-logs")
+  ).toBeInTheDocument();
   expect(screen.getByText("Ryii")).toHaveClass("dossier-character-name--mage");
+});
+
+it("shows a spinner only for characters whose evidence is still gathering", () => {
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: "Mage",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted",
+          researchState: "complete"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryalts" },
+          displayName: "Ryalts",
+          className: "Priest",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+          source: "fingerprint_derived",
+          researchState: "gathering"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  expect(
+    screen.getByRole("status", { name: "Research gathering for Ryalts" })
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("status", { name: "Research gathering for Ryii" })
+  ).not.toBeInTheDocument();
 });
 
 it("exposes overflowing desktop rows as a labelled keyboard-scrollable region", async () => {

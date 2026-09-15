@@ -113,7 +113,20 @@ export function DossierCharacterList({
             key={`${character.key.region}/${character.key.realm}/${character.key.name}`}
           >
             <div>
-              <DossierCharacterName character={character} />
+              <div className="dossier-character-name-line">
+                <DossierCharacterName character={character} />
+                {!character.evidenceState &&
+                character.researchState === "gathering" ? (
+                  <svg
+                    aria-label={`Research gathering for ${character.displayName}`}
+                    className="dossier-loading-spinner dossier-character-spinner"
+                    role="status"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle cx="12" cy="12" r="8" />
+                  </svg>
+                ) : null}
+              </div>
               <span className="dossier-location">
                 {character.key.region.toUpperCase()} · {character.key.realm}
               </span>

@@ -361,25 +361,6 @@ a {
   margin-left: 0;
 }
 
-.profile-link {
-  display: inline-grid;
-  width: 1.65rem;
-  height: 1.65rem;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  color: var(--text-muted);
-  font-size: 0.55rem;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  text-decoration: none;
-}
-
-.profile-link:hover {
-  color: var(--text);
-  border-color: var(--text-muted);
-}
-
 .dossier-character-actions {
   display: flex;
   align-items: center;
@@ -538,6 +519,18 @@ a {
   margin-top: 0.25rem;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.dossier-character-name-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dossier-character-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--muted);
 }
 
 .source-badge {
@@ -913,12 +906,10 @@ a {
   gap: 0.4rem 0.55rem;
 }
 
-.dossier-parse-character {
-  font-size: 0.85rem;
-  font-weight: 720;
-}
-
 .dossier-parse-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   border: 1px solid currentColor;
   border-radius: 999px;
   font-size: 0.75rem;
