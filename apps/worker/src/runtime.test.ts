@@ -262,6 +262,41 @@ describe("worker runtime", () => {
     });
   });
 
+  it("routes a throttled Blizzard response through the worker's own upstream_throttle record", async () => {
+    // Break caught: the worker composition root could stop passing onThrottle
+    // to the Blizzard client it constructs (or never wire it in the first
+    // place) with nothing here to notice -- upstream throttling would then
+    // vanish from the logs.
+    const logger = { info: vi.fn() };
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 429,
+          headers: { "Retry-After": "30" }
+        })
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+    try {
+      const integration = createFingerprintIntegration(config, logger);
+      await expect(
+        integration.blizzardGateway!.getCompletedAchievements({
+          region: "eu",
+          realm: "silvermoon",
+          name: "sentinel"
+        })
+      ).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "upstream_throttle",
+      provider: "blizzard",
+      retryAfterMs: 30_000
+    });
+  });
+
   it("swallows and logs a non-successful maintainer webhook response", async () => {
     // Break caught: a provider outage could reject discovery work and cause the
     // durable job to retry after its sweep had already changed state.
@@ -444,12 +479,14 @@ describe("worker runtime", () => {
         }
       ).evidence
     });
-    await fakes.evidenceWorkHandler?.(
-      { runId: "00000000-0000-4000-8000-000000000006" },
-      context
-    );
+    const payload = {
+      runId: "00000000-0000-4000-8000-000000000006",
+      correlationId: "c1",
+      enqueuedAt: "2026-09-13T12:00:00.000Z"
+    };
+    await fakes.evidenceWorkHandler?.(payload, context);
     expect(fakes.evidenceHandler.execute).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000006",
+      payload,
       context
     );
     await runtime.stop();
@@ -476,6 +513,40 @@ describe("worker runtime", () => {
     expect(fakes.handler.execute).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000003",
       context
+    );
+    await runtime.stop();
+  });
+
+  it("forwards the queue payload's correlation id and enqueue time to the discovery handler", async () => {
+    // Break caught: Task 7 wired correlationId/enqueuedAt onto the queue
+    // payload, but the work() callback here discarded them before ever
+    // reaching the handler, leaving discovery_run's correlation and
+    // queue-wait fields permanently null.
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    const context = {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    };
+    await fakes.workHandler?.(
+      {
+        runId: "00000000-0000-4000-8000-000000000004",
+        key: { region: "eu", realm: "silvermoon", name: "private-value" },
+        correlationId: "corr-4",
+        enqueuedAt: "2026-08-05T08:00:00.000Z"
+      },
+      context
+    );
+
+    expect(fakes.handler.execute).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000004",
+      {
+        ...context,
+        correlationId: "corr-4",
+        enqueuedAt: "2026-08-05T08:00:00.000Z"
+      }
     );
     await runtime.stop();
   });
@@ -510,7 +581,14 @@ describe("worker runtime", () => {
 
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
-    expect(fakes.enqueued).toEqual(fakes.pendingDispatches);
+    // A recovered job gets a fresh enqueuedAt (not the original, since there
+    // is none stored) so it measures its new wait rather than a stale one.
+    expect(fakes.enqueued).toEqual([
+      expect.objectContaining({
+        ...fakes.pendingDispatches[0],
+        enqueuedAt: expect.any(String)
+      })
+    ]);
     expect(fakes.recoveredDispatches).toEqual([
       "00000000-0000-4000-8000-000000000011"
     ]);
@@ -550,7 +628,9 @@ describe("worker runtime", () => {
     expect(fakes.fingerprintAdmissions).toEqual([waitingRunId]);
     expect(fakes.admissionHandler).toBeTypeOf("function");
     await fakes.admissionHandler?.(waitingRunId);
-    expect(fakes.enqueued).toEqual([{ runId: waitingRunId, key }]);
+    expect(fakes.enqueued).toEqual([
+      { runId: waitingRunId, key, enqueuedAt: expect.any(String) }
+    ]);
     expect(fakes.handler.execute).not.toHaveBeenCalled();
     await runtime.stop();
   });
@@ -605,7 +685,9 @@ describe("worker runtime", () => {
 
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
-    expect(fakes.enqueued).toEqual([{ runId, key }]);
+    expect(fakes.enqueued).toEqual([
+      { runId, key, enqueuedAt: expect.any(String) }
+    ]);
     expect(fakes.dispatchedFingerprintRuns).toEqual([runId]);
     await runtime.stop();
   });

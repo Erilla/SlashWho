@@ -17,6 +17,7 @@ import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
 import { Pool } from "pg";
 
 import { loadWebConfig, type WebConfig } from "./config";
+import { webLogger } from "./logger";
 
 type WebPool = {
   query(text: string): Promise<unknown>;
@@ -44,11 +45,13 @@ export type WebContainerDependencies = Readonly<{
     fetch: typeof globalThis.fetch;
     baseUrl: string;
     timeoutMs: number;
+    onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): RaiderIoGateway;
   createBlizzardGateway(options: {
     fetch: typeof globalThis.fetch;
     clientId: string;
     clientSecret: string;
+    onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): BlizzardGateway;
   createApplicantDossierService(options: {
     repositories: Pick<Repositories, "snapshots" | "evidence">;
@@ -91,22 +94,30 @@ export async function createWebContainer(
       config: config.application
     });
     const dossiers = dependencies.createApplicantDossierService({
-      onCacheEvent: (source, event) =>
-        console.info(
-          JSON.stringify({ event: "dossier_cache", source, outcome: event })
-        ),
       repositories,
       search: searches,
       queue: initializedQueue,
       blizzard: dependencies.createBlizzardGateway({
         fetch: globalThis.fetch,
         clientId: config.dossier.blizzardClientId,
-        clientSecret: config.dossier.blizzardClientSecret
+        clientSecret: config.dossier.blizzardClientSecret,
+        onThrottle: (event) =>
+          webLogger.info({
+            event: "upstream_throttle",
+            provider: "blizzard",
+            retryAfterMs: event.retryAfterMs ?? null
+          })
       }),
       raiderio: dependencies.createRaiderIoGateway({
         fetch: globalThis.fetch,
         baseUrl: config.dossier.raiderIoBaseUrl,
-        timeoutMs: config.dossier.raiderIoTimeoutMs
+        timeoutMs: config.dossier.raiderIoTimeoutMs,
+        onThrottle: (event) =>
+          webLogger.info({
+            event: "upstream_throttle",
+            provider: "raiderio",
+            retryAfterMs: event.retryAfterMs ?? null
+          })
       }),
       config: config.application,
       evidenceJobCredentialEncryptionKey:

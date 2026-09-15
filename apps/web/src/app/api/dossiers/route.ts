@@ -7,16 +7,23 @@ import { getContainer } from "../../../server/container";
 import { apiError, withHttpRequest } from "../../../server/http";
 
 export async function POST(request: Request): Promise<Response> {
-  return withHttpRequest("dossier_start", async () => {
+  return withHttpRequest("dossier_start", async (scope, correlationId) => {
     const body = createDossierRequestSchema.safeParse(
       await request.json().catch(() => null)
     );
     if (!body.success) return apiError("invalid_character_url");
     const { dossiers } = await getContainer();
-    const result = await dossiers.start({
-      characterUrl: body.data.characterUrl,
-      headers: request.headers
-    });
+    const result = await dossiers.start(
+      {
+        characterUrl: body.data.characterUrl,
+        headers: request.headers,
+        correlationId
+      },
+      scope
+    );
+    if ("joinedExistingRun" in result && result.joinedExistingRun) {
+      scope.mark("runJoined");
+    }
     if (result.kind === "job") {
       return Response.json(
         dossierStartResponseSchema.parse({

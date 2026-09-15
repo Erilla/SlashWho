@@ -139,6 +139,7 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 }>;
 
 type AccessToken = Readonly<{
@@ -212,13 +213,42 @@ function retryAfterMs(response: Response): number | undefined {
     : undefined;
 }
 
-function responseLimitation(response: Response): WarcraftLogsLimitation {
+/**
+ * A reporting callback must never change what this client returns. If the
+ * logger behind `onThrottle` throws, the raw thrown value would otherwise
+ * replace the failure being built here, degrading a genuine rate limit into an
+ * unavailable upstream. Swallowed silently: there is no safe place to report a
+ * failure of the reporting path itself, and it must not become a second
+ * failure.
+ */
+function reportThrottle(
+  onThrottle:
+    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
+  retryAfterMs: number | undefined
+): void {
+  try {
+    onThrottle?.({ retryAfterMs });
+  } catch {
+    // Intentionally ignored; see above.
+  }
+}
+
+function responseLimitation(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): WarcraftLogsLimitation {
   if (response.status === 404) return { kind: "limitation", code: "not_found" };
   if (response.status === 401 || response.status === 403) {
     return { kind: "limitation", code: "private" };
   }
+  // Upstream asking us to back off is throttling whether or not it also sent
+  // 429 — a 503 carrying Retry-After is the same signal. This affects only
+  // when onThrottle fires, never the limitation this function returns.
+  const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
+    reportThrottle(onThrottle, retryAfter);
+  }
   if (response.status === 429) {
-    const retryAfter = retryAfterMs(response);
     return {
       kind: "limitation",
       code: "rate_limited",
@@ -1179,7 +1209,7 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response);
+    if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = record(await response.json());
       signal?.throwIfAborted();
@@ -1226,7 +1256,7 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response);
+    if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = await response.json();
       signal?.throwIfAborted();

@@ -1,5 +1,6 @@
 import type { SearchService } from "./search-service";
 import type {
+  DiscoveryQueue,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -14,6 +15,8 @@ import { describe, expect, it, vi } from "vitest";
 import { applicationConfigSchema } from "./config";
 import { decryptCredential } from "./credential-encryption";
 import { createApplicantDossierService } from "./applicant-dossier-service";
+import { createMeasurementScope } from "./measurement";
+import { createSearchService } from "./search-service";
 
 const encryptionKey = Buffer.alloc(32, "k");
 const root = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
@@ -64,6 +67,7 @@ function fixture(
     containingSnapshot?: StoredSnapshot | null;
     characterCap?: number;
     warcraftLogsRequestCap?: number;
+    providerConcurrency?: number;
     additionalKills?: readonly StoredCharacterMythicKill[];
     wipes?: readonly StoredCharacterMythicWipe[];
     includeCachedKills?: boolean;
@@ -235,7 +239,10 @@ function fixture(
       : { DOSSIER_CHARACTER_CAP: options.characterCap }),
     ...(options.warcraftLogsRequestCap === undefined
       ? {}
-      : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap })
+      : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap }),
+    ...(options.providerConcurrency === undefined
+      ? {}
+      : { DOSSIER_PROVIDER_CONCURRENCY: options.providerConcurrency })
   });
   const dossiers = createApplicantDossierService({
     repositories,
@@ -528,6 +535,276 @@ describe("applicant dossier service", () => {
     }
   );
 
+  it("threads the request scope through to search.create so start's own database work is measured", async () => {
+    // Break caught: start and addConnectedCharacter do real database and
+    // queue work through search.create, so discarding the scope here would
+    // leave dossier_start with a durationMs but no dbMs at all -- exactly
+    // the endpoint the research doc measures as "submission to first response".
+    const config = applicationConfigSchema.parse({
+      BOT_API_KEY: "b".repeat(32),
+      RATE_LIMIT_HASH_SECRET: "r".repeat(32)
+    });
+    const searchRepositories = {
+      searchReservations: {
+        async reserve() {
+          return {
+            kind: "reserved" as const,
+            run: {
+              id: "00000000-0000-4000-8000-000000000050",
+              rootKey: root,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "public" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          };
+        },
+        async cancel() {},
+        async listPending() {
+          return [];
+        },
+        async markEnqueued() {}
+      },
+      snapshots: {
+        async getCurrent() {
+          return null;
+        },
+        async find() {
+          return null;
+        },
+        async listHistory() {
+          return { items: [], nextCursor: null };
+        },
+        async create() {
+          throw new Error("not used");
+        },
+        async createAndFinishFingerprintSweep() {
+          throw new Error("not used");
+        }
+      },
+      manualConnections: {
+        async add() {
+          return "added" as const;
+        },
+        async list() {
+          return [];
+        }
+      },
+      runs: {
+        async createOrReuse() {
+          throw new Error("not used");
+        },
+        async claim() {
+          return null;
+        },
+        async markRunning() {},
+        async markRetrying() {},
+        async complete() {},
+        async fail() {},
+        async find() {
+          return null;
+        },
+        async findActive() {
+          return null;
+        }
+      },
+      suppressions: {
+        async suppress() {},
+        async isActive() {
+          return false;
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      },
+      rateLimits: {
+        async reserve() {
+          return { allowed: true, retryAt: null };
+        },
+        async record() {},
+        async countActive() {
+          return 0;
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      },
+      negativeCache: {
+        async put() {},
+        async putAndFailRun() {},
+        async find() {
+          return null;
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      },
+      evidence: {
+        async reserve() {
+          throw new Error("not used");
+        },
+        async find() {
+          return null;
+        },
+        async claim() {
+          return null;
+        },
+        async markEnqueued() {
+          throw new Error("not used");
+        },
+        async publish() {
+          throw new Error("not used");
+        },
+        async fail() {
+          throw new Error("not used");
+        },
+        async getCompleted() {
+          return null;
+        },
+        async listStatus() {
+          return [];
+        }
+      },
+      fingerprintSweeps: {
+        async requestAdmission() {
+          return { kind: "not_due" as const };
+        },
+        async recordRequest() {},
+        async finish() {},
+        async release() {},
+        async listWaiting() {
+          return [];
+        },
+        async listAdmittedUndispatched() {
+          return [];
+        },
+        async markDispatched() {},
+        async admitWaiting() {
+          return { kind: "settled" as const };
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      }
+    } as unknown as Repositories;
+    const queue: Pick<DiscoveryQueue, "enqueue"> = {
+      async enqueue() {
+        return "job-1";
+      }
+    };
+    const search = createSearchService({
+      repositories: searchRepositories,
+      queue,
+      config
+    });
+    const dossiers = createApplicantDossierService({
+      repositories: {
+        snapshots: {},
+        evidence: {},
+        manualConnections: {}
+      } as unknown as Pick<
+        Repositories,
+        "snapshots" | "evidence" | "manualConnections"
+      >,
+      search,
+      queue: { enqueueCharacterEvidence: vi.fn() },
+      blizzard: {
+        getCompletedAchievements: vi.fn()
+      } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">,
+      raiderio: {
+        getMythicBossRankings: vi.fn(),
+        getCharacter: vi.fn()
+      } as unknown as Pick<
+        RaiderIoGateway,
+        "getMythicBossRankings" | "getCharacter"
+      >,
+      config,
+      evidenceJobCredentialEncryptionKey: encryptionKey
+    });
+    const scope = createMeasurementScope();
+
+    const result = await dossiers.start(
+      { characterUrl: raiderUrl, headers },
+      scope
+    );
+
+    expect(result).toMatchObject({ kind: "job" });
+    expect(scope.totals().dbCalls).toBeGreaterThan(0);
+  });
+
+  it("measures the read path's database work and keeps the buckets disjoint", async () => {
+    // Break caught: read and readInitial passed options.repositories in raw, so
+    // the dossier endpoint -- the heaviest database path in the system, and the
+    // one the design's "database or queue?" question is about -- could never
+    // report dbMs, dbCalls or dbMaxCallMs at all.
+    const { dossiers } = fixture();
+    // Every clock read advances, so nesting would double count and break the
+    // inequality rather than silently reading as zero.
+    let tick = 0;
+    const monotonic = () => tick++;
+    const scope = createMeasurementScope(monotonic);
+
+    const startedAt = monotonic();
+    const result = await dossiers.read(root, undefined, undefined, scope);
+    const durationMs = monotonic() - startedAt;
+
+    expect(result.kind).toBe("ready");
+    const totals = scope.totals();
+    expect(totals.dbCalls).toBeGreaterThan(0);
+    expect(totals.dbMs).toBeGreaterThan(0);
+    expect(totals.dbMaxCallMs).toBeGreaterThan(0);
+
+    // Provider timing sits inside the bounded-cache loaders, which do no
+    // database work, so every measured bucket is a disjoint slice of the call.
+    const bucketMs = Object.entries(totals)
+      .filter(
+        ([field, value]) =>
+          typeof value === "number" &&
+          field.endsWith("Ms") &&
+          !field.endsWith("MaxCallMs") &&
+          field !== "limiterWaitMs"
+      )
+      .reduce((total, [, value]) => total + (value as number), 0);
+    expect(bucketMs).toBeLessThanOrEqual(durationMs);
+  });
+
+  it("measures the readInitial path's database work", async () => {
+    const { dossiers } = fixture();
+    const scope = createMeasurementScope();
+
+    await dossiers.readInitial(root, undefined, undefined, scope);
+
+    expect(scope.totals().dbCalls).toBeGreaterThan(0);
+  });
+
+  it("threads the request scope through addConnectedCharacter's call to search.create", async () => {
+    const { dossiers, search } = fixture();
+    const scope = createMeasurementScope();
+
+    await dossiers.addConnectedCharacter(
+      root,
+      {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+        headers
+      },
+      scope
+    );
+
+    expect(search.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts"
+      }),
+      scope
+    );
+  });
+
   it("returns the existing active discovery result without creating another run", async () => {
     // Break caught: an in-flight search could be replaced instead of reused by dossier start.
     const { dossiers, search, runsCreate } = fixture();
@@ -537,7 +814,8 @@ describe("applicant dossier service", () => {
       status: "running",
       statusUrl: "/api/v1/searches/00000000-0000-4000-8000-000000000010",
       characterUrl: "/characters/eu/silvermoon/ryii",
-      staleCharacter: null
+      staleCharacter: null,
+      joinedExistingRun: true
     } as const;
     vi.mocked(search.create).mockResolvedValue(active);
 
@@ -1140,6 +1418,107 @@ describe("applicant dossier service", () => {
     );
   });
 
+  it("attributes provider time per operation on readInitial", async () => {
+    const scope = createMeasurementScope(
+      (() => {
+        let index = 0;
+        const steps = [0, 12, 12, 12];
+        return () => steps[Math.min(index++, steps.length - 1)]!;
+      })()
+    );
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getCharacter).mockResolvedValue({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null,
+      isTournamentProfile: false
+    });
+
+    await dossiers.readInitial(root, undefined, undefined, scope);
+
+    expect(scope.totals()).toMatchObject({
+      raiderIoCharacterMs: 12,
+      raiderIoCharacterCalls: 1
+    });
+  });
+
+  it("attributes limiter admission wait only to the request that actually queued", async () => {
+    // Break caught: a limiter onWait broadcast to every registered scope
+    // instead of the call that actually waited (a metric that misleads is
+    // worse than no metric). The limiter's own clock (performance.now,
+    // uninjectable through the service's public options) is stubbed so the
+    // wait attributed to the queued call is a deterministic, specific value
+    // rather than merely "some positive number".
+    let clock = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    try {
+      const scopeA = createMeasurementScope(() => clock);
+      const scopeB = createMeasurementScope(() => clock);
+      const { dossiers, raiderio } = fixture({ providerConcurrency: 1 });
+
+      let releaseFirst!: () => void;
+      let firstStarted = false;
+      vi.mocked(raiderio.getMythicBossRankings).mockImplementation(async () => {
+        firstStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        return {
+          kind: "rankings",
+          rows: [
+            {
+              rank: 2,
+              guildName: "Example Guild",
+              guildRealm: "silvermoon",
+              guildRegion: "eu",
+              firstDefeated: "2024-10-01T20:00:00.000Z"
+            }
+          ]
+        };
+      });
+
+      const first = dossiers.read(root, undefined, undefined, scopeA);
+      await vi.waitFor(() => expect(firstStarted).toBe(true));
+      const second = dossiers.read(root, undefined, undefined, scopeB);
+      // Let the second call's own microtasks run far enough to reach and
+      // queue behind the first call's admitted (but still blocked) request.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      clock = 40;
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      expect(scopeA.totals().limiterWaitMs).toBe(0);
+      expect(scopeB.totals().limiterWaitMs).toBe(40);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("attributes cache outcomes to the request that actually observed them", async () => {
+    // Break caught: a broadcast cache observer would credit every active
+    // scope with every outcome instead of the call that actually produced it.
+    const scopeA = createMeasurementScope(() => 0);
+    const scopeB = createMeasurementScope(() => 0);
+    const { dossiers } = fixture();
+
+    await dossiers.readInitial(root, undefined, undefined, scopeA);
+    await dossiers.readInitial(root, undefined, undefined, scopeB);
+
+    expect(scopeA.totals().cacheMisses).toBeGreaterThan(0);
+    expect(scopeA.totals().cacheHits).toBeUndefined();
+    expect(scopeB.totals().cacheHits).toBeGreaterThan(0);
+    expect(scopeB.totals().cacheMisses).toBeUndefined();
+  });
+
+  it("behaves identically when no scope is supplied", async () => {
+    const { dossiers } = fixture();
+    await expect(dossiers.read(root)).resolves.toBeDefined();
+  });
+
   it("encrypts supplied Warcraft Logs credentials into every evidence reservation", async () => {
     // Break caught: a visitor's Warcraft Logs secret could reach the durable
     // evidence run in plain text, or never reach the worker at all.
@@ -1166,6 +1545,35 @@ describe("applicant dossier service", () => {
         decryptCredential(pair.wclClientSecretEncrypted, encryptionKey)
       ).toBe("user-secret");
     }
+  });
+
+  it("keeps supplied credentials out of every measured total", async () => {
+    // Break caught: threading a measurement scope alongside the credential
+    // overrides could fold a key into the record the boundary emits. Totals
+    // are numeric by construction; this proves the construction holds on the
+    // path that actually carries a visitor's secret.
+    const scope = createMeasurementScope(() => 0);
+    const { dossiers } = fixture();
+
+    await dossiers.read(
+      root,
+      undefined,
+      {
+        wclCredentials: {
+          clientId: "user-client-id",
+          clientSecret: "user-secret"
+        }
+      },
+      scope
+    );
+
+    const totals = scope.totals();
+    expect(Object.keys(totals).length).toBeGreaterThan(0);
+    for (const value of Object.values(totals)) {
+      expect(typeof value).toBe("number");
+    }
+    expect(JSON.stringify(totals)).not.toContain("user-client-id");
+    expect(JSON.stringify(totals)).not.toContain("user-secret");
   });
 
   it("reserves evidence without credentials when the visitor supplies none", async () => {

@@ -3,6 +3,23 @@ import { createRaiderIoClient } from "@slashwho/raiderio";
 import type { DossierGatewayOverrides } from "@slashwho/application";
 
 import type { WebConfig } from "./config";
+import { webLogger } from "./logger";
+
+/**
+ * A visitor-supplied client reports throttling exactly as the container's
+ * shared clients do, so an upstream throttling one visitor's own key is as
+ * visible as one throttling the server's. The record names the provider and
+ * the delay only: the header values that built the client are never on it,
+ * and `allowedFields` in the web logger would drop them even if they were.
+ */
+function throttleReporter(provider: "blizzard" | "raiderio") {
+  return (event: { retryAfterMs: number | undefined }) =>
+    webLogger.info({
+      event: "upstream_throttle",
+      provider,
+      retryAfterMs: event.retryAfterMs ?? null
+    });
+}
 
 export function readCredentialOverrides(
   headers: Headers,
@@ -20,7 +37,8 @@ export function readCredentialOverrides(
     overrides.blizzard = createBlizzardClient({
       fetch: globalThis.fetch,
       clientId: blizzardClientId,
-      clientSecret: blizzardClientSecret
+      clientSecret: blizzardClientSecret,
+      onThrottle: throttleReporter("blizzard")
     });
   }
 
@@ -30,7 +48,8 @@ export function readCredentialOverrides(
       fetch: globalThis.fetch,
       baseUrl: config.dossier.raiderIoBaseUrl,
       timeoutMs: config.dossier.raiderIoTimeoutMs,
-      accessKey: raiderIoAccessKey
+      accessKey: raiderIoAccessKey,
+      onThrottle: throttleReporter("raiderio")
     });
   }
 

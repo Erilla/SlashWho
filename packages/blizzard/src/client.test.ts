@@ -337,6 +337,70 @@ describe("Blizzard gateway", () => {
     await expect(request).rejects.not.toThrow(/missing-private-body-marker/);
   });
 
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const gateway = createBlizzardClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        return url.hostname === "oauth.battle.net"
+          ? tokenResponse()
+          : new Response("", { status: 429, headers: { "Retry-After": "2" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await gateway
+      .getCompletedAchievements(key, AbortSignal.timeout(1_000))
+      .catch(() => undefined);
+
+    expect(throttles).toEqual([{ retryAfterMs: 2_000 }]);
+  });
+
+  it("keeps a throwing onThrottle from changing the thrown failure", async () => {
+    // Break caught: an unguarded reporting callback could replace BlizzardError
+    // with whatever the logger threw, turning a genuine rate limit into an
+    // unrecognisable failure. A reporting callback must never be able to change
+    // what the client returns.
+    const gateway = createBlizzardClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        return url.hostname === "oauth.battle.net"
+          ? tokenResponse()
+          : new Response("", { status: 429, headers: { "Retry-After": "2" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      onThrottle: () => {
+        throw new Error("logger-exploded-marker");
+      }
+    });
+
+    const request = gateway.getCompletedAchievements(
+      key,
+      AbortSignal.timeout(1_000)
+    );
+    await expect(request).rejects.toMatchObject({
+      kind: "transient",
+      status: 429,
+      retryAfterMs: 2_000
+    });
+    await expect(request).rejects.not.toThrow(/logger-exploded-marker/);
+  });
+
+  it("does not require onThrottle", async () => {
+    const { gateway } = clientFor((url) =>
+      url.hostname === "oauth.battle.net"
+        ? tokenResponse()
+        : new Response("", { status: 429 })
+    );
+
+    await expect(
+      gateway.getCompletedAchievements(key, AbortSignal.timeout(1_000))
+    ).rejects.toBeDefined();
+  });
+
   it("rejects regions outside the supported same-region profile boundary", async () => {
     // Break caught: a forged key could send fingerprint data to the unsupported
     // China API rather than keeping every request in the domain's region set.

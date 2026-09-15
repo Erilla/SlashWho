@@ -6,10 +6,17 @@ export const maintenanceCleanupQueueName = "maintenance-cleanup";
 export const fingerprintAdmissionQueueName = "fingerprint-admission";
 export const collectCharacterEvidenceQueueName = "collect-character-evidence";
 
+/** Optional so jobs enqueued before this deployment stay valid in flight. */
+export type JobTelemetry = {
+  correlationId?: string;
+  /** ISO 8601. Absent yields a null queueWaitMs rather than a wrong one. */
+  enqueuedAt?: string;
+};
+
 export type DiscoverCharacterJob = {
   runId: string;
   key: CharacterKey;
-};
+} & JobTelemetry;
 
 type FingerprintAdmissionJob = {
   runId: string;
@@ -17,7 +24,7 @@ type FingerprintAdmissionJob = {
 
 export type CollectCharacterEvidenceJob = {
   runId: string;
-};
+} & JobTelemetry;
 
 export type DiscoveryWorkContext = {
   attempt: number;
@@ -38,7 +45,7 @@ export interface DiscoveryQueue {
   start(): Promise<void>;
   enqueue(payload: DiscoverCharacterJob): Promise<string>;
   enqueueFingerprintAdmission(runId: string): Promise<string>;
-  enqueueCharacterEvidence(runId: string): Promise<string>;
+  enqueueCharacterEvidence(runId: string, meta?: JobTelemetry): Promise<string>;
   work(
     handler: (
       payload: DiscoverCharacterJob,
@@ -271,11 +278,11 @@ export function createDiscoveryQueue(
       );
     },
 
-    async enqueueCharacterEvidence(runId) {
+    async enqueueCharacterEvidence(runId, meta) {
       if (!ready) throw new Error("discovery_queue_not_ready");
       const id = await boss.send(
         collectCharacterEvidenceQueueName,
-        { runId },
+        { runId, ...(meta ?? {}) },
         { singletonKey: runId }
       );
       return (

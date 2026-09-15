@@ -34,9 +34,11 @@ import type {
 } from "@slashwho/raiderio";
 
 import type { ApplicationConfig } from "./config";
-import { createBoundedCache } from "./bounded-cache";
+import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { encryptCredential } from "./credential-encryption";
 import { createConcurrencyLimiter } from "./concurrency";
+import { measuredRepositories } from "./measured-repositories";
+import type { MeasurementScope } from "./measurement";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -63,20 +65,26 @@ export type DossierGatewayOverrides = Readonly<{
 type WclCredentials = Readonly<{ clientId: string; clientSecret: string }>;
 
 export interface ApplicantDossierService {
-  start(input: CreateDossierCommand): Promise<CreateDossierResult>;
+  start(
+    input: CreateDossierCommand,
+    scope?: MeasurementScope
+  ): Promise<CreateDossierResult>;
   addConnectedCharacter(
     root: CharacterKey,
-    input: CreateDossierCommand
+    input: CreateDossierCommand,
+    scope?: MeasurementScope
   ): Promise<CreateSearchResult | { kind: "linked" | "duplicate" }>;
   readInitial(
     key: CharacterKey,
     signal?: AbortSignal,
-    overrides?: DossierGatewayOverrides
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
   ): Promise<ReadDossierResult>;
   read(
     key: CharacterKey,
     signal?: AbortSignal,
-    overrides?: DossierGatewayOverrides
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
   ): Promise<ReadDossierResult>;
 }
 
@@ -309,7 +317,8 @@ async function gatherCharacterEvidence(
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
-      reservation.run.id
+      reservation.run.id,
+      { enqueuedAt: new Date().toISOString() }
     );
     await options.repositories.evidence.markEnqueued(
       reservation.run.id,
@@ -631,6 +640,27 @@ async function assembleDossier(options: {
   });
 }
 
+// Maps a bounded cache's per-call outcome onto the requesting scope's own
+// counters. Attributed per call (via the cache's optional per-call observer
+// parameter), never broadcast to every scope sharing the process-wide cache
+// instance -- the same defect already fixed for the concurrency limiter.
+const cacheField: Record<string, string> = {
+  hit: "cacheHits",
+  miss: "cacheMisses",
+  shared: "cacheShared",
+  failure: "cacheFailures",
+  capacity: "cacheCapacity"
+};
+
+function cacheObserver(
+  scope?: MeasurementScope
+): ((event: BoundedCacheOutcome) => void) | undefined {
+  if (!scope) return undefined;
+  return (event) => {
+    scope.increment(cacheField[event] ?? "cacheFailures");
+  };
+}
+
 class RankingLookupFailure extends Error {
   constructor(
     readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
@@ -659,6 +689,9 @@ export function createApplicantDossierService(options: {
     maxEntries: 1_000,
     observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
   });
+  // The limiter instance is shared across every request so it actually
+  // bounds the fan-out; only the wait *reporting* is per-call, via a
+  // scope-bound facade built per readInitial/read call below.
   const providerConcurrency = createConcurrencyLimiter(
     options.config.DOSSIER_PROVIDER_CONCURRENCY
   );
@@ -672,18 +705,23 @@ export function createApplicantDossierService(options: {
   // A null cache is a visitor-supplied gateway: it keeps the shared timeout,
   // filtering and failure semantics while neither reading from nor writing to
   // the caches every other visitor is served from.
+  //
+  // `scope` is the caller's own measurement scope, never a stored one: the
+  // gateway is rebuilt per read so provider time is attributed to the single
+  // request that spent it, whether that request uses the shared gateway or its
+  // own credentials.
   function cuttingEdgeGateway(
     source: Pick<BlizzardGateway, "getCompletedAchievements">,
-    cache: typeof achievements | null
+    cache: typeof achievements | null,
+    scope?: MeasurementScope
   ): Pick<BlizzardGateway, "getCompletedAchievements"> {
     return {
       async getCompletedAchievements(key, signal) {
         signal?.throwIfAborted();
         const load = async () => {
-          const rows = await source.getCompletedAchievements(
-            key,
-            AbortSignal.timeout(15_000)
-          );
+          const run = async () =>
+            source.getCompletedAchievements(key, AbortSignal.timeout(15_000));
+          const rows = scope ? await scope.time("blizzard", run) : await run();
           return rows
             .filter(
               (row) => lookupCuttingEdgeAchievement(row.achievementId) !== null
@@ -695,7 +733,11 @@ export function createApplicantDossierService(options: {
         };
         const result = await awaitWithAbort(
           cache
-            ? cache(`${key.region}/${key.realm}/${key.name}`, load)
+            ? cache(
+                `${key.region}/${key.realm}/${key.name}`,
+                load,
+                cacheObserver(scope)
+              )
             : load(),
           signal
         );
@@ -705,17 +747,25 @@ export function createApplicantDossierService(options: {
   }
   function rankingsGateway(
     source: Pick<RaiderIoGateway, "getMythicBossRankings">,
-    cache: typeof rankings | null
+    cache: typeof rankings | null,
+    scope?: MeasurementScope
   ): Pick<RaiderIoGateway, "getMythicBossRankings"> {
     return {
       async getMythicBossRankings(boss, signal) {
         signal?.throwIfAborted();
         const load = async () => {
-          const response = await source.getMythicBossRankings(
-            boss,
-            AbortSignal.timeout(15_000)
-          );
+          const run = async () =>
+            source.getMythicBossRankings(boss, AbortSignal.timeout(15_000));
+          const response = scope
+            ? await scope.time("raiderIoRankings", run)
+            : await run();
           if (response.kind !== "rankings") {
+            // The bounded cache's own "failure" outcome already reaches the
+            // requesting scope via cacheObserver(scope) below, since this
+            // loader throws. The container-level onCacheEvent notification is
+            // additive and carries the limitation code; an uncached
+            // visitor-supplied gateway reports neither, since it is not part
+            // of the shared cache at all.
             if (cache) {
               options.onCacheEvent?.(
                 "raiderio_rankings",
@@ -727,7 +777,9 @@ export function createApplicantDossierService(options: {
           return response;
         };
         try {
-          const result = await (cache ? cache(rankingKey(boss), load) : load());
+          const result = await (cache
+            ? cache(rankingKey(boss), load, cacheObserver(scope))
+            : load());
           signal?.throwIfAborted();
           return result;
         } catch (error) {
@@ -738,33 +790,72 @@ export function createApplicantDossierService(options: {
       }
     };
   }
-  const blizzard = cuttingEdgeGateway(options.blizzard, achievements);
-  const raiderio = rankingsGateway(options.raiderio, rankings);
-  function gatewaysFor(overrides?: DossierGatewayOverrides) {
+  // Built per call and never captured at construction: this service is a
+  // process-wide singleton, so a wrapper held in a closure would attribute one
+  // request's queries to another request's scope. The dossier read path is the
+  // heaviest database path in the system, so without this it could never report
+  // `dbMs` at all.
+  function scopedRepositories(
+    scope?: MeasurementScope
+  ): typeof options.repositories {
+    if (!scope) return options.repositories;
+    return measuredRepositories(options.repositories, scope);
+  }
+  // Reports this call's admission wait to its own scope rather than the
+  // shared limiter's constructor-level onWait, without cloning the limiter
+  // itself: the single shared instance must keep bounding the fan-out.
+  function scopedConcurrency(
+    scope?: MeasurementScope
+  ): Pick<ReturnType<typeof createConcurrencyLimiter>, "run"> {
+    if (!scope) return providerConcurrency;
     return {
-      blizzard: overrides?.blizzard
-        ? cuttingEdgeGateway(overrides.blizzard, null)
-        : blizzard,
-      raiderio: overrides?.raiderio
-        ? rankingsGateway(overrides.raiderio, null)
-        : raiderio
+      run: (work) =>
+        providerConcurrency.run(work, (ms) =>
+          scope.observe("limiterWaitMs", ms)
+        )
+    };
+  }
+  // Both gateways are rebuilt for every read so that the visitor's own
+  // credentials and the caller's own measurement scope are applied together.
+  // Nothing here is cached across calls.
+  function gatewaysFor(
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
+  ) {
+    return {
+      blizzard: cuttingEdgeGateway(
+        overrides?.blizzard ?? options.blizzard,
+        overrides?.blizzard ? null : achievements,
+        scope
+      ),
+      raiderio: rankingsGateway(
+        overrides?.raiderio ?? options.raiderio,
+        overrides?.raiderio ? null : rankings,
+        scope
+      )
     };
   }
   return {
-    async start(input) {
+    async start(input, scope) {
+      // start does real database and queue work through search.create, so its
+      // scope is threaded through rather than discarded: this is the endpoint
+      // the research doc measures as "submission to first response".
       try {
-        return options.search.create({
+        const command = {
           ...input,
           characterUrl: toRaiderIoUrl(
             parseApplicantCharacterUrl(input.characterUrl)
           )
-        });
+        };
+        return scope
+          ? options.search.create(command, scope)
+          : options.search.create(command);
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
     },
 
-    async addConnectedCharacter(root, input) {
+    async addConnectedCharacter(root, input, scope) {
       let target: CharacterKey;
       try {
         target = parseApplicantCharacterUrl(input.characterUrl);
@@ -773,10 +864,13 @@ export function createApplicantDossierService(options: {
       }
       if (canonicalCharacterId(root) === canonicalCharacterId(target))
         return { kind: "duplicate" };
-      const result = await options.search.create({
+      const connectedCommand = {
         ...input,
         characterUrl: toRaiderIoUrl(target)
-      });
+      };
+      const result = scope
+        ? await options.search.create(connectedCommand, scope)
+        : await options.search.create(connectedCommand);
       // Record the link for a queued character too. Connections are stored by
       // key, so this survives until discovery creates the character and the
       // dossier resolves it without a second attempt. Anything other than a
@@ -790,7 +884,8 @@ export function createApplicantDossierService(options: {
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
-    async readInitial(key, signal, overrides) {
+    async readInitial(key, signal, overrides, scope) {
+      const repositories = scopedRepositories(scope);
       // Initial evidence precedes the worker's snapshot filter. One bounded
       // lookup prevents that preview from exposing a tournament root.
       const timeout = AbortSignal.timeout(15_000);
@@ -800,7 +895,13 @@ export function createApplicantDossierService(options: {
       const profiles = overrides?.raiderio ?? options.raiderio;
       try {
         requestSignal.throwIfAborted();
-        const character = await profiles.getCharacter(key, requestSignal);
+        // The visitor's own gateway when they supplied one, the shared gateway
+        // otherwise; either way the call is timed against this read's scope.
+        const loadCharacter = async () =>
+          profiles.getCharacter(key, requestSignal);
+        const character = scope
+          ? await scope.time("raiderIoCharacter", loadCharacter)
+          : await loadCharacter();
         requestSignal.throwIfAborted();
         if (character.isTournamentProfile === true)
           return { kind: "not_ready" };
@@ -827,10 +928,10 @@ export function createApplicantDossierService(options: {
             message:
               "Linked-character research is still running; this evidence covers only the submitted character."
           },
-          repositories: options.repositories,
+          repositories,
           queue: options.queue,
-          ...gatewaysFor(overrides),
-          concurrency: providerConcurrency,
+          ...gatewaysFor(overrides, scope),
+          concurrency: scopedConcurrency(scope),
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
@@ -841,12 +942,11 @@ export function createApplicantDossierService(options: {
       };
     },
 
-    async read(key, signal, overrides) {
+    async read(key, signal, overrides, scope) {
+      const repositories = scopedRepositories(scope);
       const snapshot =
-        (await options.repositories.snapshots.getCurrent(key)) ??
-        (await options.repositories.snapshots.getCurrentContainingCharacter?.(
-          key
-        ));
+        (await repositories.snapshots.getCurrent(key)) ??
+        (await repositories.snapshots.getCurrentContainingCharacter?.(key));
       if (!snapshot) return { kind: "not_ready" };
 
       const seen = new Set(
@@ -862,7 +962,7 @@ export function createApplicantDossierService(options: {
       // Level only orders the list; it is not part of a dossier subject.
       type RankedSubject = DossierSubject & Readonly<{ level: number }>;
       const manual: RankedSubject[] = [];
-      for (const character of await options.repositories.manualConnections.list(
+      for (const character of await repositories.manualConnections.list(
         snapshot.rootKey
       )) {
         const admit = (candidate: RankedSubject) => {
@@ -875,8 +975,9 @@ export function createApplicantDossierService(options: {
         // An undiscovered character has no snapshot to merge yet. Its own run
         // is still queued, and the next read picks the characters up.
         if (character.pending) continue;
-        const connectedSnapshot =
-          await options.repositories.snapshots.getCurrent(character.key);
+        const connectedSnapshot = await repositories.snapshots.getCurrent(
+          character.key
+        );
         for (const discovered of connectedSnapshot?.characters ?? []) {
           admit(discovered);
         }
@@ -918,10 +1019,10 @@ export function createApplicantDossierService(options: {
                   message:
                     "Additional linked characters may exist; this dossier is not exhaustive."
                 },
-          repositories: options.repositories,
+          repositories,
           queue: options.queue,
-          ...gatewaysFor(overrides),
-          concurrency: providerConcurrency,
+          ...gatewaysFor(overrides, scope),
+          concurrency: scopedConcurrency(scope),
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),

@@ -2259,6 +2259,123 @@ describe("Warcraft Logs gateway", () => {
     expect(JSON.stringify(result)).not.toContain("client-secret-marker");
   });
 
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 429, headers: { "Retry-After": "60" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([{ retryAfterMs: 60_000 }]);
+  });
+
+  it("keeps a throwing onThrottle from changing the returned limitation", async () => {
+    // Break caught: an unguarded reporting callback could turn a Warcraft Logs
+    // throttle into an unexpected_error job retry instead of the rate_limited
+    // limitation the caller handles.
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 429, headers: { "Retry-After": "60" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      onThrottle: () => {
+        throw new Error("logger-exploded-marker");
+      }
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
+    ).resolves.toMatchObject({
+      kind: "limitation",
+      code: "rate_limited",
+      retryAfterMs: 60_000
+    });
+  });
+
+  it("does not require onThrottle", async () => {
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : new Response("", { status: 429 })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
+    ).resolves.toMatchObject({ kind: "limitation", code: "rate_limited" });
+  });
+
+  it("reports a non-429 response carrying Retry-After as throttling", async () => {
+    // "Upstream asked us to back off" is the definition shared with Blizzard
+    // and Raider.IO, so a 503 with Retry-After must fire onThrottle even
+    // though it still returns the unavailable limitation, unchanged.
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 503, headers: { "Retry-After": "30" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([{ retryAfterMs: 30_000 }]);
+    expect(result).toEqual({ kind: "limitation", code: "unavailable" });
+  });
+
+  it("does not report a response without Retry-After as throttling", async () => {
+    const throttles: unknown[] = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 503 });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: () => throttles.push(true)
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([]);
+  });
+
   it("stops paging at the caller's request cap", async () => {
     const firstPage = (
       fixture("character-report-valid") as {

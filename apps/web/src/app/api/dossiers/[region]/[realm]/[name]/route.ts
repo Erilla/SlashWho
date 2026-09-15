@@ -16,7 +16,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier", async () => {
+  return withHttpRequest("dossier", async (scope) => {
     let parsed: ReturnType<typeof parseCharacterRoute>;
     try {
       parsed = parseCharacterRoute(await context.params);
@@ -42,8 +42,13 @@ export async function GET(
     const overrides = readCredentialOverrides(request.headers, loadWebConfig());
     const result =
       new URL(request.url).searchParams.get("scope") === "initial"
-        ? await dossiers.readInitial(parsed.key, request.signal, overrides)
-        : await dossiers.read(parsed.key, request.signal, overrides);
+        ? await dossiers.readInitial(
+            parsed.key,
+            request.signal,
+            overrides,
+            scope
+          )
+        : await dossiers.read(parsed.key, request.signal, overrides, scope);
     if (result.kind === "not_ready") return apiError("discovery_not_ready");
     return Response.json(applicantDossierSchema.parse(result.dossier), {
       headers: { "cache-control": "no-store" }

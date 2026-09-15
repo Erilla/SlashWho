@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { readCredentialOverrides } from "./credential-headers";
 import { loadWebConfig } from "./config";
+import { webLogger } from "./logger";
 
 const config = loadWebConfig({
   DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
@@ -47,6 +48,50 @@ describe("readCredentialOverrides", () => {
     const headers = new Headers({ "x-raiderio-access-key": "user-key" });
     const overrides = readCredentialOverrides(headers, config);
     expect(overrides.raiderio).toBeDefined();
+  });
+
+  it("reports an upstream throttle from a visitor's own gateway without naming the credential", async () => {
+    // Break caught: a per-request client built from a visitor's own key could
+    // be constructed without the throttle callback the shared clients carry,
+    // making throttling of a visitor's key invisible. The record must also
+    // never carry the key that provoked it.
+    const records: Array<Record<string, unknown>> = [];
+    const infoSpy = vi
+      .spyOn(webLogger, "info")
+      .mockImplementation((record: unknown) => {
+        records.push(record as Record<string, unknown>);
+      });
+    try {
+      // The client captures globalThis.fetch at construction, so the stub has
+      // to be in place before the override is built.
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("", { status: 429, headers: { "Retry-After": "3" } })
+      );
+      const headers = new Headers({ "x-raiderio-access-key": "user-key" });
+      const overrides = readCredentialOverrides(headers, config);
+
+      // A 429 is still a transient failure to the caller: reporting the
+      // throttle must not change what the client throws.
+      await expect(
+        overrides.raiderio!.getCharacter({
+          region: "eu",
+          realm: "silvermoon",
+          name: "ryii"
+        })
+      ).rejects.toThrow("raiderio_transient");
+
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          event: "upstream_throttle",
+          provider: "raiderio",
+          retryAfterMs: 3000
+        })
+      );
+      expect(JSON.stringify(records)).not.toContain("user-key");
+    } finally {
+      infoSpy.mockRestore();
+      vi.restoreAllMocks();
+    }
   });
 
   it("returns WCL credentials as plain data, not a gateway", () => {

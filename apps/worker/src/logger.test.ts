@@ -105,4 +105,67 @@ describe("worker logger", () => {
     expect(captured).toContain("fingerprint_event");
     expect(captured).not.toContain(marker);
   });
+
+  it("keeps the evidence_job performance fields", () => {
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      runId: "run-1",
+      correlationId: "c1",
+      durationMs: 50,
+      queueWaitMs: 2_000,
+      warcraftLogsMs: 40,
+      warcraftLogsCalls: 1,
+      warcraftLogsMaxCallMs: 40,
+      dbMs: 10,
+      dbCalls: 2,
+      dbMaxCallMs: 6,
+      outcome: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      requestCapUsed: 80,
+      killCount: 4
+    });
+
+    const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(record)) {
+      expect(value, `${key} was redacted`).not.toBe("[Redacted]");
+    }
+  });
+
+  it("censors a visitor's upstream credential under every key that could carry one", () => {
+    // Break caught: this logger is a denylist, so a credential field added to
+    // a worker record later would be printed verbatim. The evidence job now
+    // handles visitor-supplied Warcraft Logs keys, which makes this the
+    // highest-stakes name set in the file.
+    const marker = "visitor-supplied-secret-value";
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      clientId: marker,
+      clientSecret: marker,
+      accessKey: marker,
+      apiKey: marker,
+      secret: marker,
+      credentials: marker,
+      run: {
+        wclClientId: marker,
+        wclClientSecret: marker,
+        wclClientIdEncrypted: marker,
+        wclClientSecretEncrypted: marker,
+        credential: marker
+      }
+    });
+
+    expect(lines[0]).toContain("evidence_job");
+    expect(lines[0]).not.toContain(marker);
+  });
 });

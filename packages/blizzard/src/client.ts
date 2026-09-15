@@ -16,6 +16,7 @@ export type CreateBlizzardClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides both Blizzard hosts for deterministic local integration tests. */
   baseUrl?: string;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 }>;
 
 type AccessToken = Readonly<{
@@ -42,10 +43,36 @@ function retryAfterMs(response: Response): number | undefined {
     : undefined;
 }
 
-function responseFailure(response: Response): BlizzardFailure {
+/**
+ * A reporting callback must never change what this client returns. If the
+ * logger behind `onThrottle` throws, the raw thrown value would otherwise
+ * replace the failure being built here, degrading a genuine rate limit into an
+ * unavailable upstream. Swallowed silently: there is no safe place to report a
+ * failure of the reporting path itself, and it must not become a second
+ * failure.
+ */
+function reportThrottle(
+  onThrottle:
+    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
+  retryAfterMs: number | undefined
+): void {
+  try {
+    onThrottle?.({ retryAfterMs });
+  } catch {
+    // Intentionally ignored; see above.
+  }
+}
+
+function responseFailure(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): BlizzardFailure {
   if (response.status === 404) return { kind: "not_found" };
 
   const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
+    reportThrottle(onThrottle, retryAfter);
+  }
   return {
     kind: "transient",
     status: response.status,
@@ -218,7 +245,8 @@ export function createBlizzardClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) throw createBlizzardError(responseFailure(response));
+    if (!response.ok)
+      throw createBlizzardError(responseFailure(response, options.onThrottle));
 
     try {
       const body = valueRecord(await response.json());
@@ -263,7 +291,8 @@ export function createBlizzardClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) throw createBlizzardError(responseFailure(response));
+    if (!response.ok)
+      throw createBlizzardError(responseFailure(response, options.onThrottle));
 
     try {
       const normalized = normalize(await response.json());

@@ -52,3 +52,26 @@ it("bounds concurrent distinct loads without duplicating a pending load", async 
   expect(await first).toBe(1);
   expect(events).toHaveBeenCalledWith("capacity");
 });
+
+it("notifies a per-call observer in addition to the constructor-level one", async () => {
+  const constructorEvents = vi.fn();
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 2,
+    observe: constructorEvents
+  });
+  const callerAEvents = vi.fn();
+  const callerBEvents = vi.fn();
+
+  expect(await cache("a", async () => 1, callerAEvents)).toBe(1);
+  expect(await cache("b", async () => 2, callerBEvents)).toBe(2);
+  expect(await cache("a", async () => 3, callerBEvents)).toBe(1);
+
+  expect(callerAEvents).toHaveBeenCalledWith("miss");
+  expect(callerAEvents).not.toHaveBeenCalledWith("hit");
+  expect(callerBEvents).toHaveBeenCalledWith("miss");
+  expect(callerBEvents).toHaveBeenCalledWith("hit");
+  // The constructor-level observer keeps receiving every outcome, unchanged.
+  expect(constructorEvents).toHaveBeenCalledWith("miss");
+  expect(constructorEvents).toHaveBeenCalledWith("hit");
+});

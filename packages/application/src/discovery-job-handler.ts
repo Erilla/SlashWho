@@ -1,5 +1,12 @@
-import type { DiscoveryWorkContext, Repositories } from "@slashwho/database";
-import type { BlizzardGateway } from "@slashwho/blizzard";
+import type {
+  DiscoveryWorkContext,
+  JobTelemetry,
+  Repositories
+} from "@slashwho/database";
+import type {
+  BlizzardGateway,
+  BlizzardProfileRequestObserver
+} from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
   deduplicateCharacters,
@@ -10,6 +17,92 @@ import {
 } from "@slashwho/domain";
 
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
+import { measuredRepositories } from "./measured-repositories";
+import {
+  createMeasurementScope,
+  type ExcludeFromBucket,
+  type MeasurementScope
+} from "./measurement";
+import { queueWaitMs } from "./queue-wait";
+
+/**
+ * Provider timing belongs on the gateway, not on the orchestrating domain
+ * function: `discoverCharacter` and `discoverFingerprintMatches` also consult
+ * the suppression list and the fingerprint sweep tables, and timing them whole
+ * would count that database work inside the provider bucket as well as `dbMs`.
+ * Wrapping the gateway keeps the buckets disjoint, matching the decorators the
+ * dossier service already builds per request.
+ */
+function scopedRaiderIoGateway(
+  gateway: RaiderIoGateway,
+  scope: MeasurementScope
+): RaiderIoGateway {
+  return {
+    getCharacter: (key, signal) =>
+      scope.time("raiderIo", () => gateway.getCharacter(key, signal)),
+    getClaimedCharacters: (ownerId, signal) =>
+      scope.time("raiderIo", () =>
+        gateway.getClaimedCharacters(ownerId, signal)
+      ),
+    resolveProfileGuess: (value, signal) =>
+      scope.time("raiderIo", () => gateway.resolveProfileGuess(value, signal))
+  };
+}
+
+function scopedBlizzardGateway(
+  gateway: BlizzardGateway,
+  scope: MeasurementScope
+): BlizzardGateway {
+  // The fingerprint budget is recorded through a callback the client invokes
+  // mid-request, so that one database write is the only nesting that cannot be
+  // hoisted out of the provider call; it is excluded from `blizzardMs` and
+  // still counted in `dbMs`.
+  const excludeObserver = (
+    excluded: ExcludeFromBucket,
+    onProfileRequest?: BlizzardProfileRequestObserver
+  ): BlizzardProfileRequestObserver | undefined =>
+    onProfileRequest === undefined
+      ? undefined
+      : () =>
+          excluded(async () => {
+            await onProfileRequest();
+          });
+
+  return {
+    getGuildRoster: (root, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getGuildRoster(
+          root,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      ),
+    getAchievementFingerprint: (key, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getAchievementFingerprint(
+          key,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      ),
+    getCompletedAchievements: (key, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getCompletedAchievements(
+          key,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      )
+  };
+}
+
+/**
+ * The work context a caller passes to `execute`. Widened with `JobTelemetry`
+ * so a live queue delivery can carry the correlation id and enqueue time
+ * through to the emitted record; a resumed run (no context supplied) simply
+ * has neither.
+ */
+export type DiscoveryExecutionContext = DiscoveryWorkContext & JobTelemetry;
 
 export type DiscoveryLogger = {
   info(value: Record<string, unknown>): void;
@@ -70,6 +163,8 @@ type DiscoveryRunRecord = {
   limitationCode: string | null;
   characterCount: number;
   durationMs: number;
+  correlationId: string | null;
+  queueWaitMs: number | null;
   fingerprintQueueWaitMs: number | null;
   fingerprintReservedRequests: number;
   fingerprintUsedRequests: number;
@@ -164,11 +259,19 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   return {
     async execute(
       runId: string,
-      workContext?: DiscoveryWorkContext
+      workContext?: DiscoveryExecutionContext
     ): Promise<void> {
+      // Created before the first query so the run lookup and claim reach
+      // `dbCalls` too; nothing else about the run depends on its lifetime.
+      // `observedAt` moves up with it so `durationMs` still spans every
+      // measured call and the buckets stay within it.
+      const observedAt = monotonic();
+      const scope = createMeasurementScope(monotonic);
+      const repositories = measuredRepositories(options.repositories, scope);
+
       let context = workContext;
       if (!context) {
-        const existing = await options.repositories.runs.find(runId);
+        const existing = await repositories.runs.find(runId);
         if (!existing) throw new Error("discovery_run_not_found");
         if (existing.status === "complete" || existing.status === "failed") {
           return;
@@ -180,10 +283,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         };
       }
 
-      const run = await options.repositories.runs.claim(runId, context.attempt);
+      const run = await repositories.runs.claim(runId, context.attempt);
       if (!run) return;
 
-      const observedAt = monotonic();
+      const startedAt = now();
       const record: DiscoveryRunRecord = {
         event: "discovery_run",
         runId,
@@ -196,6 +299,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         limitationCode: null,
         characterCount: 0,
         durationMs: 0,
+        correlationId: context.correlationId ?? null,
+        queueWaitMs: queueWaitMs(context.enqueuedAt, startedAt),
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
@@ -204,23 +309,22 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
       try {
         context.signal.throwIfAborted();
-        const executionTime = now();
+        const executionTime = startedAt;
         if (
           executionTime.getTime() - run.createdAt.getTime() >=
           maxJobLifetimeMs
         ) {
           record.outcome = "lifetime_exceeded";
-          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
 
         let outcome: DiscoveryOutcome = await discoverCharacter(
           run.rootKey,
-          options.gateway,
+          scopedRaiderIoGateway(options.gateway, scope),
           {
             requestCap: options.requestCap,
-            isSuppressed: (key) =>
-              options.repositories.suppressions.isActive(key),
+            isSuppressed: (key) => repositories.suppressions.isActive(key),
             signal: context.signal
           }
         );
@@ -231,7 +335,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           maxJobLifetimeMs
         ) {
           record.outcome = "lifetime_exceeded";
-          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
 
@@ -243,7 +347,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           if (fingerprint && blizzardGateway) {
             const admissionTime = now();
             const admission =
-              await options.repositories.fingerprintSweeps.requestAdmission({
+              await repositories.fingerprintSweeps.requestAdmission({
                 runId,
                 key: run.rootKey,
                 requestCap: fingerprint.requestCap,
@@ -307,7 +411,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               }
               const releaseReservation = async () => {
                 if (!reservationActive) return;
-                await options.repositories.fingerprintSweeps.release(
+                await repositories.fingerprintSweeps.release(
                   admission.reservationId,
                   now()
                 );
@@ -315,11 +419,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               };
               try {
                 const adaptedGateway = createBlizzardFingerprintAdapter(
-                  blizzardGateway,
+                  scopedBlizzardGateway(blizzardGateway, scope),
                   {
                     requestCap: admission.requestCap,
                     recordRequest: async () => {
-                      await options.repositories.fingerprintSweeps.recordRequest(
+                      await repositories.fingerprintSweeps.recordRequest(
                         admission.reservationId,
                         1,
                         now()
@@ -346,7 +450,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     minimumIdenticalPercent:
                       fingerprint.minimumIdenticalPercent,
                     isSuppressed: (key) =>
-                      options.repositories.suppressions.isActive(key),
+                      repositories.suppressions.isActive(key),
                     signal: context.signal
                   }
                 );
@@ -364,10 +468,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   ) {
                     record.outcome = "lifetime_exceeded";
                     await releaseReservation();
-                    await options.repositories.runs.fail(
-                      runId,
-                      "upstream_unavailable"
-                    );
+                    await repositories.runs.fail(runId, "upstream_unavailable");
                     return;
                   }
                   const limitationCode =
@@ -395,7 +496,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
                   record.characterCount = characters.length;
-                  await options.repositories.snapshots.createAndFinishFingerprintSweep(
+                  await repositories.snapshots.createAndFinishFingerprintSweep(
                     {
                       runId,
                       rootKey: run.rootKey,
@@ -439,7 +540,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             record.limitationCode =
               outcome.state === "partial" ? outcome.limitationCode : null;
             record.characterCount = outcome.characters.length;
-            await options.repositories.snapshots.create(
+            await repositories.snapshots.create(
               {
                 runId,
                 rootKey: run.rootKey,
@@ -459,7 +560,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           record.outcome = outcome.code;
           if (outcome.code === "character_not_found") {
             context.signal.throwIfAborted();
-            await options.repositories.negativeCache.putAndFailRun(
+            await repositories.negativeCache.putAndFailRun(
               run.rootKey,
               new Date(persistenceTime.getTime() + negativeCacheTtlMs),
               runId,
@@ -467,7 +568,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             );
             return;
           }
-          await options.repositories.runs.fail(runId, "search_failed");
+          await repositories.runs.fail(runId, "search_failed");
           return;
         }
 
@@ -486,11 +587,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
         if (!schedule) {
           record.outcome = "upstream_unavailable";
-          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
         record.outcome = "retrying";
-        await options.repositories.runs.markRetrying(
+        await repositories.runs.markRetrying(
           runId,
           context.attempt,
           schedule.nextRetryAt
@@ -507,7 +608,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         if (isRetryableDiscoveryError(error)) throw error;
         record.outcome = "unexpected_error";
 
-        const current = await options.repositories.runs.find(runId);
+        const current = await repositories.runs.find(runId);
         if (current?.status === "complete" || current?.status === "failed") {
           if (current.status === "complete") return;
           throw error;
@@ -522,12 +623,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
         if (!schedule) {
           record.outcome = "search_failed";
-          await options.repositories.runs.fail(runId, "search_failed");
+          await repositories.runs.fail(runId, "search_failed");
           throw error;
         }
 
         record.outcome = "retrying";
-        await options.repositories.runs.markRetrying(
+        await repositories.runs.markRetrying(
           runId,
           context.attempt,
           schedule.nextRetryAt
@@ -536,7 +637,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       } finally {
         if (options.logger) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
-          options.logger.info({ ...record });
+          options.logger.info({ ...record, ...scope.totals() });
         }
       }
     }
