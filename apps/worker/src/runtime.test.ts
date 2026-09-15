@@ -43,7 +43,8 @@ const config: WorkerConfig = {
   blizzardHourlyRequestBudget: 28_800,
   fingerprintMinimumCommon: 200,
   fingerprintMinimumIdenticalPercent: 20,
-  fingerprintSweepCadenceHours: 168
+  fingerprintSweepCadenceHours: 168,
+  evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
 };
 
 function runtimeFakes() {

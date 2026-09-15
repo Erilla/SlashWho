@@ -52,3 +52,8 @@ export {
   serializeJobStatus,
   serializeSnapshot
 } from "./serializers";
+export {
+  decryptCredential,
+  encryptCredential,
+  parseEncryptionKey
+} from "./credential-encryption";

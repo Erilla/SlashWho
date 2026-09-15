@@ -8,7 +8,8 @@ const environment = {
   BLIZZARD_CLIENT_SECRET: "worker-client-secret",
   BLIZZARD_SWEEP_REQUEST_CAP: "300",
   WARCRAFT_LOGS_CLIENT_ID: "warcraft-logs-client-id",
-  WARCRAFT_LOGS_CLIENT_SECRET: "warcraft-logs-client-secret"
+  WARCRAFT_LOGS_CLIENT_SECRET: "warcraft-logs-client-secret",
+  EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
 };
 
 it("rejects missing Blizzard credentials and invalid sweep bounds", () => {
@@ -102,6 +103,15 @@ it("preserves a maintainer webhook path and query string", () => {
       MAINTAINER_ALERT_WEBHOOK_URL: webhookUrl
     }).maintainerAlertWebhookUrl
   ).toBe(webhookUrl);
+});
+
+it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is missing", () => {
+  // Break caught: the worker could start without the key it needs to decrypt
+  // a visitor-supplied WarcraftLogs credential from an evidence job.
+  const { EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY, ...rest } = environment;
+  expect(() => loadWorkerConfig(rest)).toThrow(
+    "evidence_job_credential_encryption_key_required"
+  );
 });
 
 it("accepts only explicit loopback or container health hosts", () => {
