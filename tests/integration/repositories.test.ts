@@ -374,7 +374,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 9,
+      evidenceVersion: 10,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
