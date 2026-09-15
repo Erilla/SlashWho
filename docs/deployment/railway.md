@@ -44,10 +44,17 @@ DOSSIER_CHARACTER_CAP=12
 DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
 DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP=20
 DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS=8000
+# Shared between web and worker: encrypts a visitor-supplied WarcraftLogs key
+# while its evidence job is queued. Must be identical in both services.
+# 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
+EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the worker's value>
 ```
 
-The web service never receives Warcraft Logs credentials. It schedules and reads
-normalized cached evidence only; never expose worker credentials to the browser.
+The web service never receives the server's own Warcraft Logs credentials —
+those stay worker-only and never reach the web service. It does receive a
+visitor's own WCL client ID and secret, as request headers on a dossier read,
+but encrypts that pair immediately and never persists it in plaintext; only
+the ciphertext is written to a queued evidence run for the worker to decrypt.
 
 Worker variables. `DISCOVERY_REQUEST_CAP`, `NEGATIVE_CACHE_TTL_MS`, and the
 Blizzard fingerprint settings are read only by the worker, so set them on the
@@ -71,6 +78,10 @@ BLIZZARD_CLIENT_ID=<Blizzard OAuth client ID secret>
 BLIZZARD_CLIENT_SECRET=<Blizzard OAuth client secret>
 WARCRAFT_LOGS_CLIENT_ID=<Warcraft Logs OAuth client ID secret>
 WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
+# Shared between web and worker: decrypts a visitor-supplied WarcraftLogs key
+# while its evidence job runs. Must be identical in both services.
+# 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
+EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the web service's value>
 EVIDENCE_REQUEST_CAP=500
 BLIZZARD_SWEEP_REQUEST_CAP=300
 BLIZZARD_HOURLY_REQUEST_BUDGET=28800
