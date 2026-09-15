@@ -66,8 +66,27 @@ const sensitiveKeys = new Set([
   "fingerprintscore",
   "matchscore",
   "identicalpercent",
-  "score"
+  "score",
+  "databaseurl"
 ]);
+
+// Exact matching alone can never be robust against a provider-prefixed
+// credential name (blizzardClientId, warcraftLogsClientSecret, a future
+// raiderIoAccessKey, ...): the normalized key changes with every prefix, so
+// each one would need its own entry above, forever one step behind whatever
+// name gets added next. These substrings catch the credential-shaped
+// concern generally, wherever it appears in a normalized key, while staying
+// narrow enough not to catch unrelated fields such as providerName or
+// correlationId.
+const sensitiveKeySubstrings = [
+  "clientid",
+  "clientsecret",
+  "accesskey",
+  "apikey",
+  "credential",
+  "encryptionkey",
+  "decryptionkey"
+];
 
 function sanitize(value: unknown, visited = new WeakSet<object>()): unknown {
   if (typeof value !== "object" || value === null || value instanceof Date) {
@@ -80,12 +99,15 @@ function sanitize(value: unknown, visited = new WeakSet<object>()): unknown {
   }
 
   return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      sensitiveKeys.has(key.toLowerCase().replaceAll(/[^a-z]/g, ""))
-        ? "[Redacted]"
-        : sanitize(item, visited)
-    ])
+    Object.entries(value).map(([key, item]) => {
+      const normalized = key.toLowerCase().replaceAll(/[^a-z]/g, "");
+      const isSensitive =
+        sensitiveKeys.has(normalized) ||
+        sensitiveKeySubstrings.some((substring) =>
+          normalized.includes(substring)
+        );
+      return [key, isSensitive ? "[Redacted]" : sanitize(item, visited)];
+    })
   );
 }
 

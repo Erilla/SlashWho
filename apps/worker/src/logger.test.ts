@@ -168,4 +168,60 @@ describe("worker logger", () => {
     expect(lines[0]).toContain("evidence_job");
     expect(lines[0]).not.toContain(marker);
   });
+
+  it("redacts provider-prefixed and other credential names not literally listed", () => {
+    // Break caught: a security review found these seven credential-bearing
+    // names reachable in worker payloads but not caught by the denylist,
+    // because exact matching can't survive a provider prefix. This proves
+    // the substring backstop closes the gap, including when nested.
+    const marker = "UNIQUE_PROVIDER_CREDENTIAL_MARKER_7c2ab1";
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      config: {
+        blizzardClientId: marker,
+        blizzardClientSecret: marker,
+        warcraftLogsClientId: marker,
+        warcraftLogsClientSecret: marker,
+        evidenceJobCredentialEncryptionKey: marker,
+        databaseUrl: marker
+      },
+      options: {
+        decryptionKey: marker
+      }
+    });
+
+    expect(lines[0]).toContain("evidence_job");
+    expect(lines[0]).not.toContain(marker);
+  });
+
+  it("does not redact ordinary telemetry fields that this branch exists to produce", () => {
+    // Break caught: widening the matcher to a substring rule could quietly
+    // swallow unrelated fields that merely share letters with a credential
+    // name (e.g. providerName, characterCount), silencing the telemetry.
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      provider: "warcraftlogs",
+      durationMs: 50,
+      characterCount: 3,
+      correlationId: "c1",
+      outcome: "complete"
+    });
+
+    const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(record.provider).toBe("warcraftlogs");
+    expect(record.durationMs).toBe(50);
+    expect(record.characterCount).toBe(3);
+    expect(record.correlationId).toBe("c1");
+    expect(record.outcome).toBe("complete");
+  });
 });
