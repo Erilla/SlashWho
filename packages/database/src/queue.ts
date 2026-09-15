@@ -378,10 +378,18 @@ export function createDiscoveryQueue(
       await boss.work<
         CollectCharacterEvidenceJob,
         void,
-        { pollingIntervalSeconds: number; includeMetadata: true }
+        {
+          pollingIntervalSeconds: number;
+          includeMetadata: true;
+          localConcurrency: number;
+        }
       >(
         collectCharacterEvidenceQueueName,
-        { pollingIntervalSeconds: 0.5, includeMetadata: true },
+        {
+          pollingIntervalSeconds: 0.5,
+          includeMetadata: true,
+          localConcurrency: 3
+        },
         async ([job]) => {
           if (!job) return;
           const execution = (async () => {

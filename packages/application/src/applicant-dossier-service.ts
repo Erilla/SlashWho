@@ -67,11 +67,13 @@ type DossierSubject = Readonly<{
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
 }>;
+type DossierEvidenceState = "waiting" | "scanning" | "complete" | "partial";
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   wipes: readonly DossierWipeEvidence[];
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
+  evidenceState: DossierEvidenceState;
 }>;
 type CuttingEdgeEvidenceResult = Readonly<{
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
@@ -281,7 +283,15 @@ async function gatherCharacterEvidence(
       completed?.run.status === "complete" &&
       completed.run.limitationCode === null &&
       completed.wipeCapable,
-    gathering: reservation.kind !== "fresh"
+    gathering: reservation.kind !== "fresh",
+    evidenceState:
+      reservation.kind === "fresh"
+        ? completed?.run.status === "partial"
+          ? "partial"
+          : "complete"
+        : reservation.run.status === "running"
+          ? "scanning"
+          : "waiting"
   };
 }
 
@@ -320,7 +330,10 @@ async function gatherCuttingEdgeEvidence(
   return { cuttingEdges, limitations };
 }
 
-function serializeDossierSubject(character: DossierSubject) {
+function serializeDossierSubject(
+  character: DossierSubject,
+  evidenceState?: DossierEvidenceState
+) {
   return {
     key: character.key,
     displayName: formatCharacterDisplayName(character.displayName),
@@ -333,7 +346,8 @@ function serializeDossierSubject(character: DossierSubject) {
           ? ("manually_added" as const)
           : character.source === "fingerprint"
             ? ("fingerprint_derived" as const)
-            : ("raiderio_declared" as const)
+            : ("raiderio_declared" as const),
+    ...(evidenceState ? { evidenceState } : {})
   };
 }
 
@@ -508,7 +522,9 @@ async function assembleDossier(options: {
             "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
         }
       : options.research,
-    characters: options.subjects.map(serializeDossierSubject),
+    characters: options.subjects.map((character, index) =>
+      serializeDossierSubject(character, evidence[index]?.evidenceState)
+    ),
     limitations: dossier.limitations.map((item) => ({
       ...item,
       code: contractLimitationCode(item.code),

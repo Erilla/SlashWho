@@ -78,6 +78,11 @@ const expanded = dossier(
   "Linked-character research is complete.",
   "Expanded evidence"
 );
+const partiallyExpanded = dossier(
+  "partial",
+  "Additional linked characters may exist; this dossier is not exhaustive.",
+  "Partial evidence"
+);
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -265,6 +270,61 @@ describe("DossierPageClient staged research", () => {
     });
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
+  });
+
+  it("keeps polling evidence after a transient read failure", async () => {
+    // Break caught: a temporary dossier read throttle could strand the page on
+    // the gathering message until the reviewer manually refreshed it.
+    vi.useFakeTimers();
+    let evidenceCalls = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input !== dossierPath)
+        return Promise.reject(new Error(`Unexpected request: ${input}`));
+      evidenceCalls += 1;
+      return evidenceCalls === 1
+        ? Promise.resolve(
+            Response.json(
+              { error: { code: "rate_limited", message: "Try again later." } },
+              { status: 429 }
+            )
+          )
+        : Promise.resolve(Response.json(partiallyExpanded));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={dossier(
+          "gathering",
+          "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes.",
+          "Gathering evidence"
+        )}
+        jobId={null}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+      )
+    ).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(evidenceCalls).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(evidenceCalls).toBe(2);
+    expect(screen.getByText(partiallyExpanded.research.message)).toBeVisible();
+    expect(
+      screen.queryByText(
+        "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+      )
+    ).not.toBeInTheDocument();
   });
 
   it("shows a linked snapshot immediately and starts discovery for its root", async () => {

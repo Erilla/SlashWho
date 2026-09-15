@@ -132,3 +132,47 @@ it("does not describe naturally flowing narrow rows as scrollable", () => {
     )
   ).not.toBeInTheDocument();
 });
+
+it("shows scanning and waiting states without leaving a spinner on completed scans", () => {
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "scanning" },
+          displayName: "Scanning",
+          className: null,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/scanning",
+          source: "submitted",
+          evidenceState: "scanning"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "waiting" },
+          displayName: "Waiting",
+          className: null,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/waiting",
+          source: "raiderio_declared",
+          evidenceState: "waiting"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "complete" },
+          displayName: "Complete",
+          className: null,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/complete",
+          source: "raiderio_declared",
+          evidenceState: "complete"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "scanning" }}
+    />
+  );
+
+  expect(
+    screen.getByRole("img", { name: "Evidence currently being scanned" })
+  ).toBeVisible();
+  expect(
+    screen.getByRole("img", { name: "Evidence waiting to be scanned" })
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("img", { name: /scan complete/i })
+  ).not.toBeInTheDocument();
+});
