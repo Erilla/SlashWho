@@ -2,6 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 import {
@@ -13,6 +14,8 @@ const push = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push })
 }));
+
+import { headerIdentitySlotId } from "../../../../../components/site-header";
 
 import { DossierPageClient } from "./dossier-page-client";
 
@@ -129,6 +132,12 @@ describe("DossierPageClient staged research", () => {
   });
 
   it("moves the identity into the centered header after the heading scrolls away", async () => {
+    // The badge is portalled into the slot the site header owns, so the header
+    // grid keeps it clear of the search controls.
+    const headerSlot = document.createElement("div");
+    headerSlot.id = headerIdentitySlotId;
+    document.body.append(headerSlot);
+
     let observe: ((entries: IntersectionObserverEntry[]) => void) | undefined;
     vi.stubGlobal(
       "IntersectionObserver",
@@ -156,9 +165,11 @@ describe("DossierPageClient staged research", () => {
       observe?.([{ isIntersecting: false } as IntersectionObserverEntry])
     );
 
-    expect(
-      await screen.findByRole("status", { name: "Current character" })
-    ).toHaveTextContent("RyiiEU · silvermoon");
+    const badge = await screen.findByRole("status", {
+      name: "Current character"
+    });
+    expect(badge).toHaveTextContent("RyiiEU · silvermoon");
+    expect(headerSlot).toContainElement(badge);
   });
 
   it("shows a loading indicator while applicant research is in progress", () => {
@@ -669,5 +680,100 @@ describe("DossierPageClient staged research", () => {
         })
       })
     );
+  });
+});
+
+describe("DossierPageClient connected-character additions", () => {
+  it("refetches the dossier when a character is added", async () => {
+    // Break caught: the panel used to call window.location.reload(), which
+    // discarded the dialog's progress message and every poll already in
+    // flight. The addition has to refresh through the dossier state instead.
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(
+      async (input: URL | RequestInfo, init?: RequestInit) => {
+        if (String(input).endsWith("/connected-characters")) {
+          void init;
+          return new Response(JSON.stringify({ kind: "ready" }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        return new Response(JSON.stringify(expanded), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={initial}
+        jobId={null}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add character" }));
+    await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+    await user.paste("https://raider.io/characters/eu/silvermoon/Ryalts");
+    await user.click(
+      screen.getByRole("button", { name: "Add connected character" })
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Expanded evidence" })
+    ).toBeVisible();
+    // Break caught: the dialog closes on submit, so the dossier itself has to
+    // confirm the addition or nothing tells the reviewer it worked.
+    expect(
+      await screen.findByText("Ryalts has been added to this dossier.")
+    ).toBeVisible();
+    expect(
+      fetchMock.mock.calls.filter(([input]) => String(input) === dossierPath)
+    ).not.toHaveLength(0);
+  });
+});
+
+describe("DossierPageClient queued connected characters", () => {
+  it("announces a queued character as being researched", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL | RequestInfo) =>
+        String(input).endsWith("/connected-characters")
+          ? new Response(
+              JSON.stringify({
+                kind: "job",
+                jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+                status: "queued"
+              }),
+              { status: 202, headers: { "content-type": "application/json" } }
+            )
+          : new Response(JSON.stringify(expanded), {
+              status: 200,
+              headers: { "content-type": "application/json" }
+            })
+      )
+    );
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={initial}
+        jobId={null}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add character" }));
+    await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+    await user.paste("https://raider.io/characters/eu/silvermoon/Ryalts");
+    await user.click(
+      screen.getByRole("button", { name: "Add connected character" })
+    );
+
+    expect(
+      await screen.findByText("Ryalts has been added and is being researched.")
+    ).toBeVisible();
   });
 });

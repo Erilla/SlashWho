@@ -1261,3 +1261,190 @@ describe("applicant dossier service", () => {
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
   });
 });
+
+describe("manually connected characters", () => {
+  const manualKey = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "manual"
+  } as const;
+  const manualAlt = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "manualalt"
+  } as const;
+
+  it("links a queued character so no second attempt is needed", async () => {
+    // Break caught: addConnectedCharacter used to return early for anything
+    // that was not already a fresh snapshot, so a queued character was
+    // researched and never linked. The reviewer had to add it twice.
+    const { dossiers, repositories, search } = fixture();
+    (search.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+      kind: "job",
+      jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+      status: "queued"
+    });
+
+    await expect(
+      dossiers.addConnectedCharacter(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        headers
+      })
+    ).resolves.toMatchObject({ kind: "job" });
+
+    expect(repositories.manualConnections.add).toHaveBeenCalledWith(
+      root,
+      manualKey
+    );
+  });
+
+  it("does not link a character whose search never started", async () => {
+    const { dossiers, repositories, search } = fixture();
+    (search.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+      kind: "rate_limited",
+      retryAfterSeconds: 30
+    });
+
+    await expect(
+      dossiers.addConnectedCharacter(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        headers
+      })
+    ).resolves.toMatchObject({ kind: "rate_limited" });
+
+    expect(repositories.manualConnections.add).not.toHaveBeenCalled();
+  });
+
+  it("lists a character linked before discovery without inventing its details", async () => {
+    // Break caught: connections used to require an existing character row, so a
+    // pending link could not be stored at all, and a placeholder row would have
+    // fabricated a class and level for the dossier to colour and rank.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "manual",
+        className: null,
+        level: 0,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: true
+      }
+    ]);
+    // An undiscovered character has no evidence run, so its reservation is a
+    // new one rather than a fresh cached result.
+    const reserve = repositories.evidence.reserve as ReturnType<typeof vi.fn>;
+    const reserveFresh = reserve.getMockImplementation() as (request: {
+      key: CharacterKey;
+    }) => Promise<unknown>;
+    reserve.mockImplementation(async (request: { key: CharacterKey }) =>
+      request.key.name === "manual"
+        ? {
+            kind: "reserved",
+            run: {
+              id: "10000000-0000-4000-8000-000000000041",
+              key: manualKey,
+              queueJobId: null,
+              status: "queued",
+              attempt: 1,
+              limitationCode: null,
+              parseLimitationCode: null,
+              errorCode: null,
+              createdAt: new Date("2026-09-15T12:00:00.000Z"),
+              startedAt: null,
+              completedAt: null
+            },
+            completed: null
+          }
+        : reserveFresh(request)
+    );
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    // The spinner in the connected list is driven by these two states, and
+    // showing the character as being researched is the point of linking it
+    // before discovery has run.
+    expect(
+      result.dossier.characters.find(
+        (character) => character.key.name === "manual"
+      )
+    ).toMatchObject({
+      className: null,
+      source: "manually_added",
+      evidenceState: "waiting",
+      researchState: "gathering"
+    });
+    expect(repositories.snapshots.getCurrent).not.toHaveBeenCalledWith(
+      manualKey
+    );
+  });
+
+  it("merges the characters discovered from a manually connected character", async () => {
+    // Break caught: adding a character starts a discovery run rooted at it,
+    // which walks its Raider.IO alts and fingerprints its Blizzard guild
+    // roster. Those characters belong in this dossier, not only in that
+    // character's own.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "Manual",
+        className: "Warrior",
+        level: 80,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: false
+      }
+    ]);
+    (
+      repositories.snapshots.getCurrent as ReturnType<typeof vi.fn>
+    ).mockImplementation(async (key: CharacterKey) =>
+      key.name === "manual"
+        ? {
+            ...storedSnapshot([
+              {
+                characterId: "10000000-0000-4000-8000-000000000031",
+                key: manualKey,
+                displayName: "Manual",
+                className: "Warrior",
+                level: 80,
+                raiderIoUrl:
+                  "https://raider.io/characters/eu/silvermoon/manual",
+                source: "input",
+                displayOrder: 0
+              },
+              {
+                characterId: "10000000-0000-4000-8000-000000000032",
+                key: manualAlt,
+                displayName: "Manualalt",
+                className: "Rogue",
+                level: 80,
+                raiderIoUrl:
+                  "https://raider.io/characters/eu/silvermoon/manualalt",
+                source: "fingerprint",
+                displayOrder: 1
+              }
+            ]),
+            rootKey: manualKey
+          }
+        : storedSnapshot()
+    );
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    const names = result.dossier.characters.map(
+      (character) => character.key.name
+    );
+    expect(names).toContain("manual");
+    expect(names).toContain("manualalt");
+    expect(
+      result.dossier.characters.find(
+        (character) => character.key.name === "manualalt"
+      )
+    ).toMatchObject({ source: "fingerprint_derived" });
+  });
+});

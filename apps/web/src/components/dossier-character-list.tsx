@@ -1,5 +1,10 @@
 import type { DossierCharacter } from "@slashwho/contracts";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import {
+  AddConnectedCharacterDialog,
+  type AddedConnectedCharacter
+} from "./add-connected-character-dialog";
 
 import { DossierCharacterName } from "./dossier-character-name";
 import { CharacterProfileLinks } from "./profile-links";
@@ -7,6 +12,10 @@ import { CharacterProfileLinks } from "./profile-links";
 type DossierCharacterListProps = Readonly<{
   characters: readonly DossierCharacter[];
   root: DossierCharacter["key"];
+  /** Refreshes and announces the dossier once a character has been linked. */
+  onCharacterAdded?: (added: AddedConnectedCharacter) => void;
+  /** Read-only views, such as the demo dossier, hide the add action. */
+  canAddCharacters?: boolean;
 }>;
 
 function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
@@ -34,33 +43,13 @@ const evidenceStateLabel = {
 
 export function DossierCharacterList({
   characters,
-  root
+  onCharacterAdded,
+  root,
+  canAddCharacters = true
 }: DossierCharacterListProps) {
   const listRef = useRef<HTMLUListElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
-  const [characterUrl, setCharacterUrl] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-
-  async function addCharacter(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const response = await fetch(
-      `/api/dossiers/${root.region}/${root.realm}/${root.name}/connected-characters`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ characterUrl })
-      }
-    );
-    if (response.status === 202) {
-      setMessage("Researching connected character…");
-      return;
-    }
-    if (!response.ok) {
-      setMessage("The character could not be added.");
-      return;
-    }
-    window.location.reload();
-  }
+  const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     const list = listRef.current;
@@ -170,36 +159,24 @@ export function DossierCharacterList({
           </li>
         ))}
       </ul>
-      <form
-        className="search-form dossier-character-add-form"
-        onSubmit={addCharacter}
-      >
-        <label className="visually-hidden" htmlFor="connected-character-url">
-          Connected character URL
-        </label>
-        <div className="search-control">
-          <input
-            className="search-input dossier-character-add-control"
-            id="connected-character-url"
-            type="url"
-            value={characterUrl}
-            onChange={(event) => setCharacterUrl(event.currentTarget.value)}
-            placeholder="Raider.IO or Warcraft Logs character URL"
-            required
-          />
+      {canAddCharacters ? (
+        <>
           <button
-            className="search-button dossier-character-add-control"
-            type="submit"
+            className="search-button dossier-character-add-trigger"
+            onClick={() => setIsAdding(true)}
+            type="button"
           >
             Add character
           </button>
-        </div>
-        {message ? (
-          <p className="form-error" role="status">
-            {message}
-          </p>
-        ) : null}
-      </form>
+          <AddConnectedCharacterDialog
+            connectedCharacters={characters.map((character) => character.key)}
+            onAdded={(added) => onCharacterAdded?.(added)}
+            onClose={() => setIsAdding(false)}
+            open={isAdding}
+            root={root}
+          />
+        </>
+      ) : null}
     </section>
   );
 }

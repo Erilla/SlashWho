@@ -4,6 +4,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --parallel --filter @slashwho/web --filter @slashwho/worker dev",
+    "capture:demo-dossier": "tsx scripts/capture-demo-dossier.mts",
     "generate:cutting-edge-catalogue": "tsx scripts/generate-cutting-edge-catalogue.mts",
     "generate:raid-current-content-windows": "tsx scripts/generate-raid-current-content-windows.mts",
     "format": "prettier --write .",

@@ -2,6 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { DossierCharacterList } from "./dossier-character-list";
@@ -220,7 +221,9 @@ it("shows scanning and waiting states without leaving a spinner on completed sca
   ).not.toBeInTheDocument();
 });
 
-it("uses compact matching controls for manually adding a connected character", () => {
+it("offers a compact add action instead of idle character fields", () => {
+  // Break caught: #148 removes the always-visible entry row, so an idle text
+  // field in the panel means the dialog flow was bypassed.
   render(
     <DossierCharacterList
       characters={[]}
@@ -228,17 +231,78 @@ it("uses compact matching controls for manually adding a connected character", (
     />
   );
 
-  const form = screen
-    .getByRole("textbox", {
-      name: "Connected character URL"
-    })
-    .closest("form");
-  expect(form).toHaveClass("dossier-character-add-form");
+  expect(screen.getByRole("button", { name: "Add character" })).toHaveClass(
+    "dossier-character-add-trigger"
+  );
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
 
-  const input = screen.getByRole("textbox", {
-    name: "Connected character URL"
-  });
-  const button = screen.getByRole("button", { name: "Add character" });
-  expect(input).toHaveClass("dossier-character-add-control");
-  expect(button).toHaveClass("dossier-character-add-control");
+it("opens the character dialog from the add action", async () => {
+  const user = userEvent.setup();
+  render(
+    <DossierCharacterList
+      characters={[]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  await user.click(screen.getByRole("button", { name: "Add character" }));
+
+  expect(
+    screen.getByRole("dialog", { name: "Add connected character" })
+  ).toBeVisible();
+});
+
+it("returns focus to the add action when the dialog closes", async () => {
+  // Break caught: a dialog that drops focus to the document leaves keyboard
+  // viewers with no idea where they are when it closes.
+  const user = userEvent.setup();
+  render(
+    <DossierCharacterList
+      characters={[]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  const trigger = screen.getByRole("button", { name: "Add character" });
+  await user.click(trigger);
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+});
+
+it("passes the already-connected characters to the dialog", async () => {
+  // Break caught: without the current list the dialog cannot tell a duplicate
+  // from a fresh link, because the API answers both the same way.
+  const user = userEvent.setup();
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryalts" },
+          displayName: "Ryalts",
+          className: null,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+          source: "raiderio_declared"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  await user.click(screen.getByRole("button", { name: "Add character" }));
+  await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+  await user.paste("https://raider.io/characters/eu/silvermoon/Ryalts");
+  await user.click(
+    screen.getByRole("button", { name: "Add connected character" })
+  );
+
+  expect(
+    screen.getByText("Ryalts is already connected to this dossier.")
+  ).toBeVisible();
+  expect(fetchMock).not.toHaveBeenCalled();
 });

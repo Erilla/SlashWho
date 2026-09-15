@@ -132,7 +132,8 @@ describe("PostgreSQL repositories", () => {
       characters,
       suppressed_characters,
       negative_character_cache,
-      rate_limit_events
+      rate_limit_events,
+      manual_dossier_connections
       CASCADE`);
   });
 
@@ -297,7 +298,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 6,
+      evidenceVersion: 7,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
@@ -770,6 +771,93 @@ describe("PostgreSQL repositories", () => {
     const found = await repositories.evidence.find(reservation.run.id);
     expect(found?.wclClientIdEncrypted).toBe("encrypted-id");
     expect(found?.wclClientSecretEncrypted).toBe("encrypted-secret");
+  });
+
+  describe("manual dossier connections", () => {
+    const pendingKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "undiscovered"
+    } as const;
+
+    it("links a character that has not been discovered yet", async () => {
+      // Break caught: the insert used to join `characters` twice, so a target
+      // with no row yielded no rows and was reported as a duplicate. A
+      // reviewer could not link a character before its discovery finished.
+      await seedCompleteSnapshot(repositories);
+
+      await expect(
+        repositories.manualConnections.add(rootKey, pendingKey)
+      ).resolves.toBe("added");
+
+      const listed = await repositories.manualConnections.list(rootKey);
+      expect(listed).toEqual([
+        {
+          key: pendingKey,
+          displayName: "undiscovered",
+          className: null,
+          level: 0,
+          raiderIoUrl:
+            "https://raider.io/characters/eu/silvermoon/undiscovered",
+          pending: true
+        }
+      ]);
+    });
+
+    it("reports a repeated link as a duplicate rather than adding it twice", async () => {
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, pendingKey);
+
+      await expect(
+        repositories.manualConnections.add(rootKey, pendingKey)
+      ).resolves.toBe("duplicate");
+      expect(await repositories.manualConnections.list(rootKey)).toHaveLength(
+        1
+      );
+    });
+
+    it("resolves the character once discovery creates it", async () => {
+      // Break caught: the link is stored by key, so it has to pick up the real
+      // display name, class and level on its own as soon as the character
+      // exists, with no second write and no backfill step.
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, altKey);
+
+      expect(await repositories.manualConnections.list(rootKey)).toMatchObject([
+        { pending: true, className: null, level: 0 }
+      ]);
+
+      const run = await repositories.runs.createOrReuse(altKey, "anonymous");
+      await repositories.runs.markRunning(run.id);
+      const snapshot = await repositories.snapshots.create({
+        runId: run.id,
+        rootKey: altKey,
+        state: "complete",
+        limitationCode: null,
+        refreshedAt: new Date(),
+        characters: [observation(altKey, "Other")]
+      });
+      await repositories.runs.complete(run.id, snapshot.id);
+
+      expect(await repositories.manualConnections.list(rootKey)).toEqual([
+        {
+          key: altKey,
+          displayName: "Other",
+          className: "Mage",
+          level: 80,
+          raiderIoUrl: "https://raider.io/characters/us/area-52/other",
+          pending: false
+        }
+      ]);
+    });
+
+    it("withholds a connection whose character has an active removal request", async () => {
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, pendingKey);
+      await repositories.suppressions.suppress(pendingKey, "removal", null);
+
+      expect(await repositories.manualConnections.list(rootKey)).toEqual([]);
+    });
   });
 
   afterAll(async () => {

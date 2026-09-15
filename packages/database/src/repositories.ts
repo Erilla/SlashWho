@@ -98,8 +98,23 @@ export interface SnapshotRepository {
   ): Promise<SnapshotHistoryPage>;
 }
 
+/**
+ * A manually connected character. It is stored by key, so it can be linked
+ * before discovery has created its row: until then the upstream details are
+ * unknown and `pending` is true, rather than a placeholder class and level
+ * being invented for it.
+ */
+export interface ManualConnectionCharacter {
+  key: CharacterKey;
+  displayName: string;
+  className: string | null;
+  level: number;
+  raiderIoUrl: string;
+  pending: boolean;
+}
+
 export interface ManualConnectionRepository {
-  list(root: CharacterKey): Promise<readonly StoredSnapshotCharacter[]>;
+  list(root: CharacterKey): Promise<readonly ManualConnectionCharacter[]>;
   add(
     root: CharacterKey,
     character: CharacterKey

@@ -494,3 +494,81 @@ test("separates adjacent raid evidence with responsive artwork banners", async (
     )
   ).toBe(true);
 });
+
+test("keeps the scrolled header identity clear of the header search", async ({
+  page
+}) => {
+  // Break caught: the scrolled-in character identity was centred on the
+  // viewport independently of the header grid, so between the two-row
+  // breakpoint and roughly 860px it was drawn straight over the search field.
+  const key = { region: "eu", realm: "silvermoon", name: "overlap" } as const;
+  const characters = Array.from({ length: 12 }, (_, index) => ({
+    key:
+      index === 0
+        ? key
+        : {
+            region: "eu" as const,
+            realm: "silvermoon",
+            name: `overlapalt${index}`
+          },
+    displayName: index === 0 ? "Overlap" : `Overlapalt${index}`,
+    className: "Mage",
+    level: 80 - index
+  }));
+  await seedSnapshot({
+    key,
+    displayName: "Overlap",
+    refreshedAt: new Date(),
+    characters
+  });
+  await Promise.all(
+    characters.map((character) => seedCharacterEvidence(character.key))
+  );
+
+  await page.goto("/dossiers/eu/silvermoon/overlap");
+  // The identity only appears once the dossier heading has scrolled away, so
+  // the page has to be fully rendered before the viewport sweep begins.
+  await expect(
+    page.getByRole("heading", { name: "Historic Cutting Edge" })
+  ).toBeVisible();
+
+  const identity = page.locator(".dossier-header-identity");
+  for (const width of [390, 544, 560, 700, 768, 820, 900, 1280]) {
+    await page.setViewportSize({ width, height: 600 });
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await expect(identity).toBeVisible();
+
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector: string) =>
+        document.querySelector(selector)!.getBoundingClientRect();
+      const identityBounds = bounds(".dossier-header-identity");
+      const overlapWith = (selector: string) => {
+        const other = bounds(selector);
+        const horizontal =
+          Math.min(identityBounds.right, other.right) -
+          Math.max(identityBounds.left, other.left);
+        const vertical =
+          Math.min(identityBounds.bottom, other.bottom) -
+          Math.max(identityBounds.top, other.top);
+        return horizontal > 0 && vertical > 0 ? Math.round(horizontal) : 0;
+      };
+      return {
+        width: Math.round(identityBounds.width),
+        searchInput: overlapWith(".header-search .search-input"),
+        searchButton: overlapWith(".header-search .search-button"),
+        nav: overlapWith(".site-nav"),
+        logo: overlapWith(".header-logo")
+      };
+    });
+
+    expect({ viewport: width, ...geometry }).toEqual({
+      viewport: width,
+      width: geometry.width,
+      searchInput: 0,
+      searchButton: 0,
+      nav: 0,
+      logo: 0
+    });
+    expect(geometry.width).toBeGreaterThan(0);
+  }
+});

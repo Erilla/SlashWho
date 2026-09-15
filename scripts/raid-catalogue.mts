@@ -156,17 +156,31 @@ function mediaAsset(
   return asset ? nonEmptyString(asset.value) : null;
 }
 
-function primaryCreatureDisplayId(
+/**
+ * The artwork for an encounter is the creature Blizzard names after it, and
+ * otherwise the first creature the Journal depicts. Councils, twin bosses and
+ * subtitled bosses name their creatures individually — "Council of Dreams" is
+ * fought as Urctos, Aerwynn and Pip — and upstream lists the primary creature
+ * first, so requiring the encounter name leaves those encounters with no
+ * artwork rather than picking the boss they actually depict.
+ */
+export function primaryCreatureDisplayId(
   body: Record<string, unknown> | null,
   encounterName: string
 ): number | null {
   if (!body || !Array.isArray(body.creatures)) return null;
-  const creature = body.creatures
-    .map(record)
-    .find((value) => value?.name === encounterName);
-  return creature
-    ? positiveInteger(record(creature.creature_display)?.id)
+  const creatures = body.creatures.map(record);
+  const named = creatures.find((value) => value?.name === encounterName);
+  const displayId = named
+    ? positiveInteger(record(named.creature_display)?.id)
     : null;
+  if (displayId !== null) return displayId;
+
+  for (const creature of creatures) {
+    const candidate = positiveInteger(record(creature?.creature_display)?.id);
+    if (candidate !== null) return candidate;
+  }
+  return null;
 }
 
 async function enrichJournalRaid(

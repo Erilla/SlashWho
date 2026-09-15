@@ -8,7 +8,9 @@ import {
   type ApplicantDossier,
   type CharacterKey
 } from "@slashwho/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { formatCharacterDisplayName } from "@slashwho/domain";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   credentialHeaders,
@@ -25,11 +27,14 @@ import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierRateLimitCountdown } from "../../../../../components/dossier-rate-limit-countdown";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
 import { CharacterProfileLinks } from "../../../../../components/profile-links";
+import { headerIdentitySlotId } from "../../../../../components/site-header";
 
 type DossierPageClientProps = Readonly<{
   identity: CharacterKey;
   initialDossier: ApplicantDossier | null;
   jobId: string | null;
+  /** The demo dossier is read-only, so it offers no way to link characters. */
+  canAddCharacters?: boolean;
 }>;
 
 const activeJobStates = new Set(["queued", "running", "retrying"]);
@@ -48,14 +53,17 @@ function apiError(response: Response, body: unknown): string {
 export function DossierPageClient({
   identity,
   initialDossier,
-  jobId
+  jobId,
+  canAddCharacters = true
 }: DossierPageClientProps) {
   const [dossier, setDossier] = useState(initialDossier);
   const [activeJobId, setActiveJobId] = useState(jobId);
   const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [researchFailed, setResearchFailed] = useState(false);
   const [identityHidden, setIdentityHidden] = useState(false);
+  const [identitySlot, setIdentitySlot] = useState<HTMLElement | null>(null);
   const identityRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState(
     initialDossier
@@ -69,6 +77,20 @@ export function DossierPageClient({
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
     [identity]
   );
+
+  // A manually connected character changes the dossier immediately, so read it
+  // back rather than reloading the page and discarding the polls in flight.
+  const refreshDossier = useCallback(async () => {
+    const response = await fetch(dossierPath, { cache: "no-store" });
+    if (!response.ok) return;
+    const body: unknown = await response.json().catch(() => null);
+    const parsed = applicantDossierSchema.safeParse(body);
+    if (!parsed.success) return;
+    hasExpandedDossier.current = true;
+    setDossier(parsed.data);
+    setInitialError(null);
+    setError(null);
+  }, [dossierPath]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -415,6 +437,24 @@ export function DossierPageClient({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    setIdentitySlot(document.getElementById(headerIdentitySlotId));
+  }, []);
+
+  // The header owns this slot, so the identity is laid out by the header grid
+  // instead of floating over whatever the header happens to hold.
+  const identityBadge = (
+    <div
+      className="dossier-header-identity"
+      role="status"
+      aria-label="Current character"
+    >
+      <DossierCharacterName character={identity} />
+      <span>
+        {identity.region.toUpperCase()} · {identity.realm}
+      </span>
+    </div>
+  );
   return (
     <DossierCharacterProvider characters={dossier?.characters ?? []}>
       <main className="page-shell dossier-page">
@@ -441,18 +481,9 @@ export function DossierPageClient({
             character={{ key: identity, displayName: rootDisplayName }}
           />
         </header>
-        {identityHidden ? (
-          <div
-            className="dossier-header-identity"
-            role="status"
-            aria-label="Current character"
-          >
-            <DossierCharacterName character={identity} />
-            <span>
-              {identity.region.toUpperCase()} · {identity.realm}
-            </span>
-          </div>
-        ) : null}
+        {identityHidden && identitySlot
+          ? createPortal(identityBadge, identitySlot)
+          : null}
 
         {visibleResearch ? (
           <DossierResearchState research={visibleResearch} />
@@ -474,11 +505,26 @@ export function DossierPageClient({
             {visibleError}
           </p>
         ) : null}
+        {notice ? (
+          <p className="dossier-notice" role="status">
+            {notice}
+          </p>
+        ) : null}
 
         {dossier ? (
           <div className="dossier-layout">
             <DossierCharacterList
+              canAddCharacters={canAddCharacters}
               characters={dossier.characters}
+              onCharacterAdded={(added) => {
+                const name = formatCharacterDisplayName(added.key.name);
+                setNotice(
+                  added.queued
+                    ? `${name} has been added and is being researched.`
+                    : `${name} has been added to this dossier.`
+                );
+                void refreshDossier();
+              }}
               root={dossier.root}
             />
             <DossierCuttingEdgeList
