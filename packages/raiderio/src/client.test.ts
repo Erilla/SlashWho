@@ -350,6 +350,35 @@ describe("Raider.IO gateway", () => {
     });
   });
 
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response("", { status: 429, headers: { "Retry-After": "5" } }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50,
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await client.getCharacter(sentinel).catch(() => undefined);
+
+    expect(throttles).toEqual([{ retryAfterMs: 5_000 }]);
+  });
+
+  it("does not report a private profile as throttling", async () => {
+    const throttles: unknown[] = [];
+    const client = createRaiderIoClient({
+      fetch: async () => new Response("", { status: 403 }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50,
+      onThrottle: () => throttles.push(true)
+    });
+
+    await client.getCharacter(sentinel).catch(() => undefined);
+
+    expect(throttles).toEqual([]);
+  });
+
   it("classifies a server error without exposing its body", async () => {
     const promise = clientFor("server-error").getCharacter(sentinel);
 

@@ -105,6 +105,7 @@ export type CreateRaiderIoClientOptions = {
   fetch: typeof globalThis.fetch;
   baseUrl: string;
   timeoutMs: number;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 };
 
 function retryAfterMs(response: Response): number | undefined {
@@ -118,14 +119,20 @@ function retryAfterMs(response: Response): number | undefined {
   return Math.max(0, at - Date.now());
 }
 
-function responseFailure(response: Response): RaiderIoFailure {
+function responseFailure(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): RaiderIoFailure {
   if (response.status === 404) return { kind: "not_found" };
   // Raider.IO answers 403 for a user profile its owner has made private. That
   // is a permanent answer about visibility, not an outage, so it must never be
-  // retried as one.
+  // retried as one, and it must never fire onThrottle.
   if (response.status === 403) return { kind: "forbidden" };
 
   const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
+    onThrottle?.({ retryAfterMs: retryAfter });
+  }
   return {
     kind: "transient",
     status: response.status,
@@ -290,7 +297,9 @@ export function createRaiderIoClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) throw createRaiderIoError(responseFailure(response));
+    if (!response.ok) {
+      throw createRaiderIoError(responseFailure(response, options.onThrottle));
+    }
 
     let value: unknown;
     try {

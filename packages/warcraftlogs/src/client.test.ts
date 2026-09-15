@@ -1906,6 +1906,42 @@ describe("Warcraft Logs gateway", () => {
     expect(JSON.stringify(result)).not.toContain("client-secret-marker");
   });
 
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 429, headers: { "Retry-After": "60" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([{ retryAfterMs: 60_000 }]);
+  });
+
+  it("does not require onThrottle", async () => {
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : new Response("", { status: 429 })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
+    ).resolves.toMatchObject({ kind: "limitation", code: "rate_limited" });
+  });
+
   it("stops paging at the caller's request cap", async () => {
     const firstPage = (
       fixture("character-report-valid") as {

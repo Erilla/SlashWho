@@ -138,6 +138,7 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 }>;
 
 type AccessToken = Readonly<{
@@ -211,13 +212,17 @@ function retryAfterMs(response: Response): number | undefined {
     : undefined;
 }
 
-function responseLimitation(response: Response): WarcraftLogsLimitation {
+function responseLimitation(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): WarcraftLogsLimitation {
   if (response.status === 404) return { kind: "limitation", code: "not_found" };
   if (response.status === 401 || response.status === 403) {
     return { kind: "limitation", code: "private" };
   }
   if (response.status === 429) {
     const retryAfter = retryAfterMs(response);
+    onThrottle?.({ retryAfterMs: retryAfter });
     return {
       kind: "limitation",
       code: "rate_limited",
@@ -1033,7 +1038,7 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response);
+    if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = record(await response.json());
       signal?.throwIfAborted();
@@ -1080,7 +1085,7 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response);
+    if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = await response.json();
       signal?.throwIfAborted();

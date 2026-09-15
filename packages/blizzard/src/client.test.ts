@@ -337,6 +337,39 @@ describe("Blizzard gateway", () => {
     await expect(request).rejects.not.toThrow(/missing-private-body-marker/);
   });
 
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const gateway = createBlizzardClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        return url.hostname === "oauth.battle.net"
+          ? tokenResponse()
+          : new Response("", { status: 429, headers: { "Retry-After": "2" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await gateway
+      .getCompletedAchievements(key, AbortSignal.timeout(1_000))
+      .catch(() => undefined);
+
+    expect(throttles).toEqual([{ retryAfterMs: 2_000 }]);
+  });
+
+  it("does not require onThrottle", async () => {
+    const { gateway } = clientFor((url) =>
+      url.hostname === "oauth.battle.net"
+        ? tokenResponse()
+        : new Response("", { status: 429 })
+    );
+
+    await expect(
+      gateway.getCompletedAchievements(key, AbortSignal.timeout(1_000))
+    ).rejects.toBeDefined();
+  });
+
   it("rejects regions outside the supported same-region profile boundary", async () => {
     // Break caught: a forged key could send fingerprint data to the unsupported
     // China API rather than keeping every request in the domain's region set.

@@ -16,6 +16,7 @@ export type CreateBlizzardClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides both Blizzard hosts for deterministic local integration tests. */
   baseUrl?: string;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 }>;
 
 type AccessToken = Readonly<{
@@ -42,10 +43,16 @@ function retryAfterMs(response: Response): number | undefined {
     : undefined;
 }
 
-function responseFailure(response: Response): BlizzardFailure {
+function responseFailure(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): BlizzardFailure {
   if (response.status === 404) return { kind: "not_found" };
 
   const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
+    onThrottle?.({ retryAfterMs: retryAfter });
+  }
   return {
     kind: "transient",
     status: response.status,
@@ -218,7 +225,8 @@ export function createBlizzardClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) throw createBlizzardError(responseFailure(response));
+    if (!response.ok)
+      throw createBlizzardError(responseFailure(response, options.onThrottle));
 
     try {
       const body = valueRecord(await response.json());
@@ -263,7 +271,8 @@ export function createBlizzardClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) throw createBlizzardError(responseFailure(response));
+    if (!response.ok)
+      throw createBlizzardError(responseFailure(response, options.onThrottle));
 
     try {
       const normalized = normalize(await response.json());
