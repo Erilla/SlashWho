@@ -114,6 +114,17 @@ it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is missing", () => {
   );
 });
 
+it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is malformed", () => {
+  // Break caught: a truncated or non-hex key could pass through unvalidated
+  // and fail unpredictably at encrypt/decrypt time instead of at startup.
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "not-a-valid-key"
+    })
+  ).toThrow("invalid_credential_encryption_key");
+});
+
 it("accepts only explicit loopback or container health hosts", () => {
   // Break caught: a deploy could silently bind to an unusable or arbitrary
   // interface instead of the intended local/container health boundary.
