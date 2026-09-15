@@ -75,29 +75,64 @@ function wipe(
 }
 
 describe("applicant dossier", () => {
-  it("retains Mythic Tidebound Grotto kills inside its reviewed content window", () => {
+  it("reports a limitation when a raid kill cannot be matched to the catalogue", () => {
+    // Break caught: an unmatched raid zone used to drop the kill with no trace,
+    // so a whole tier could read as unkilled and nothing in the dossier said
+    // why. Dungeon fights are expected noise; a raid-shaped zone is not.
     const dossier = buildApplicantDossier({
       root,
       characters: [rootCharacter],
       kills: [
         kill(root, {
-          raidId: "1317",
+          raidId: "9999",
+          raidName: "Some Unreleased Raid",
+          bossId: "8888",
+          bossName: "Nobody In The Catalogue",
+          journalBossId: null,
+          killedAt: "2026-08-26T12:00:00.000Z"
+        })
+      ],
+      wipes: [],
+      completeWarcraftLogsCharacters: [root],
+      limitations: []
+    });
+
+    expect(dossier.limitations).toContainEqual(
+      expect.objectContaining({
+        source: "warcraft_logs",
+        character: root,
+        code: "unmatched_encounter"
+      })
+    );
+  });
+
+  it("retains Mythic Tidebound Grotto kills inside its reviewed content window", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      // Shaped from the real Warcraft Logs payloads for these two reports. Both
+      // are filed under the Mythic+ season zone, so the raid name arrives from
+      // the fight's own game zone and no journal id is available at all — the
+      // catalogue has to place the boss by name.
+      kills: [
+        kill(root, {
+          raidId: "2987",
           raidName: "The Tidebound Grotto",
-          bossId: "2849",
+          bossId: "3379",
           bossName: "Nymrissa Wavecaller",
-          journalBossId: "2849",
-          bossOrder: 1,
+          journalBossId: null,
+          bossOrder: 3379,
           killedAt: "2026-08-19T00:00:00.000Z",
           reportUrl:
             "https://www.warcraftlogs.com/reports/V8LFB9HjR4pZYrb6#fight=27"
         }),
         kill(root, {
-          raidId: "1317",
+          raidId: "2987",
           raidName: "The Tidebound Grotto",
-          bossId: "2849",
+          bossId: "3379",
           bossName: "Nymrissa Wavecaller",
-          journalBossId: "2849",
-          bossOrder: 1,
+          journalBossId: null,
+          bossOrder: 3379,
           killedAt: "2026-08-26T12:00:00.000Z",
           reportUrl:
             "https://www.warcraftlogs.com/reports/Aqc9zw1dg7jpmLkZ#fight=23"

@@ -1,13 +1,15 @@
 import type {
+  DiscoverCharacterJob,
   DiscoveryQueue,
   DiscoveryRun,
   Repositories,
   StoredSnapshot
 } from "@slashwho/database";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
-import { createSearchService } from "./search-service";
+import { createMeasurementScope } from "./measurement";
+import { createSearchService, recoverPendingSearches } from "./search-service";
 
 const key = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
 const characterUrl = "https://raider.io/characters/eu/silvermoon/ryii";
@@ -226,6 +228,9 @@ function policyFixture(
       },
       async listStatus() {
         return [];
+      },
+      async clearStaleCredentials() {
+        return 0;
       }
     },
     fingerprintSweeps: {
@@ -251,6 +256,7 @@ function policyFixture(
     }
   } satisfies Repositories;
 
+  const enqueuedPayloads: DiscoverCharacterJob[] = [];
   const queue: Pick<DiscoveryQueue, "enqueue"> = {
     async enqueue(payload) {
       if (enqueueFails) {
@@ -258,6 +264,7 @@ function policyFixture(
         throw new Error("queue_unavailable");
       }
       enqueued.push(payload.runId);
+      enqueuedPayloads.push(payload);
       return payload.runId;
     }
   };
@@ -271,7 +278,15 @@ function policyFixture(
     characterUrl,
     headers: new Headers({ "x-real-ip": "203.0.113.8" })
   };
-  return { service, command, enqueued, cancelled, events };
+  return {
+    service,
+    command,
+    enqueued,
+    enqueuedPayloads,
+    cancelled,
+    events,
+    repositories
+  };
 }
 
 describe("search freshness policy", () => {
@@ -415,5 +430,79 @@ describe("search freshness policy", () => {
       retryAfterSeconds: 3600
     });
     expect(fixture.enqueued).toHaveLength(0);
+  });
+});
+
+describe("job telemetry", () => {
+  it("carries a correlation id and a fresh enqueuedAt onto the discovery job", async () => {
+    // The service injects its clock (options.now) rather than reading the
+    // system clock directly, so this asserts against that injected time.
+    const fixture = policyFixture();
+
+    await fixture.service.create({
+      ...fixture.command,
+      correlationId: "corr-1"
+    });
+
+    expect(fixture.enqueuedPayloads[0]).toMatchObject({
+      correlationId: "corr-1",
+      enqueuedAt: now.toISOString()
+    });
+  });
+
+  it("enqueues without a correlation id when none is supplied", async () => {
+    const fixture = policyFixture();
+
+    await fixture.service.create(fixture.command);
+
+    expect(fixture.enqueuedPayloads[0]?.correlationId).toBeUndefined();
+    expect(typeof fixture.enqueuedPayloads[0]?.enqueuedAt).toBe("string");
+  });
+
+  it("attributes create's repository access to the scope's db bucket when supplied", async () => {
+    // Break caught: dossier_start is measured as "submission to first
+    // response," so create's own database work must land in the db bucket
+    // rather than vanishing when a scope is passed through.
+    const fixture = policyFixture();
+    const scope = createMeasurementScope();
+
+    await fixture.service.create(fixture.command, scope);
+
+    expect(scope.totals().dbCalls).toBeGreaterThan(0);
+  });
+
+  it("stamps a fresh enqueuedAt when recovering a pending search", async () => {
+    // Break caught: carrying over the original enqueuedAt would measure the
+    // wait since the first deployment's enqueue, not the recovered one.
+    const runId = "00000000-0000-4000-8000-000000000099";
+    const pendingRepositories = {
+      searchReservations: {
+        async listPending() {
+          return [{ runId, key }];
+        },
+        async markEnqueued() {}
+      }
+    } as unknown as Repositories;
+    const recovered: DiscoverCharacterJob[] = [];
+    const queue: Pick<DiscoveryQueue, "enqueue"> = {
+      async enqueue(payload) {
+        recovered.push(payload);
+        return payload.runId;
+      }
+    };
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-15T11:30:00.000Z"));
+      await recoverPendingSearches(pendingRepositories, queue);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(recovered[0]).toMatchObject({
+      runId,
+      key,
+      enqueuedAt: "2026-09-15T11:30:00.000Z"
+    });
   });
 });

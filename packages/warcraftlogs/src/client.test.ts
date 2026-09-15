@@ -167,6 +167,7 @@ function performanceRankings(
     difficulty?: number;
     characterId?: number;
     archiveAccessible?: boolean;
+    spec?: string;
   }> = {}
 ): unknown {
   const row = (rankPercent: unknown) => ({
@@ -182,6 +183,7 @@ function performanceRankings(
             id: options.characterId ?? 2101,
             name: "Sentinel",
             server: { name: "silvermoon", region: "eu" },
+            ...(options.spec === undefined ? {} : { spec: options.spec }),
             rankPercent
           }
         ]
@@ -1139,7 +1141,93 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("leaves an ambiguous specialisation unset when no class is reported", async () => {
+  it("resolves an ambiguous specialisation from the character's known class", async () => {
+    // Break caught: Warcraft Logs does not report a class on its ranks, so
+    // Frost, Holy, Protection and Restoration resolved to no icon at all. A
+    // character's class cannot change, so the caller's known class settles it.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse("performance-report");
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [{ rankPercent: 91, spec: "Frost" }] },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 3,
+      className: "Death Knight"
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(result.kills[0]?.performance.spec).toEqual({
+      name: "Frost",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/spell_deathknight_frostpresence.jpg"
+    });
+  });
+
+  it("prefers a class reported by Warcraft Logs over the caller's class", async () => {
+    // Break caught: Warcraft Logs reports `class` as a numeric class id (4 is
+    // Mage), so reading it as a name silently ignored it. The per-rank class is
+    // the more specific claim; the known class is only a fallback.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse("performance-report");
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: {
+                  data: [{ rankPercent: 91, class: 4, spec: "Frost" }]
+                },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 3,
+      className: "Death Knight"
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(result.kills[0]?.performance.spec).toEqual({
+      name: "Frost",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/spell_frost_frostbolt02.jpg"
+    });
+  });
+
+  it("leaves an ambiguous specialisation unset when no class is known", async () => {
     // Break caught: guessing a class for a shared spec name shows a confidently
     // wrong icon; omitting it is the honest outcome.
     const { client } = clientFor((url, init) => {
@@ -1177,6 +1265,81 @@ describe("Warcraft Logs gateway", () => {
       state: "available",
       percentile: 91
     });
+  });
+
+  it("enriches kills without a specialisation before ones that have it", async () => {
+    // Break caught: enrichment always walked bosses in discovery order, so a
+    // budget-limited run redid the same prefix and never reached the tail.
+    const requested: number[] = [];
+    const reports = [
+      performanceReport([26], true, "report-one", 3306),
+      performanceReport([27], false, "report-two", 3307)
+    ];
+    let reportPage = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string; encounterID?: number };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        // Only the first report yields a specialisation.
+        return body.variables?.code === "report-one"
+          ? jsonResponse(
+              performanceRankings(
+                { damage: 23, healing: 48, bossDamage: 42 },
+                {
+                  code: "report-one",
+                  fightId: 26,
+                  encounterId: 3306,
+                  spec: "Brewmaster"
+                }
+              )
+            )
+          : emptyRankingsResponse(body.variables?.code ?? "report-two");
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character0: {
+                id: 2101,
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        requested.push(body.variables?.encounterID ?? -1);
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [] },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      const report = reports[reportPage++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 8
+    });
+
+    // 3307 has no specialisation yet, so it must be enriched first.
+    expect(requested[0]).toBe(3307);
+    expect(requested).toContain(3306);
   });
 
   it("bounds concurrent character encounter ranking requests", async () => {
@@ -1425,6 +1588,99 @@ describe("Warcraft Logs gateway", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/participantReport",
           fightUrl:
             "https://www.warcraftlogs.com/reports/participantReport#fight=3"
+        }
+      ]
+    });
+  });
+
+  it("uses each fight's game zone when the report zone names another instance", async () => {
+    // Break caught: Warcraft Logs pins one zone to a whole report, and a raid
+    // night that also ran Mythic+ is filed under the dungeon season. Stamping
+    // that zone on every fight hands the dossier a non-raid zone name, and the
+    // raid kill inside the report is discarded as if it never happened.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "mixedReport",
+                        startTime: 1_706_918_400_000,
+                        zone: {
+                          id: 55,
+                          name: "Mythic+ Season 2",
+                          encounters: [{ id: 12993, journalID: 0 }]
+                        },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 23,
+                            encounterID: 3379,
+                            name: "Nymrissa Wavecaller",
+                            startTime: 3_600_000,
+                            endTime: 3_600_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 2987, name: "The Tidebound Grotto" }
+                          },
+                          {
+                            id: 25,
+                            encounterID: 3470,
+                            name: "Nek'zali the Soulcoiler",
+                            startTime: 7_200_000,
+                            endTime: 7_200_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 3004, name: "The Venomous Abyss" }
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          raidId: "2987",
+          raidName: "The Tidebound Grotto",
+          bossId: "3379",
+          bossName: "Nymrissa Wavecaller",
+          fightUrl: "https://www.warcraftlogs.com/reports/mixedReport#fight=23"
+        },
+        {
+          raidId: "3004",
+          raidName: "The Venomous Abyss",
+          bossId: "3470",
+          bossName: "Nek'zali the Soulcoiler",
+          fightUrl: "https://www.warcraftlogs.com/reports/mixedReport#fight=25"
         }
       ]
     });
@@ -2078,6 +2334,123 @@ describe("Warcraft Logs gateway", () => {
     });
     expect(JSON.stringify(result)).not.toContain("rate-limit-body-marker");
     expect(JSON.stringify(result)).not.toContain("client-secret-marker");
+  });
+
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 429, headers: { "Retry-After": "60" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([{ retryAfterMs: 60_000 }]);
+  });
+
+  it("keeps a throwing onThrottle from changing the returned limitation", async () => {
+    // Break caught: an unguarded reporting callback could turn a Warcraft Logs
+    // throttle into an unexpected_error job retry instead of the rate_limited
+    // limitation the caller handles.
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 429, headers: { "Retry-After": "60" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      onThrottle: () => {
+        throw new Error("logger-exploded-marker");
+      }
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
+    ).resolves.toMatchObject({
+      kind: "limitation",
+      code: "rate_limited",
+      retryAfterMs: 60_000
+    });
+  });
+
+  it("does not require onThrottle", async () => {
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : new Response("", { status: 429 })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
+    ).resolves.toMatchObject({ kind: "limitation", code: "rate_limited" });
+  });
+
+  it("reports a non-429 response carrying Retry-After as throttling", async () => {
+    // "Upstream asked us to back off" is the definition shared with Blizzard
+    // and Raider.IO, so a 503 with Retry-After must fire onThrottle even
+    // though it still returns the unavailable limitation, unchanged.
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 503, headers: { "Retry-After": "30" } });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([{ retryAfterMs: 30_000 }]);
+    expect(result).toEqual({ kind: "limitation", code: "unavailable" });
+  });
+
+  it("does not report a response without Retry-After as throttling", async () => {
+    const throttles: unknown[] = [];
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        return url.pathname === "/oauth/token"
+          ? token()
+          : new Response("", { status: 503 });
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      onThrottle: () => throttles.push(true)
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(throttles).toEqual([]);
   });
 
   it("stops paging at the caller's request cap", async () => {

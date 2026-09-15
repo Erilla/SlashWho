@@ -105,6 +105,8 @@ export type CreateRaiderIoClientOptions = {
   fetch: typeof globalThis.fetch;
   baseUrl: string;
   timeoutMs: number;
+  accessKey?: string;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 };
 
 function retryAfterMs(response: Response): number | undefined {
@@ -118,14 +120,40 @@ function retryAfterMs(response: Response): number | undefined {
   return Math.max(0, at - Date.now());
 }
 
-function responseFailure(response: Response): RaiderIoFailure {
+/**
+ * A reporting callback must never change what this client returns. If the
+ * logger behind `onThrottle` throws, the raw thrown value would otherwise
+ * replace the failure being built here, degrading a genuine rate limit into an
+ * unavailable upstream. Swallowed silently: there is no safe place to report a
+ * failure of the reporting path itself, and it must not become a second
+ * failure.
+ */
+function reportThrottle(
+  onThrottle:
+    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
+  retryAfterMs: number | undefined
+): void {
+  try {
+    onThrottle?.({ retryAfterMs });
+  } catch {
+    // Intentionally ignored; see above.
+  }
+}
+
+function responseFailure(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): RaiderIoFailure {
   if (response.status === 404) return { kind: "not_found" };
   // Raider.IO answers 403 for a user profile its owner has made private. That
   // is a permanent answer about visibility, not an outage, so it must never be
-  // retried as one.
+  // retried as one, and it must never fire onThrottle.
   if (response.status === 403) return { kind: "forbidden" };
 
   const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
+    reportThrottle(onThrottle, retryAfter);
+  }
   return {
     kind: "transient",
     status: response.status,
@@ -274,6 +302,8 @@ export function createRaiderIoClient(
     normalize: (value: unknown) => T,
     signal?: AbortSignal
   ): Promise<T> {
+    if (options.accessKey)
+      url.searchParams.set("access_key", options.accessKey);
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
     const requestSignal = signal
       ? AbortSignal.any([signal, timeoutSignal])
@@ -290,7 +320,9 @@ export function createRaiderIoClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) throw createRaiderIoError(responseFailure(response));
+    if (!response.ok) {
+      throw createRaiderIoError(responseFailure(response, options.onThrottle));
+    }
 
     let value: unknown;
     try {

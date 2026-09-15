@@ -54,6 +54,7 @@ const recentReportsQuery = `
               kill
               difficulty
               friendlyPlayers
+              gameZone { id name }
             }
           }
           has_more_pages
@@ -138,6 +139,7 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
+  onThrottle?(event: { retryAfterMs: number | undefined }): void;
 }>;
 
 type AccessToken = Readonly<{
@@ -211,13 +213,42 @@ function retryAfterMs(response: Response): number | undefined {
     : undefined;
 }
 
-function responseLimitation(response: Response): WarcraftLogsLimitation {
+/**
+ * A reporting callback must never change what this client returns. If the
+ * logger behind `onThrottle` throws, the raw thrown value would otherwise
+ * replace the failure being built here, degrading a genuine rate limit into an
+ * unavailable upstream. Swallowed silently: there is no safe place to report a
+ * failure of the reporting path itself, and it must not become a second
+ * failure.
+ */
+function reportThrottle(
+  onThrottle:
+    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
+  retryAfterMs: number | undefined
+): void {
+  try {
+    onThrottle?.({ retryAfterMs });
+  } catch {
+    // Intentionally ignored; see above.
+  }
+}
+
+function responseLimitation(
+  response: Response,
+  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+): WarcraftLogsLimitation {
   if (response.status === 404) return { kind: "limitation", code: "not_found" };
   if (response.status === 401 || response.status === 403) {
     return { kind: "limitation", code: "private" };
   }
+  // Upstream asking us to back off is throttling whether or not it also sent
+  // 429 — a 503 carrying Retry-After is the same signal. This affects only
+  // when onThrottle fires, never the limitation this function returns.
+  const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
+    reportThrottle(onThrottle, retryAfter);
+  }
   if (response.status === 429) {
-    const retryAfter = retryAfterMs(response);
     return {
       kind: "limitation",
       code: "rate_limited",
@@ -411,6 +442,13 @@ function firstKillReports(
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
+      // A report carries one zone, but a raid night that also ran Mythic+ is
+      // filed under the dungeon season. Only the fight knows its own instance.
+      const fightZone = fight && record(fight.gameZone);
+      const fightRaidId =
+        (fightZone && positiveInteger(fightZone.id)) ?? raidId;
+      const fightRaidName =
+        (fightZone && nonEmptyString(fightZone.name)) ?? raidName;
       if (!id || encounterId === null) {
         return schemaDrift();
       }
@@ -453,8 +491,8 @@ function firstKillReports(
       const fightUrl = `${reportUrl}#fight=${id}`;
       if (!killed) {
         const candidate: WarcraftLogsWipeEvidence = {
-          raidId: String(raidId),
-          raidName,
+          raidId: String(fightRaidId),
+          raidName: fightRaidName,
           bossId: String(encounterId),
           bossName,
           journalBossId: journalBossIds.get(encounterId) ?? null,
@@ -467,8 +505,8 @@ function firstKillReports(
         continue;
       }
       const candidate: WarcraftLogsFirstKillEvidence = {
-        raidId: String(raidId),
-        raidName,
+        raidId: String(fightRaidId),
+        raidName: fightRaidName,
         bossId: String(encounterId),
         bossName,
         journalBossId: journalBossIds.get(encounterId) ?? null,
@@ -679,7 +717,7 @@ function decodeRankingRows(
               specName === null
                 ? null
                 : {
-                    className: nonEmptyString(record(characterValue)?.class),
+                    className: reportedClassName(record(characterValue)?.class),
                     specName
                   },
             percentile:
@@ -834,7 +872,7 @@ function characterRankingPercentile(value: unknown): CharacterRanking {
       bestSpec =
         specName === null
           ? null
-          : { className: nonEmptyString(object.class), specName };
+          : { className: reportedClassName(object.class), specName };
     }
     for (const nested of Object.values(object)) visit(nested);
   };
@@ -936,19 +974,50 @@ const unambiguousSpecIconNames: ReadonlyMap<string, string> = (() => {
   );
 })();
 
+// Warcraft Logs reports a rank's class as a numeric class id, not a name.
+// Verified against `gameData { classes { id name } }`.
+const warcraftLogsClassNames: Readonly<Record<number, string>> = {
+  1: "DeathKnight",
+  2: "Druid",
+  3: "Hunter",
+  4: "Mage",
+  5: "Monk",
+  6: "Paladin",
+  7: "Priest",
+  8: "Rogue",
+  9: "Shaman",
+  10: "Warlock",
+  11: "Warrior",
+  12: "DemonHunter",
+  13: "Evoker"
+};
+
+function reportedClassName(value: unknown): string | null {
+  if (typeof value === "number") {
+    return warcraftLogsClassNames[value] ?? null;
+  }
+  return nonEmptyString(value);
+}
+
 function specKey(value: string): string {
   return value.replaceAll(/[^\p{L}\p{N}]/gu, "");
 }
 
+/**
+ * Resolves the icon for a rank's specialisation. Warcraft Logs rarely reports a
+ * class on its ranks, so `knownClassName` — the class the caller already holds
+ * for this character, which cannot change — settles the four specialisation
+ * names that two classes share.
+ */
 function specPerformance(
-  identity: SpecIdentity | null
+  identity: SpecIdentity | null,
+  knownClassName?: string
 ): WarcraftLogsPerformance["spec"] {
   if (identity === null) return null;
   const specName = specKey(identity.specName);
-  const className =
-    identity.className === null ? null : specKey(identity.className);
+  const className = specKey(identity.className ?? knownClassName ?? "");
   const iconName =
-    (className === null ? undefined : specIconNames[className]?.[specName]) ??
+    (className === "" ? undefined : specIconNames[className]?.[specName]) ??
     unambiguousSpecIconNames.get(specName);
   return iconName === undefined
     ? null
@@ -962,7 +1031,8 @@ function decodeCharacterEncounterRankings(
   value: unknown,
   key: CharacterKey,
   bossId: string,
-  difficulty: number
+  difficulty: number,
+  knownClassName?: string
 ): WarcraftLogsPerformance | WarcraftLogsLimitation {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
@@ -1002,7 +1072,7 @@ function decodeCharacterEncounterRankings(
     null
   );
   return {
-    spec: specPerformance(best?.spec ?? null),
+    spec: specPerformance(best?.spec ?? null, knownClassName),
     damage: damage.metric,
     healing: healing.metric,
     bossDamage: bossDamage.metric
@@ -1012,7 +1082,8 @@ function decodeCharacterEncounterRankings(
 function normalizedPerformance(
   rows: readonly RankingRow[],
   requestedIds: readonly number[],
-  fightIds: readonly number[]
+  fightIds: readonly number[],
+  knownClassName?: string
 ): ReadonlyMap<number, WarcraftLogsPerformance> | WarcraftLogsLimitation {
   const performance = new Map<number, WarcraftLogsPerformance>(
     fightIds.map((fightId) => [fightId, unavailablePerformance()])
@@ -1032,7 +1103,7 @@ function normalizedPerformance(
   }
   for (const [fightId, initial] of performance) {
     performance.set(fightId, {
-      spec: specPerformance(specs.get(fightId) ?? null),
+      spec: specPerformance(specs.get(fightId) ?? null, knownClassName),
       damage: values.has(`${fightId}:damage`)
         ? { state: "available", percentile: values.get(`${fightId}:damage`)! }
         : initial.damage,
@@ -1138,7 +1209,7 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response);
+    if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = record(await response.json());
       signal?.throwIfAborted();
@@ -1185,7 +1256,7 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response);
+    if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = await response.json();
       signal?.throwIfAborted();
@@ -1214,6 +1285,7 @@ export function createWarcraftLogsClient(
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      className?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1386,7 +1458,8 @@ export function createWarcraftLogsClient(
               const performance = normalizedPerformance(
                 decoded.rows,
                 requestedIds,
-                group.fightIds
+                group.fightIds,
+                options.className
               );
               if (isLimitation(performance)) {
                 parseLimitation = performance;
@@ -1411,15 +1484,31 @@ export function createWarcraftLogsClient(
     // rankings remain reserved for exact fight evidence and may be empty for
     // archived or otherwise unranked reports.
     if (kills.size > 0) {
-      const bosses = new Map<string, { bossId: string; difficulty: number }>();
+      const bosses = new Map<
+        string,
+        { bossId: string; difficulty: number; enriched: boolean }
+      >();
       for (const kill of kills.values()) {
-        bosses.set(`${kill.bossId}:${kill.difficulty}`, {
+        const bossKey = `${kill.bossId}:${kill.difficulty}`;
+        const known = bosses.get(bossKey);
+        // A boss counts as enriched only once every one of its kills carries a
+        // specialisation, so a partly-enriched boss keeps its place at the front.
+        const enriched =
+          (known?.enriched ?? true) && kill.performance.spec !== null;
+        bosses.set(bossKey, {
           bossId: kill.bossId,
-          difficulty: kill.difficulty
+          difficulty: kill.difficulty,
+          enriched
         });
       }
+      // Budgets, rate limits and timeouts cut this loop short, so spend what
+      // there is on the kills still missing a specialisation. Successive runs
+      // then converge instead of redoing the same prefix.
+      const orderedBosses = [...bosses.values()].sort(
+        (a, b) => Number(a.enriched) - Number(b.enriched)
+      );
       await forEachWithConcurrency(
-        [...bosses.values()],
+        orderedBosses,
         CHARACTER_RANKING_CONCURRENCY,
         async ({ bossId, difficulty }) => {
           const rankings = await graphql(
@@ -1444,7 +1533,8 @@ export function createWarcraftLogsClient(
             rankings.value,
             key,
             bossId,
-            difficulty
+            difficulty,
+            options.className
           );
           if (isLimitation(performance)) return;
           for (const [fightUrl, kill] of kills) {

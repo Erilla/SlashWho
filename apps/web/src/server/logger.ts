@@ -1,6 +1,11 @@
 import pino, { type DestinationStream, type Logger } from "pino";
 
-const allowedFields = new Set([
+// This Set is the sole control keeping character names, realms, URLs,
+// request bodies, and upstream payloads out of the logs. It is kept
+// module-private and mutable; only a read-only view of it (below) is ever
+// exported, so no consumer -- present or future -- can `.add`/`.delete` its
+// way into changing what this service is willing to log.
+const allowlist = new Set([
   "event",
   "correlationId",
   "endpoint",
@@ -9,14 +14,47 @@ const allowedFields = new Set([
   "count",
   // The error class only. Messages, bodies, URLs, and payloads stay out by
   // construction: any field not named here is dropped before serialization.
-  "errorName"
+  "errorName",
+  // Performance totals. Integers and booleans only -- never identity.
+  "raiderIoRankingsMs",
+  "raiderIoRankingsCalls",
+  "raiderIoRankingsMaxCallMs",
+  "raiderIoCharacterMs",
+  "raiderIoCharacterCalls",
+  "raiderIoCharacterMaxCallMs",
+  "blizzardMs",
+  "blizzardCalls",
+  "blizzardMaxCallMs",
+  "dbMs",
+  "dbCalls",
+  "dbMaxCallMs",
+  "limiterWaitMs",
+  "runJoined",
+  // upstream_throttle: a fixed literal from a closed provider set, and the
+  // upstream's own Retry-After -- never user data.
+  "provider",
+  "retryAfterMs",
+  "cacheHits",
+  "cacheMisses",
+  "cacheShared",
+  "cacheFailures",
+  "cacheCapacity"
 ]);
+
+// Exported so the logger test can assert every listed field actually
+// survives serialization, without the test's own list drifting from this
+// allowlist (a typo here or there would otherwise pass silently). Typed as
+// `ReadonlySet` -- not just a runtime freeze -- so an attempted mutation
+// from outside this module is a compile error; `allowlistedLog` below reads
+// from the same underlying `allowlist` instance, so there is only ever one
+// source of truth.
+export const allowedFields: ReadonlySet<string> = allowlist;
 
 function allowlistedLog(
   value: Record<string, unknown>
 ): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(value).filter(([key]) => allowedFields.has(key))
+    Object.entries(value).filter(([key]) => allowlist.has(key))
   );
 }
 

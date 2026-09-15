@@ -24,6 +24,8 @@ import {
   type CallerIdentity
 } from "./auth";
 import type { ApplicationConfig } from "./config";
+import { measuredRepositories } from "./measured-repositories";
+import type { MeasurementScope } from "./measurement";
 import { createRateLimiter } from "./rate-limit";
 import {
   serializeCharacterResource,
@@ -35,6 +37,7 @@ import {
 export type CreateSearchCommand = Readonly<{
   characterUrl: string;
   headers: Pick<Headers, "get">;
+  correlationId?: string;
 }>;
 
 export type CreateSearchResult =
@@ -46,6 +49,7 @@ export type CreateSearchResult =
       statusUrl: string;
       characterUrl: string;
       staleCharacter: CharacterResource | null;
+      joinedExistingRun: boolean;
     }
   | { kind: "not_found"; code: "character_not_found" | "suppressed_character" }
   | { kind: "invalid"; code: "invalid_character_url" }
@@ -69,12 +73,16 @@ const searchJobResultSchema = z
     status: z.enum(["queued", "running", "retrying"]),
     statusUrl: z.string().startsWith("/api/v1/searches/"),
     characterUrl: z.string().startsWith("/characters/"),
-    staleCharacter: characterResourceSchema.nullable()
+    staleCharacter: characterResourceSchema.nullable(),
+    joinedExistingRun: z.boolean()
   })
   .strict();
 
 export interface SearchService {
-  create(input: CreateSearchCommand): Promise<CreateSearchResult>;
+  create(
+    input: CreateSearchCommand,
+    scope?: MeasurementScope
+  ): Promise<CreateSearchResult>;
   authorizePublicRead(
     headers: Pick<Headers, "get">
   ): Promise<PublicReadAuthorizationResult>;
@@ -116,7 +124,12 @@ export async function recoverPendingSearches(
 ): Promise<number> {
   const pending = await repositories.searchReservations.listPending(limit);
   for (const payload of pending) {
-    const queueJobId = await queue.enqueue(payload);
+    // A recovered job must measure its new wait, never the original one, so
+    // enqueuedAt is stamped fresh at re-enqueue time rather than carried over.
+    const queueJobId = await queue.enqueue({
+      ...payload,
+      enqueuedAt: new Date().toISOString()
+    });
     await repositories.searchReservations.markEnqueued(
       payload.runId,
       queueJobId
@@ -188,12 +201,20 @@ export function createSearchService(options: {
       status,
       statusUrl: response.statusUrl,
       characterUrl: response.characterUrl,
-      staleCharacter
+      staleCharacter,
+      joinedExistingRun: reservation.kind === "active"
     });
   }
 
   return {
-    async create(input) {
+    async create(input, scope) {
+      // Wrapped per call, not at the composition root: this container is a
+      // process-wide singleton, so a shared wrapper could not attribute a
+      // query to the request that caused it.
+      const repositories = scope
+        ? measuredRepositories(options.repositories, scope)
+        : options.repositories;
+
       let key: CharacterKey;
       try {
         key = parseRaiderIoCharacterUrl(input.characterUrl);
@@ -217,14 +238,14 @@ export function createSearchService(options: {
       }
 
       const at = now();
-      if (await options.repositories.suppressions.isActive(key, at)) {
+      if (await repositories.suppressions.isActive(key, at)) {
         return limitedRead(caller, {
           kind: "not_found",
           code: "suppressed_character"
         });
       }
 
-      const current = await options.repositories.snapshots.getCurrent(key);
+      const current = await repositories.snapshots.getCurrent(key);
       if (
         current &&
         current.refreshedAt.getTime() >
@@ -236,10 +257,7 @@ export function createSearchService(options: {
         });
       }
 
-      if (
-        !current &&
-        (await options.repositories.negativeCache.find(key, at))
-      ) {
+      if (!current && (await repositories.negativeCache.find(key, at))) {
         return limitedRead(caller, {
           kind: "not_found",
           code: "character_not_found"
@@ -247,20 +265,18 @@ export function createSearchService(options: {
       }
 
       const searchPolicy = rateLimiter.searchReservation(caller);
-      const reservation = await options.repositories.searchReservations.reserve(
-        {
-          key,
-          callerClass: caller.callerClass,
-          callerBucketHash: searchPolicy.bucketHash,
-          limit: searchPolicy.limit,
-          expiresAt: searchPolicy.expiresAt,
-          at: searchPolicy.at,
-          freshnessCutoff: new Date(
-            searchPolicy.at.getTime() -
-              options.config.FRESHNESS_HOURS * 60 * 60 * 1_000
-          )
-        }
-      );
+      const reservation = await repositories.searchReservations.reserve({
+        key,
+        callerClass: caller.callerClass,
+        callerBucketHash: searchPolicy.bucketHash,
+        limit: searchPolicy.limit,
+        expiresAt: searchPolicy.expiresAt,
+        at: searchPolicy.at,
+        freshnessCutoff: new Date(
+          searchPolicy.at.getTime() -
+            options.config.FRESHNESS_HOURS * 60 * 60 * 1_000
+        )
+      });
       if (reservation.kind === "rate_limited") {
         const decision = rateLimiter.retryDecision(
           { allowed: false, retryAt: reservation.retryAt },
@@ -285,7 +301,7 @@ export function createSearchService(options: {
         });
       }
       if (reservation.kind === "fresh") {
-        const fresh = await options.repositories.snapshots.getCurrent(key);
+        const fresh = await repositories.snapshots.getCurrent(key);
         if (fresh) {
           return limitedRead(caller, {
             kind: "character",
@@ -294,7 +310,7 @@ export function createSearchService(options: {
         }
         return limitedRead(caller, {
           kind: "not_found",
-          code: (await options.repositories.suppressions.isActive(key, at))
+          code: (await repositories.suppressions.isActive(key, at))
             ? "suppressed_character"
             : "character_not_found"
         });
@@ -311,15 +327,15 @@ export function createSearchService(options: {
       try {
         queueJobId = await options.queue.enqueue({
           runId: reservation.run.id,
-          key
+          key,
+          correlationId: input.correlationId,
+          enqueuedAt: now().toISOString()
         });
       } catch {
-        await options.repositories.searchReservations.cancel(
-          reservation.run.id
-        );
+        await repositories.searchReservations.cancel(reservation.run.id);
         return { kind: "failed", code: "search_failed" };
       }
-      await options.repositories.searchReservations
+      await repositories.searchReservations
         .markEnqueued(reservation.run.id, queueJobId)
         .catch(() => undefined);
       return jobResult(reservation, staleCharacter);

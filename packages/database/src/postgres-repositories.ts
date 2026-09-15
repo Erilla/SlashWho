@@ -99,6 +99,9 @@ interface EvidenceRunRow {
   created_at: Date;
   started_at: Date | null;
   completed_at: Date | null;
+  wcl_client_id_encrypted: string | null;
+  wcl_client_secret_encrypted: string | null;
+  class_name: string | null;
 }
 
 interface CharacterMythicKillRow {
@@ -145,7 +148,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 7;
+const CURRENT_EVIDENCE_VERSION = 8;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -313,6 +316,16 @@ function mapRun(row: RunRow): DiscoveryRun {
   };
 }
 
+// The character's class lives on `characters`, keyed identically to an evidence
+// run. Evidence collection needs it to settle the four specialisation names that
+// two classes share, so every run projection carries it.
+function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
+  return `(SELECT c.class_name FROM characters c
+             WHERE c.region = ${alias}.region
+               AND c.realm_slug = ${alias}.realm_slug
+               AND c.normalized_name = ${alias}.normalized_name) AS class_name`;
+}
+
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
   return {
     id: row.id,
@@ -330,7 +343,10 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     errorCode: row.error_code,
     createdAt: row.created_at,
     startedAt: row.started_at,
-    completedAt: row.completed_at
+    completedAt: row.completed_at,
+    wclClientIdEncrypted: row.wcl_client_id_encrypted,
+    wclClientSecretEncrypted: row.wcl_client_secret_encrypted,
+    className: row.class_name
   };
 }
 
@@ -466,7 +482,8 @@ async function loadCompletedEvidence(
     `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
             evidence_version, attempt, limitation_code, parse_limitation_code,
             retry_after_at, error_code, created_at, started_at,
-            completed_at
+            completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+            ${evidenceRunClassNameSql()}
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
        AND status IN ('complete', 'partial')
@@ -516,6 +533,30 @@ export function isEvidenceFresh(
     completedAt >= freshnessCutoff &&
     (retryAfterAt === null || retryAfterAt > at)
   );
+}
+
+// Parse enrichment is best-effort: a re-collection that is rate limited or
+// capped re-finds the same fight with nothing attached. A fight is immutable,
+// so a value already observed for it is never worsened by a later blank.
+function mergeParseMetric(
+  previous: ReturnType<typeof parsePerformanceValues>["damage"],
+  incoming: ReturnType<typeof parsePerformanceValues>["damage"]
+): ReturnType<typeof parsePerformanceValues>["damage"] {
+  return incoming.state === "available" || previous.state !== "available"
+    ? incoming
+    : previous;
+}
+
+function mergePerformanceValues(
+  previous: ReturnType<typeof parsePerformanceValues>,
+  incoming: ReturnType<typeof parsePerformanceValues>
+): ReturnType<typeof parsePerformanceValues> {
+  return {
+    spec: incoming.spec ?? previous.spec,
+    damage: mergeParseMetric(previous.damage, incoming.damage),
+    healing: mergeParseMetric(previous.healing, incoming.healing),
+    bossDamage: mergeParseMetric(previous.bossDamage, incoming.bossDamage)
+  };
 }
 
 async function loadPositiveEvidenceForPartial(
@@ -2061,7 +2102,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
-      async reserve({ key, freshnessCutoff, at }) {
+      async reserve({ key, freshnessCutoff, at, credentials }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -2096,7 +2137,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const active = await client.query<EvidenceRunRow>(
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                    ${evidenceRunClassNameSql()}
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
                AND status IN ('queued', 'running', 'retrying')
@@ -2115,12 +2157,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-              (region, realm_slug, normalized_name)
-             VALUES ($1, $2, $3)
+              (region, realm_slug, normalized_name, wcl_client_id_encrypted, wcl_client_secret_encrypted)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                       completed_at`,
-            [key.region, key.realm, key.name]
+                       completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                       ${evidenceRunClassNameSql()}`,
+            [
+              key.region,
+              key.realm,
+              key.name,
+              credentials?.wclClientIdEncrypted ?? null,
+              credentials?.wclClientSecretEncrypted ?? null
+            ]
           );
           await client.query("COMMIT");
           return {
@@ -2140,7 +2189,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                   attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                  completed_at
+                  completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                  ${evidenceRunClassNameSql()}
            FROM character_evidence_runs WHERE id = $1`,
           [id]
         );
@@ -2160,7 +2210,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              AND status IN ('queued', 'running', 'retrying')
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                      attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                     completed_at`,
+                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                     ${evidenceRunClassNameSql()}`,
           [id, attempt]
         );
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
@@ -2237,7 +2288,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]) ?? []
           );
           for (const kill of incomingKills) {
-            kills.set(kill.kill.fightUrl, kill);
+            const stored = kills.get(kill.kill.fightUrl);
+            kills.set(
+              kill.kill.fightUrl,
+              stored === undefined
+                ? kill
+                : {
+                    kill: kill.kill,
+                    performance: mergePerformanceValues(
+                      stored.performance,
+                      kill.performance
+                    )
+                  }
+            );
           }
           const wipes = new Map<string, (typeof input.wipes)[number]>();
           for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
@@ -2302,7 +2365,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
-                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7
+                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
+                 wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
               runId,
@@ -2331,7 +2395,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           throw new RangeError("character_evidence_error_invalid");
         const result = await pool.query(
           `UPDATE character_evidence_runs
-           SET status = 'failed', error_code = $2, completed_at = now()
+           SET status = 'failed', error_code = $2, completed_at = now(),
+               wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
            WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
           [id, code]
         );
@@ -2351,7 +2416,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              run.id, run.region, run.realm_slug, run.normalized_name,
              run.queue_job_id, run.status, run.attempt, run.limitation_code,
              run.parse_limitation_code,
-             run.error_code, run.created_at, run.started_at, run.completed_at
+             run.error_code, run.created_at, run.started_at, run.completed_at,
+             run.wcl_client_id_encrypted, run.wcl_client_secret_encrypted,
+             ${evidenceRunClassNameSql("run")}
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])
              AS requested(region, realm_slug, normalized_name)
@@ -2368,6 +2435,20 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           ]
         );
         return result.rows.map(mapEvidenceRun);
+      },
+
+      async clearStaleCredentials(cutoff) {
+        if (Number.isNaN(cutoff.valueOf())) {
+          throw new RangeError("character_evidence_credential_cutoff_invalid");
+        }
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
+           WHERE created_at < $1
+             AND (wcl_client_id_encrypted IS NOT NULL OR wcl_client_secret_encrypted IS NOT NULL)`,
+          [cutoff]
+        );
+        return result.rowCount ?? 0;
       }
     },
 

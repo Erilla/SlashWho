@@ -34,8 +34,11 @@ import type {
 } from "@slashwho/raiderio";
 
 import type { ApplicationConfig } from "./config";
-import { createBoundedCache } from "./bounded-cache";
+import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
+import { encryptCredential } from "./credential-encryption";
 import { createConcurrencyLimiter } from "./concurrency";
+import { measuredRepositories } from "./measured-repositories";
+import type { MeasurementScope } from "./measurement";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -56,24 +59,51 @@ export type ConnectedCharacterRemovalResult =
   | { kind: "missing" }
   | { kind: "invalid"; code: "invalid_character_url" };
 
+/**
+ * Visitor-supplied credentials for a single dossier read. Gateways built from
+ * these keys are used directly, never through the caches shared by every other
+ * visitor, so one visitor's key budget can neither fill nor be billed for
+ * another's results.
+ */
+export type DossierGatewayOverrides = Readonly<{
+  blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
+  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
+  wclCredentials?: WclCredentials | null;
+}>;
+
+type WclCredentials = Readonly<{ clientId: string; clientSecret: string }>;
+
 export interface ApplicantDossierService {
-  start(input: CreateDossierCommand): Promise<CreateDossierResult>;
+  start(
+    input: CreateDossierCommand,
+    scope?: MeasurementScope
+  ): Promise<CreateDossierResult>;
   addConnectedCharacter(
     root: CharacterKey,
-    input: CreateDossierCommand
+    input: CreateDossierCommand,
+    scope?: MeasurementScope
   ): Promise<CreateSearchResult | { kind: "linked" | "duplicate" }>;
   readInitial(
     key: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
   ): Promise<ReadDossierResult>;
-  read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
+  read(
+    key: CharacterKey,
+    signal?: AbortSignal,
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
+  ): Promise<ReadDossierResult>;
   setConnectedCharacterExclusion(
     root: CharacterKey,
-    input: { characterUrl: string; excluded: boolean }
+    input: { characterUrl: string; excluded: boolean },
+    scope?: MeasurementScope
   ): Promise<ConnectedCharacterExclusionResult>;
   removeConnectedCharacter(
     root: CharacterKey,
-    input: { characterUrl: string }
+    input: { characterUrl: string },
+    scope?: MeasurementScope
   ): Promise<ConnectedCharacterRemovalResult>;
 }
 
@@ -139,6 +169,8 @@ function limitationMessage(
   const label =
     source === "blizzard" ? "Blizzard achievement data" : "Warcraft Logs";
   switch (code) {
+    case "unmatched_encounter":
+      return `${label} reported Mythic kills this dossier could not match to a known raid boss, so they are not shown. Other kills may exist.`;
     case "not_found":
       return `${label} has no public evidence for this character.`;
     case "private":
@@ -281,16 +313,31 @@ async function gatherCharacterEvidence(
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     freshnessCutoff: Date;
     signal?: AbortSignal;
+    wclCredentials?: WclCredentials | null;
+    encryptionKey: Buffer;
   }
 ): Promise<EvidenceResult & { gathering: boolean }> {
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
     freshnessCutoff: options.freshnessCutoff,
-    at: new Date()
+    at: new Date(),
+    credentials: options.wclCredentials
+      ? {
+          wclClientIdEncrypted: encryptCredential(
+            options.wclCredentials.clientId,
+            options.encryptionKey
+          ),
+          wclClientSecretEncrypted: encryptCredential(
+            options.wclCredentials.clientSecret,
+            options.encryptionKey
+          )
+        }
+      : null
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
-      reservation.run.id
+      reservation.run.id,
+      { enqueuedAt: new Date().toISOString() }
     );
     await options.repositories.evidence.markEnqueued(
       reservation.run.id,
@@ -548,6 +595,8 @@ async function assembleDossier(options: {
 
   freshnessCutoff: Date;
   signal: AbortSignal;
+  wclCredentials?: WclCredentials | null;
+  encryptionKey: Buffer;
 }): Promise<ContractApplicantDossier> {
   const [evidence, cuttingEdgeEvidence] = await Promise.all([
     Promise.all(
@@ -556,7 +605,9 @@ async function assembleDossier(options: {
           repositories: options.repositories,
           queue: options.queue,
           freshnessCutoff: options.freshnessCutoff,
-          signal: options.signal
+          signal: options.signal,
+          wclCredentials: options.wclCredentials,
+          encryptionKey: options.encryptionKey
         })
       )
     ),
@@ -624,6 +675,27 @@ async function assembleDossier(options: {
   });
 }
 
+// Maps a bounded cache's per-call outcome onto the requesting scope's own
+// counters. Attributed per call (via the cache's optional per-call observer
+// parameter), never broadcast to every scope sharing the process-wide cache
+// instance -- the same defect already fixed for the concurrency limiter.
+const cacheField: Record<string, string> = {
+  hit: "cacheHits",
+  miss: "cacheMisses",
+  shared: "cacheShared",
+  failure: "cacheFailures",
+  capacity: "cacheCapacity"
+};
+
+function cacheObserver(
+  scope?: MeasurementScope
+): ((event: BoundedCacheOutcome) => void) | undefined {
+  if (!scope) return undefined;
+  return (event) => {
+    scope.increment(cacheField[event] ?? "cacheFailures");
+  };
+}
+
 class RankingLookupFailure extends Error {
   constructor(
     readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
@@ -642,6 +714,7 @@ export function createApplicantDossierService(options: {
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
   config: ApplicationConfig;
+  evidenceJobCredentialEncryptionKey: Buffer;
   onCacheEvent?: (source: string, event: string) => void;
 }): ApplicantDossierService {
   const achievements = createBoundedCache<
@@ -651,6 +724,9 @@ export function createApplicantDossierService(options: {
     maxEntries: 1_000,
     observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
   });
+  // The limiter instance is shared across every request so it actually
+  // bounds the fan-out; only the wait *reporting* is per-call, via a
+  // scope-bound facade built per readInitial/read call below.
   const providerConcurrency = createConcurrencyLimiter(
     options.config.DOSSIER_PROVIDER_CONCURRENCY
   );
@@ -661,15 +737,26 @@ export function createApplicantDossierService(options: {
     maxEntries: 256,
     observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
   });
-  const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
-    async getCompletedAchievements(key, signal) {
-      signal?.throwIfAborted();
-      const result = await awaitWithAbort(
-        achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
-          const rows = await options.blizzard.getCompletedAchievements(
-            key,
-            AbortSignal.timeout(15_000)
-          );
+  // A null cache is a visitor-supplied gateway: it keeps the shared timeout,
+  // filtering and failure semantics while neither reading from nor writing to
+  // the caches every other visitor is served from.
+  //
+  // `scope` is the caller's own measurement scope, never a stored one: the
+  // gateway is rebuilt per read so provider time is attributed to the single
+  // request that spent it, whether that request uses the shared gateway or its
+  // own credentials.
+  function cuttingEdgeGateway(
+    source: Pick<BlizzardGateway, "getCompletedAchievements">,
+    cache: typeof achievements | null,
+    scope?: MeasurementScope
+  ): Pick<BlizzardGateway, "getCompletedAchievements"> {
+    return {
+      async getCompletedAchievements(key, signal) {
+        signal?.throwIfAborted();
+        const load = async () => {
+          const run = async () =>
+            source.getCompletedAchievements(key, AbortSignal.timeout(15_000));
+          const rows = scope ? await scope.time("blizzard", run) : await run();
           return rows
             .filter(
               (row) => lookupCuttingEdgeAchievement(row.achievementId) !== null
@@ -678,54 +765,132 @@ export function createApplicantDossierService(options: {
               achievementId,
               completedAt
             }));
-        }),
-        signal
-      );
-      return result;
-    }
-  };
-  const raiderio: Pick<RaiderIoGateway, "getMythicBossRankings"> = {
-    async getMythicBossRankings(boss, signal) {
-      signal?.throwIfAborted();
-      try {
-        const result = await rankings(rankingKey(boss), async () => {
-          const response = await options.raiderio.getMythicBossRankings(
-            boss,
-            AbortSignal.timeout(15_000)
-          );
+        };
+        const result = await awaitWithAbort(
+          cache
+            ? cache(
+                `${key.region}/${key.realm}/${key.name}`,
+                load,
+                cacheObserver(scope)
+              )
+            : load(),
+          signal
+        );
+        return result;
+      }
+    };
+  }
+  function rankingsGateway(
+    source: Pick<RaiderIoGateway, "getMythicBossRankings">,
+    cache: typeof rankings | null,
+    scope?: MeasurementScope
+  ): Pick<RaiderIoGateway, "getMythicBossRankings"> {
+    return {
+      async getMythicBossRankings(boss, signal) {
+        signal?.throwIfAborted();
+        const load = async () => {
+          const run = async () =>
+            source.getMythicBossRankings(boss, AbortSignal.timeout(15_000));
+          const response = scope
+            ? await scope.time("raiderIoRankings", run)
+            : await run();
           if (response.kind !== "rankings") {
-            options.onCacheEvent?.(
-              "raiderio_rankings",
-              `failure_${response.code}`
-            );
+            // The bounded cache's own "failure" outcome already reaches the
+            // requesting scope via cacheObserver(scope) below, since this
+            // loader throws. The container-level onCacheEvent notification is
+            // additive and carries the limitation code; an uncached
+            // visitor-supplied gateway reports neither, since it is not part
+            // of the shared cache at all.
+            if (cache) {
+              options.onCacheEvent?.(
+                "raiderio_rankings",
+                `failure_${response.code}`
+              );
+            }
             throw new RankingLookupFailure(response);
           }
           return response;
-        });
-        signal?.throwIfAborted();
-        return result;
-      } catch (error) {
-        signal?.throwIfAborted();
-        if (error instanceof RankingLookupFailure) return error.result;
-        return { kind: "limitation", code: "unavailable" };
+        };
+        try {
+          const result = await (cache
+            ? cache(rankingKey(boss), load, cacheObserver(scope))
+            : load());
+          signal?.throwIfAborted();
+          return result;
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (error instanceof RankingLookupFailure) return error.result;
+          return { kind: "limitation", code: "unavailable" };
+        }
       }
-    }
-  };
+    };
+  }
+  // Built per call and never captured at construction: this service is a
+  // process-wide singleton, so a wrapper held in a closure would attribute one
+  // request's queries to another request's scope. The dossier read path is the
+  // heaviest database path in the system, so without this it could never report
+  // `dbMs` at all.
+  function scopedRepositories(
+    scope?: MeasurementScope
+  ): typeof options.repositories {
+    if (!scope) return options.repositories;
+    return measuredRepositories(options.repositories, scope);
+  }
+  // Reports this call's admission wait to its own scope rather than the
+  // shared limiter's constructor-level onWait, without cloning the limiter
+  // itself: the single shared instance must keep bounding the fan-out.
+  function scopedConcurrency(
+    scope?: MeasurementScope
+  ): Pick<ReturnType<typeof createConcurrencyLimiter>, "run"> {
+    if (!scope) return providerConcurrency;
+    return {
+      run: (work) =>
+        providerConcurrency.run(work, (ms) =>
+          scope.observe("limiterWaitMs", ms)
+        )
+    };
+  }
+  // Both gateways are rebuilt for every read so that the visitor's own
+  // credentials and the caller's own measurement scope are applied together.
+  // Nothing here is cached across calls.
+  function gatewaysFor(
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
+  ) {
+    return {
+      blizzard: cuttingEdgeGateway(
+        overrides?.blizzard ?? options.blizzard,
+        overrides?.blizzard ? null : achievements,
+        scope
+      ),
+      raiderio: rankingsGateway(
+        overrides?.raiderio ?? options.raiderio,
+        overrides?.raiderio ? null : rankings,
+        scope
+      )
+    };
+  }
   return {
-    async start(input) {
+    async start(input, scope) {
+      // start does real database and queue work through search.create, so its
+      // scope is threaded through rather than discarded: this is the endpoint
+      // the research doc measures as "submission to first response".
       try {
-        return options.search.create({
+        const command = {
           ...input,
           characterUrl: toRaiderIoUrl(
             parseApplicantCharacterUrl(input.characterUrl)
           )
-        });
+        };
+        return scope
+          ? options.search.create(command, scope)
+          : options.search.create(command);
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
     },
 
-    async addConnectedCharacter(root, input) {
+    async addConnectedCharacter(root, input, scope) {
       let target: CharacterKey;
       try {
         target = parseApplicantCharacterUrl(input.characterUrl);
@@ -734,10 +899,13 @@ export function createApplicantDossierService(options: {
       }
       if (canonicalCharacterId(root) === canonicalCharacterId(target))
         return { kind: "duplicate" };
-      const result = await options.search.create({
+      const connectedCommand = {
         ...input,
         characterUrl: toRaiderIoUrl(target)
-      });
+      };
+      const result = scope
+        ? await options.search.create(connectedCommand, scope)
+        : await options.search.create(connectedCommand);
       // Record the link for a queued character too. Connections are stored by
       // key, so this survives until discovery creates the character and the
       // dossier resolves it without a second attempt. Anything other than a
@@ -751,48 +919,51 @@ export function createApplicantDossierService(options: {
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
-    async setConnectedCharacterExclusion(root, input) {
+    async setConnectedCharacterExclusion(root, input, scope) {
       let target: CharacterKey;
       try {
         target = parseApplicantCharacterUrl(input.characterUrl);
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
-      const result = await options.repositories.manualConnections.setExcluded(
-        root,
-        target,
-        input.excluded
-      );
+      const result = await scopedRepositories(
+        scope
+      ).manualConnections.setExcluded(root, target, input.excluded);
       return result === "updated" ? { kind: "updated" } : { kind: "missing" };
     },
 
-    async removeConnectedCharacter(root, input) {
+    async removeConnectedCharacter(root, input, scope) {
       let target: CharacterKey;
       try {
         target = parseApplicantCharacterUrl(input.characterUrl);
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
-      const result = await options.repositories.manualConnections.remove(
+      const result = await scopedRepositories(scope).manualConnections.remove(
         root,
         target
       );
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
-    async readInitial(key, signal) {
+    async readInitial(key, signal, overrides, scope) {
+      const repositories = scopedRepositories(scope);
       // Initial evidence precedes the worker's snapshot filter. One bounded
       // lookup prevents that preview from exposing a tournament root.
       const timeout = AbortSignal.timeout(15_000);
       const requestSignal = signal
         ? AbortSignal.any([signal, timeout])
         : timeout;
+      const profiles = overrides?.raiderio ?? options.raiderio;
       try {
         requestSignal.throwIfAborted();
-        const character = await options.raiderio.getCharacter(
-          key,
-          requestSignal
-        );
+        // The visitor's own gateway when they supplied one, the shared gateway
+        // otherwise; either way the call is timed against this read's scope.
+        const loadCharacter = async () =>
+          profiles.getCharacter(key, requestSignal);
+        const character = scope
+          ? await scope.time("raiderIoCharacter", loadCharacter)
+          : await loadCharacter();
         requestSignal.throwIfAborted();
         if (character.isTournamentProfile === true)
           return { kind: "not_ready" };
@@ -820,25 +991,25 @@ export function createApplicantDossierService(options: {
             message:
               "Linked-character research is still running; this evidence covers only the submitted character."
           },
-          repositories: options.repositories,
+          repositories,
           queue: options.queue,
-          blizzard,
-          raiderio,
-          concurrency: providerConcurrency,
+          ...gatewaysFor(overrides, scope),
+          concurrency: scopedConcurrency(scope),
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
-          signal: signal ?? new AbortController().signal
+          signal: signal ?? new AbortController().signal,
+          wclCredentials: overrides?.wclCredentials,
+          encryptionKey: options.evidenceJobCredentialEncryptionKey
         })
       };
     },
 
-    async read(key, signal) {
+    async read(key, signal, overrides, scope) {
+      const repositories = scopedRepositories(scope);
       const snapshot =
-        (await options.repositories.snapshots.getCurrent(key)) ??
-        (await options.repositories.snapshots.getCurrentContainingCharacter?.(
-          key
-        ));
+        (await repositories.snapshots.getCurrent(key)) ??
+        (await repositories.snapshots.getCurrentContainingCharacter?.(key));
       if (!snapshot) return { kind: "not_ready" };
 
       const seen = new Set(
@@ -855,7 +1026,7 @@ export function createApplicantDossierService(options: {
       type RankedSubject = DossierSubject & Readonly<{ level: number }>;
       const manual: RankedSubject[] = [];
       const excluded: RankedSubject[] = [];
-      for (const character of await options.repositories.manualConnections.list(
+      for (const character of await repositories.manualConnections.list(
         snapshot.rootKey
       )) {
         const admit = (candidate: RankedSubject, into = manual) => {
@@ -875,8 +1046,9 @@ export function createApplicantDossierService(options: {
         // An undiscovered character has no snapshot to merge yet. Its own run
         // is still queued, and the next read picks the characters up.
         if (character.pending) continue;
-        const connectedSnapshot =
-          await options.repositories.snapshots.getCurrent(character.key);
+        const connectedSnapshot = await repositories.snapshots.getCurrent(
+          character.key
+        );
         for (const discovered of connectedSnapshot?.characters ?? []) {
           admit(discovered);
         }
@@ -928,15 +1100,16 @@ export function createApplicantDossierService(options: {
                   message:
                     "Additional linked characters may exist; this dossier is not exhaustive."
                 },
-          repositories: options.repositories,
+          repositories,
           queue: options.queue,
-          blizzard,
-          raiderio,
-          concurrency: providerConcurrency,
+          ...gatewaysFor(overrides, scope),
+          concurrency: scopedConcurrency(scope),
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
-          signal: signal ?? new AbortController().signal
+          signal: signal ?? new AbortController().signal,
+          wclCredentials: overrides?.wclCredentials,
+          encryptionKey: options.evidenceJobCredentialEncryptionKey
         })
       };
     }

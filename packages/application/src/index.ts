@@ -3,11 +3,13 @@ export { createApplicantEvidenceJobHandler } from "./applicant-evidence-job-hand
 export type {
   ApplicantEvidenceJobHandler,
   ApplicantEvidenceJobHandlerOptions,
+  ApplicantEvidenceJobInput,
   ApplicantEvidenceRun,
   ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export type {
+  DiscoveryExecutionContext,
   DiscoveryJobHandler,
   DiscoveryJobHandlerOptions,
   DiscoveryLogger,
@@ -27,8 +29,13 @@ export type {
   ApplicantDossierService,
   CreateDossierCommand,
   CreateDossierResult,
+  DossierGatewayOverrides,
   ReadDossierResult
 } from "./applicant-dossier-service";
+export { createMeasurementScope } from "./measurement";
+export type { MeasurementScope } from "./measurement";
+export { measuredRepositories } from "./measured-repositories";
+export { queueWaitMs } from "./queue-wait";
 export { createRateLimiter } from "./rate-limit";
 export type {
   RateLimitDecision,
@@ -52,3 +59,8 @@ export {
   serializeJobStatus,
   serializeSnapshot
 } from "./serializers";
+export {
+  decryptCredential,
+  encryptCredential,
+  parseEncryptionKey
+} from "./credential-encryption";

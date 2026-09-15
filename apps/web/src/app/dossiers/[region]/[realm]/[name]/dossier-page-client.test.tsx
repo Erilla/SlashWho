@@ -5,6 +5,10 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
+import {
+  clearStoredCredentials,
+  writeStoredCredentials
+} from "../../../../../lib/api-credentials";
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -104,6 +108,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   push.mockReset();
+  clearStoredCredentials();
 });
 
 describe("DossierPageClient staged research", () => {
@@ -624,6 +629,57 @@ describe("DossierPageClient staged research", () => {
 
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
+  });
+
+  it("attaches stored credential headers to the dossier fetch", async () => {
+    writeStoredCredentials({
+      blizzardClientId: "id",
+      blizzardClientSecret: "secret",
+      raiderIoAccessKey: "",
+      wclClientId: "",
+      wclClientSecret: ""
+    });
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`) {
+        return Promise.resolve(Response.json(initial));
+      }
+      if (input === `/api/dossiers/jobs/${jobId}`) {
+        return Promise.resolve(
+          Response.json({
+            status: "complete",
+            error: null
+          })
+        );
+      }
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(expanded));
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(dossierPath),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-blizzard-client-id": "id",
+          "x-blizzard-client-secret": "secret"
+        })
+      })
+    );
   });
 });
 

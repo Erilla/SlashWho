@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { CharacterKey } from "@slashwho/domain";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createRaiderIoClient } from "./index";
 import recordedRankings from "./fixtures/queen-ansurek-rankings.json";
@@ -114,6 +114,36 @@ function clientFor(name: FixtureName) {
 }
 
 describe("Raider.IO gateway", () => {
+  it("attaches the configured access key to every request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          viewUserCharactersApi: {
+            name: "Foo",
+            characters: []
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    );
+    const client = createRaiderIoClient({
+      fetch: fetchMock,
+      baseUrl: "https://raider.io",
+      timeoutMs: 5_000,
+      accessKey: "test-access-key"
+    });
+
+    await client.getClaimedCharacters("Foo");
+
+    const requestedUrl = new URL(
+      (fetchMock.mock.calls[0]![0] as URL).toString()
+    );
+    expect(requestedUrl.searchParams.get("access_key")).toBe("test-access-key");
+  });
+
   it("normalizes a character and exposes its visible owner", async () => {
     await expect(
       clientFor("character-visible-owner").getCharacter(sentinel)
@@ -348,6 +378,62 @@ describe("Raider.IO gateway", () => {
       status: 429,
       retryAfterMs: 30_000
     });
+  });
+
+  it("reports a throttled response through onThrottle", async () => {
+    const throttles: Array<{ retryAfterMs: number | undefined }> = [];
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response("", { status: 429, headers: { "Retry-After": "5" } }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50,
+      onThrottle: (event) => throttles.push(event)
+    });
+
+    await client.getCharacter(sentinel).catch(() => undefined);
+
+    expect(throttles).toEqual([{ retryAfterMs: 5_000 }]);
+  });
+
+  it("keeps a throwing onThrottle from changing the thrown failure", async () => {
+    // Break caught: an unguarded reporting callback could replace RaiderIoError
+    // with whatever the logger threw, degrading a rate_limited limitation into
+    // an unavailable upstream.
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response("", { status: 429, headers: { "Retry-After": "5" } }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50,
+      onThrottle: () => {
+        throw new Error("logger-exploded-marker");
+      }
+    });
+
+    const request = client.getCharacter(sentinel);
+    await expect(request).rejects.toMatchObject({
+      kind: "transient",
+      status: 429,
+      retryAfterMs: 5_000
+    });
+    await expect(request).rejects.not.toThrow(/logger-exploded-marker/);
+  });
+
+  it("does not report a private profile as throttling", async () => {
+    // The 403 response carries Retry-After so the only thing preventing
+    // onThrottle from firing is the 403 early-return running ahead of the
+    // throttle check, not the absence of a header.
+    const throttles: unknown[] = [];
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response("", { status: 403, headers: { "Retry-After": "5" } }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50,
+      onThrottle: () => throttles.push(true)
+    });
+
+    await client.getCharacter(sentinel).catch(() => undefined);
+
+    expect(throttles).toEqual([]);
   });
 
   it("classifies a server error without exposing its body", async () => {

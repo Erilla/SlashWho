@@ -110,6 +110,27 @@ it("accepts a provider reset timestamp on a rate-limited limitation", () => {
   expect(result.success).toBe(true);
 });
 
+it("publishes the unmatched-encounter limitation the dossier can emit", () => {
+  // Break caught: the domain reports a kill it could not place in the
+  // catalogue, and a code the contract rejects turns that into a failed
+  // response rather than a visible gap.
+  const result = applicantDossierSchema.safeParse({
+    ...validDossier,
+    limitations: [
+      {
+        source: "warcraft_logs",
+        character: { region: "eu", realm: "silvermoon", name: "rinn" },
+        code: "unmatched_encounter",
+        message:
+          "Some Mythic kills could not be matched to a known raid boss, so they are not shown.",
+        observedAt: "2026-09-15T12:00:00.000Z"
+      }
+    ]
+  });
+
+  expect(result.success).toBe(true);
+});
+
 it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
   // Break caught: loose optional evidence fields could let a negative boss
   // carry stale kill data or a wipe omit its auditable report.

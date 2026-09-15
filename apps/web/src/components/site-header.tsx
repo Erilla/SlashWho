@@ -14,6 +14,9 @@ export function SiteHeader() {
         <Link href="/changelog" className="site-nav-link">
           Changelog
         </Link>
+        <Link href="/settings" className="site-nav-link">
+          Settings
+        </Link>
       </nav>
       <div className="header-identity" id={headerIdentitySlotId} />
       <div className="header-search">

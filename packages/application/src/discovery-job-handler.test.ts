@@ -349,6 +349,9 @@ function createMemoryRepositories(): Repositories {
       },
       async listStatus() {
         return [];
+      },
+      async clearStaleCredentials() {
+        return 0;
       }
     },
     fingerprintSweeps: {
@@ -884,12 +887,86 @@ describe("discovery job handler", () => {
         limitationCode: null,
         characterCount: 3,
         durationMs: 0,
+        correlationId: null,
+        queueWaitMs: null,
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
-        fingerprintDurationMs: 0
+        fingerprintDurationMs: 0,
+        dbMs: 0,
+        dbCalls: 7,
+        dbMaxCallMs: 0,
+        raiderIoMs: 0,
+        raiderIoCalls: 2,
+        raiderIoMaxCallMs: 0
       }
     ]);
+  });
+
+  it("keeps provider and database buckets disjoint within the run duration", async () => {
+    // Break caught: timing the orchestrating domain function instead of the
+    // gateway counted every suppression check and fingerprint write inside the
+    // provider buckets as well as in dbMs, so raiderIoMs + blizzardMs + dbMs
+    // could exceed durationMs and an operator comparing a discovery_run with an
+    // http_request record -- where the same field names are disjoint -- was
+    // misled about which subsystem dominated the run.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+    // Every clock read advances, so any nested region would be double counted
+    // and break the inequality rather than silently reading as zero.
+    let tick = 0;
+    // An admitted sweep is the demanding case: it runs Blizzard calls and, via
+    // the fingerprint budget callback, a database write inside one of them.
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted" as const,
+      reservationId: "reservation-disjoint",
+      requestCap: 300
+    });
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [
+      {
+        key: fingerprintKey,
+        displayName: "Fingerprint Match",
+        className: "Priest",
+        level: 80
+      }
+    ];
+    const fingerprint = achievementFingerprint();
+    blizzardGateway.fingerprints.set(keyId(rootKey), fingerprint);
+    blizzardGateway.fingerprints.set(keyId(fingerprintKey), fingerprint);
+    // The two database calls the domain functions make from inside the provider
+    // phases dominate the clock, so counting either of them in a provider
+    // bucket as well as in dbMs pushes the sum past durationMs.
+    repositories.suppressions.isActive = async () => {
+      tick += 1_000;
+      return false;
+    };
+    repositories.fingerprintSweeps.recordRequest = async () => {
+      tick += 1_000;
+    };
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway,
+      logger: {
+        info(record) {
+          records.push(record);
+        }
+      },
+      monotonic: () => tick++
+    }).execute(run.id, delivery());
+
+    const record = records[0]!;
+    const value = (field: string) => (record[field] as number | undefined) ?? 0;
+
+    expect(record.outcome).toBe("snapshot");
+    expect(value("raiderIoCalls")).toBeGreaterThan(0);
+    expect(value("blizzardCalls")).toBeGreaterThan(0);
+    expect(value("dbCalls")).toBeGreaterThan(0);
+    expect(value("durationMs")).toBeGreaterThan(0);
+    expect(
+      value("raiderIoMs") + value("blizzardMs") + value("dbMs")
+    ).toBeLessThanOrEqual(value("durationMs"));
   });
 
   it("records a failure outcome without upstream detail", async () => {
@@ -924,13 +1001,86 @@ describe("discovery job handler", () => {
         limitationCode: null,
         characterCount: 0,
         durationMs: 0,
+        correlationId: null,
+        queueWaitMs: null,
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
-        fingerprintDurationMs: 0
+        fingerprintDurationMs: 0,
+        dbMs: 0,
+        dbCalls: 4,
+        dbMaxCallMs: 0,
+        raiderIoMs: 0,
+        raiderIoCalls: 1,
+        raiderIoMaxCallMs: 0
       }
     ]);
     expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it("records correlation id, exact queue wait, and provider totals", async () => {
+    // Break caught: a job's correlation id and its time spent waiting in the
+    // queue could go unattributed even though the queue payload carries them,
+    // and Raider.IO/db time could go unattributed even though the record
+    // carries a bucket for each.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+    const enqueuedAt = new Date("2026-08-05T07:59:59.000Z");
+    const startedAt = new Date("2026-08-05T08:00:00.000Z");
+
+    const handler = createDiscoveryJobHandler({
+      repositories,
+      gateway: new MutableGateway(),
+      requestCap: 12,
+      now: () => startedAt,
+      monotonic: () => 0,
+      logger: {
+        info(record) {
+          records.push(record);
+        }
+      }
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 3,
+      signal: new AbortController().signal,
+      correlationId: "c1",
+      enqueuedAt: enqueuedAt.toISOString()
+    });
+
+    expect(records[0]).toMatchObject({
+      event: "discovery_run",
+      correlationId: "c1",
+      queueWaitMs: 1_000,
+      raiderIoCalls: 2,
+      raiderIoMs: expect.any(Number),
+      raiderIoMaxCallMs: expect.any(Number),
+      dbCalls: expect.any(Number),
+      dbMs: expect.any(Number)
+    });
+  });
+
+  it("reports a null queue wait for a job with no enqueue time", async () => {
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+
+    const handler = createDiscoveryJobHandler({
+      repositories,
+      gateway: new MutableGateway(),
+      requestCap: 12,
+      logger: {
+        info(record) {
+          records.push(record);
+        }
+      }
+    });
+
+    await handler.execute(run.id, delivery());
+
+    expect(records[0]).toMatchObject({ queueWaitMs: null });
   });
 
   it("atomically persists a trustworthy snapshot and completes the run", async () => {

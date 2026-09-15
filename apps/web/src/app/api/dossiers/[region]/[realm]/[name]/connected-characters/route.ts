@@ -17,7 +17,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_connection", async () => {
+  return withHttpRequest("dossier_connection", async (scope, correlationId) => {
     let root: ReturnType<typeof parseCharacterRoute>;
     try {
       root = parseCharacterRoute(await context.params);
@@ -30,10 +30,18 @@ export async function POST(
     );
     if (!body.success) return apiError("invalid_character_url");
     const { dossiers } = await getContainer();
-    const result = await dossiers.addConnectedCharacter(root.key, {
-      characterUrl: body.data.characterUrl,
-      headers: request.headers
-    });
+    const result = await dossiers.addConnectedCharacter(
+      root.key,
+      {
+        characterUrl: body.data.characterUrl,
+        headers: request.headers,
+        correlationId
+      },
+      scope
+    );
+    if ("joinedExistingRun" in result && result.joinedExistingRun) {
+      scope.mark("runJoined");
+    }
     if (result.kind === "linked" || result.kind === "duplicate") {
       return Response.json(
         dossierStartResponseSchema.parse({ kind: "ready" }),
@@ -85,7 +93,7 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_connection_exclusion", async () => {
+  return withHttpRequest("dossier_connection_exclusion", async (scope) => {
     const root = await resolveRoot(context);
     if ("refusal" in root) return root.refusal;
     const body = connectedCharacterExclusionRequestSchema.safeParse(
@@ -93,10 +101,14 @@ export async function PATCH(
     );
     if (!body.success) return apiError("invalid_character_url");
     const { dossiers } = await getContainer();
-    const result = await dossiers.setConnectedCharacterExclusion(root.key, {
-      characterUrl: body.data.characterUrl,
-      excluded: body.data.excluded
-    });
+    const result = await dossiers.setConnectedCharacterExclusion(
+      root.key,
+      {
+        characterUrl: body.data.characterUrl,
+        excluded: body.data.excluded
+      },
+      scope
+    );
     if (result.kind === "updated") return changed();
     if (result.kind === "invalid") return apiError(result.code);
     return apiError("connection_not_found");
@@ -107,7 +119,7 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_connection_removal", async () => {
+  return withHttpRequest("dossier_connection_removal", async (scope) => {
     const root = await resolveRoot(context);
     if ("refusal" in root) return root.refusal;
     const body = createDossierRequestSchema.safeParse(
@@ -115,9 +127,11 @@ export async function DELETE(
     );
     if (!body.success) return apiError("invalid_character_url");
     const { dossiers } = await getContainer();
-    const result = await dossiers.removeConnectedCharacter(root.key, {
-      characterUrl: body.data.characterUrl
-    });
+    const result = await dossiers.removeConnectedCharacter(
+      root.key,
+      { characterUrl: body.data.characterUrl },
+      scope
+    );
     if (result.kind === "removed") return changed();
     if (result.kind === "invalid") return apiError(result.code);
     return apiError("connection_not_found");

@@ -27,4 +27,70 @@ describe("createConcurrencyLimiter", () => {
     expect(jobs).toEqual([0, 1, 2, 3, 4]);
     expect(maximum).toBe(2);
   });
+
+  it("reports admission wait without including the work", async () => {
+    const waits: number[] = [];
+    let clock = 0;
+    const limiter = createConcurrencyLimiter(1, {
+      onWait: (ms) => waits.push(ms),
+      monotonic: () => clock
+    });
+
+    let releaseFirst: (() => void) | undefined;
+    const first = limiter.run(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+
+    const second = limiter.run(async () => {
+      clock += 100;
+    });
+
+    clock = 30;
+    await Promise.resolve(); // flush microtasks so work function starts
+    releaseFirst!();
+    await Promise.all([first, second]);
+
+    expect(waits).toEqual([0, 30]);
+  });
+
+  it("reports a zero wait when admission is immediate", async () => {
+    const waits: number[] = [];
+    const limiter = createConcurrencyLimiter(2, {
+      onWait: (ms) => waits.push(ms),
+      monotonic: () => 0
+    });
+
+    await Promise.all([
+      limiter.run(async () => undefined),
+      limiter.run(async () => undefined)
+    ]);
+
+    expect(waits).toEqual([0, 0]);
+  });
+
+  it("works without an onWait callback", async () => {
+    const limiter = createConcurrencyLimiter(1);
+    await expect(limiter.run(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("recovers from synchronous throws without deadlock", async () => {
+    const limiter = createConcurrencyLimiter(1);
+
+    // Queue a job that throws synchronously
+    const throwingJob = limiter.run(() => {
+      throw new Error("sync throw");
+    });
+
+    // Queue a second job after the throwing one
+    const followingJob = limiter.run(async () => "ok");
+
+    // First job should reject
+    await expect(throwingJob).rejects.toThrow("sync throw");
+
+    // Second job should still settle (no deadlock)
+    await expect(followingJob).resolves.toBe("ok");
+  });
 });
