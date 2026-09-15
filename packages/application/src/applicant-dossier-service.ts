@@ -36,6 +36,7 @@ import type {
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { createConcurrencyLimiter } from "./concurrency";
+import { measuredRepositories } from "./measured-repositories";
 import type { MeasurementScope } from "./measurement";
 import type {
   CreateSearchCommand,
@@ -737,6 +738,17 @@ export function createApplicantDossierService(options: {
       }
     };
   }
+  // Built per call and never captured at construction: this service is a
+  // process-wide singleton, so a wrapper held in a closure would attribute one
+  // request's queries to another request's scope. The dossier read path is the
+  // heaviest database path in the system, so without this it could never report
+  // `dbMs` at all.
+  function scopedRepositories(
+    scope?: MeasurementScope
+  ): typeof options.repositories {
+    if (!scope) return options.repositories;
+    return measuredRepositories(options.repositories, scope);
+  }
   // Reports this call's admission wait to its own scope rather than the
   // shared limiter's constructor-level onWait, without cloning the limiter
   // itself: the single shared instance must keep bounding the fan-out.
@@ -796,6 +808,7 @@ export function createApplicantDossierService(options: {
     },
 
     async readInitial(key, signal, scope) {
+      const repositories = scopedRepositories(scope);
       // Initial evidence precedes the worker's snapshot filter. One bounded
       // lookup prevents that preview from exposing a tournament root.
       const timeout = AbortSignal.timeout(15_000);
@@ -835,7 +848,7 @@ export function createApplicantDossierService(options: {
             message:
               "Linked-character research is still running; this evidence covers only the submitted character."
           },
-          repositories: options.repositories,
+          repositories,
           queue: options.queue,
           blizzard: measuredBlizzard(scope),
           raiderio: measuredRaiderIo(scope),
@@ -849,11 +862,10 @@ export function createApplicantDossierService(options: {
     },
 
     async read(key, signal, scope) {
+      const repositories = scopedRepositories(scope);
       const snapshot =
-        (await options.repositories.snapshots.getCurrent(key)) ??
-        (await options.repositories.snapshots.getCurrentContainingCharacter?.(
-          key
-        ));
+        (await repositories.snapshots.getCurrent(key)) ??
+        (await repositories.snapshots.getCurrentContainingCharacter?.(key));
       if (!snapshot) return { kind: "not_ready" };
 
       const seen = new Set(
@@ -862,7 +874,7 @@ export function createApplicantDossierService(options: {
         )
       );
       const manual = (
-        await options.repositories.manualConnections.list(snapshot.rootKey)
+        await repositories.manualConnections.list(snapshot.rootKey)
       )
         .filter((character) => !seen.has(canonicalCharacterId(character.key)))
         .map((character) => ({
@@ -906,7 +918,7 @@ export function createApplicantDossierService(options: {
                   message:
                     "Additional linked characters may exist; this dossier is not exhaustive."
                 },
-          repositories: options.repositories,
+          repositories,
           queue: options.queue,
           blizzard: measuredBlizzard(scope),
           raiderio: measuredRaiderIo(scope),

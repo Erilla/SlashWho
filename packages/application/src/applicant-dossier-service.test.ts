@@ -735,6 +735,51 @@ describe("applicant dossier service", () => {
     expect(scope.totals().dbCalls).toBeGreaterThan(0);
   });
 
+  it("measures the read path's database work and keeps the buckets disjoint", async () => {
+    // Break caught: read and readInitial passed options.repositories in raw, so
+    // the dossier endpoint -- the heaviest database path in the system, and the
+    // one the design's "database or queue?" question is about -- could never
+    // report dbMs, dbCalls or dbMaxCallMs at all.
+    const { dossiers } = fixture();
+    // Every clock read advances, so nesting would double count and break the
+    // inequality rather than silently reading as zero.
+    let tick = 0;
+    const monotonic = () => tick++;
+    const scope = createMeasurementScope(monotonic);
+
+    const startedAt = monotonic();
+    const result = await dossiers.read(root, undefined, scope);
+    const durationMs = monotonic() - startedAt;
+
+    expect(result.kind).toBe("ready");
+    const totals = scope.totals();
+    expect(totals.dbCalls).toBeGreaterThan(0);
+    expect(totals.dbMs).toBeGreaterThan(0);
+    expect(totals.dbMaxCallMs).toBeGreaterThan(0);
+
+    // Provider timing sits inside the bounded-cache loaders, which do no
+    // database work, so every measured bucket is a disjoint slice of the call.
+    const bucketMs = Object.entries(totals)
+      .filter(
+        ([field, value]) =>
+          typeof value === "number" &&
+          field.endsWith("Ms") &&
+          !field.endsWith("MaxCallMs") &&
+          field !== "limiterWaitMs"
+      )
+      .reduce((total, [, value]) => total + (value as number), 0);
+    expect(bucketMs).toBeLessThanOrEqual(durationMs);
+  });
+
+  it("measures the readInitial path's database work", async () => {
+    const { dossiers } = fixture();
+    const scope = createMeasurementScope();
+
+    await dossiers.readInitial(root, undefined, scope);
+
+    expect(scope.totals().dbCalls).toBeGreaterThan(0);
+  });
+
   it("threads the request scope through addConnectedCharacter's call to search.create", async () => {
     const { dossiers, search } = fixture();
     const scope = createMeasurementScope();
