@@ -2,7 +2,6 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 
 import { DossierCharacterNameByName } from "./dossier-character-name";
 import { parseColour } from "./parse-colour";
-import { UpstreamIcon } from "./upstream-icon-link";
 
 type KillBoss = Extract<
   ApplicantDossier["raids"][number]["bosses"][number],
@@ -14,10 +13,11 @@ type ApplicantDossierParseMetric = ApplicantDossierCharacterParses["damage"];
 type DossierParseListProps = Readonly<{
   label: string;
   parses: readonly ApplicantDossierCharacterParses[];
+  loading?: boolean;
   showCharacterName?: boolean;
 }>;
 
-type MetricName = "Damage" | "Healing" | "Boss damage";
+type MetricName = "Damage" | "Healing" | "Boss Damage";
 
 function displayPercentile(percentile: number): string {
   const truncated = Math.trunc(percentile * 10) / 10;
@@ -43,17 +43,27 @@ function ordinalSuffix(value: number): string {
 
 function ParseMetric({
   metric,
-  name
+  name,
+  loading
 }: {
   metric: ApplicantDossierParseMetric;
   name: MetricName;
+  loading: boolean;
 }) {
   if (metric.state !== "available") {
-    const label = `${name} ${metric.state.replace("_", " ")}`;
     return (
-      <span className="dossier-parse-metric dossier-parse-metric--neutral">
-        {label}
-      </span>
+      <div className="dossier-parse-metric dossier-parse-metric--neutral">
+        <span className="dossier-parse-metric-label">{name}</span>
+        {loading && metric.state === "unavailable" ? (
+          <span
+            aria-label="Loading parse"
+            className="dossier-parse-spinner"
+            role="status"
+          />
+        ) : (
+          <span className="dossier-parse-metric-value">-</span>
+        )}
+      </div>
     );
   }
 
@@ -66,8 +76,10 @@ function ParseMetric({
       rel="noopener noreferrer"
       target="_blank"
     >
-      <UpstreamIcon source="warcraft_logs" />
-      {label}
+      <span className="dossier-parse-metric-label">{name}</span>
+      <span className="dossier-parse-metric-value">
+        {displayPercentile(metric.percentile)}
+      </span>
     </a>
   );
 }
@@ -75,6 +87,7 @@ function ParseMetric({
 export function DossierParseList({
   label,
   parses,
+  loading = false,
   showCharacterName = true
 }: DossierParseListProps) {
   return (
@@ -90,13 +103,28 @@ export function DossierParseList({
               key={parse.character}
               role="group"
             >
+              <span className="dossier-parse-character-spec">
+                {parse.classSpec ?? "—"}
+              </span>
               {showCharacterName ? (
                 <DossierCharacterNameByName name={parse.character} />
               ) : null}
               <span className="dossier-parse-metrics">
-                <ParseMetric metric={parse.damage} name="Damage" />
-                <ParseMetric metric={parse.healing} name="Healing" />
-                <ParseMetric metric={parse.bossDamage} name="Boss damage" />
+                <ParseMetric
+                  loading={loading}
+                  metric={parse.damage}
+                  name="Damage"
+                />
+                <ParseMetric
+                  loading={loading}
+                  metric={parse.healing}
+                  name="Healing"
+                />
+                <ParseMetric
+                  loading={loading}
+                  metric={parse.bossDamage}
+                  name="Boss Damage"
+                />
               </span>
             </li>
           ))}

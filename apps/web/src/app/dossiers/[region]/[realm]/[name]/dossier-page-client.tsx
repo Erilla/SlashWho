@@ -447,6 +447,7 @@ export function DossierPageClient({
             />
             <DossierRaidList
               raids={dossier.raids}
+              loading={dossier.research.state === "gathering"}
               limitations={dossier.limitations}
             />
             <DossierLimitations limitations={dossier.limitations} />

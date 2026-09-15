@@ -20,6 +20,7 @@ type WipeGroup = Readonly<{
 type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
   limitations?: ApplicantDossier["limitations"];
+  loading?: boolean;
 }>;
 
 function ReportLinks({
@@ -243,7 +244,7 @@ function BossArtwork({ boss }: { boss: Boss }) {
   );
 }
 
-function KillEvidence({ boss }: { boss: KillBoss }) {
+function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
   const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
     (a, b) =>
       a.killedAt.localeCompare(b.killedAt) ||
@@ -293,8 +294,16 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
           </p>
         </div>
       </div>
-      <DossierParseList label="First kill parses" parses={firstKill.parses} />
-      <DossierParseList label="Best shown parses" parses={boss.bestParses} />
+      <DossierParseList
+        label="First kill parses"
+        loading={loading}
+        parses={firstKill.parses}
+      />
+      <DossierParseList
+        label="Best shown parses"
+        loading={loading}
+        parses={boss.bestParses}
+      />
       <details>
         <summary>View kill evidence</summary>
         <section aria-label="Kill evidence" className="dossier-evidence-list">
@@ -349,6 +358,7 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
                       <dd>
                         <DossierParseList
                           label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
+                          loading={loading}
                           parses={evidence.parses}
                           showCharacterName={false}
                         />
@@ -365,10 +375,10 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
   );
 }
 
-function BossEvidence({ boss }: { boss: Boss }) {
+function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
   switch (boss.state) {
     case "kill":
-      return <KillEvidence boss={boss} />;
+      return <KillEvidence boss={boss} loading={loading} />;
     case "wipe":
       return (
         <>
@@ -447,7 +457,8 @@ function RaidArtwork({ raid }: { raid: Raid }) {
 
 export function DossierRaidList({
   raids,
-  limitations = []
+  limitations = [],
+  loading = false
 }: DossierRaidListProps) {
   const unknown = limitations.some(
     (item) => item.code === "current_content_window_unknown"
@@ -510,7 +521,7 @@ export function DossierRaidList({
                       key={boss.bossId}
                       role="group"
                     >
-                      <BossEvidence boss={boss} />
+                      <BossEvidence boss={boss} loading={loading} />
                     </article>
                   ))}
                 </div>

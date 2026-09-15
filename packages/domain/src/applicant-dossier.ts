@@ -97,6 +97,7 @@ export type ApplicantDossierParseMetric =
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
 export type ApplicantDossierCharacterParses = Readonly<{
   character: string;
+  classSpec?: string | null;
   damage: ApplicantDossierParseMetric;
   healing: ApplicantDossierParseMetric;
   bossDamage: ApplicantDossierParseMetric;
@@ -331,6 +332,7 @@ function aggregateEventParses(
     return [
       {
         character: character.displayName,
+        ...(character.className ? { classSpec: character.className } : {}),
         damage: selectParseMetric(
           characterKills.map((kill) =>
             parseCandidate(kill, kill.performance.damage)
