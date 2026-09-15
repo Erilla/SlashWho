@@ -49,6 +49,7 @@ describe("createConcurrencyLimiter", () => {
     });
 
     clock = 30;
+    await Promise.resolve(); // flush microtasks so work function starts
     releaseFirst!();
     await Promise.all([first, second]);
 
@@ -73,5 +74,23 @@ describe("createConcurrencyLimiter", () => {
   it("works without an onWait callback", async () => {
     const limiter = createConcurrencyLimiter(1);
     await expect(limiter.run(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("recovers from synchronous throws without deadlock", async () => {
+    const limiter = createConcurrencyLimiter(1);
+
+    // Queue a job that throws synchronously
+    const throwingJob = limiter.run(() => {
+      throw new Error("sync throw");
+    });
+
+    // Queue a second job after the throwing one
+    const followingJob = limiter.run(async () => "ok");
+
+    // First job should reject
+    await expect(throwingJob).rejects.toThrow("sync throw");
+
+    // Second job should still settle (no deadlock)
+    await expect(followingJob).resolves.toBe("ok");
   });
 });

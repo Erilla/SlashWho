@@ -28,11 +28,13 @@ export function createConcurrencyLimiter(
       active += 1;
       // Reported before the work starts, so the wait never includes it.
       options.onWait?.(Math.max(0, Math.round(monotonic() - item.queuedAt)));
-      const work = item.work();
-      work.then(item.resolve, item.reject).finally(() => {
-        active -= 1;
-        drain();
-      });
+      Promise.resolve()
+        .then(item.work)
+        .then(item.resolve, item.reject)
+        .finally(() => {
+          active -= 1;
+          drain();
+        });
     }
   }
 
