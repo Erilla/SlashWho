@@ -37,9 +37,9 @@ const expectedPerformanceFields = [
   "dbCalls",
   "dbMaxCallMs",
   "limiterWaitMs",
-  "rateLimitHits",
-  "retryAfterMaxMs",
   "runJoined",
+  "provider",
+  "retryAfterMs",
   "cacheHits",
   "cacheMisses",
   "cacheShared",
@@ -100,6 +100,7 @@ it("keeps every allowlisted performance field, with its exact value, through ser
   }
 
   const booleanFields = new Set(["runJoined"]);
+  const stringFields = new Set(["provider"]);
   const record: Record<string, unknown> = {
     event: "http_request",
     correlationId: "c1",
@@ -109,7 +110,11 @@ it("keeps every allowlisted performance field, with its exact value, through ser
   };
   const expected: Record<string, unknown> = {};
   expectedPerformanceFields.forEach((field, index) => {
-    const value = booleanFields.has(field) ? true : 1_000 + index;
+    const value = booleanFields.has(field)
+      ? true
+      : stringFields.has(field)
+        ? `sentinel-${index}`
+        : 1_000 + index;
     record[field] = value;
     expected[field] = value;
   });

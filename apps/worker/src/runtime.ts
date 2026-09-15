@@ -38,12 +38,17 @@ export type WorkerRuntimeDependencies = {
   runMigrations: (pool: RuntimePool) => Promise<void>;
   createRepositories: (pool: RuntimePool) => Repositories;
   createQueue: (connectionString: string) => DiscoveryQueue;
-  createGateway: (config: WorkerConfig) => RaiderIoGateway;
+  createGateway: (
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
+  ) => RaiderIoGateway;
   createEvidenceGateway: (
-    config: WorkerConfig
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
   ) => Pick<WarcraftLogsGateway, "getFirstKillReports">;
   createFingerprintIntegration?: (
-    config: WorkerConfig
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
   ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
   createFingerprintAlertNotifier?: (
     config: WorkerConfig,
@@ -60,14 +65,21 @@ export type WorkerRuntime = {
 };
 
 export function createFingerprintIntegration(
-  config: WorkerConfig
+  config: WorkerConfig,
+  logger?: DiscoveryLogger
 ): Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint"> {
   return {
     blizzardGateway: createBlizzardClient({
       fetch: globalThis.fetch,
       clientId: config.blizzardClientId,
       clientSecret: config.blizzardClientSecret,
-      baseUrl: config.blizzardBaseUrl
+      baseUrl: config.blizzardBaseUrl,
+      onThrottle: (event) =>
+        logger?.info({
+          event: "upstream_throttle",
+          provider: "blizzard",
+          retryAfterMs: event.retryAfterMs ?? null
+        })
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,
@@ -123,17 +135,29 @@ const defaultDependencies: WorkerRuntimeDependencies = {
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
-  createGateway: (config) =>
+  createGateway: (config, logger) =>
     createRaiderIoClient({
       fetch: globalThis.fetch,
       baseUrl: config.raiderIoBaseUrl,
-      timeoutMs: config.raiderIoTimeoutMs
+      timeoutMs: config.raiderIoTimeoutMs,
+      onThrottle: (event) =>
+        logger?.info({
+          event: "upstream_throttle",
+          provider: "raiderio",
+          retryAfterMs: event.retryAfterMs ?? null
+        })
     }),
-  createEvidenceGateway: (config) =>
+  createEvidenceGateway: (config, logger) =>
     createWarcraftLogsClient({
       fetch: globalThis.fetch,
       clientId: config.warcraftLogsClientId,
-      clientSecret: config.warcraftLogsClientSecret
+      clientSecret: config.warcraftLogsClientSecret,
+      onThrottle: (event) =>
+        logger?.info({
+          event: "upstream_throttle",
+          provider: "warcraftlogs",
+          retryAfterMs: event.retryAfterMs ?? null
+        })
     }),
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
@@ -181,9 +205,11 @@ export async function createWorkerRuntime(
     const repositories = dependencies.createRepositories(pool);
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
-    const gateway = dependencies.createGateway(config);
-    const fingerprintIntegration =
-      dependencies.createFingerprintIntegration?.(config);
+    const gateway = dependencies.createGateway(config, logger);
+    const fingerprintIntegration = dependencies.createFingerprintIntegration?.(
+      config,
+      logger
+    );
     const fingerprintAlertNotifier =
       dependencies.createFingerprintAlertNotifier?.(config, logger);
     const handler = dependencies.createHandler({
@@ -207,7 +233,7 @@ export async function createWorkerRuntime(
     if (!evidence) throw new Error("character_evidence_repository_unavailable");
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
-      warcraftLogs: dependencies.createEvidenceGateway(config),
+      warcraftLogs: dependencies.createEvidenceGateway(config, logger),
       requestCap: config.evidenceRequestCap,
       parseRequestCap: config.evidenceParseRequestCap
     });
@@ -276,7 +302,11 @@ export async function createWorkerRuntime(
       await recoverPendingSearches(repositories, initializedQueue);
     });
     await initializedQueue.work(async (payload, context) => {
-      await handler.execute(payload.runId, context);
+      await handler.execute(payload.runId, {
+        ...context,
+        correlationId: payload.correlationId,
+        enqueuedAt: payload.enqueuedAt
+      });
     });
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
       await evidenceHandler.execute(payload.runId, context);

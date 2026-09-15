@@ -29,9 +29,11 @@ const allowlist = new Set([
   "dbCalls",
   "dbMaxCallMs",
   "limiterWaitMs",
-  "rateLimitHits",
-  "retryAfterMaxMs",
   "runJoined",
+  // upstream_throttle: a fixed literal from a closed provider set, and the
+  // upstream's own Retry-After -- never user data.
+  "provider",
+  "retryAfterMs",
   "cacheHits",
   "cacheMisses",
   "cacheShared",

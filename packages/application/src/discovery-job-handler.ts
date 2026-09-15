@@ -1,4 +1,8 @@
-import type { DiscoveryWorkContext, Repositories } from "@slashwho/database";
+import type {
+  DiscoveryWorkContext,
+  JobTelemetry,
+  Repositories
+} from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
@@ -10,6 +14,17 @@ import {
 } from "@slashwho/domain";
 
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
+import { measuredRepositories } from "./measured-repositories";
+import { createMeasurementScope } from "./measurement";
+import { queueWaitMs } from "./queue-wait";
+
+/**
+ * The work context a caller passes to `execute`. Widened with `JobTelemetry`
+ * so a live queue delivery can carry the correlation id and enqueue time
+ * through to the emitted record; a resumed run (no context supplied) simply
+ * has neither.
+ */
+export type DiscoveryExecutionContext = DiscoveryWorkContext & JobTelemetry;
 
 export type DiscoveryLogger = {
   info(value: Record<string, unknown>): void;
@@ -70,11 +85,13 @@ type DiscoveryRunRecord = {
   limitationCode: string | null;
   characterCount: number;
   durationMs: number;
+  correlationId: string | null;
+  queueWaitMs: number | null;
   fingerprintQueueWaitMs: number | null;
   fingerprintReservedRequests: number;
   fingerprintUsedRequests: number;
   fingerprintDurationMs: number;
-};
+} & Record<string, unknown>;
 
 export type RetryableDiscoveryError = Error & {
   retryable: true;
@@ -164,7 +181,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   return {
     async execute(
       runId: string,
-      workContext?: DiscoveryWorkContext
+      workContext?: DiscoveryExecutionContext
     ): Promise<void> {
       let context = workContext;
       if (!context) {
@@ -184,6 +201,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       if (!run) return;
 
       const observedAt = monotonic();
+      const scope = createMeasurementScope(monotonic);
+      const repositories = measuredRepositories(options.repositories, scope);
       const record: DiscoveryRunRecord = {
         event: "discovery_run",
         runId,
@@ -196,6 +215,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         limitationCode: null,
         characterCount: 0,
         durationMs: 0,
+        correlationId: context.correlationId ?? null,
+        queueWaitMs: queueWaitMs(context.enqueuedAt, new Date()),
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
@@ -210,19 +231,16 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           maxJobLifetimeMs
         ) {
           record.outcome = "lifetime_exceeded";
-          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
 
-        let outcome: DiscoveryOutcome = await discoverCharacter(
-          run.rootKey,
-          options.gateway,
-          {
+        let outcome: DiscoveryOutcome = await scope.time("raiderIo", () =>
+          discoverCharacter(run.rootKey, options.gateway, {
             requestCap: options.requestCap,
-            isSuppressed: (key) =>
-              options.repositories.suppressions.isActive(key),
+            isSuppressed: (key) => repositories.suppressions.isActive(key),
             signal: context.signal
-          }
+          })
         );
         context.signal.throwIfAborted();
         const persistenceTime = now();
@@ -231,7 +249,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           maxJobLifetimeMs
         ) {
           record.outcome = "lifetime_exceeded";
-          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
 
@@ -243,7 +261,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           if (fingerprint && blizzardGateway) {
             const admissionTime = now();
             const admission =
-              await options.repositories.fingerprintSweeps.requestAdmission({
+              await repositories.fingerprintSweeps.requestAdmission({
                 runId,
                 key: run.rootKey,
                 requestCap: fingerprint.requestCap,
@@ -307,7 +325,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               }
               const releaseReservation = async () => {
                 if (!reservationActive) return;
-                await options.repositories.fingerprintSweeps.release(
+                await repositories.fingerprintSweeps.release(
                   admission.reservationId,
                   now()
                 );
@@ -319,7 +337,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   {
                     requestCap: admission.requestCap,
                     recordRequest: async () => {
-                      await options.repositories.fingerprintSweeps.recordRequest(
+                      await repositories.fingerprintSweeps.recordRequest(
                         admission.reservationId,
                         1,
                         now()
@@ -337,18 +355,16 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     }
                   }
                 );
-                const sweep = await discoverFingerprintMatches(
-                  run.rootKey,
-                  adaptedGateway,
-                  {
+                const sweep = await scope.time("blizzard", () =>
+                  discoverFingerprintMatches(run.rootKey, adaptedGateway, {
                     requestCap: Number.MAX_SAFE_INTEGER,
                     minimumCommon: fingerprint.minimumCommon,
                     minimumIdenticalPercent:
                       fingerprint.minimumIdenticalPercent,
                     isSuppressed: (key) =>
-                      options.repositories.suppressions.isActive(key),
+                      repositories.suppressions.isActive(key),
                     signal: context.signal
-                  }
+                  })
                 );
 
                 if (sweep.kind === "failure") {
@@ -364,10 +380,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   ) {
                     record.outcome = "lifetime_exceeded";
                     await releaseReservation();
-                    await options.repositories.runs.fail(
-                      runId,
-                      "upstream_unavailable"
-                    );
+                    await repositories.runs.fail(runId, "upstream_unavailable");
                     return;
                   }
                   const limitationCode =
@@ -395,7 +408,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
                   record.characterCount = characters.length;
-                  await options.repositories.snapshots.createAndFinishFingerprintSweep(
+                  await repositories.snapshots.createAndFinishFingerprintSweep(
                     {
                       runId,
                       rootKey: run.rootKey,
@@ -439,7 +452,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             record.limitationCode =
               outcome.state === "partial" ? outcome.limitationCode : null;
             record.characterCount = outcome.characters.length;
-            await options.repositories.snapshots.create(
+            await repositories.snapshots.create(
               {
                 runId,
                 rootKey: run.rootKey,
@@ -459,7 +472,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           record.outcome = outcome.code;
           if (outcome.code === "character_not_found") {
             context.signal.throwIfAborted();
-            await options.repositories.negativeCache.putAndFailRun(
+            await repositories.negativeCache.putAndFailRun(
               run.rootKey,
               new Date(persistenceTime.getTime() + negativeCacheTtlMs),
               runId,
@@ -467,7 +480,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             );
             return;
           }
-          await options.repositories.runs.fail(runId, "search_failed");
+          await repositories.runs.fail(runId, "search_failed");
           return;
         }
 
@@ -486,11 +499,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
         if (!schedule) {
           record.outcome = "upstream_unavailable";
-          await options.repositories.runs.fail(runId, "upstream_unavailable");
+          await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
         record.outcome = "retrying";
-        await options.repositories.runs.markRetrying(
+        await repositories.runs.markRetrying(
           runId,
           context.attempt,
           schedule.nextRetryAt
@@ -507,7 +520,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         if (isRetryableDiscoveryError(error)) throw error;
         record.outcome = "unexpected_error";
 
-        const current = await options.repositories.runs.find(runId);
+        const current = await repositories.runs.find(runId);
         if (current?.status === "complete" || current?.status === "failed") {
           if (current.status === "complete") return;
           throw error;
@@ -522,12 +535,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
         if (!schedule) {
           record.outcome = "search_failed";
-          await options.repositories.runs.fail(runId, "search_failed");
+          await repositories.runs.fail(runId, "search_failed");
           throw error;
         }
 
         record.outcome = "retrying";
-        await options.repositories.runs.markRetrying(
+        await repositories.runs.markRetrying(
           runId,
           context.attempt,
           schedule.nextRetryAt
@@ -536,7 +549,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       } finally {
         if (options.logger) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
-          options.logger.info({ ...record });
+          options.logger.info({ ...record, ...scope.totals() });
         }
       }
     }

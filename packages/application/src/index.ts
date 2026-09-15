@@ -8,6 +8,7 @@ export type {
 } from "./applicant-evidence-job-handler";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export type {
+  DiscoveryExecutionContext,
   DiscoveryJobHandler,
   DiscoveryJobHandlerOptions,
   DiscoveryLogger,

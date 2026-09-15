@@ -878,10 +878,18 @@ describe("discovery job handler", () => {
         limitationCode: null,
         characterCount: 3,
         durationMs: 0,
+        correlationId: null,
+        queueWaitMs: null,
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
-        fingerprintDurationMs: 0
+        fingerprintDurationMs: 0,
+        dbMs: 0,
+        dbCalls: 6,
+        dbMaxCallMs: 0,
+        raiderIoMs: 0,
+        raiderIoCalls: 1,
+        raiderIoMaxCallMs: 0
       }
     ]);
   });
@@ -918,13 +926,76 @@ describe("discovery job handler", () => {
         limitationCode: null,
         characterCount: 0,
         durationMs: 0,
+        correlationId: null,
+        queueWaitMs: null,
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
-        fingerprintDurationMs: 0
+        fingerprintDurationMs: 0,
+        dbMs: 0,
+        dbCalls: 3,
+        dbMaxCallMs: 0,
+        raiderIoMs: 0,
+        raiderIoCalls: 1,
+        raiderIoMaxCallMs: 0
       }
     ]);
     expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it("records correlation, queue wait, and provider totals", async () => {
+    // Break caught: a job's correlation id and its time spent waiting in the
+    // queue could go unattributed even though the queue payload carries them.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+
+    const handler = createDiscoveryJobHandler({
+      repositories,
+      gateway: new MutableGateway(),
+      requestCap: 12,
+      logger: {
+        info(record) {
+          records.push(record);
+        }
+      }
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 3,
+      signal: new AbortController().signal,
+      correlationId: "c1",
+      enqueuedAt: new Date(Date.now() - 1_000).toISOString()
+    });
+
+    expect(records[0]).toMatchObject({
+      event: "discovery_run",
+      correlationId: "c1"
+    });
+    expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(900);
+  });
+
+  it("reports a null queue wait for a job with no enqueue time", async () => {
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+
+    const handler = createDiscoveryJobHandler({
+      repositories,
+      gateway: new MutableGateway(),
+      requestCap: 12,
+      now: () => new Date("2026-08-05T08:00:00.000Z"),
+      logger: {
+        info(record) {
+          records.push(record);
+        }
+      }
+    });
+
+    await handler.execute(run.id, delivery());
+
+    expect(records[0]).toMatchObject({ queueWaitMs: null });
   });
 
   it("atomically persists a trustworthy snapshot and completes the run", async () => {
