@@ -208,6 +208,13 @@ export async function createWorkerRuntime(
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
       warcraftLogs: dependencies.createEvidenceGateway(config),
+      createWarcraftLogsGateway: (credentials) =>
+        createWarcraftLogsClient({
+          fetch: globalThis.fetch,
+          clientId: credentials.clientId,
+          clientSecret: credentials.clientSecret
+        }),
+      decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: config.evidenceRequestCap,
       parseRequestCap: config.evidenceParseRequestCap
     });

@@ -431,6 +431,8 @@ describe("worker runtime", () => {
 
     expect(handlerOptions).toMatchObject({
       warcraftLogs,
+      createWarcraftLogsGateway: expect.any(Function),
+      decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: 500,
       parseRequestCap: 8,
       evidence: (
