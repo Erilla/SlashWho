@@ -14,7 +14,7 @@ export type PerformanceSummary = {
   count: number;
   fields: Record<string, FieldSummary>;
   outcomes: Record<string, number>;
-  providers?: Record<string, number>;
+  providers: Record<string, number>;
 };
 
 export function percentile(samples: readonly number[], target: number): number {
@@ -42,13 +42,22 @@ export function summarize(
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let record: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      record = JSON.parse(trimmed) as Record<string, unknown>;
+      parsed = JSON.parse(trimmed);
     } catch {
       // Captured streams interleave non-JSON platform output. Skip it.
       continue;
     }
+    // Reject null, arrays, primitives, and other non-objects
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      continue;
+    }
+    const record = parsed as Record<string, unknown>;
     if (record.event !== event) continue;
     count += 1;
 
@@ -76,12 +85,7 @@ export function summarize(
     };
   }
 
-  const result: PerformanceSummary = { event, count, fields, outcomes };
-  if (Object.keys(providers).length > 0) {
-    result.providers = providers;
-  }
-
-  return result;
+  return { event, count, fields, outcomes, providers };
 }
 
 async function main(): Promise<void> {

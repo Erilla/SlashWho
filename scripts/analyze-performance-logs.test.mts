@@ -90,8 +90,110 @@ describe("summarize", () => {
     });
   });
 
-  it("has empty outcomes and providers for upstream_throttle", () => {
+  it("has empty outcomes and empty providers for upstream_throttle", () => {
     const summary = summarize(lines, "upstream_throttle");
     expect(summary.outcomes).toEqual({});
+    expect(summary.providers).toEqual({
+      "raider.io": 1,
+      "warcraftlogs.com": 1
+    });
+  });
+
+  it("skips bare null without throwing", () => {
+    const testLines = [
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 100
+      }),
+      "null",
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 200
+      })
+    ];
+    expect(() => summarize(testLines, "http_request")).not.toThrow();
+    expect(summarize(testLines, "http_request").count).toBe(2);
+  });
+
+  it("skips JSON arrays without throwing", () => {
+    const testLines = [
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 100
+      }),
+      "[1,2]",
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 200
+      })
+    ];
+    expect(() => summarize(testLines, "http_request")).not.toThrow();
+    expect(summarize(testLines, "http_request").count).toBe(2);
+  });
+
+  it("skips JSON strings without throwing", () => {
+    const testLines = [
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 100
+      }),
+      '"just a string"',
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 200
+      })
+    ];
+    expect(() => summarize(testLines, "http_request")).not.toThrow();
+    expect(summarize(testLines, "http_request").count).toBe(2);
+  });
+
+  it("skips JSON numbers without throwing", () => {
+    const testLines = [
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 100
+      }),
+      "42",
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 200
+      })
+    ];
+    expect(() => summarize(testLines, "http_request")).not.toThrow();
+    expect(summarize(testLines, "http_request").count).toBe(2);
+  });
+
+  it("skips truncated JSON without throwing", () => {
+    const testLines = [
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 100
+      }),
+      '{"event":"http_request","duration',
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 200
+      })
+    ];
+    expect(() => summarize(testLines, "http_request")).not.toThrow();
+    expect(summarize(testLines, "http_request").count).toBe(2);
+  });
+
+  it("skips records with no event field without throwing", () => {
+    const testLines = [
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 100
+      }),
+      JSON.stringify({
+        durationMs: 150
+      }),
+      JSON.stringify({
+        event: "http_request",
+        durationMs: 200
+      })
+    ];
+    expect(() => summarize(testLines, "http_request")).not.toThrow();
+    expect(summarize(testLines, "http_request").count).toBe(2);
   });
 });
