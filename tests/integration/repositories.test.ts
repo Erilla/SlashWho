@@ -42,6 +42,7 @@ function observation(
 function mythicKill(
   overrides: Partial<CharacterMythicKillInput> = {}
 ): CharacterMythicKillInput {
+  const { performance: overridePerformance, ...restOverrides } = overrides;
   return {
     raidId: "42",
     raidName: "Nerub-ar Palace",
@@ -56,11 +57,13 @@ function mythicKill(
     guild: { name: "Example Guild", realm: "silvermoon" },
     historicWorldRank: null,
     performance: {
+      spec: null,
       damage: { state: "unavailable" },
       healing: { state: "unavailable" },
-      bossDamage: { state: "unavailable" }
+      bossDamage: { state: "unavailable" },
+      ...overridePerformance
     },
-    ...overrides
+    ...restOverrides
   };
 }
 
@@ -617,6 +620,7 @@ describe("PostgreSQL repositories", () => {
     const kill = completed?.kills[0];
     if (!kill) throw new Error("published_kill_missing");
     expect(kill.performance).toEqual({
+      spec: null,
       damage: { state: "available", percentile: 0 },
       healing: { state: "available", percentile: 0 },
       bossDamage: { state: "available", percentile: 0 }
