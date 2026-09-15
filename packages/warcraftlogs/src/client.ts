@@ -54,6 +54,7 @@ const recentReportsQuery = `
               kill
               difficulty
               friendlyPlayers
+              gameZone { id name }
             }
           }
           has_more_pages
@@ -411,6 +412,13 @@ function firstKillReports(
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
+      // A report carries one zone, but a raid night that also ran Mythic+ is
+      // filed under the dungeon season. Only the fight knows its own instance.
+      const fightZone = fight && record(fight.gameZone);
+      const fightRaidId =
+        (fightZone && positiveInteger(fightZone.id)) ?? raidId;
+      const fightRaidName =
+        (fightZone && nonEmptyString(fightZone.name)) ?? raidName;
       if (!id || encounterId === null) {
         return schemaDrift();
       }
@@ -453,8 +461,8 @@ function firstKillReports(
       const fightUrl = `${reportUrl}#fight=${id}`;
       if (!killed) {
         const candidate: WarcraftLogsWipeEvidence = {
-          raidId: String(raidId),
-          raidName,
+          raidId: String(fightRaidId),
+          raidName: fightRaidName,
           bossId: String(encounterId),
           bossName,
           journalBossId: journalBossIds.get(encounterId) ?? null,
@@ -467,8 +475,8 @@ function firstKillReports(
         continue;
       }
       const candidate: WarcraftLogsFirstKillEvidence = {
-        raidId: String(raidId),
-        raidName,
+        raidId: String(fightRaidId),
+        raidName: fightRaidName,
         bossId: String(encounterId),
         bossName,
         journalBossId: journalBossIds.get(encounterId) ?? null,

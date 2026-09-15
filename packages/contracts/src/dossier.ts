@@ -158,7 +158,8 @@ export const dossierLimitationSchema = z
       "parse_unavailable",
       "parse_schema_drift",
       "current_content_window_unknown",
-      "current_content_evidence_withheld"
+      "current_content_evidence_withheld",
+      "unmatched_encounter"
     ]),
     message: z.string().min(1),
     observedAt: z.iso.datetime(),

@@ -1430,6 +1430,99 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("uses each fight's game zone when the report zone names another instance", async () => {
+    // Break caught: Warcraft Logs pins one zone to a whole report, and a raid
+    // night that also ran Mythic+ is filed under the dungeon season. Stamping
+    // that zone on every fight hands the dossier a non-raid zone name, and the
+    // raid kill inside the report is discarded as if it never happened.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "mixedReport",
+                        startTime: 1_706_918_400_000,
+                        zone: {
+                          id: 55,
+                          name: "Mythic+ Season 2",
+                          encounters: [{ id: 12993, journalID: 0 }]
+                        },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 23,
+                            encounterID: 3379,
+                            name: "Nymrissa Wavecaller",
+                            startTime: 3_600_000,
+                            endTime: 3_600_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 2987, name: "The Tidebound Grotto" }
+                          },
+                          {
+                            id: 25,
+                            encounterID: 3470,
+                            name: "Nek'zali the Soulcoiler",
+                            startTime: 7_200_000,
+                            endTime: 7_200_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 3004, name: "The Venomous Abyss" }
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          raidId: "2987",
+          raidName: "The Tidebound Grotto",
+          bossId: "3379",
+          bossName: "Nymrissa Wavecaller",
+          fightUrl: "https://www.warcraftlogs.com/reports/mixedReport#fight=23"
+        },
+        {
+          raidId: "3004",
+          raidName: "The Venomous Abyss",
+          bossId: "3470",
+          bossName: "Nek'zali the Soulcoiler",
+          fightUrl: "https://www.warcraftlogs.com/reports/mixedReport#fight=25"
+        }
+      ]
+    });
+  });
+
   it("emits only participant-attributed Mythic wipes beside verified kills", async () => {
     // Break caught: treating every unsuccessful fight in a character report as
     // that character's Mythic wipe would create false applicant evidence.
