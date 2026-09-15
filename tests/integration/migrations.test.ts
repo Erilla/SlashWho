@@ -86,9 +86,9 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-3).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 8, tag: "0008_character_mythic_wipe_fights" },
       { idx: 9, tag: "0009_character_kill_parses" },
-      { idx: 10, tag: "0010_manual_dossier_connections" }
+      { idx: 10, tag: "0010_manual_dossier_connections" },
+      { idx: 11, tag: "0012_evidence_retry_after" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

@@ -26,6 +26,7 @@ export type ApplicantEvidenceStore = {
       state: "complete" | "partial";
       limitationCode: WarcraftLogsLimitationCode | null;
       parseLimitationCode: WarcraftLogsLimitationCode | null;
+      retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       completedAt: Date;
@@ -93,10 +94,15 @@ export function createApplicantEvidenceJobHandler(
       activeContext.signal.throwIfAborted();
 
       if (response.kind === "limitation") {
+        const retryAfterAt =
+          response.retryAfterMs === undefined
+            ? undefined
+            : new Date(now().getTime() + response.retryAfterMs);
         await options.evidence.publish(run.id, {
           state: "partial",
           limitationCode: response.code,
           parseLimitationCode: null,
+          ...(retryAfterAt ? { retryAfterAt } : {}),
           kills: [],
           wipes: [],
           completedAt: now()
@@ -104,10 +110,17 @@ export function createApplicantEvidenceJobHandler(
         return;
       }
 
+      const retryAfterMs = Math.max(
+        response.limitation?.retryAfterMs ?? 0,
+        response.parseLimitation?.retryAfterMs ?? 0
+      );
       await options.evidence.publish(run.id, {
         state: response.limitation ? "partial" : "complete",
         limitationCode: response.limitation?.code ?? null,
         parseLimitationCode: response.parseLimitation?.code ?? null,
+        ...(retryAfterMs > 0
+          ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
+          : {}),
         kills: response.kills.map(toCharacterMythicKillInput),
         wipes: response.wipes,
         completedAt: now()

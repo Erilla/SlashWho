@@ -764,7 +764,8 @@ describe("applicant dossier service", () => {
       const { dossiers, raiderio } = fixture();
       vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
         kind: "limitation",
-        code
+        code,
+        ...(code === "rate_limited" ? { retryAfterMs: 90_000 } : {})
       });
       await expect(dossiers.read(root)).resolves.toMatchObject({
         kind: "ready",
@@ -776,7 +777,10 @@ describe("applicant dossier service", () => {
             expect.objectContaining({
               source: "raiderio",
               code: code === "schema_drift" ? "schema_changed" : code,
-              message: expect.stringContaining("boss world ranks")
+              message: expect.stringContaining("boss world ranks"),
+              ...(code === "rate_limited"
+                ? { retryAt: expect.any(String) }
+                : {})
             })
           ]
         }

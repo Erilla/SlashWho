@@ -91,6 +91,23 @@ const validDossier = {
   ]
 };
 
+it("accepts a provider reset timestamp on a rate-limited limitation", () => {
+  const result = applicantDossierSchema.safeParse({
+    ...validDossier,
+    limitations: [
+      {
+        source: "raiderio",
+        character: null,
+        code: "rate_limited",
+        message: "Raider.IO is temporarily rate limited.",
+        retryAt: "2026-09-15T12:05:00.000Z"
+      }
+    ]
+  });
+
+  expect(result.success).toBe(true);
+});
+
 it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
   // Break caught: loose optional evidence fields could let a negative boss
   // carry stale kill data or a wipe omit its auditable report.

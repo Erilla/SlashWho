@@ -153,6 +153,7 @@ export interface CharacterEvidenceRun {
   attempt: number;
   limitationCode: string | null;
   parseLimitationCode: string | null;
+  retryAfterAt: Date | null;
   errorCode: string | null;
   createdAt: Date;
   startedAt: Date | null;
@@ -246,6 +247,7 @@ export interface EvidenceRepository {
       state: "complete" | "partial";
       limitationCode: string | null;
       parseLimitationCode: string | null;
+      retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly CharacterMythicWipeInput[];
       completedAt: Date;
