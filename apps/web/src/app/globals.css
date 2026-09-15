@@ -120,6 +120,10 @@ a {
   margin-top: 0.2rem;
 }
 
+.header-search .form-error:empty {
+  display: none;
+}
+
 .header-search .search-input {
   min-height: 2.8rem;
 }
@@ -301,6 +305,9 @@ a {
 }
 
 .search-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 2.8rem;
   min-height: 3.35rem;
   border: 1px solid var(--accent);
