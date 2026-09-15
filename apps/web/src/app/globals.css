@@ -451,6 +451,11 @@ a {
   padding-top: 1rem;
 }
 
+.dossier-character-add-control.search-input,
+.dossier-character-add-control.search-button {
+  min-height: 2.8rem;
+}
+
 .dossier-scroll-hint {
   display: none;
 }
@@ -1118,10 +1123,6 @@ a {
   width: 1rem;
   height: 1rem;
   fill: currentColor;
-}
-
-.upstream-link-icon--raiderio path:last-child {
-  fill: var(--surface-raised);
 }
 
 .dossier-report-links {

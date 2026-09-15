@@ -33,6 +33,10 @@ export type GeneratedJournalRaid = Readonly<{
   }>[];
 }>;
 
+// Blizzard exposes this Dragonflight world-boss container as a Mythic RAID
+// Journal instance, but it is not a supported raid for dossier evidence.
+const excludedJournalRaidIds = new Set([1205]);
+
 export type FetchJournalRaidsOptions = Readonly<{
   fetch: typeof globalThis.fetch;
   accessToken: string;
@@ -63,6 +67,10 @@ export function normalizeJournalRaid(
   value: unknown
 ): GeneratedJournalRaid | null {
   const raid = value as JournalRaid;
+  const journalRaidId = positiveInteger(raid.id);
+  if (journalRaidId !== null && excludedJournalRaidIds.has(journalRaidId)) {
+    return null;
+  }
   const category = record(raid.category);
   if (category?.type !== "RAID" || !Array.isArray(raid.modes)) return null;
   const hasMythicMode = raid.modes.some((value) => {
@@ -71,7 +79,6 @@ export function normalizeJournalRaid(
   });
   if (!hasMythicMode || !Array.isArray(raid.encounters)) return null;
 
-  const journalRaidId = positiveInteger(raid.id);
   const raidName = nonEmptyString(raid.name);
   if (!journalRaidId || !raidName) return null;
 

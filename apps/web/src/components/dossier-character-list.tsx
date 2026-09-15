@@ -170,13 +170,16 @@ export function DossierCharacterList({
           </li>
         ))}
       </ul>
-      <form className="search-form" onSubmit={addCharacter}>
+      <form
+        className="search-form dossier-character-add-form"
+        onSubmit={addCharacter}
+      >
         <label className="visually-hidden" htmlFor="connected-character-url">
           Connected character URL
         </label>
         <div className="search-control">
           <input
-            className="search-input"
+            className="search-input dossier-character-add-control"
             id="connected-character-url"
             type="url"
             value={characterUrl}
@@ -184,7 +187,10 @@ export function DossierCharacterList({
             placeholder="Raider.IO or Warcraft Logs character URL"
             required
           />
-          <button className="search-button" type="submit">
+          <button
+            className="search-button dossier-character-add-control"
+            type="submit"
+          >
             Add character
           </button>
         </div>

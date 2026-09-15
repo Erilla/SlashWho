@@ -184,10 +184,11 @@ async function readDeploymentStatus(
 ): Promise<GithubDeploymentStatus | null> {
   const statuses = await fetchJson<GithubDeploymentStatus[]>(
     fetchInstance,
-    `${statusUrl}?per_page=1`,
+    `${statusUrl}?per_page=100`,
     headers
   );
-  return statuses[0] ?? null;
+  if (!Array.isArray(statuses)) return null;
+  return statuses.find((status) => status?.state === "success") ?? null;
 }
 
 async function readDeploymentCommitMessage(
@@ -219,66 +220,96 @@ async function loadForEnvironment(
   fetchInstance: typeof globalThis.fetch,
   headers: HeadersInit
 ): Promise<readonly ChangeLogEnvironment[]> {
-  const deployments = await fetchJson<GithubDeployment[]>(
-    fetchInstance,
-    `${githubApiBase}/repos/${repository}/deployments?environment=${encodeURIComponent(environment)}&per_page=${maxDeploymentsPerEnvironment}`,
-    headers
-  );
-
   const entries = new Map<string, ChangeLogEnvironment>();
-  const sortedByCreated = [...deployments].sort(
-    (left, right) =>
-      new Date(right.created_at).valueOf() - new Date(left.created_at).valueOf()
-  );
-
-  for (const deployment of sortedByCreated) {
-    if (entries.size >= maxEntries) break;
-    if (!deployment?.sha || !deployment.statuses_url) continue;
-
-    const status = await readDeploymentStatus(
+  const pageSize = Math.min(100, maxDeploymentsPerEnvironment);
+  for (let page = 1; ; page += 1) {
+    const deployments = await fetchJson<GithubDeployment[]>(
       fetchInstance,
-      deployment.statuses_url,
+      `${githubApiBase}/repos/${repository}/deployments?environment=${encodeURIComponent(environment)}&per_page=${pageSize}&page=${page}`,
       headers
     );
-    if (!status || status.state !== "success") continue;
+    if (!Array.isArray(deployments)) break;
 
-    const commitSha = deployment.sha;
-    if (uniqueEntryKey(entries, commitSha)) continue;
+    const sortedByCreated = [...deployments].sort(compareDeployments);
+    for (const deployment of sortedByCreated) {
+      if (entries.size >= maxEntries) break;
+      if (!deployment?.sha || !deployment.statuses_url) continue;
 
-    const commitMessage = await readDeploymentCommitMessage(
-      fetchInstance,
-      repository,
-      commitSha,
-      headers
-    );
+      let status: GithubDeploymentStatus | null;
+      try {
+        status = await readDeploymentStatus(
+          fetchInstance,
+          deployment.statuses_url,
+          headers
+        );
+      } catch {
+        continue;
+      }
+      if (!status) continue;
 
-    const summary = commitMessage
-      ? buildSummary(commitMessage)
-      : `Deploy ${environment}`;
-    const links = commitMessage
-      ? normalizeReferences(commitMessage)
-          .slice(0, 4)
-          .map((number) => ({
-            number: Number(number),
-            href: safeLink(repository, number),
-            label: `#${number}`
-          }))
-      : [];
-    const deployedAt = parseDate(status.created_at, Date.now());
-    entries.set(commitSha, {
-      id: deployment.id,
-      createdAt: deployedAt,
-      environment,
-      commit: commitSha,
-      summary,
-      links,
-      commitUrl: `https://github.com/${repository}/commit/${commitSha}`
-    });
+      const commitSha = deployment.sha;
+      if (uniqueEntryKey(entries, commitSha)) continue;
+
+      let commitMessage: string | null = null;
+      try {
+        commitMessage = await readDeploymentCommitMessage(
+          fetchInstance,
+          repository,
+          commitSha,
+          headers
+        );
+      } catch {
+        // Commit enrichment is optional; retain the deployment with a fallback summary.
+      }
+
+      const summary = commitMessage
+        ? buildSummary(commitMessage)
+        : `Deploy ${environment}`;
+      const links = commitMessage
+        ? normalizeReferences(commitMessage)
+            .slice(0, 4)
+            .map((number) => ({
+              number: Number(number),
+              href: safeLink(repository, number),
+              label: `#${number}`
+            }))
+        : [];
+      const deployedAt = parseDate(
+        status.created_at,
+        parseDate(deployment.created_at, 0).valueOf()
+      );
+      entries.set(commitSha, {
+        id: deployment.id,
+        createdAt: deployedAt,
+        environment,
+        commit: commitSha,
+        summary,
+        links,
+        commitUrl: `https://github.com/${repository}/commit/${commitSha}`
+      });
+    }
+
+    if (entries.size >= maxEntries || deployments.length < pageSize) break;
   }
 
-  return [...entries.values()].sort(
-    (left, right) => right.createdAt.valueOf() - left.createdAt.valueOf()
-  );
+  return [...entries.values()].sort(compareEntries);
+}
+
+function compareDeployments(
+  left: GithubDeployment,
+  right: GithubDeployment
+): number {
+  const byCreated =
+    new Date(right.created_at).valueOf() - new Date(left.created_at).valueOf();
+  return byCreated || right.id - left.id;
+}
+
+function compareEntries(
+  left: ChangeLogEnvironment,
+  right: ChangeLogEnvironment
+): number {
+  const byCreated = right.createdAt.valueOf() - left.createdAt.valueOf();
+  return byCreated || right.id - left.id;
 }
 
 export async function loadDeploymentChangelog(
@@ -315,9 +346,7 @@ export async function loadDeploymentChangelog(
       if (entries.size >= maxEntries) break;
     }
 
-    const ordered = [...entries.values()].sort(
-      (left, right) => right.createdAt.valueOf() - left.createdAt.valueOf()
-    );
+    const ordered = [...entries.values()].sort(compareEntries);
 
     return {
       kind: "available",

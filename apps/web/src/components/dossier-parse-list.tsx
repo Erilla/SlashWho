@@ -1,5 +1,6 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { DossierCharacterNameByName } from "./dossier-character-name";
 import { parseColour } from "./parse-colour";
 
 type KillBoss = Extract<
@@ -13,6 +14,7 @@ type DossierParseListProps = Readonly<{
   label: string;
   parses: readonly ApplicantDossierCharacterParses[];
   loading?: boolean;
+  showCharacterName?: boolean;
 }>;
 
 type MetricName = "Damage" | "Healing" | "Boss Damage";
@@ -85,7 +87,8 @@ function ParseMetric({
 export function DossierParseList({
   label,
   parses,
-  loading = false
+  loading = false,
+  showCharacterName = true
 }: DossierParseListProps) {
   return (
     <section aria-label={label} className="dossier-parse-list">
@@ -103,6 +106,9 @@ export function DossierParseList({
               <span className="dossier-parse-character-spec">
                 {parse.classSpec ?? "—"}
               </span>
+              {showCharacterName ? (
+                <DossierCharacterNameByName name={parse.character} />
+              ) : null}
               <span className="dossier-parse-metrics">
                 <ParseMetric
                   loading={loading}
