@@ -13,7 +13,8 @@ export type {
   CollectCharacterEvidenceJob,
   DiscoverCharacterJob,
   DiscoveryQueue,
-  DiscoveryWorkContext
+  DiscoveryWorkContext,
+  JobTelemetry
 } from "./queue";
 export type {
   CallerClass,

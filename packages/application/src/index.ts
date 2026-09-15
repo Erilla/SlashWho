@@ -32,6 +32,7 @@ export type {
 export { createMeasurementScope } from "./measurement";
 export type { MeasurementScope } from "./measurement";
 export { measuredRepositories } from "./measured-repositories";
+export { queueWaitMs } from "./queue-wait";
 export { createRateLimiter } from "./rate-limit";
 export type {
   RateLimitDecision,

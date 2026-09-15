@@ -283,7 +283,8 @@ async function gatherCharacterEvidence(
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
-      reservation.run.id
+      reservation.run.id,
+      { enqueuedAt: new Date().toISOString() }
     );
     await options.repositories.evidence.markEnqueued(
       reservation.run.id,
@@ -751,20 +752,26 @@ export function createApplicantDossierService(options: {
     };
   }
   return {
-    async start(input, _scope) {
+    async start(input, scope) {
+      // start does real database and queue work through search.create, so its
+      // scope is threaded through rather than discarded: this is the endpoint
+      // the research doc measures as "submission to first response".
       try {
-        return options.search.create({
+        const command = {
           ...input,
           characterUrl: toRaiderIoUrl(
             parseApplicantCharacterUrl(input.characterUrl)
           )
-        });
+        };
+        return scope
+          ? options.search.create(command, scope)
+          : options.search.create(command);
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
     },
 
-    async addConnectedCharacter(root, input, _scope) {
+    async addConnectedCharacter(root, input, scope) {
       let target: CharacterKey;
       try {
         target = parseApplicantCharacterUrl(input.characterUrl);
@@ -773,10 +780,13 @@ export function createApplicantDossierService(options: {
       }
       if (canonicalCharacterId(root) === canonicalCharacterId(target))
         return { kind: "duplicate" };
-      const result = await options.search.create({
+      const connectedCommand = {
         ...input,
         characterUrl: toRaiderIoUrl(target)
-      });
+      };
+      const result = scope
+        ? await options.search.create(connectedCommand, scope)
+        : await options.search.create(connectedCommand);
       if (result.kind !== "character") return result;
       const connection = await options.repositories.manualConnections.add(
         root,

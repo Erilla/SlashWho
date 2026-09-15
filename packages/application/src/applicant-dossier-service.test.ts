@@ -1,5 +1,6 @@
 import type { SearchService } from "./search-service";
 import type {
+  DiscoveryQueue,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -14,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { applicationConfigSchema } from "./config";
 import { createApplicantDossierService } from "./applicant-dossier-service";
 import { createMeasurementScope } from "./measurement";
+import { createSearchService } from "./search-service";
 
 const root = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
 const alt = { region: "eu", realm: "silvermoon", name: "ryalts" } as const;
@@ -529,6 +531,230 @@ describe("applicant dossier service", () => {
       });
     }
   );
+
+  it("threads the request scope through to search.create so start's own database work is measured", async () => {
+    // Break caught: start and addConnectedCharacter do real database and
+    // queue work through search.create, so discarding the scope here would
+    // leave dossier_start with a durationMs but no dbMs at all -- exactly
+    // the endpoint the research doc measures as "submission to first response".
+    const config = applicationConfigSchema.parse({
+      BOT_API_KEY: "b".repeat(32),
+      RATE_LIMIT_HASH_SECRET: "r".repeat(32)
+    });
+    const searchRepositories = {
+      searchReservations: {
+        async reserve() {
+          return {
+            kind: "reserved" as const,
+            run: {
+              id: "00000000-0000-4000-8000-000000000050",
+              rootKey: root,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "public" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          };
+        },
+        async cancel() {},
+        async listPending() {
+          return [];
+        },
+        async markEnqueued() {}
+      },
+      snapshots: {
+        async getCurrent() {
+          return null;
+        },
+        async find() {
+          return null;
+        },
+        async listHistory() {
+          return { items: [], nextCursor: null };
+        },
+        async create() {
+          throw new Error("not used");
+        },
+        async createAndFinishFingerprintSweep() {
+          throw new Error("not used");
+        }
+      },
+      manualConnections: {
+        async add() {
+          return "added" as const;
+        },
+        async list() {
+          return [];
+        }
+      },
+      runs: {
+        async createOrReuse() {
+          throw new Error("not used");
+        },
+        async claim() {
+          return null;
+        },
+        async markRunning() {},
+        async markRetrying() {},
+        async complete() {},
+        async fail() {},
+        async find() {
+          return null;
+        },
+        async findActive() {
+          return null;
+        }
+      },
+      suppressions: {
+        async suppress() {},
+        async isActive() {
+          return false;
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      },
+      rateLimits: {
+        async reserve() {
+          return { allowed: true, retryAt: null };
+        },
+        async record() {},
+        async countActive() {
+          return 0;
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      },
+      negativeCache: {
+        async put() {},
+        async putAndFailRun() {},
+        async find() {
+          return null;
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      },
+      evidence: {
+        async reserve() {
+          throw new Error("not used");
+        },
+        async find() {
+          return null;
+        },
+        async claim() {
+          return null;
+        },
+        async markEnqueued() {
+          throw new Error("not used");
+        },
+        async publish() {
+          throw new Error("not used");
+        },
+        async fail() {
+          throw new Error("not used");
+        },
+        async getCompleted() {
+          return null;
+        },
+        async listStatus() {
+          return [];
+        }
+      },
+      fingerprintSweeps: {
+        async requestAdmission() {
+          return { kind: "not_due" as const };
+        },
+        async recordRequest() {},
+        async finish() {},
+        async release() {},
+        async listWaiting() {
+          return [];
+        },
+        async listAdmittedUndispatched() {
+          return [];
+        },
+        async markDispatched() {},
+        async admitWaiting() {
+          return { kind: "settled" as const };
+        },
+        async cleanupExpired() {
+          return 0;
+        }
+      }
+    } as unknown as Repositories;
+    const queue: Pick<DiscoveryQueue, "enqueue"> = {
+      async enqueue() {
+        return "job-1";
+      }
+    };
+    const search = createSearchService({
+      repositories: searchRepositories,
+      queue,
+      config
+    });
+    const dossiers = createApplicantDossierService({
+      repositories: {
+        snapshots: {},
+        evidence: {},
+        manualConnections: {}
+      } as unknown as Pick<
+        Repositories,
+        "snapshots" | "evidence" | "manualConnections"
+      >,
+      search,
+      queue: { enqueueCharacterEvidence: vi.fn() },
+      blizzard: {
+        getCompletedAchievements: vi.fn()
+      } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">,
+      raiderio: {
+        getMythicBossRankings: vi.fn(),
+        getCharacter: vi.fn()
+      } as unknown as Pick<
+        RaiderIoGateway,
+        "getMythicBossRankings" | "getCharacter"
+      >,
+      config
+    });
+    const scope = createMeasurementScope();
+
+    const result = await dossiers.start(
+      { characterUrl: raiderUrl, headers },
+      scope
+    );
+
+    expect(result).toMatchObject({ kind: "job" });
+    expect(scope.totals().dbCalls).toBeGreaterThan(0);
+  });
+
+  it("threads the request scope through addConnectedCharacter's call to search.create", async () => {
+    const { dossiers, search } = fixture();
+    const scope = createMeasurementScope();
+
+    await dossiers.addConnectedCharacter(
+      root,
+      {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+        headers
+      },
+      scope
+    );
+
+    expect(search.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts"
+      }),
+      scope
+    );
+  });
 
   it("returns the existing active discovery result without creating another run", async () => {
     // Break caught: an in-flight search could be replaced instead of reused by dossier start.

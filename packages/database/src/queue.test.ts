@@ -11,7 +11,7 @@ const queueFakes = vi.hoisted(() => {
   return {
     createQueue: vi.fn(async () => {}),
     updateQueue: vi.fn(async () => {}),
-    send: vi.fn(async () => "job-id"),
+    send: vi.fn(async (..._args: unknown[]) => "job-id"),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     work: vi.fn(async (name, _options, handler) => {
@@ -161,5 +161,82 @@ describe("character evidence queue", () => {
       { singletonKey: runId }
     );
     expect(delivered).toEqual([{ runId, attempt: 1 }]);
+  });
+});
+
+describe("job telemetry", () => {
+  it("carries correlation and enqueue time on the discovery payload", async () => {
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    await queue.start();
+    queueFakes.send.mockClear();
+
+    await queue.enqueue({
+      runId: "00000000-0000-4000-8000-000000000010",
+      key: { region: "eu", realm: "silvermoon", name: "root" },
+      correlationId: "c1",
+      enqueuedAt: "2026-09-15T10:00:00.000Z"
+    });
+
+    expect(queueFakes.send.mock.calls[0]?.[1]).toMatchObject({
+      correlationId: "c1",
+      enqueuedAt: "2026-09-15T10:00:00.000Z"
+    });
+  });
+
+  it("keeps the singleton key on the run id alone", async () => {
+    // Break caught: keying deduplication on the correlation id would let one
+    // character be discovered once per requester.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    const runId = "00000000-0000-4000-8000-000000000011";
+    await queue.start();
+    queueFakes.send.mockClear();
+
+    await queue.enqueue({
+      runId,
+      key: { region: "eu", realm: "silvermoon", name: "root" },
+      correlationId: "c1"
+    });
+
+    expect(queueFakes.send.mock.calls[0]?.[2]).toMatchObject({
+      singletonKey: runId
+    });
+  });
+
+  it("carries correlation and enqueue time on the evidence payload", async () => {
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    await queue.start();
+    queueFakes.send.mockClear();
+
+    await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000012",
+      { correlationId: "c2", enqueuedAt: "2026-09-15T10:00:01.000Z" }
+    );
+
+    expect(queueFakes.send.mock.calls[0]?.[1]).toMatchObject({
+      correlationId: "c2",
+      enqueuedAt: "2026-09-15T10:00:01.000Z"
+    });
+  });
+
+  it("enqueues evidence without metadata", async () => {
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    await queue.start();
+    queueFakes.send.mockClear();
+
+    await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000013"
+    );
+
+    expect(queueFakes.send.mock.calls[0]?.[1]).toEqual({
+      runId: "00000000-0000-4000-8000-000000000013"
+    });
   });
 });

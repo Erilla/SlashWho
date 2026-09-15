@@ -499,7 +499,14 @@ describe("worker runtime", () => {
 
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
-    expect(fakes.enqueued).toEqual(fakes.pendingDispatches);
+    // A recovered job gets a fresh enqueuedAt (not the original, since there
+    // is none stored) so it measures its new wait rather than a stale one.
+    expect(fakes.enqueued).toEqual([
+      expect.objectContaining({
+        ...fakes.pendingDispatches[0],
+        enqueuedAt: expect.any(String)
+      })
+    ]);
     expect(fakes.recoveredDispatches).toEqual([
       "00000000-0000-4000-8000-000000000011"
     ]);
