@@ -137,6 +137,26 @@ describe("PostgreSQL repositories", () => {
       CASCADE`);
   });
 
+  it("carries the character's class onto a claimed evidence run", async () => {
+    // Break caught: Warcraft Logs omits a class on its ranks, so evidence
+    // collection needs the stored class to settle shared specialisation names.
+    await seedCompleteSnapshot(repositories);
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    const claimed = await repositories.evidence.claim(reservation.run.id, 1);
+
+    expect(claimed?.className).toBe("Mage");
+    await expect(
+      repositories.evidence.find(reservation.run.id)
+    ).resolves.toMatchObject({ className: "Mage" });
+  });
+
   it("retains the last completed evidence while a stale character refresh is active", async () => {
     // Break caught: a refresh could make previously completed dossier evidence
     // disappear until its replacement scan finishes.
@@ -298,7 +318,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 7,
+      evidenceVersion: 8,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })

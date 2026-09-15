@@ -1139,7 +1139,93 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("leaves an ambiguous specialisation unset when no class is reported", async () => {
+  it("resolves an ambiguous specialisation from the character's known class", async () => {
+    // Break caught: Warcraft Logs does not report a class on its ranks, so
+    // Frost, Holy, Protection and Restoration resolved to no icon at all. A
+    // character's class cannot change, so the caller's known class settles it.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse("performance-report");
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: { data: [{ rankPercent: 91, spec: "Frost" }] },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 3,
+      className: "Death Knight"
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(result.kills[0]?.performance.spec).toEqual({
+      name: "Frost",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/spell_deathknight_frostpresence.jpg"
+    });
+  });
+
+  it("prefers a class reported by Warcraft Logs over the caller's class", async () => {
+    // Break caught: Warcraft Logs reports `class` as a numeric class id (4 is
+    // Mage), so reading it as a name silently ignored it. The per-rank class is
+    // the more specific claim; the known class is only a fallback.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse("performance-report");
+      }
+      if (body.query.includes("CharacterEncounterRankings")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                name: "Sentinel",
+                server: { slug: "silvermoon", region: { slug: "eu" } },
+                damage: {
+                  data: [{ rankPercent: 91, class: 4, spec: "Frost" }]
+                },
+                healing: { data: [] },
+                bossDamage: { data: [] }
+              }
+            }
+          }
+        });
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 3,
+      className: "Death Knight"
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(result.kills[0]?.performance.spec).toEqual({
+      name: "Frost",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/spell_frost_frostbolt02.jpg"
+    });
+  });
+
+  it("leaves an ambiguous specialisation unset when no class is known", async () => {
     // Break caught: guessing a class for a shared spec name shows a confidently
     // wrong icon; omitting it is the honest outcome.
     const { client } = clientFor((url, init) => {

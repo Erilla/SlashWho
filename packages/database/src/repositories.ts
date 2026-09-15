@@ -175,6 +175,8 @@ export interface CharacterEvidenceRun {
   completedAt: Date | null;
   wclClientIdEncrypted: string | null;
   wclClientSecretEncrypted: string | null;
+  /** The character's class, carried so evidence collection can resolve shared specialisation names. */
+  className: string | null;
 }
 
 export type CharacterMythicKillParseMetric =
