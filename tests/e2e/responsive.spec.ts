@@ -209,6 +209,38 @@ test("keeps landing search modes compact and usable at desktop and mobile widths
   ).resolves.toBe(true);
 });
 
+test("centers landing search controls within the header", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+
+  const geometry = await page.locator(".site-header").evaluate((header) => {
+    const control = header.querySelector(".search-input")!;
+    const button = header.querySelector(".search-button")!;
+    const headerBounds = header.getBoundingClientRect();
+    const controlBounds = control.getBoundingClientRect();
+    const buttonBounds = button.getBoundingClientRect();
+    const buttonStyle = getComputedStyle(button);
+    return {
+      headerCenter: headerBounds.top + headerBounds.height / 2,
+      controlCenter: controlBounds.top + controlBounds.height / 2,
+      buttonCenter: buttonBounds.top + buttonBounds.height / 2,
+      buttonDisplay: buttonStyle.display,
+      buttonAlignItems: buttonStyle.alignItems,
+      buttonJustifyContent: buttonStyle.justifyContent
+    };
+  });
+
+  expect(Math.abs(geometry.controlCenter - geometry.headerCenter)).toBeLessThan(
+    1
+  );
+  expect(Math.abs(geometry.buttonCenter - geometry.headerCenter)).toBeLessThan(
+    1
+  );
+  expect(geometry.buttonDisplay).toBe("flex");
+  expect(geometry.buttonAlignItems).toBe("center");
+  expect(geometry.buttonJustifyContent).toBe("center");
+});
+
 test("matches dossier summary panels and confines character scrolling to desktop", async ({
   page
 }) => {
