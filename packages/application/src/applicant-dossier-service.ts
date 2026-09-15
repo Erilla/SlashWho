@@ -142,6 +142,8 @@ function limitationMessage(
   const label =
     source === "blizzard" ? "Blizzard achievement data" : "Warcraft Logs";
   switch (code) {
+    case "unmatched_encounter":
+      return `${label} reported Mythic kills this dossier could not match to a known raid boss, so they are not shown. Other kills may exist.`;
     case "not_found":
       return `${label} has no public evidence for this character.`;
     case "private":

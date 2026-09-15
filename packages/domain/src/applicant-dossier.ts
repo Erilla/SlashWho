@@ -414,7 +414,22 @@ export function buildApplicantDossier(
   const withheldKillReasons = new Map<string, DossierLimitation>();
   for (const suppliedKill of input.kills) {
     const metadata = catalogueEncounter(suppliedKill);
-    if (metadata === null) continue;
+    if (metadata === null) {
+      // A Mythic+ dungeon fight is expected noise in a character's reports. A
+      // raid-shaped zone the catalogue cannot place is evidence going missing,
+      // and silence there reads as "never killed it".
+      if (!isNonRaidWclZone(suppliedKill.raidName)) {
+        withheldKillReasons.set(
+          `unmatched_encounter\0${canonicalCharacterId(suppliedKill.character)}`,
+          {
+            source: "warcraft_logs",
+            character: suppliedKill.character,
+            code: "unmatched_encounter"
+          }
+        );
+      }
+      continue;
+    }
     const raid = lookupRaidByName(suppliedKill.raidName);
     const kill = { ...suppliedKill, ...(raid ?? {}), ...(metadata ?? {}) };
     const eligible = currentness(kill.killedAt, kill.raidId);
