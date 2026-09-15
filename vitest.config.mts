@@ -7,6 +7,9 @@ export default defineConfig({
       {
         plugins: [react()],
         test: {
+          fileParallelism: false,
+          maxWorkers: 1,
+          pool: "threads",
           include: [
             "apps/**/src/**/*.test.{ts,tsx}",
             "packages/**/src/**/*.test.ts",
