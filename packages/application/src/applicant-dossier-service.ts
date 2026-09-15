@@ -35,6 +35,7 @@ import type {
 
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache } from "./bounded-cache";
+import { createConcurrencyLimiter } from "./concurrency";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -451,6 +452,7 @@ function guildRankingRequest(
 async function enrichHistoricRanks(options: {
   kills: readonly DossierKillEvidence[];
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  concurrency: ReturnType<typeof createConcurrencyLimiter>;
   signal: AbortSignal;
 }): Promise<{
   kills: readonly DossierKillEvidence[];
@@ -466,9 +468,8 @@ async function enrichHistoricRanks(options: {
   }
   await Promise.all(
     [...requests.entries()].map(async ([key, boss]) => {
-      const result = await options.raiderio.getMythicBossRankings(
-        boss,
-        options.signal
+      const result = await options.concurrency.run(() =>
+        options.raiderio.getMythicBossRankings(boss, options.signal)
       );
       if (result.kind === "rankings") rankings.set(key, result.rows);
       else
@@ -511,6 +512,8 @@ async function assembleDossier(options: {
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  concurrency: ReturnType<typeof createConcurrencyLimiter>;
+
   freshnessCutoff: Date;
   signal: AbortSignal;
 }): Promise<ContractApplicantDossier> {
@@ -540,6 +543,7 @@ async function assembleDossier(options: {
   const ranked = await enrichHistoricRanks({
     kills: evidence.flatMap((item) => item.kills),
     raiderio: options.raiderio,
+    concurrency: options.concurrency,
     signal: options.signal
   });
   const dossier = buildApplicantDossier({
@@ -607,6 +611,9 @@ export function createApplicantDossierService(options: {
     maxEntries: 1_000,
     observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
   });
+  const providerConcurrency = createConcurrencyLimiter(
+    options.config.DOSSIER_PROVIDER_CONCURRENCY
+  );
   const rankings = createBoundedCache<
     Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
   >({
@@ -742,6 +749,7 @@ export function createApplicantDossierService(options: {
           queue: options.queue,
           blizzard,
           raiderio,
+          concurrency: providerConcurrency,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
@@ -812,6 +820,7 @@ export function createApplicantDossierService(options: {
           queue: options.queue,
           blizzard,
           raiderio,
+          concurrency: providerConcurrency,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),

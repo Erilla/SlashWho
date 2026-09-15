@@ -12,7 +12,13 @@ export const applicationConfigSchema = z.object({
   BOT_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(60),
   PUBLIC_READS_PER_MINUTE: z.coerce.number().int().positive().default(300),
   FRESHNESS_HOURS: z.coerce.number().positive().default(24),
-  DOSSIER_CHARACTER_CAP: z.coerce.number().int().min(1).max(30).default(12)
+  DOSSIER_CHARACTER_CAP: z.coerce.number().int().min(1).max(30).default(12),
+  DOSSIER_PROVIDER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(12)
+    .default(4)
 });
 
 export type ApplicationConfig = z.infer<typeof applicationConfigSchema>;
