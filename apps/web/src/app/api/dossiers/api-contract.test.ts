@@ -38,7 +38,6 @@ let readAllowed:
 let readCalls = 0;
 let readInitialCalls = 0;
 let lastReadOverrides: unknown;
-let lastReadInitialOverrides: unknown;
 
 const dossiers = {
   async start() {
@@ -51,7 +50,7 @@ const dossiers = {
   },
   async readInitial(_key: unknown, _signal: unknown, overrides: unknown) {
     readInitialCalls += 1;
-    lastReadInitialOverrides = overrides;
+    void overrides;
     return readInitial;
   }
 };
@@ -138,7 +137,6 @@ beforeEach(() => {
   readCalls = 0;
   readInitialCalls = 0;
   lastReadOverrides = undefined;
-  lastReadInitialOverrides = undefined;
 });
 
 describe("POST /api/dossiers", () => {

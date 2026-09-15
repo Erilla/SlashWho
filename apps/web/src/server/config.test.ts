@@ -34,6 +34,7 @@ it("does not require Warcraft Logs credentials in the web process", () => {
 it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is missing", () => {
   // Break caught: the web process could start without the key it needs to
   // encrypt a visitor-supplied WarcraftLogs credential before queuing it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY, ...rest } = validEnv;
   expect(() => loadWebConfig(rest)).toThrow(
     "evidence_job_credential_encryption_key_required"

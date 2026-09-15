@@ -108,6 +108,7 @@ it("preserves a maintainer webhook path and query string", () => {
 it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is missing", () => {
   // Break caught: the worker could start without the key it needs to decrypt
   // a visitor-supplied WarcraftLogs credential from an evidence job.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY, ...rest } = environment;
   expect(() => loadWorkerConfig(rest)).toThrow(
     "evidence_job_credential_encryption_key_required"
