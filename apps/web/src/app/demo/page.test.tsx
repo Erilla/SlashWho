@@ -29,14 +29,21 @@ describe("demo page", () => {
 
     render(DemoPage());
 
+    // The captured fixture is a full real dossier (~150k lines of JSON),
+    // so mounting it is CPU-bound work that can run well past the default
+    // timeouts on a loaded CI runner, even though nothing here is async.
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Ryii" })
+      await screen.findByRole(
+        "heading",
+        { level: 1, name: "Ryii" },
+        { timeout: 15_000 }
+      )
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Connected characters" })
     ).toBeInTheDocument();
     expect(fetchSpy).not.toHaveBeenCalled();
-  });
+  }, 20_000);
 
   it("omits the add character action so the demo cannot mutate real data", () => {
     render(DemoPage());
@@ -44,5 +51,5 @@ describe("demo page", () => {
     expect(
       screen.queryByRole("button", { name: "Add character" })
     ).not.toBeInTheDocument();
-  });
+  }, 20_000);
 });
