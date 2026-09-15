@@ -1194,9 +1194,9 @@ it("lists bosses within a raid last-to-first, with the raid order untouched", ()
   );
 
   expect(
-    screen.getAllByRole("group", { name: /evidence$/ }).map((group) =>
-      group.getAttribute("aria-label")
-    )
+    screen
+      .getAllByRole("group", { name: /evidence$/ })
+      .map((group) => group.getAttribute("aria-label"))
   ).toEqual([
     "Queen Ansurek evidence",
     "The Bloodbound Horror evidence",
