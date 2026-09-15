@@ -168,7 +168,7 @@ it("keeps empty and partial upstream responses available", async () => {
 it("paginates deployment history when a page is full", async () => {
   const fetch = vi.fn(async (value: RequestInfo | URL) => {
     const url = String(value);
-    const page = url.match(/page=(\d+)/)?.[1];
+    const page = url.match(/[?&]page=(\d+)/)?.[1];
     if (page === "1" || page === "2") {
       const id = page === "1" ? 61 : 62;
       return jsonResponse([
