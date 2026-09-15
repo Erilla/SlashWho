@@ -139,7 +139,11 @@ describe("applicant evidence job handler", () => {
       evidence,
       warcraftLogs: {
         async getFirstKillReports() {
-          return { kind: "limitation", code: "rate_limited" };
+          return {
+            kind: "limitation",
+            code: "rate_limited",
+            retryAfterMs: 90_000
+          };
         }
       },
       requestCap: 500,
@@ -160,6 +164,7 @@ describe("applicant evidence job handler", () => {
           state: "partial",
           limitationCode: "rate_limited",
           parseLimitationCode: null,
+          retryAfterAt: new Date("2026-09-13T12:02:30.000Z"),
           kills: [],
           wipes: [],
           completedAt: new Date("2026-09-13T12:01:00.000Z")

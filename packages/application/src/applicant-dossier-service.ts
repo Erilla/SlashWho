@@ -147,9 +147,30 @@ function limitationMessage(
 function limitation(
   source: EvidenceSource,
   character: CharacterKey,
-  code: string
+  code: string,
+  retryAfterAt?: Date | null
 ): DossierLimitation {
-  return { source, character, code: contractLimitationCode(code) };
+  return {
+    source,
+    character,
+    code: contractLimitationCode(code),
+    ...(retryAfterAt && !Number.isNaN(retryAfterAt.valueOf())
+      ? { retryAt: retryAfterAt.toISOString() }
+      : {})
+  };
+}
+
+function retryAfterAt(error: unknown): Date | null {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("retryAfterMs" in error) ||
+    typeof error.retryAfterMs !== "number" ||
+    !Number.isFinite(error.retryAfterMs)
+  ) {
+    return null;
+  }
+  return new Date(Date.now() + Math.max(0, error.retryAfterMs));
 }
 
 function isAbort(error: unknown, signal?: AbortSignal): boolean {
@@ -260,7 +281,12 @@ async function gatherCharacterEvidence(
   const completed = reservation.completed;
   if (completed?.run.limitationCode) {
     limitations.push(
-      limitation("warcraft_logs", character.key, completed.run.limitationCode)
+      limitation(
+        "warcraft_logs",
+        character.key,
+        completed.run.limitationCode,
+        completed.run.retryAfterAt
+      )
     );
   }
   if (completed?.run.parseLimitationCode) {
@@ -268,7 +294,8 @@ async function gatherCharacterEvidence(
       limitation(
         "warcraft_logs",
         character.key,
-        completed.run.parseLimitationCode
+        completed.run.parseLimitationCode,
+        completed.run.retryAfterAt
       )
     );
   }
@@ -323,7 +350,12 @@ async function gatherCuttingEdgeEvidence(
     } catch (error) {
       if (isAbort(error, options.signal)) throw error;
       limitations.push(
-        limitation("blizzard", character.key, blizzardLimitationCode(error))
+        limitation(
+          "blizzard",
+          character.key,
+          blizzardLimitationCode(error),
+          retryAfterAt(error)
+        )
       );
     }
   }
@@ -443,7 +475,14 @@ async function enrichHistoricRanks(options: {
         failures.set(result.code, {
           source: "raiderio",
           character: null,
-          code: result.code
+          code: result.code,
+          ...(result.retryAfterMs === undefined
+            ? {}
+            : {
+                retryAt: new Date(
+                  Date.now() + Math.max(0, result.retryAfterMs)
+                ).toISOString()
+              })
         });
     })
   );

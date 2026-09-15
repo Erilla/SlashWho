@@ -94,6 +94,7 @@ interface EvidenceRunRow {
   attempt: number;
   limitation_code: string | null;
   parse_limitation_code: string | null;
+  retry_after_at: Date | null;
   error_code: string | null;
   created_at: Date;
   started_at: Date | null;
@@ -323,6 +324,7 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     attempt: row.attempt,
     limitationCode: row.limitation_code,
     parseLimitationCode: row.parse_limitation_code,
+    retryAfterAt: row.retry_after_at,
     errorCode: row.error_code,
     createdAt: row.created_at,
     startedAt: row.started_at,
@@ -450,7 +452,7 @@ async function loadCompletedEvidence(
   const runResult = await client.query<EvidenceRunRow>(
     `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
             evidence_version, attempt, limitation_code, parse_limitation_code,
-            error_code, created_at, started_at,
+            retry_after_at, error_code, created_at, started_at,
             completed_at
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -1980,7 +1982,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const active = await client.query<EvidenceRunRow>(
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                    attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
+                    attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                     completed_at
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -2003,7 +2005,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               (region, realm_slug, normalized_name)
              VALUES ($1, $2, $3)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
-                       attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
+                       attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                        completed_at`,
             [key.region, key.realm, key.name]
           );
@@ -2024,7 +2026,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async find(id) {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                  attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
+                  attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                   completed_at
            FROM character_evidence_runs WHERE id = $1`,
           [id]
@@ -2044,7 +2046,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              AND attempt < $2
              AND status IN ('queued', 'running', 'retrying')
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
-                     attempt, limitation_code, parse_limitation_code, error_code, created_at, started_at,
+                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                      completed_at`,
           [id, attempt]
         );
@@ -2185,13 +2187,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
-                 error_code = NULL, completed_at = $5, evidence_version = $6
+                 retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
               runId,
               input.state,
               input.limitationCode,
               input.parseLimitationCode,
+              input.retryAfterAt ?? null,
               input.completedAt,
               CURRENT_EVIDENCE_VERSION
             ]

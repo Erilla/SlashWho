@@ -387,6 +387,7 @@ export const characterEvidenceRuns = pgTable(
     attempt: integer("attempt").default(0).notNull(),
     limitationCode: text("limitation_code"),
     parseLimitationCode: text("parse_limitation_code"),
+    retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

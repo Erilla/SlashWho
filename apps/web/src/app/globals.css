@@ -973,6 +973,12 @@ a {
   margin-top: 0.55rem;
 }
 
+.dossier-rate-limit-countdown {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
