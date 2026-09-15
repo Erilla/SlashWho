@@ -35,6 +35,7 @@ import type {
 
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache } from "./bounded-cache";
+import { encryptCredential } from "./credential-encryption";
 import { createConcurrencyLimiter } from "./concurrency";
 import type {
   CreateSearchCommand,
@@ -47,6 +48,20 @@ export type CreateDossierResult = CreateSearchResult;
 export type ReadDossierResult =
   { kind: "ready"; dossier: ContractApplicantDossier } | { kind: "not_ready" };
 
+/**
+ * Visitor-supplied credentials for a single dossier read. Gateways built from
+ * these keys are used directly, never through the caches shared by every other
+ * visitor, so one visitor's key budget can neither fill nor be billed for
+ * another's results.
+ */
+export type DossierGatewayOverrides = Readonly<{
+  blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
+  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
+  wclCredentials?: WclCredentials | null;
+}>;
+
+type WclCredentials = Readonly<{ clientId: string; clientSecret: string }>;
+
 export interface ApplicantDossierService {
   start(input: CreateDossierCommand): Promise<CreateDossierResult>;
   addConnectedCharacter(
@@ -55,9 +70,14 @@ export interface ApplicantDossierService {
   ): Promise<CreateSearchResult | { kind: "linked" | "duplicate" }>;
   readInitial(
     key: CharacterKey,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    overrides?: DossierGatewayOverrides
   ): Promise<ReadDossierResult>;
-  read(key: CharacterKey, signal?: AbortSignal): Promise<ReadDossierResult>;
+  read(
+    key: CharacterKey,
+    signal?: AbortSignal,
+    overrides?: DossierGatewayOverrides
+  ): Promise<ReadDossierResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -264,12 +284,26 @@ async function gatherCharacterEvidence(
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     freshnessCutoff: Date;
     signal?: AbortSignal;
+    wclCredentials?: WclCredentials | null;
+    encryptionKey: Buffer;
   }
 ): Promise<EvidenceResult & { gathering: boolean }> {
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
     freshnessCutoff: options.freshnessCutoff,
-    at: new Date()
+    at: new Date(),
+    credentials: options.wclCredentials
+      ? {
+          wclClientIdEncrypted: encryptCredential(
+            options.wclCredentials.clientId,
+            options.encryptionKey
+          ),
+          wclClientSecretEncrypted: encryptCredential(
+            options.wclCredentials.clientSecret,
+            options.encryptionKey
+          )
+        }
+      : null
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
@@ -522,6 +556,8 @@ async function assembleDossier(options: {
 
   freshnessCutoff: Date;
   signal: AbortSignal;
+  wclCredentials?: WclCredentials | null;
+  encryptionKey: Buffer;
 }): Promise<ContractApplicantDossier> {
   const [evidence, cuttingEdgeEvidence] = await Promise.all([
     Promise.all(
@@ -530,7 +566,9 @@ async function assembleDossier(options: {
           repositories: options.repositories,
           queue: options.queue,
           freshnessCutoff: options.freshnessCutoff,
-          signal: options.signal
+          signal: options.signal,
+          wclCredentials: options.wclCredentials,
+          encryptionKey: options.encryptionKey
         })
       )
     ),
@@ -609,6 +647,7 @@ export function createApplicantDossierService(options: {
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
   config: ApplicationConfig;
+  evidenceJobCredentialEncryptionKey: Buffer;
   onCacheEvent?: (source: string, event: string) => void;
 }): ApplicantDossierService {
   const achievements = createBoundedCache<
@@ -628,12 +667,18 @@ export function createApplicantDossierService(options: {
     maxEntries: 256,
     observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
   });
-  const blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> = {
-    async getCompletedAchievements(key, signal) {
-      signal?.throwIfAborted();
-      const result = await awaitWithAbort(
-        achievements(`${key.region}/${key.realm}/${key.name}`, async () => {
-          const rows = await options.blizzard.getCompletedAchievements(
+  // A null cache is a visitor-supplied gateway: it keeps the shared timeout,
+  // filtering and failure semantics while neither reading from nor writing to
+  // the caches every other visitor is served from.
+  function cuttingEdgeGateway(
+    source: Pick<BlizzardGateway, "getCompletedAchievements">,
+    cache: typeof achievements | null
+  ): Pick<BlizzardGateway, "getCompletedAchievements"> {
+    return {
+      async getCompletedAchievements(key, signal) {
+        signal?.throwIfAborted();
+        const load = async () => {
+          const rows = await source.getCompletedAchievements(
             key,
             AbortSignal.timeout(15_000)
           );
@@ -645,39 +690,64 @@ export function createApplicantDossierService(options: {
               achievementId,
               completedAt
             }));
-        }),
-        signal
-      );
-      return result;
-    }
-  };
-  const raiderio: Pick<RaiderIoGateway, "getMythicBossRankings"> = {
-    async getMythicBossRankings(boss, signal) {
-      signal?.throwIfAborted();
-      try {
-        const result = await rankings(rankingKey(boss), async () => {
-          const response = await options.raiderio.getMythicBossRankings(
+        };
+        const result = await awaitWithAbort(
+          cache
+            ? cache(`${key.region}/${key.realm}/${key.name}`, load)
+            : load(),
+          signal
+        );
+        return result;
+      }
+    };
+  }
+  function rankingsGateway(
+    source: Pick<RaiderIoGateway, "getMythicBossRankings">,
+    cache: typeof rankings | null
+  ): Pick<RaiderIoGateway, "getMythicBossRankings"> {
+    return {
+      async getMythicBossRankings(boss, signal) {
+        signal?.throwIfAborted();
+        const load = async () => {
+          const response = await source.getMythicBossRankings(
             boss,
             AbortSignal.timeout(15_000)
           );
           if (response.kind !== "rankings") {
-            options.onCacheEvent?.(
-              "raiderio_rankings",
-              `failure_${response.code}`
-            );
+            if (cache) {
+              options.onCacheEvent?.(
+                "raiderio_rankings",
+                `failure_${response.code}`
+              );
+            }
             throw new RankingLookupFailure(response);
           }
           return response;
-        });
-        signal?.throwIfAborted();
-        return result;
-      } catch (error) {
-        signal?.throwIfAborted();
-        if (error instanceof RankingLookupFailure) return error.result;
-        return { kind: "limitation", code: "unavailable" };
+        };
+        try {
+          const result = await (cache ? cache(rankingKey(boss), load) : load());
+          signal?.throwIfAborted();
+          return result;
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (error instanceof RankingLookupFailure) return error.result;
+          return { kind: "limitation", code: "unavailable" };
+        }
       }
-    }
-  };
+    };
+  }
+  const blizzard = cuttingEdgeGateway(options.blizzard, achievements);
+  const raiderio = rankingsGateway(options.raiderio, rankings);
+  function gatewaysFor(overrides?: DossierGatewayOverrides) {
+    return {
+      blizzard: overrides?.blizzard
+        ? cuttingEdgeGateway(overrides.blizzard, null)
+        : blizzard,
+      raiderio: overrides?.raiderio
+        ? rankingsGateway(overrides.raiderio, null)
+        : raiderio
+    };
+  }
   return {
     async start(input) {
       try {
@@ -713,19 +783,17 @@ export function createApplicantDossierService(options: {
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
-    async readInitial(key, signal) {
+    async readInitial(key, signal, overrides) {
       // Initial evidence precedes the worker's snapshot filter. One bounded
       // lookup prevents that preview from exposing a tournament root.
       const timeout = AbortSignal.timeout(15_000);
       const requestSignal = signal
         ? AbortSignal.any([signal, timeout])
         : timeout;
+      const profiles = overrides?.raiderio ?? options.raiderio;
       try {
         requestSignal.throwIfAborted();
-        const character = await options.raiderio.getCharacter(
-          key,
-          requestSignal
-        );
+        const character = await profiles.getCharacter(key, requestSignal);
         requestSignal.throwIfAborted();
         if (character.isTournamentProfile === true)
           return { kind: "not_ready" };
@@ -754,18 +822,19 @@ export function createApplicantDossierService(options: {
           },
           repositories: options.repositories,
           queue: options.queue,
-          blizzard,
-          raiderio,
+          ...gatewaysFor(overrides),
           concurrency: providerConcurrency,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
-          signal: signal ?? new AbortController().signal
+          signal: signal ?? new AbortController().signal,
+          wclCredentials: overrides?.wclCredentials,
+          encryptionKey: options.evidenceJobCredentialEncryptionKey
         })
       };
     },
 
-    async read(key, signal) {
+    async read(key, signal, overrides) {
       const snapshot =
         (await options.repositories.snapshots.getCurrent(key)) ??
         (await options.repositories.snapshots.getCurrentContainingCharacter?.(
@@ -825,13 +894,14 @@ export function createApplicantDossierService(options: {
                 },
           repositories: options.repositories,
           queue: options.queue,
-          blizzard,
-          raiderio,
+          ...gatewaysFor(overrides),
           concurrency: providerConcurrency,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),
-          signal: signal ?? new AbortController().signal
+          signal: signal ?? new AbortController().signal,
+          wclCredentials: overrides?.wclCredentials,
+          encryptionKey: options.evidenceJobCredentialEncryptionKey
         })
       };
     }
