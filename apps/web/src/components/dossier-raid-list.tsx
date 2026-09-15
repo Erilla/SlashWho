@@ -320,7 +320,7 @@ function KillEvidence({ boss }: { boss: KillBoss }) {
                     <div>
                       <dt>Guild</dt>
                       <dd>
-                        Guild: {displayGuild(evidence.guild)}
+                        {displayGuild(evidence.guild)}
                         {evidence.guild ? (
                           <GuildProfileLinks guild={evidence.guild} />
                         ) : null}

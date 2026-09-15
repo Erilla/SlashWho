@@ -126,6 +126,58 @@ it("shows the grouped rank in the summary and retains all distinct report links"
   expect(screen.getAllByText("First kill")).toHaveLength(1);
 });
 
+it("renders guild attribution as a concise value with an accessible label", async () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "guild-label",
+            raidName: "Guild Label Raid",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              {
+                ...boss,
+                firstKill: {
+                  ...boss.firstKill,
+                  guild: { name: "Rancour", region: "eu", realm: "Draenor" }
+                },
+                firstKills: [
+                  {
+                    ...boss.firstKill,
+                    guild: { name: "Rancour", region: "eu", realm: "Draenor" }
+                  },
+                  {
+                    ...boss.firstKill,
+                    killedAt: "2025-02-14T20:30:00.000Z",
+                    guild: null
+                  }
+                ]
+              }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  await userEvent.setup().click(screen.getByText("View kill evidence"));
+
+  const evidence = screen.getByRole("region", { name: "Kill evidence" });
+  const guildValues = within(evidence)
+    .getAllByText("Guild", { selector: "dt" })
+    .map((label) => label.parentElement?.querySelector("dd"));
+
+  expect(guildValues[0]).toHaveTextContent(/^Rancour · Draenor$/);
+  expect(guildValues[1]).toHaveTextContent(/^—$/);
+  expect(guildValues[0]).not.toHaveTextContent(/^Guild:/);
+  expect(guildValues[1]).not.toHaveTextContent(/^Guild:/);
+  expect(
+    within(evidence).getAllByText("Guild", { selector: "dt" })
+  ).toHaveLength(2);
+});
+
 it("colours kill report controls green and wipe report controls grey", async () => {
   renderWithDossierCharacters(
     <DossierRaidList
