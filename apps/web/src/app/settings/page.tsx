@@ -108,10 +108,14 @@ export default function SettingsPage() {
             />
           </label>
         </fieldset>
-        <button type="submit">Save</button>
-        <button type="button" onClick={onClear}>
-          Clear all
-        </button>
+        <div className="settings-actions">
+          <button className="search-button" type="submit">
+            Save
+          </button>
+          <button className="search-button" type="button" onClick={onClear}>
+            Clear all
+          </button>
+        </div>
         {saved ? <p role="status">Saved.</p> : null}
       </form>
     </main>
