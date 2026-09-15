@@ -6,6 +6,10 @@ import {
   type AddedConnectedCharacter
 } from "./add-connected-character-dialog";
 
+import {
+  DossierCharacterMenu,
+  type ConnectedCharacterChange
+} from "./dossier-character-menu";
 import { DossierCharacterName } from "./dossier-character-name";
 import { CharacterProfileLinks } from "./profile-links";
 
@@ -14,7 +18,9 @@ type DossierCharacterListProps = Readonly<{
   root: DossierCharacter["key"];
   /** Refreshes and announces the dossier once a character has been linked. */
   onCharacterAdded?: (added: AddedConnectedCharacter) => void;
-  /** Read-only views, such as the demo dossier, hide the add action. */
+  /** Refreshes the dossier once a manual connection is excluded or unlinked. */
+  onCharactersChanged?: (change: ConnectedCharacterChange) => void;
+  /** Read-only views, such as the demo dossier, hide the add and row actions. */
   canAddCharacters?: boolean;
 }>;
 
@@ -44,6 +50,7 @@ const evidenceStateLabel = {
 export function DossierCharacterList({
   characters,
   onCharacterAdded,
+  onCharactersChanged,
   root,
   canAddCharacters = true
 }: DossierCharacterListProps) {
@@ -98,7 +105,9 @@ export function DossierCharacterList({
       >
         {characters.map((character) => (
           <li
-            className="dossier-character-row"
+            className={`dossier-character-row${
+              character.excluded ? " dossier-character-row--excluded" : ""
+            }`}
             key={`${character.key.region}/${character.key.realm}/${character.key.name}`}
           >
             <div>
@@ -127,6 +136,11 @@ export function DossierCharacterList({
               <span className="source-badge">
                 {sourceLabel[character.source]}
               </span>
+              {character.excluded ? (
+                <span className="source-badge source-badge--excluded">
+                  Excluded
+                </span>
+              ) : null}
               {character.evidenceState === "scanning" ? (
                 <span
                   aria-label={evidenceStateLabel.scanning}
@@ -154,6 +168,13 @@ export function DossierCharacterList({
                     {evidenceStateLabel.waiting}
                   </span>
                 </span>
+              ) : null}
+              {canAddCharacters && character.source === "manually_added" ? (
+                <DossierCharacterMenu
+                  character={character}
+                  onChanged={(change) => onCharactersChanged?.(change)}
+                  root={root}
+                />
               ) : null}
             </div>
           </li>

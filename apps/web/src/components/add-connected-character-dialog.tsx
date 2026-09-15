@@ -10,6 +10,7 @@ import {
 } from "@slashwho/domain";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { closeDialog, openDialog, supportsModalDialog } from "./modal-dialog";
 import {
   CharacterIdentityFields,
   emptyCharacterIdentity,
@@ -52,25 +53,6 @@ function resolveIdentity(identity: CharacterIdentity): CharacterKey | null {
       return null;
     }
   }
-}
-
-/**
- * jsdom, and browsers without dialog support, implement neither showModal nor
- * close. showModal gives the top layer, an inert backdrop and Escape handling
- * where it exists; the open attribute is the honest fallback everywhere else.
- */
-function supportsModalDialog(dialog: HTMLDialogElement): boolean {
-  return typeof dialog.showModal === "function";
-}
-
-function openDialog(dialog: HTMLDialogElement): void {
-  if (supportsModalDialog(dialog)) dialog.showModal();
-  else dialog.setAttribute("open", "");
-}
-
-function closeDialog(dialog: HTMLDialogElement): void {
-  if (typeof dialog.close === "function") dialog.close();
-  else dialog.removeAttribute("open");
 }
 
 function sameCharacter(left: CharacterKey, right: CharacterKey): boolean {

@@ -17,7 +17,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("demo page", () => {
+// Rendering the frozen dossier is the heaviest render in the suite: the whole
+// raid catalogue at once, three times over. On a loaded machine it sits close
+// to the 5s default, so this file gets room rather than a timing flake.
+describe("demo page", { timeout: 20_000 }, () => {
   it("keeps the captured dossier valid against the published contract", () => {
     const parsed = applicantDossierSchema.safeParse(fixture);
 

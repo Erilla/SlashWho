@@ -577,6 +577,124 @@ a {
   border-bottom: 1px solid var(--border);
 }
 
+/* An excluded character stays readable: it is dimmed to say it contributes
+   nothing, and its "Excluded" badge carries the state for anyone the dimming
+   does not reach. Its own menu keeps full contrast so it can be restored. */
+.dossier-character-row--excluded > div:first-child,
+.dossier-character-row--excluded .source-badge:not(.source-badge--excluded),
+.dossier-character-row--excluded .profile-links {
+  opacity: 0.55;
+}
+
+.source-badge--excluded {
+  border-color: currentcolor;
+  color: var(--text);
+}
+
+.dossier-character-menu {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.dossier-character-menu-trigger {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.dossier-character-menu-trigger:hover,
+.dossier-character-menu-trigger:focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.dossier-character-menu-trigger svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: currentcolor;
+}
+
+.dossier-character-menu-items {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 2;
+  display: flex;
+  min-width: 8rem;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--surface-raised);
+  padding: 0.25rem;
+}
+
+.dossier-character-menu-item {
+  border: none;
+  border-radius: 0.35rem;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.dossier-character-menu-item:hover:not(:disabled),
+.dossier-character-menu-item:focus-visible {
+  background: var(--surface);
+}
+
+.dossier-character-menu-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.dossier-character-menu-item--destructive {
+  color: #ed405b;
+}
+
+.dossier-character-menu-error {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 2;
+  max-width: min(18rem, calc(100vw - 2rem));
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--surface-raised);
+  padding: 0.4rem 0.6rem;
+}
+
+.dossier-character-remove-dialog {
+  max-width: min(26rem, calc(100vw - 2rem));
+  width: 100%;
+  margin: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 1.25rem;
+}
+
+.dossier-character-remove-dialog::backdrop {
+  background: rgb(9 9 15 / 70%);
+}
+
+.dossier-character-remove-dialog .section-heading {
+  margin-top: 0;
+}
+
 .dossier-character-name {
   color: var(--text);
   font-weight: 720;

@@ -1487,6 +1487,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           class_name: string | null;
           level: number | null;
           raider_io_url: string | null;
+          excluded: boolean;
         }>(
           // Left join: a connection linked before discovery has no character
           // row yet, and must still be listed so the dossier can show it as
@@ -1497,7 +1498,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                   connected.display_name,
                   connected.class_name,
                   connected.level,
-                  connected.raider_io_url
+                  connected.raider_io_url,
+                  connection.excluded_at IS NOT NULL AS excluded
            FROM manual_dossier_connections connection
            JOIN characters owner ON owner.id = connection.root_character_id
            LEFT JOIN characters connected
@@ -1534,9 +1536,60 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             // has none, and sorts last rather than claiming a rank.
             level: row.level ?? 0,
             raiderIoUrl: row.raider_io_url ?? toRaiderIoUrl(key),
-            pending: row.display_name === null
+            pending: row.display_name === null,
+            excluded: row.excluded
           };
         });
+      },
+
+      async setExcluded(root, character, excluded) {
+        const result = await pool.query(
+          `UPDATE manual_dossier_connections connection
+           SET excluded_at = CASE WHEN $7::boolean THEN now() ELSE NULL END
+           FROM characters owner
+           WHERE owner.id = connection.root_character_id
+             AND owner.region = $1
+             AND owner.realm_slug = $2
+             AND owner.normalized_name = $3
+             AND connection.connected_region = $4
+             AND connection.connected_realm_slug = $5
+             AND connection.connected_normalized_name = $6`,
+          [
+            root.region,
+            root.realm,
+            root.name,
+            character.region,
+            character.realm,
+            character.name,
+            excluded
+          ]
+        );
+        return result.rowCount === 1 ? "updated" : "missing";
+      },
+
+      async remove(root, character) {
+        // Only the link is deleted. The character row and every snapshot that
+        // found it are shared with other dossiers and stay untouched.
+        const result = await pool.query(
+          `DELETE FROM manual_dossier_connections connection
+           USING characters owner
+           WHERE owner.id = connection.root_character_id
+             AND owner.region = $1
+             AND owner.realm_slug = $2
+             AND owner.normalized_name = $3
+             AND connection.connected_region = $4
+             AND connection.connected_realm_slug = $5
+             AND connection.connected_normalized_name = $6`,
+          [
+            root.region,
+            root.realm,
+            root.name,
+            character.region,
+            character.realm,
+            character.name
+          ]
+        );
+        return result.rowCount === 1 ? "removed" : "missing";
       }
     },
 

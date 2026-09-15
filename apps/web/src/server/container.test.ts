@@ -135,6 +135,12 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     },
     async readInitial() {
       return { kind: "not_ready" as const };
+    },
+    async setConnectedCharacterExclusion() {
+      return { kind: "updated" as const };
+    },
+    async removeConnectedCharacter() {
+      return { kind: "removed" as const };
     }
   };
 

@@ -239,3 +239,19 @@ export async function suppressCharacter(
     await pool.end();
   }
 }
+
+/** Links a character to a dossier the way the Add character action does. */
+export async function seedManualConnection(
+  root: CharacterKey,
+  character: CharacterKey
+): Promise<void> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    await createPostgresRepositories(pool).manualConnections.add(
+      root,
+      character
+    );
+  } finally {
+    await pool.end();
+  }
+}

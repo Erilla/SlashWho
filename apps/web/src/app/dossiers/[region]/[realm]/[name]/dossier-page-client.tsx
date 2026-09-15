@@ -519,6 +519,17 @@ export function DossierPageClient({
                 );
                 void refreshDossier();
               }}
+              onCharactersChanged={(change) => {
+                const name = formatCharacterDisplayName(change.displayName);
+                setNotice(
+                  change.kind === "removed"
+                    ? `${name} has been removed from this dossier.`
+                    : change.kind === "excluded"
+                      ? `${name} is excluded from this dossier.`
+                      : `${name} is included in this dossier again.`
+                );
+                void refreshDossier();
+              }}
               root={dossier.root}
             />
             <DossierCuttingEdgeList

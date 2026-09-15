@@ -32,6 +32,8 @@ export const dossierCharacterSchema = z
     raiderIoUrl: z.url(),
     source: dossierSourceLabelSchema,
     evidenceState: dossierEvidenceStateSchema.optional(),
+    /** A manually added character a reviewer has excluded from the evidence. */
+    excluded: z.literal(true).optional(),
     /** @deprecated Use evidenceState for the precise scan state. */
     researchState: z.enum(["complete", "gathering"]).optional()
   })
@@ -177,6 +179,11 @@ export const createDossierRequestSchema = z
   .object({ characterUrl: z.url() })
   .strict();
 
+/** Hides a manually added character from the dossier evidence, or restores it. */
+export const connectedCharacterExclusionRequestSchema = z
+  .object({ characterUrl: z.url(), excluded: z.boolean() })
+  .strict();
+
 export const dossierStartResponseSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ready") }).strict(),
   z
@@ -213,5 +220,8 @@ export type ApplicantDossierCharacterParses = z.infer<
   typeof applicantDossierCharacterParsesSchema
 >;
 export type CreateDossierRequest = z.infer<typeof createDossierRequestSchema>;
+export type ConnectedCharacterExclusionRequest = z.infer<
+  typeof connectedCharacterExclusionRequestSchema
+>;
 export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;

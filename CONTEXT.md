@@ -58,3 +58,12 @@ character, so its own Raider.IO alts and Blizzard guild-roster fingerprint
 matches join the dossier as well. It is distinct from snapshot-discovered links
 and is excluded when the target has an active removal request.
 _Avoid_: Verified manual alt, ownership claim, manual alt list
+
+**Excluded connection**:
+A manual connection a reviewer has hidden from one dossier's evidence. The
+character keeps its row, greyed and labelled, so the exclusion can be
+reversed; it contributes no kills, wipes, parses or Cutting Edge, raises no
+limitation, and spends no character-cap slot. It is scoped to the dossier it
+was made on, and it does not disturb the characters that connection's own
+discovery run found.
+_Avoid_: Removal request, suppression, blacklisted alt
