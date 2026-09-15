@@ -61,6 +61,18 @@ describe("Blizzard Journal raid catalogue", () => {
     ).toBeNull();
   });
 
+  it("excludes the Dragon Isles expansion container from raid metadata", () => {
+    expect(
+      normalizeJournalRaid({
+        id: 1205,
+        name: "Dragon Isles",
+        category: { type: "RAID" },
+        modes: [{ mode: { type: "MYTHIC" } }],
+        encounters: [{ id: 2515, name: "Strunraan, The Sky's Misery" }]
+      })
+    ).toBeNull();
+  });
+
   it("walks Journal tiers and deduplicates Mythic raid instances", async () => {
     const urls: URL[] = [];
     const fetch = async (input: string | URL) => {

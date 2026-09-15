@@ -1127,49 +1127,6 @@
       ]
     },
     {
-      "journalRaidId": "1205",
-      "raidName": "Dragon Isles",
-      "imageUrl": "https://render.worldofwarcraft.com/eu/zones/dragon-isles-small.jpg",
-      "encounters": [
-        {
-          "journalBossId": "2515",
-          "bossName": "Strunraan, The Sky's Misery",
-          "bossOrder": 1,
-          "imageUrl": null
-        },
-        {
-          "journalBossId": "2506",
-          "bossName": "Basrikron, The Shale Wing",
-          "bossOrder": 2,
-          "imageUrl": null
-        },
-        {
-          "journalBossId": "2517",
-          "bossName": "Bazual, The Dreaded Flame",
-          "bossOrder": 3,
-          "imageUrl": null
-        },
-        {
-          "journalBossId": "2518",
-          "bossName": "Liskanoth, The Futurebane",
-          "bossOrder": 4,
-          "imageUrl": null
-        },
-        {
-          "journalBossId": "2531",
-          "bossName": "The Zaqali Elders",
-          "bossOrder": 5,
-          "imageUrl": null
-        },
-        {
-          "journalBossId": "2562",
-          "bossName": "Aurostor, The Hibernator",
-          "bossOrder": 6,
-          "imageUrl": null
-        }
-      ]
-    },
-    {
       "journalRaidId": "1207",
       "raidName": "Amirdrassil, the Dream's Hope",
       "imageUrl": "https://render.worldofwarcraft.com/eu/zones/amirdrassil-the-dreams-hope-small.jpg",

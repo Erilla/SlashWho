@@ -1104,6 +1104,28 @@ describe("applicant dossier", () => {
     ]);
   });
 
+  it("excludes Dragon Isles world-boss evidence from historic raids", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "1205",
+          raidName: "Dragon Isles",
+          bossId: "2515",
+          bossName: "Strunraan, The Sky's Misery",
+          journalBossId: "2515"
+        }),
+        kill(root, { raidName: "Nerub-ar Palace", journalBossId: "2602" })
+      ],
+      limitations: []
+    });
+
+    expect(dossier.raids).toEqual([
+      expect.objectContaining({ raidName: "Nerub-ar Palace" })
+    ]);
+  });
+
   it("excludes named dungeon zones from historic raid evidence", () => {
     // Break caught: a named dungeon zone could bypass the generic-zone filter
     // and present its boss as raid evidence.
