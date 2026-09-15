@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { CharacterKey } from "@slashwho/domain";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createRaiderIoClient } from "./index";
 import recordedRankings from "./fixtures/queen-ansurek-rankings.json";
@@ -114,6 +114,34 @@ function clientFor(name: FixtureName) {
 }
 
 describe("Raider.IO gateway", () => {
+  it("attaches the configured access key to every request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          viewUserCharactersApi: {
+            name: "Foo",
+            characters: []
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    );
+    const client = createRaiderIoClient({
+      fetch: fetchMock,
+      baseUrl: "https://raider.io",
+      timeoutMs: 5_000,
+      accessKey: "test-access-key"
+    });
+
+    await client.getClaimedCharacters("Foo");
+
+    const requestedUrl = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
+    expect(requestedUrl.searchParams.get("access_key")).toBe("test-access-key");
+  });
+
   it("normalizes a character and exposes its visible owner", async () => {
     await expect(
       clientFor("character-visible-owner").getCharacter(sentinel)
