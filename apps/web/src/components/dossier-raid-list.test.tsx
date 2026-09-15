@@ -1171,3 +1171,35 @@ it("shows first-kill and best parse summaries before evidence details are opened
     within(eventParses).getByRole("group", { name: "Ryii parses" })
   ).toBeVisible();
 });
+
+it("lists bosses within a raid last-to-first, with the raid order untouched", () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              { ...boss, bossId: "1", bossName: "Ulgrax the Devourer" },
+              { ...boss, bossId: "2", bossName: "The Bloodbound Horror" },
+              { ...boss, bossId: "3", bossName: "Queen Ansurek" }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  expect(
+    screen.getAllByRole("group", { name: /evidence$/ }).map((group) =>
+      group.getAttribute("aria-label")
+    )
+  ).toEqual([
+    "Queen Ansurek evidence",
+    "The Bloodbound Horror evidence",
+    "Ulgrax the Devourer evidence"
+  ]);
+});

@@ -514,7 +514,7 @@ export function DossierRaidList({
                   <span className="dossier-raid-name">{raid.raidName}</span>
                 </h3>
                 <div className="dossier-boss-list">
-                  {raid.bosses.map((boss) => (
+                  {[...raid.bosses].reverse().map((boss) => (
                     <article
                       aria-label={`${boss.bossName} evidence`}
                       className={`dossier-boss dossier-boss--${boss.state}`}
