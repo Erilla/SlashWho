@@ -777,3 +777,93 @@ describe("DossierPageClient queued connected characters", () => {
     ).toBeVisible();
   });
 });
+
+describe("DossierPageClient connected-character exclusions", () => {
+  const withManualCharacter = (source: ApplicantDossier): ApplicantDossier => ({
+    ...source,
+    characters: [
+      ...source.characters,
+      {
+        key: { region: "eu", realm: "silvermoon", name: "manual" },
+        displayName: "Manual",
+        className: "Warrior",
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        source: "manually_added"
+      }
+    ]
+  });
+
+  it("refetches the dossier and says what changed when a character is excluded", async () => {
+    // The row greys out only once the refreshed dossier arrives, so nothing
+    // else tells the reviewer their exclusion took effect.
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: URL | RequestInfo) =>
+      String(input).endsWith("/connected-characters")
+        ? new Response(JSON.stringify({ kind: "ready" }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          })
+        : new Response(JSON.stringify(withManualCharacter(expanded)), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withManualCharacter(initial)}
+        jobId={null}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Manual" })
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Exclude" }));
+
+    expect(
+      await screen.findByText("Manual is excluded from this dossier.")
+    ).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "Expanded evidence" })
+    ).toBeVisible();
+  });
+
+  it("says a removed character has been unlinked", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL | RequestInfo) =>
+        String(input).endsWith("/connected-characters")
+          ? new Response(JSON.stringify({ kind: "ready" }), {
+              status: 200,
+              headers: { "content-type": "application/json" }
+            })
+          : new Response(JSON.stringify(expanded), {
+              status: 200,
+              headers: { "content-type": "application/json" }
+            })
+      )
+    );
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withManualCharacter(initial)}
+        jobId={null}
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Manual" })
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Remove…" }));
+    await user.click(screen.getByRole("button", { name: "Remove character" }));
+
+    expect(
+      await screen.findByText("Manual has been removed from this dossier.")
+    ).toBeVisible();
+  });
+});

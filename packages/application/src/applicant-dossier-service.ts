@@ -49,6 +49,15 @@ export type CreateDossierCommand = CreateSearchCommand;
 export type CreateDossierResult = CreateSearchResult;
 export type ReadDossierResult =
   { kind: "ready"; dossier: ContractApplicantDossier } | { kind: "not_ready" };
+/** `missing` covers a link another reviewer has already removed. */
+export type ConnectedCharacterExclusionResult =
+  | { kind: "updated" }
+  | { kind: "missing" }
+  | { kind: "invalid"; code: "invalid_character_url" };
+export type ConnectedCharacterRemovalResult =
+  | { kind: "removed" }
+  | { kind: "missing" }
+  | { kind: "invalid"; code: "invalid_character_url" };
 
 /**
  * Visitor-supplied credentials for a single dossier read. Gateways built from
@@ -86,6 +95,16 @@ export interface ApplicantDossierService {
     overrides?: DossierGatewayOverrides,
     scope?: MeasurementScope
   ): Promise<ReadDossierResult>;
+  setConnectedCharacterExclusion(
+    root: CharacterKey,
+    input: { characterUrl: string; excluded: boolean },
+    scope?: MeasurementScope
+  ): Promise<ConnectedCharacterExclusionResult>;
+  removeConnectedCharacter(
+    root: CharacterKey,
+    input: { characterUrl: string },
+    scope?: MeasurementScope
+  ): Promise<ConnectedCharacterRemovalResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -415,7 +434,8 @@ async function gatherCuttingEdgeEvidence(
 
 function serializeDossierSubject(
   character: DossierSubject,
-  evidenceState?: DossierEvidenceState
+  evidenceState?: DossierEvidenceState,
+  excluded = false
 ) {
   return {
     key: character.key,
@@ -430,6 +450,7 @@ function serializeDossierSubject(
           : character.source === "fingerprint"
             ? ("fingerprint_derived" as const)
             : ("raiderio_declared" as const),
+    ...(excluded ? { excluded: true as const } : {}),
     ...(evidenceState
       ? {
           evidenceState,
@@ -558,6 +579,13 @@ async function assembleDossier(options: {
   root: CharacterKey;
   subjects: readonly DossierSubject[];
   skippedSubjects: readonly DossierSubject[];
+  /**
+   * Manually added characters a reviewer has excluded. They are listed so the
+   * exclusion can be reversed, and are kept out of every evidence request and
+   * out of `buildApplicantDossier` entirely: an exclusion is a deliberate
+   * choice, so it raises no limitation and leaves no catalogue gap.
+   */
+  excludedSubjects: readonly DossierSubject[];
   research: ContractApplicantDossier["research"];
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
@@ -628,9 +656,16 @@ async function assembleDossier(options: {
             "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
         }
       : options.research,
-    characters: options.subjects.map((character, index) =>
-      serializeDossierSubject(character, evidence[index]?.evidenceState)
-    ),
+    characters: [
+      ...options.subjects.map((character, index) =>
+        serializeDossierSubject(character, evidence[index]?.evidenceState)
+      ),
+      // Excluded rows sit after the researched ones rather than holding their
+      // ranked position, so the list reads top-down as evidence then exclusions.
+      ...options.excludedSubjects.map((character) =>
+        serializeDossierSubject(character, undefined, true)
+      )
+    ],
     limitations: dossier.limitations.map((item) => ({
       ...item,
       observedAt: item.observedAt ?? new Date().toISOString(),
@@ -884,6 +919,33 @@ export function createApplicantDossierService(options: {
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
 
+    async setConnectedCharacterExclusion(root, input, scope) {
+      let target: CharacterKey;
+      try {
+        target = parseApplicantCharacterUrl(input.characterUrl);
+      } catch {
+        return { kind: "invalid", code: "invalid_character_url" };
+      }
+      const result = await scopedRepositories(
+        scope
+      ).manualConnections.setExcluded(root, target, input.excluded);
+      return result === "updated" ? { kind: "updated" } : { kind: "missing" };
+    },
+
+    async removeConnectedCharacter(root, input, scope) {
+      let target: CharacterKey;
+      try {
+        target = parseApplicantCharacterUrl(input.characterUrl);
+      } catch {
+        return { kind: "invalid", code: "invalid_character_url" };
+      }
+      const result = await scopedRepositories(scope).manualConnections.remove(
+        root,
+        target
+      );
+      return result === "removed" ? { kind: "removed" } : { kind: "missing" };
+    },
+
     async readInitial(key, signal, overrides, scope) {
       const repositories = scopedRepositories(scope);
       // Initial evidence precedes the worker's snapshot filter. One bounded
@@ -923,6 +985,7 @@ export function createApplicantDossierService(options: {
             }
           ],
           skippedSubjects: [],
+          excludedSubjects: [],
           research: {
             state: "initial",
             message:
@@ -962,16 +1025,24 @@ export function createApplicantDossierService(options: {
       // Level only orders the list; it is not part of a dossier subject.
       type RankedSubject = DossierSubject & Readonly<{ level: number }>;
       const manual: RankedSubject[] = [];
+      const excluded: RankedSubject[] = [];
       for (const character of await repositories.manualConnections.list(
         snapshot.rootKey
       )) {
-        const admit = (candidate: RankedSubject) => {
+        const admit = (candidate: RankedSubject, into = manual) => {
           const id = canonicalCharacterId(candidate.key);
           if (seen.has(id)) return;
           seen.add(id);
-          manual.push(candidate);
+          into.push(candidate);
         };
-        admit({ ...character, source: "manually_added" });
+        // An excluded character joins the list and nothing else, so the
+        // exclusion can be reversed from the same row. Its own discoveries
+        // still follow: excluding one character is not undoing the add, and
+        // those characters stand on their own evidence.
+        admit(
+          { ...character, source: "manually_added" },
+          character.excluded ? excluded : manual
+        );
         // An undiscovered character has no snapshot to merge yet. Its own run
         // is still queued, and the next read picks the characters up.
         if (character.pending) continue;
@@ -1002,12 +1073,22 @@ export function createApplicantDossierService(options: {
       );
       const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
       const skipped = ordered.slice(selected.length);
+      // Excluded characters are ranked among themselves only, so one of them
+      // never costs a researchable character its place under the cap.
+      const excludedOrdered = [...excluded].sort(
+        (left, right) =>
+          right.level - left.level ||
+          left.key.region.localeCompare(right.key.region, "en") ||
+          left.key.realm.localeCompare(right.key.realm, "en") ||
+          left.key.name.localeCompare(right.key.name, "en")
+      );
       return {
         kind: "ready",
         dossier: await assembleDossier({
           root: snapshot.rootKey,
           subjects: selected,
           skippedSubjects: skipped,
+          excludedSubjects: excludedOrdered,
           research:
             snapshot.state === "complete"
               ? {

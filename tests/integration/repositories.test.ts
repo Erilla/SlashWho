@@ -875,7 +875,8 @@ describe("PostgreSQL repositories", () => {
           level: 0,
           raiderIoUrl:
             "https://raider.io/characters/eu/silvermoon/undiscovered",
-          pending: true
+          pending: true,
+          excluded: false
         }
       ]);
     });
@@ -922,7 +923,8 @@ describe("PostgreSQL repositories", () => {
           className: "Mage",
           level: 80,
           raiderIoUrl: "https://raider.io/characters/us/area-52/other",
-          pending: false
+          pending: false,
+          excluded: false
         }
       ]);
     });
@@ -933,6 +935,82 @@ describe("PostgreSQL repositories", () => {
       await repositories.suppressions.suppress(pendingKey, "removal", null);
 
       expect(await repositories.manualConnections.list(rootKey)).toEqual([]);
+    });
+
+    it("marks a connection as excluded and restores it again", async () => {
+      await seedCompleteSnapshot(repositories);
+      await repositories.manualConnections.add(rootKey, pendingKey);
+
+      await expect(
+        repositories.manualConnections.setExcluded(rootKey, pendingKey, true)
+      ).resolves.toBe("updated");
+      expect(await repositories.manualConnections.list(rootKey)).toMatchObject([
+        { excluded: true }
+      ]);
+
+      await expect(
+        repositories.manualConnections.setExcluded(rootKey, pendingKey, false)
+      ).resolves.toBe("updated");
+      expect(await repositories.manualConnections.list(rootKey)).toMatchObject([
+        { excluded: false }
+      ]);
+    });
+
+    it("reports an exclusion of a character that is not linked as missing", async () => {
+      // Two reviewers can hold the same dossier, so the second must be told
+      // the link has gone rather than shown a change it did not make.
+      await seedCompleteSnapshot(repositories);
+
+      await expect(
+        repositories.manualConnections.setExcluded(rootKey, pendingKey, true)
+      ).resolves.toBe("missing");
+    });
+
+    it("unlinks a connection without touching the character or its snapshot", async () => {
+      await seedCompleteSnapshot(repositories, {
+        characters: [observation(rootKey, "Ryii"), observation(altKey, "Other")]
+      });
+      await repositories.manualConnections.add(rootKey, altKey);
+
+      await expect(
+        repositories.manualConnections.remove(rootKey, altKey)
+      ).resolves.toBe("removed");
+
+      expect(await repositories.manualConnections.list(rootKey)).toEqual([]);
+      // #186: removal unlinks, it does not delete the discovered character or
+      // the snapshot that found it.
+      const snapshot = await repositories.snapshots.getCurrent(rootKey);
+      expect(
+        snapshot?.characters.map((character) => character.key.name)
+      ).toContain(altKey.name);
+    });
+
+    it("reports a removal of a character that is not linked as missing", async () => {
+      await seedCompleteSnapshot(repositories);
+
+      await expect(
+        repositories.manualConnections.remove(rootKey, pendingKey)
+      ).resolves.toBe("missing");
+    });
+
+    it("keeps an exclusion scoped to the dossier it was made on", async () => {
+      // A connection is stored per root, so excluding a character on one
+      // applicant's dossier must say nothing about anyone else's.
+      await seedCompleteSnapshot(repositories, {
+        characters: [observation(rootKey, "Ryii"), observation(altKey, "Other")]
+      });
+      await repositories.manualConnections.add(rootKey, pendingKey);
+      await repositories.manualConnections.add(altKey, pendingKey);
+
+      await repositories.manualConnections.setExcluded(
+        rootKey,
+        pendingKey,
+        true
+      );
+
+      expect(await repositories.manualConnections.list(altKey)).toMatchObject([
+        { excluded: false }
+      ]);
     });
   });
 

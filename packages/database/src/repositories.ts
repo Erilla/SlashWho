@@ -111,6 +111,8 @@ export interface ManualConnectionCharacter {
   level: number;
   raiderIoUrl: string;
   pending: boolean;
+  /** A reviewer has hidden this character from the dossier evidence. */
+  excluded: boolean;
 }
 
 export interface ManualConnectionRepository {
@@ -119,6 +121,20 @@ export interface ManualConnectionRepository {
     root: CharacterKey,
     character: CharacterKey
   ): Promise<"added" | "duplicate">;
+  /**
+   * Hides the character from the dossier evidence, or restores it. Reports a
+   * connection that is no longer linked rather than reporting a change it did
+   * not make: two reviewers can hold the same dossier at once.
+   */
+  setExcluded(
+    root: CharacterKey,
+    character: CharacterKey,
+    excluded: boolean
+  ): Promise<"updated" | "missing">;
+  remove(
+    root: CharacterKey,
+    character: CharacterKey
+  ): Promise<"removed" | "missing">;
 }
 
 export interface SuppressionRepository {

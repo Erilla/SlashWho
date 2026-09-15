@@ -182,7 +182,12 @@ export const manualDossierConnections = pgTable(
     connectedNormalizedName: text("connected_normalized_name").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
-      .notNull()
+      .notNull(),
+    /**
+     * When a reviewer hid this character from the dossier evidence. A timestamp
+     * rather than a flag, so the moment the exclusion was made is recoverable.
+     */
+    excludedAt: timestamp("excluded_at", { withTimezone: true })
   },
   (table) => [
     primaryKey({

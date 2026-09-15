@@ -122,7 +122,9 @@ function fixture(
     },
     manualConnections: {
       add: vi.fn().mockResolvedValue("added"),
-      list: vi.fn().mockResolvedValue([])
+      list: vi.fn().mockResolvedValue([]),
+      setExcluded: vi.fn().mockResolvedValue("updated"),
+      remove: vi.fn().mockResolvedValue("removed")
     },
     runs: { create: runsCreate },
     evidence: {
@@ -1854,5 +1856,235 @@ describe("manually connected characters", () => {
         (character) => character.key.name === "manualalt"
       )
     ).toMatchObject({ source: "fingerprint_derived" });
+  });
+
+  it("lists an excluded connection without gathering any evidence for it", async () => {
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "Manual",
+        className: "Warrior",
+        level: 80,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: false,
+        excluded: true
+      }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    // The row stays, so the exclusion can be reversed from the same list, but
+    // nothing it could contribute reaches the evidence.
+    expect(
+      result.dossier.characters.find(
+        (character) => character.key.name === "manual"
+      )
+    ).toMatchObject({ source: "manually_added", excluded: true });
+    expect(repositories.evidence.reserve).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: manualKey })
+    );
+  });
+
+  it("raises no limitation for an excluded connection", async () => {
+    // An exclusion is a deliberate choice, not a gap in the research, so it
+    // must not be reported alongside characters the request cap skipped.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "Manual",
+        className: "Warrior",
+        level: 80,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: false,
+        excluded: true
+      }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    expect(
+      result.dossier.limitations.filter(
+        (limitation) => limitation.character?.name === "manual"
+      )
+    ).toEqual([]);
+  });
+
+  it("keeps the characters discovered through an excluded connection", async () => {
+    // Excluding one character is not undoing the add: its discovery run found
+    // characters that stand on their own evidence.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "Manual",
+        className: "Warrior",
+        level: 80,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: false,
+        excluded: true
+      }
+    ]);
+    (
+      repositories.snapshots.getCurrent as ReturnType<typeof vi.fn>
+    ).mockImplementation(async (key: CharacterKey) =>
+      key.name === "manual"
+        ? {
+            ...storedSnapshot([
+              {
+                characterId: "10000000-0000-4000-8000-000000000032",
+                key: manualAlt,
+                displayName: "Manualalt",
+                className: "Rogue",
+                level: 80,
+                raiderIoUrl:
+                  "https://raider.io/characters/eu/silvermoon/manualalt",
+                source: "fingerprint",
+                displayOrder: 0
+              }
+            ]),
+            rootKey: manualKey
+          }
+        : storedSnapshot()
+    );
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    const manualAltCharacter = result.dossier.characters.find(
+      (character) => character.key.name === "manualalt"
+    );
+    expect(manualAltCharacter).toMatchObject({ source: "fingerprint_derived" });
+    expect(manualAltCharacter?.excluded).toBeUndefined();
+  });
+
+  it("spends no character-cap slot on an excluded connection", async () => {
+    // Break caught: ranking the excluded row alongside the rest let it push a
+    // researchable character past the cap while contributing nothing.
+    const { dossiers, repositories } = fixture({ characterCap: 2 });
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      {
+        key: manualKey,
+        displayName: "Manual",
+        className: "Warrior",
+        level: 80,
+        raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        pending: false,
+        excluded: true
+      }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    const names = result.dossier.characters.map(
+      (character) => character.key.name
+    );
+    expect(names).toContain("ryii");
+    expect(names).toContain("ryalts");
+    expect(names).toContain("manual");
+  });
+
+  it("excludes a connected character on request", async () => {
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.setExcluded as ReturnType<typeof vi.fn>
+    ).mockResolvedValue("updated");
+
+    await expect(
+      dossiers.setConnectedCharacterExclusion(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        excluded: true
+      })
+    ).resolves.toEqual({ kind: "updated" });
+
+    expect(repositories.manualConnections.setExcluded).toHaveBeenCalledWith(
+      root,
+      manualKey,
+      true
+    );
+  });
+
+  it("reports an exclusion of an unlinked character as missing", async () => {
+    // Two reviewers can hold the same dossier. The second must be told the
+    // link has gone rather than shown a success it did not cause.
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.setExcluded as ReturnType<typeof vi.fn>
+    ).mockResolvedValue("missing");
+
+    await expect(
+      dossiers.setConnectedCharacterExclusion(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual",
+        excluded: false
+      })
+    ).resolves.toEqual({ kind: "missing" });
+  });
+
+  it("refuses an exclusion whose character cannot be parsed", async () => {
+    const { dossiers, repositories } = fixture();
+
+    await expect(
+      dossiers.setConnectedCharacterExclusion(root, {
+        characterUrl: "not-a-character",
+        excluded: true
+      })
+    ).resolves.toEqual({ kind: "invalid", code: "invalid_character_url" });
+
+    expect(repositories.manualConnections.setExcluded).not.toHaveBeenCalled();
+  });
+
+  it("unlinks a connected character on request", async () => {
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.remove as ReturnType<typeof vi.fn>
+    ).mockResolvedValue("removed");
+
+    await expect(
+      dossiers.removeConnectedCharacter(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual"
+      })
+    ).resolves.toEqual({ kind: "removed" });
+
+    expect(repositories.manualConnections.remove).toHaveBeenCalledWith(
+      root,
+      manualKey
+    );
+  });
+
+  it("reports the removal of an unlinked character as missing", async () => {
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.remove as ReturnType<typeof vi.fn>
+    ).mockResolvedValue("missing");
+
+    await expect(
+      dossiers.removeConnectedCharacter(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/manual"
+      })
+    ).resolves.toEqual({ kind: "missing" });
+  });
+
+  it("refuses a removal whose character cannot be parsed", async () => {
+    const { dossiers, repositories } = fixture();
+
+    await expect(
+      dossiers.removeConnectedCharacter(root, {
+        characterUrl: "not-a-character"
+      })
+    ).resolves.toEqual({ kind: "invalid", code: "invalid_character_url" });
+
+    expect(repositories.manualConnections.remove).not.toHaveBeenCalled();
   });
 });

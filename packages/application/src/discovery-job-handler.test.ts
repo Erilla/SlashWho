@@ -275,6 +275,12 @@ function createMemoryRepositories(): Repositories {
       },
       async list() {
         return [];
+      },
+      async setExcluded() {
+        return "updated" as const;
+      },
+      async remove() {
+        return "removed" as const;
       }
     },
     suppressions: {

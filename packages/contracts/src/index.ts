@@ -17,6 +17,7 @@ export type {
 export {
   applicantDossierSchema,
   characterKeySchema,
+  connectedCharacterExclusionRequestSchema,
   createDossierRequestSchema,
   dossierStartResponseSchema,
   dossierBossSchema,
@@ -33,6 +34,7 @@ export {
 export type {
   ApplicantDossier,
   CharacterKey,
+  ConnectedCharacterExclusionRequest,
   CreateDossierRequest,
   DossierStartResponse,
   DossierCharacter,

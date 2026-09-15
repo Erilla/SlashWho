@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -305,4 +305,127 @@ it("passes the already-connected characters to the dialog", async () => {
     screen.getByText("Ryalts is already connected to this dossier.")
   ).toBeVisible();
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("offers row actions only for manually added characters", () => {
+  // #186: source-discovered links are not a reviewer's to exclude or unlink,
+  // so only a manual link carries the actions menu.
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: "Mage",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryalts" },
+          displayName: "Ryalts",
+          className: "Priest",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+          source: "fingerprint_derived"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "manual" },
+          displayName: "Manual",
+          className: "Warrior",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+          source: "manually_added"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  expect(
+    screen.getByRole("button", { name: "Actions for Manual" })
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "Actions for Ryalts" })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Actions for Ryii" })
+  ).not.toBeInTheDocument();
+});
+
+it("hides the row actions from a read-only dossier", () => {
+  // The demo dossier is frozen, so its rows must offer nothing to change.
+  render(
+    <DossierCharacterList
+      canAddCharacters={false}
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "manual" },
+          displayName: "Manual",
+          className: "Warrior",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+          source: "manually_added"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  expect(
+    screen.queryByRole("button", { name: "Actions for Manual" })
+  ).not.toBeInTheDocument();
+});
+
+it("marks an excluded character in text rather than by dimming alone", () => {
+  // Colour and opacity are not available to every reader, so the state is
+  // said as well as shown.
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "manual" },
+          displayName: "Manual",
+          className: "Warrior",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+          source: "manually_added",
+          excluded: true
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  expect(screen.getByText("Excluded")).toBeVisible();
+  expect(screen.getByRole("listitem")).toHaveClass(
+    "dossier-character-row--excluded"
+  );
+});
+
+it("refreshes the dossier when a row action changes a connection", async () => {
+  const user = userEvent.setup();
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    json: async () => ({ kind: "ready" })
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const onCharactersChanged = vi.fn();
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "manual" },
+          displayName: "Manual",
+          className: "Warrior",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+          source: "manually_added"
+        }
+      ]}
+      onCharactersChanged={onCharactersChanged}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  await user.click(screen.getByRole("button", { name: "Actions for Manual" }));
+  await user.click(screen.getByRole("menuitem", { name: "Exclude" }));
+
+  await waitFor(() => expect(onCharactersChanged).toHaveBeenCalledTimes(1));
 });
