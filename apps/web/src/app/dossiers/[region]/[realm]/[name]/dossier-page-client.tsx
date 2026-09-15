@@ -10,6 +10,7 @@ import {
 } from "@slashwho/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { credentialHeaders, readStoredCredentials } from "../../../../../lib/api-credentials";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
   DossierCharacterName,
@@ -76,7 +77,8 @@ export function DossierPageClient({
     async function readInitialDossier() {
       const response = await fetch(`${dossierPath}?scope=initial`, {
         cache: "no-store",
-        signal: controller.signal
+        signal: controller.signal,
+        headers: credentialHeaders(readStoredCredentials())
       });
       const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
@@ -116,7 +118,8 @@ export function DossierPageClient({
     async function readCompletedDossier() {
       const response = await fetch(dossierPath, {
         cache: "no-store",
-        signal: controller.signal
+        signal: controller.signal,
+        headers: credentialHeaders(readStoredCredentials())
       });
       const body = await readJson(response);
       if (controller.signal.aborted) return;
