@@ -366,9 +366,13 @@ describe("Raider.IO gateway", () => {
   });
 
   it("does not report a private profile as throttling", async () => {
+    // The 403 response carries Retry-After so the only thing preventing
+    // onThrottle from firing is the 403 early-return running ahead of the
+    // throttle check, not the absence of a header.
     const throttles: unknown[] = [];
     const client = createRaiderIoClient({
-      fetch: async () => new Response("", { status: 403 }),
+      fetch: async () =>
+        new Response("", { status: 403, headers: { "Retry-After": "5" } }),
       baseUrl: "https://fixtures.invalid",
       timeoutMs: 50,
       onThrottle: () => throttles.push(true)

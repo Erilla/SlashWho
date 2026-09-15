@@ -220,9 +220,14 @@ function responseLimitation(
   if (response.status === 401 || response.status === 403) {
     return { kind: "limitation", code: "private" };
   }
-  if (response.status === 429) {
-    const retryAfter = retryAfterMs(response);
+  // Upstream asking us to back off is throttling whether or not it also sent
+  // 429 — a 503 carrying Retry-After is the same signal. This affects only
+  // when onThrottle fires, never the limitation this function returns.
+  const retryAfter = retryAfterMs(response);
+  if (response.status === 429 || retryAfter !== undefined) {
     onThrottle?.({ retryAfterMs: retryAfter });
+  }
+  if (response.status === 429) {
     return {
       kind: "limitation",
       code: "rate_limited",
