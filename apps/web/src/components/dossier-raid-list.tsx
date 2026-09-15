@@ -1,7 +1,7 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 
+import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
-import { DossierMediaFallback } from "./dossier-media-fallback";
 import { DossierParseList } from "./dossier-parse-list";
 import { UpstreamIconLink } from "./upstream-icon-link";
 import { GuildProfileLinks } from "./profile-links";
@@ -228,22 +228,6 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
     }));
 }
 
-function BossArtwork({ boss }: { boss: Boss }) {
-  return boss.imageUrl ? (
-    <img
-      alt={`${boss.bossName} artwork`}
-      className="dossier-boss-artwork"
-      loading="lazy"
-      src={boss.imageUrl}
-    />
-  ) : (
-    <DossierMediaFallback
-      alt={`${boss.bossName} artwork`}
-      className="dossier-boss-artwork"
-    />
-  );
-}
-
 function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
   const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
     (a, b) =>
@@ -277,7 +261,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
   return (
     <>
       <div className="dossier-boss-heading">
-        <BossArtwork boss={boss} />
+        <BossArtwork bossName={boss.bossName} imageUrl={boss.imageUrl} />
         <div>
           <h4 className="dossier-boss-title">
             <StatusIcon state="kill" />
@@ -383,7 +367,7 @@ function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
       return (
         <>
           <div className="dossier-boss-heading">
-            <BossArtwork boss={boss} />
+            <BossArtwork bossName={boss.bossName} imageUrl={boss.imageUrl} />
             <div>
               <h4 className="dossier-boss-title">
                 <StatusIcon state="wipe" />
@@ -409,7 +393,7 @@ function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
     case "no_logs":
       return (
         <div className="dossier-boss-heading dossier-boss-heading--muted">
-          <BossArtwork boss={boss} />
+          <BossArtwork bossName={boss.bossName} imageUrl={boss.imageUrl} />
           <div>
             <h4 className="dossier-boss-title">
               <StatusIcon state="no_logs" />
@@ -424,7 +408,7 @@ function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
     case "incomplete":
       return (
         <div className="dossier-boss-heading dossier-boss-heading--muted">
-          <BossArtwork boss={boss} />
+          <BossArtwork bossName={boss.bossName} imageUrl={boss.imageUrl} />
           <div>
             <h4>{boss.bossName}</h4>
             <p className="dossier-boss-state">Evidence incomplete</p>

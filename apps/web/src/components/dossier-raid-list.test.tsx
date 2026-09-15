@@ -339,6 +339,89 @@ it("keeps the raid heading visible when its banner artwork fails to load", () =>
   expect(recoveredArtwork).not.toHaveAttribute("hidden");
 });
 
+it("renders boss artwork at the enlarged intrinsic size", () => {
+  // Break caught: artwork without intrinsic dimensions reserves no space, so
+  // the boss name and evidence state shift as each image arrives.
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              { ...boss, imageUrl: "https://render.example/bosses/ansurek.jpg" }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const artwork = screen.getByRole("img", { name: "Queen Ansurek artwork" });
+  expect(artwork).toHaveAttribute("width", "112");
+  expect(artwork).toHaveAttribute("height", "112");
+});
+
+it("falls back to the placeholder when boss artwork fails to load", () => {
+  // Break caught: a Blizzard render that 404s left a broken-image marker
+  // beside the boss name, and hiding it collapsed the heading alignment.
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [
+              { ...boss, imageUrl: "https://render.example/bosses/missing.jpg" }
+            ]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const artwork = screen.getByRole("img", { name: "Queen Ansurek artwork" });
+  expect(artwork.tagName).toBe("IMG");
+
+  fireEvent.error(artwork);
+
+  const fallback = screen.getByRole("img", { name: "Queen Ansurek artwork" });
+  expect(fallback.tagName).toBe("svg");
+  expect(fallback).toHaveClass("dossier-boss-artwork");
+  expect(screen.queryByRole("img", { name: "" })).not.toBeInTheDocument();
+  expect(screen.getByText("Queen Ansurek")).toBeVisible();
+});
+
+it("shows the placeholder when a boss has no catalogued artwork", () => {
+  // Break caught: bosses missing upstream artwork must keep the same framed
+  // slot so the evidence rows stay aligned down the raid.
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={
+        [
+          {
+            raidId: "1273",
+            raidName: "Nerub-ar Palace",
+            imageUrl: null,
+            cuttingEdge: null,
+            bosses: [{ ...boss, imageUrl: null }]
+          }
+        ] satisfies ApplicantDossier["raids"]
+      }
+    />
+  );
+
+  const fallback = screen.getByRole("img", { name: "Queen Ansurek artwork" });
+  expect(fallback.tagName).toBe("svg");
+  expect(fallback).toHaveClass("dossier-boss-artwork");
+});
+
 it("keeps a text-first raid heading when official artwork is unavailable", () => {
   renderWithDossierCharacters(
     <DossierRaidList

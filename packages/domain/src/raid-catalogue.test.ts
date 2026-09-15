@@ -197,3 +197,17 @@ it("covers a historic tier the reviewed windows never reached", () => {
 it("leaves an unclosed current tier open-ended", () => {
   expect(lookupRaidCurrentContentWindow("1317")?.endsAt).toBeNull();
 });
+
+// Break caught: requiring the encounter's own name on a Journal creature left
+// 85 of 227 encounters with no artwork, because councils and subtitled bosses
+// name their creatures individually. Every catalogued boss is depicted
+// upstream, so a null here is a generator defect, not missing Blizzard data.
+it("catalogues artwork for every raid and boss", () => {
+  const withoutArtwork = supportedRaidCatalogue().flatMap((raid) => [
+    ...(raid.imageUrl === null ? [raid.raidName] : []),
+    ...raid.encounters
+      .filter((encounter) => encounter.imageUrl === null)
+      .map((encounter) => `${raid.raidName} / ${encounter.bossName}`)
+  ]);
+  expect(withoutArtwork).toEqual([]);
+});
