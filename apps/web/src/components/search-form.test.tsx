@@ -78,10 +78,6 @@ describe("SearchForm", () => {
 
     const character = screen.getByRole("textbox", { name: "Character/URL" });
     expect(character).toHaveAttribute("placeholder", "Character/URL");
-    expect(screen.getByRole("textbox", { name: "Realm" })).toHaveAttribute(
-      "placeholder",
-      "Realm"
-    );
     expect(screen.queryByText("Character name")).not.toBeInTheDocument();
 
     await user.click(character);
@@ -111,7 +107,6 @@ describe("SearchForm", () => {
     );
     render(<SearchForm />);
 
-    expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("eu");
     expect(
       screen.getByRole("button", { name: "Research applicant" })
     ).toHaveTextContent("→");
@@ -119,6 +114,7 @@ describe("SearchForm", () => {
       screen.getByRole("textbox", { name: "Character/URL" }),
       "Ryii"
     );
+    expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("eu");
     await user.type(
       screen.getByRole("textbox", { name: "Realm" }),
       "Silvermoon"
@@ -143,6 +139,39 @@ describe("SearchForm", () => {
         })
       })
     );
+  });
+
+  it("reveals the realm and region fields only once a character is entered", async () => {
+    const user = userEvent.setup();
+    render(<SearchForm />);
+
+    const character = screen.getByRole("textbox", { name: "Character/URL" });
+    expect(
+      screen.queryByRole("textbox", { name: "Realm" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Region" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Research applicant" })
+    ).toBeInTheDocument();
+
+    await user.type(character, "Ryii");
+
+    expect(screen.getByRole("textbox", { name: "Realm" })).toHaveAttribute(
+      "placeholder",
+      "Realm"
+    );
+    expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("eu");
+
+    await user.clear(character);
+
+    expect(
+      screen.queryByRole("textbox", { name: "Realm" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Region" })
+    ).not.toBeInTheDocument();
   });
 
   it("rejects structured lookup when required fields are missing", async () => {

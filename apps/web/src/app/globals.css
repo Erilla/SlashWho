@@ -248,6 +248,16 @@ a {
   gap: 0.625rem;
 }
 
+.search-structured-grid-collapsed {
+  grid-template-columns:
+    minmax(9rem, 12rem)
+    auto;
+}
+
+.search-structured-grid-collapsed .search-region-field {
+  grid-template-columns: auto;
+}
+
 .search-region-field .search-select {
   min-height: 2.5rem;
   width: 6rem;
