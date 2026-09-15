@@ -57,12 +57,13 @@ it("presents every character name and metric with source links and accessible un
   );
   expect(screen.getAllByText("-")).toHaveLength(2);
   expect(screen.getByText("Healing")).toBeVisible();
-  expect(screen.getByText("Boss Damage")).toBeVisible();
+  expect(screen.getByText("Boss Dam")).toBeVisible();
+  expect(screen.queryByText("Boss Damage")).not.toBeInTheDocument();
   expect(
     screen.queryByRole("link", { name: "Healing" })
   ).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("link", { name: "Boss Damage" })
+    screen.queryByRole("link", { name: "Boss Dam" })
   ).not.toBeInTheDocument();
 });
 

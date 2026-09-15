@@ -348,6 +348,7 @@ a {
   align-items: center;
   gap: 0.35rem;
   margin-left: 0.45rem;
+  vertical-align: middle;
   white-space: nowrap;
 }
 
@@ -932,11 +933,11 @@ a {
 }
 
 .dossier-parse-metrics {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   min-width: 0;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.4rem 0.55rem;
+  gap: 0.4rem 1rem;
 }
 
 .dossier-parse-metric {

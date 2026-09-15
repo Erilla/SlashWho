@@ -17,7 +17,7 @@ type DossierParseListProps = Readonly<{
   showCharacterName?: boolean;
 }>;
 
-type MetricName = "Damage" | "Healing" | "Boss Damage";
+type MetricName = "Damage" | "Healing" | "Boss Dam";
 
 function displayPercentileValue(percentile: number): string {
   const truncated = Math.trunc(percentile * 10) / 10;
@@ -116,7 +116,7 @@ export function DossierParseList({
                 <ParseMetric
                   loading={loading}
                   metric={parse.bossDamage}
-                  name="Boss Damage"
+                  name="Boss Dam"
                   spec={parse.spec}
                 />
               </span>
