@@ -1,4 +1,5 @@
 import catalogue from "./raid-catalogue.generated.json";
+import currentContentWindowSnapshot from "./raid-current-content-windows.generated.json";
 
 export type RaidCatalogueEncounter = Readonly<{
   raidId: string;
@@ -15,29 +16,6 @@ export type RaidCurrentContentWindow = Readonly<{
   startsAt: string;
   endsAt: string | null;
 }>;
-
-// Curated from Blizzard's Mythic raid unlock and season announcements. Windows
-// are [start, end) in UTC; an absent entry is unknown, never legacy.
-const currentContentWindows = new Map<string, RaidCurrentContentWindow>([
-  [
-    "1273",
-    { startsAt: "2024-09-17T00:00:00.000Z", endsAt: "2025-03-04T00:00:00.000Z" }
-  ],
-  [
-    "1296",
-    { startsAt: "2025-03-04T00:00:00.000Z", endsAt: "2025-08-12T00:00:00.000Z" }
-  ],
-  [
-    "1302",
-    { startsAt: "2025-08-12T00:00:00.000Z", endsAt: "2026-03-17T00:00:00.000Z" }
-  ],
-  ["1305", { startsAt: "2026-05-20T00:00:00.000Z", endsAt: null }],
-  ["1307", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
-  ["1308", { startsAt: "2026-03-31T00:00:00.000Z", endsAt: null }],
-  ["1314", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
-  ["1317", { startsAt: "2026-08-19T00:00:00.000Z", endsAt: null }],
-  ["1320", { startsAt: "2026-08-01T00:00:00.000Z", endsAt: null }]
-]);
 
 const raiderIoRaidSlugs = new Map<string, string>([
   ["768", "the-emerald-nightmare"],
@@ -67,6 +45,30 @@ const raiderIoRaidSlugs = new Map<string, string>([
   ["1317", "the-tidebound-grotto"],
   ["1320", "the-venomous-abyss"]
 ]);
+
+// Raider.IO's raiding static data is the schedule source: it publishes each
+// raid's opening and closing per region, so the windows are generated rather
+// than transcribed. Windows are [start, end) in UTC and a null end means the
+// tier has no announced close. An absent entry is unknown, never legacy — the
+// raid-catalogue guard test keeps that set to the raids Raider.IO does not
+// serve, so a new tier fails the build instead of silently discarding kills.
+const currentContentWindows = new Map<string, RaidCurrentContentWindow>(
+  [...raiderIoRaidSlugs].flatMap(([journalRaidId, raiderIoRaidSlug]) => {
+    const window: RaidCurrentContentWindow | undefined =
+      currentContentWindowSnapshot.windows[
+        raiderIoRaidSlug as keyof typeof currentContentWindowSnapshot.windows
+      ];
+    return window ? [[journalRaidId, window] as const] : [];
+  })
+);
+
+/**
+ * Catalogued raids with no current-content window, and therefore no shown
+ * Mythic kills. Raider.IO's raiding static data starts at Legion, so the four
+ * Warlords-and-earlier raids have no published schedule to generate from.
+ */
+export const raidsWithoutCurrentContentWindow: readonly string[] =
+  Object.freeze(["369", "457", "477", "669"]);
 
 const canonicalTierOrdinals = new Map<string, number>([
   ["369", 0],
