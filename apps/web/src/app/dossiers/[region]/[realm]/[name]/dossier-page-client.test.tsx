@@ -91,6 +91,39 @@ afterEach(() => {
 });
 
 describe("DossierPageClient staged research", () => {
+  it("moves the identity into the centered header after the heading scrolls away", async () => {
+    let observe: ((entries: IntersectionObserverEntry[]) => void) | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: (entries: IntersectionObserverEntry[]) => void) {
+          observe = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={expanded}
+        jobId={null}
+      />
+    );
+
+    expect(
+      screen.queryByRole("status", { name: "Current character" })
+    ).toBeNull();
+    act(() =>
+      observe?.([{ isIntersecting: false } as IntersectionObserverEntry])
+    );
+
+    expect(
+      await screen.findByRole("status", { name: "Current character" })
+    ).toHaveTextContent("RyiiEU · silvermoon");
+  });
+
   it("shows a loading indicator while applicant research is in progress", () => {
     // Break caught: an in-progress dossier could show only static text, making
     // it unclear that background research is still active.

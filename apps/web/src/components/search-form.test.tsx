@@ -20,23 +20,21 @@ describe("SearchForm", () => {
     push.mockReset();
   });
 
-  it("places an accessible validation error next to an invalid applicant URL", async () => {
+  it("places an accessible validation error next to an invalid character value", async () => {
     const user = userEvent.setup();
     render(<SearchForm />);
 
-    const input = screen.getByRole("textbox", {
-      name: "Applicant URL"
-    });
+    const input = screen.getByRole("textbox", { name: "Character/URL" });
     await user.type(input, "https://example.com/not-a-character");
     await user.click(
       screen.getByRole("button", { name: "Research applicant" })
     );
 
     expect(input).toHaveAccessibleDescription(
-      "Enter a Raider.IO or Warcraft Logs character URL."
+      "Enter a valid character URL, or character name, realm, and region."
     );
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter a Raider.IO or Warcraft Logs character URL."
+      "Enter a valid character URL, or character name, realm, and region."
     );
   });
 
@@ -58,7 +56,7 @@ describe("SearchForm", () => {
     render(<SearchForm />);
 
     await user.type(
-      screen.getByRole("textbox", { name: "Applicant URL" }),
+      screen.getByRole("textbox", { name: "Character/URL" }),
       "https://raider.io/characters/EU/Silvermoon/Ryii"
     );
     await user.click(
@@ -72,6 +70,28 @@ describe("SearchForm", () => {
       "/api/dossiers",
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  it("resolves a pasted profile URL into the character fields", async () => {
+    const user = userEvent.setup();
+    render(<SearchForm />);
+
+    const character = screen.getByRole("textbox", { name: "Character/URL" });
+    expect(character).toHaveAttribute("placeholder", "Character/URL");
+    expect(screen.getByRole("textbox", { name: "Realm" })).toHaveAttribute(
+      "placeholder",
+      "Realm"
+    );
+    expect(screen.queryByText("Character name")).not.toBeInTheDocument();
+
+    await user.click(character);
+    await user.paste("https://raider.io/characters/eu/silvermoon/Ryii");
+
+    expect(character).toHaveValue("ryii");
+    expect(screen.getByRole("textbox", { name: "Realm" })).toHaveValue(
+      "silvermoon"
+    );
+    expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("eu");
   });
 
   it("supports structured character lookup and starts dossier research", async () => {
@@ -91,15 +111,12 @@ describe("SearchForm", () => {
     );
     render(<SearchForm />);
 
-    await user.click(
-      screen.getByRole("radio", { name: "Character name + realm" })
-    );
     expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("eu");
     expect(
       screen.getByRole("button", { name: "Research applicant" })
     ).toHaveTextContent("→");
     await user.type(
-      screen.getByRole("textbox", { name: "Character name" }),
+      screen.getByRole("textbox", { name: "Character/URL" }),
       "Ryii"
     );
     await user.type(
@@ -107,7 +124,7 @@ describe("SearchForm", () => {
       "Silvermoon"
     );
     await user.selectOptions(screen.getByRole("combobox", { name: "Region" }), [
-      "EU"
+      "eu"
     ]);
     await user.click(
       screen.getByRole("button", { name: "Research applicant" })
@@ -132,11 +149,8 @@ describe("SearchForm", () => {
     const user = userEvent.setup();
     render(<SearchForm />);
 
-    await user.click(
-      screen.getByRole("radio", { name: "Character name + realm" })
-    );
     await user.type(
-      screen.getByRole("textbox", { name: "Character name" }),
+      screen.getByRole("textbox", { name: "Character/URL" }),
       "Ryii"
     );
     await user.click(
@@ -166,7 +180,7 @@ describe("SearchForm", () => {
     render(<SearchForm />);
 
     await user.type(
-      screen.getByRole("textbox", { name: "Applicant URL" }),
+      screen.getByRole("textbox", { name: "Character/URL" }),
       "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
     );
     await user.click(
@@ -200,7 +214,7 @@ describe("SearchForm", () => {
     render(<SearchForm />);
 
     await user.type(
-      screen.getByRole("textbox", { name: "Applicant URL" }),
+      screen.getByRole("textbox", { name: "Character/URL" }),
       "https://raider.io/characters/eu/silvermoon/Ryii"
     );
     await user.click(

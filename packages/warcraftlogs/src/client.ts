@@ -523,6 +523,7 @@ type RankingRow = Readonly<{
   metric: RankingMetricName;
   fightId: number;
   characterId: number;
+  spec: string | null;
   percentile: number | null;
 }>;
 type RankingScope = Readonly<{
@@ -539,6 +540,7 @@ const unavailableParseMetric: WarcraftLogsParseMetric = {
 
 function unavailablePerformance(): WarcraftLogsPerformance {
   return {
+    spec: null,
     damage: unavailableParseMetric,
     healing: unavailableParseMetric,
     bossDamage: unavailableParseMetric
@@ -664,10 +666,12 @@ function decodeRankingRows(
           }
           identities.set(identity.id, identity);
           const rankPercent = record(characterValue)?.rankPercent;
+          const spec = nonEmptyString(record(characterValue)?.spec);
           rows.push({
             metric,
             fightId,
             characterId: identity.id,
+            spec,
             percentile:
               typeof rankPercent === "number" &&
               Number.isFinite(rankPercent) &&
@@ -817,6 +821,55 @@ function characterRankingPercentile(value: unknown): WarcraftLogsParseMetric {
     : { state: "available", percentile: best };
 }
 
+const specIconNames: Readonly<Record<string, string>> = {
+  Arcane: "spell_holy_magicalsentry",
+  Arms: "ability_warrior_savageblow",
+  Assassination: "ability_rogue_deadlybrew",
+  Augmentation: "classicon_evoker_augmentation",
+  Balance: "spell_nature_starfall",
+  BeastMastery: "ability_hunter_bestialdiscipline",
+  Blood: "spell_shadow_vampiricaura",
+  Brewmaster: "spell_monk_brewmaster_spec",
+  Destruction: "spell_shadow_rainoffire",
+  Devastation: "classicon_evoker_devastation",
+  Discipline: "spell_holy_powerinfusion",
+  Elemental: "spell_nature_lightning",
+  Enhancement: "spell_shaman_maelstromweapon",
+  Feral: "ability_druid_ferociousbite",
+  Fire: "spell_fire_firebolt",
+  Frost: "spell_frost_frostbolt",
+  Fury: "ability_warrior_furiousresolve",
+  Guardian: "ability_racial_bearform",
+  Havoc: "ability_demonhunter_doublejump",
+  Holy: "spell_holy_holybolt",
+  Marksmanship: "ability_hunter_focusedaim",
+  Mistweaver: "spell_monk_mistweaver_spec",
+  Outlaw: "ability_rogue_rollthebones",
+  Preservation: "classicon_evoker_preservation",
+  Protection: "ability_paladin_shieldofthetemplar",
+  Retribution: "spell_holy_auraoflight",
+  Restoration: "spell_nature_healingtouch",
+  Shadow: "spell_shadow_shadowform",
+  Subtlety: "ability_rogue_shadowdance",
+  Survival: "ability_hunter_mongoosebite",
+  Unholy: "spell_shadow_animatedead",
+  Vengeance: "ability_demonhunter_spectralsight",
+  Windwalker: "spell_monk_windwalker_spec"
+};
+
+function specPerformance(
+  value: string | null
+): WarcraftLogsPerformance["spec"] {
+  if (value === null) return null;
+  const iconName = specIconNames[value.replaceAll(" ", "")];
+  return iconName === undefined
+    ? null
+    : {
+        name: value,
+        iconUrl: `https://wow.zamimg.com/images/wow/icons/medium/${iconName}.jpg`
+      };
+}
+
 function decodeCharacterEncounterRankings(
   value: unknown,
   key: CharacterKey,
@@ -844,6 +897,7 @@ function decodeCharacterEncounterRankings(
     return { kind: "limitation", code: "parse_schema_drift" };
   }
   return {
+    spec: null,
     damage: characterRankingPercentile(character.damage),
     healing: characterRankingPercentile(character.healing),
     bossDamage: characterRankingPercentile(character.bossDamage)
@@ -859,7 +913,9 @@ function normalizedPerformance(
     fightIds.map((fightId) => [fightId, unavailablePerformance()])
   );
   const values = new Map<string, number>();
+  const specs = new Map<number, string>();
   for (const row of rows) {
+    if (row.spec !== null) specs.set(row.fightId, row.spec);
     if (!requestedIds.includes(row.characterId) || row.percentile === null) {
       continue;
     }
@@ -871,6 +927,7 @@ function normalizedPerformance(
   }
   for (const [fightId, initial] of performance) {
     performance.set(fightId, {
+      spec: specPerformance(specs.get(fightId) ?? null),
       damage: values.has(`${fightId}:damage`)
         ? { state: "available", percentile: values.get(`${fightId}:damage`)! }
         : initial.damage,

@@ -240,18 +240,13 @@ a {
 }
 
 .search-region-field {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.search-region-field label {
-  margin: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.625rem;
 }
 
 .search-region-field .search-select {
-  min-height: 2.8rem;
-  width: 4.5rem;
+  min-height: 3.35rem;
+  width: 100%;
   padding: 0 0.55rem;
 }
 
@@ -377,6 +372,25 @@ a {
   letter-spacing: -0.045em;
   line-height: 1;
   text-transform: capitalize;
+}
+
+.dossier-header-identity {
+  position: fixed;
+  z-index: 11;
+  top: 0;
+  left: 50%;
+  display: inline-flex;
+  min-height: var(--header-height);
+  align-items: center;
+  gap: 0.55rem;
+  transform: translateX(-50%);
+  color: var(--muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.dossier-header-identity .dossier-character-name {
+  color: var(--text);
 }
 
 .eyebrow {
@@ -911,27 +925,18 @@ a {
   gap: 0.4rem 0.55rem;
 }
 
-.dossier-parse-character-spec {
-  color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 760;
-  min-width: 5.5rem;
-}
-
 .dossier-parse-metric {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.08rem;
-  border: 1px solid currentColor;
-  border-radius: 999px;
   line-height: 1.1;
   overflow-wrap: anywhere;
-  padding: 0.22rem 0.5rem;
   text-decoration: none;
 }
 
 .dossier-parse-metric-label {
+  color: var(--muted);
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -939,8 +944,16 @@ a {
 }
 
 .dossier-parse-metric-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.85rem;
   font-weight: 780;
+}
+
+.dossier-parse-spec-icon {
+  border-radius: 0.15rem;
+  object-fit: cover;
 }
 
 .dossier-parse-spinner {

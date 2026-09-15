@@ -19,36 +19,21 @@ type DossierParseListProps = Readonly<{
 
 type MetricName = "Damage" | "Healing" | "Boss Damage";
 
-function displayPercentile(percentile: number): string {
+function displayPercentileValue(percentile: number): string {
   const truncated = Math.trunc(percentile * 10) / 10;
-  return Number.isInteger(truncated)
-    ? `${truncated}${ordinalSuffix(truncated)} percentile`
-    : `${truncated.toFixed(1)} percentile`;
-}
-
-function ordinalSuffix(value: number): string {
-  const remainder = value % 100;
-  if (remainder >= 11 && remainder <= 13) return "th";
-  switch (value % 10) {
-    case 1:
-      return "st";
-    case 2:
-      return "nd";
-    case 3:
-      return "rd";
-    default:
-      return "th";
-  }
+  return Number.isInteger(truncated) ? `${truncated}` : truncated.toFixed(1);
 }
 
 function ParseMetric({
   metric,
   name,
-  loading
+  loading,
+  spec
 }: {
   metric: ApplicantDossierParseMetric;
   name: MetricName;
   loading: boolean;
+  spec?: ApplicantDossierCharacterParses["spec"];
 }) {
   if (metric.state !== "available") {
     return (
@@ -67,7 +52,7 @@ function ParseMetric({
     );
   }
 
-  const label = `${name} ${displayPercentile(metric.percentile)}`;
+  const label = `${name} ${displayPercentileValue(metric.percentile)} percentile${spec ? ` (${spec.name})` : ""}`;
   return (
     <a
       aria-label={label}
@@ -78,7 +63,16 @@ function ParseMetric({
     >
       <span className="dossier-parse-metric-label">{name}</span>
       <span className="dossier-parse-metric-value">
-        {displayPercentile(metric.percentile)}
+        {displayPercentileValue(metric.percentile)}
+        {spec ? (
+          <img
+            alt={`${spec.name} specialization`}
+            className="dossier-parse-spec-icon"
+            height={20}
+            src={spec.iconUrl}
+            width={20}
+          />
+        ) : null}
       </span>
     </a>
   );
@@ -103,9 +97,6 @@ export function DossierParseList({
               key={parse.character}
               role="group"
             >
-              <span className="dossier-parse-character-spec">
-                {parse.classSpec ?? "—"}
-              </span>
               {showCharacterName ? (
                 <DossierCharacterNameByName name={parse.character} />
               ) : null}
@@ -114,16 +105,19 @@ export function DossierParseList({
                   loading={loading}
                   metric={parse.damage}
                   name="Damage"
+                  spec={parse.spec}
                 />
                 <ParseMetric
                   loading={loading}
                   metric={parse.healing}
                   name="Healing"
+                  spec={parse.spec}
                 />
                 <ParseMetric
                   loading={loading}
                   metric={parse.bossDamage}
                   name="Boss Damage"
+                  spec={parse.spec}
                 />
               </span>
             </li>
