@@ -108,9 +108,11 @@ count or longest-call value: `limiterWaitMs`, the time spent awaiting admission
 at the provider limiter. Throttling is reported separately as `rateLimitHits`
 and `retryAfterMaxMs`, defined in the section below.
 
-The database bucket is named `db` rather than `database`, and its call count is
-`dbQueries` rather than `dbCalls`, so its fields read `dbMs`, `dbQueries`, and
-`dbMaxQueryMs`.
+Every bucket derives its field names uniformly from its prefix, as
+`<prefix>Ms`, `<prefix>Calls`, and `<prefix>MaxCallMs`. The database bucket is
+therefore `dbMs`, `dbCalls`, and `dbMaxCallMs`. Uniformity is deliberate: it
+keeps a rename map out of both the measurement module and the analysis script,
+which discovers numeric fields generically.
 
 On the dossier read path the buckets are per-operation instead — separating
 `getMythicBossRankings` from `getCharacter` — because that path is where the
@@ -204,20 +206,20 @@ values per bucket defined above — total milliseconds, call count, and longest
 single call — named `<bucket>Ms`, `<bucket>Calls`, and `<bucket>MaxCallMs`.
 
 **`http_request`** (extended) gains the per-operation provider buckets,
-`dbMs`, `dbQueries`, `dbMaxQueryMs`, `limiterWaitMs`, `rateLimitHits`,
+`dbMs`, `dbCalls`, `dbMaxCallMs`, `limiterWaitMs`, `rateLimitHits`,
 `retryAfterMaxMs`,
 `runJoined`, and the folded cache totals `cacheHits`, `cacheMisses`,
 `cacheShared`, `cacheFailures`, and `cacheCapacity`. Every existing field is
 retained.
 
 **`discovery_run`** (extended) gains the per-provider buckets, `dbMs`,
-`dbQueries`, `dbMaxQueryMs`, `rateLimitHits`, `retryAfterMaxMs`,
+`dbCalls`, `dbMaxCallMs`, `rateLimitHits`, `retryAfterMaxMs`,
 `queueWaitMs`, and `correlationId`. Every existing field is retained, including the canonical
 character key.
 
 **`evidence_job`** (new) carries `runId`, `correlationId`, `durationMs`,
 `queueWaitMs`, `outcome`, `warcraftLogsMs`, `warcraftLogsCalls`,
-`warcraftLogsMaxCallMs`, `dbMs`, `dbQueries`, `dbMaxQueryMs`,
+`warcraftLogsMaxCallMs`, `dbMs`, `dbCalls`, `dbMaxCallMs`,
 `rateLimitHits`, `retryAfterMaxMs`, `requestCapUsed`, and `limitationCode`. The evidence path currently emits
 nothing whatsoever, so this record is the single largest coverage gain in the
 design.
