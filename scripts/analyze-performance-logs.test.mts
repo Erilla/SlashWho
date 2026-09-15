@@ -90,13 +90,62 @@ describe("summarize", () => {
     });
   });
 
-  it("has empty outcomes and empty providers for upstream_throttle", () => {
+  it("has empty outcomes but counted providers for upstream_throttle", () => {
     const summary = summarize(lines, "upstream_throttle");
     expect(summary.outcomes).toEqual({});
+    expect(summary.byOutcome).toEqual({});
     expect(summary.providers).toEqual({
       "raider.io": 1,
       "warcraftlogs.com": 1
     });
+  });
+
+  it("breaks percentiles down per outcome", () => {
+    const grouped = [
+      JSON.stringify({
+        event: "evidence_job",
+        outcome: "complete",
+        durationMs: 1000
+      }),
+      JSON.stringify({
+        event: "evidence_job",
+        outcome: "complete",
+        durationMs: 1200
+      }),
+      JSON.stringify({
+        event: "evidence_job",
+        outcome: "not_claimed",
+        durationMs: 5
+      }),
+      JSON.stringify({
+        event: "evidence_job",
+        outcome: "not_claimed",
+        durationMs: 7
+      })
+    ];
+    const summary = summarize(grouped, "evidence_job");
+
+    expect(summary.count).toBe(4);
+    expect(summary.byOutcome.complete!.count).toBe(2);
+    expect(summary.byOutcome.not_claimed!.count).toBe(2);
+    // The property that matters: a fast outcome's p95 must not be dragged up by
+    // a slow one, so each grouped p95 differs from the overall p95.
+    expect(summary.byOutcome.not_claimed!.fields.durationMs!.p95).toBe(6.9);
+    expect(summary.byOutcome.complete!.fields.durationMs!.p95).toBe(1190);
+    expect(summary.fields.durationMs!.p95).not.toBe(
+      summary.byOutcome.complete!.fields.durationMs!.p95
+    );
+    expect(summary.fields.durationMs!.p95).not.toBe(
+      summary.byOutcome.not_claimed!.fields.durationMs!.p95
+    );
+  });
+
+  it("keeps an outcome group even when it has no numeric fields", () => {
+    const summary = summarize(
+      [JSON.stringify({ event: "discovery_run", outcome: "cancelled" })],
+      "discovery_run"
+    );
+    expect(summary.byOutcome.cancelled).toEqual({ count: 1, fields: {} });
   });
 
   it("skips bare null without throwing", () => {

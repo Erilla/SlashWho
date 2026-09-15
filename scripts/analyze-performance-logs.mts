@@ -9,11 +9,24 @@
 
 export type FieldSummary = { p50: number; p95: number; max: number };
 
+/** One outcome's own count and field percentiles. */
+export type OutcomeSummary = {
+  count: number;
+  fields: Record<string, FieldSummary>;
+};
+
 export type PerformanceSummary = {
   event: string;
   count: number;
   fields: Record<string, FieldSummary>;
   outcomes: Record<string, number>;
+  /**
+   * Per-outcome breakdown of the same fields. A p95 computed across every
+   * record mixes, say, `complete` with `not_claimed` and reports a number no
+   * single outcome ever exhibits, which is exactly the misread this prevents.
+   * Records with no `outcome` field contribute only to the overall summary.
+   */
+  byOutcome: Record<string, OutcomeSummary>;
   providers: Record<string, number>;
 };
 
@@ -35,9 +48,20 @@ export function summarize(
   event: string
 ): PerformanceSummary {
   const samples = new Map<string, number[]>();
+  const outcomeSamples = new Map<string, Map<string, number[]>>();
   const outcomes: Record<string, number> = {};
   const providers: Record<string, number> = {};
   let count = 0;
+
+  const collect = (
+    target: Map<string, number[]>,
+    key: string,
+    value: number
+  ) => {
+    const bucket = target.get(key) ?? [];
+    bucket.push(value);
+    target.set(key, bucket);
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -61,31 +85,56 @@ export function summarize(
     if (record.event !== event) continue;
     count += 1;
 
+    const outcome =
+      typeof record.outcome === "string" ? record.outcome : undefined;
+    let perOutcome: Map<string, number[]> | undefined;
+    if (outcome !== undefined) {
+      outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
+      perOutcome = outcomeSamples.get(outcome) ?? new Map();
+      outcomeSamples.set(outcome, perOutcome);
+    }
+
     for (const [key, value] of Object.entries(record)) {
       if (typeof value === "number" && Number.isFinite(value)) {
-        const bucket = samples.get(key) ?? [];
-        bucket.push(value);
-        samples.set(key, bucket);
+        collect(samples, key, value);
+        if (perOutcome) collect(perOutcome, key, value);
       }
-    }
-    if (typeof record.outcome === "string") {
-      outcomes[record.outcome] = (outcomes[record.outcome] ?? 0) + 1;
     }
     if (typeof record.provider === "string") {
       providers[record.provider] = (providers[record.provider] ?? 0) + 1;
     }
   }
 
-  const fields: Record<string, FieldSummary> = {};
-  for (const [key, values] of samples) {
-    fields[key] = {
-      p50: percentile(values, 50),
-      p95: percentile(values, 95),
-      max: Math.max(...values)
+  const summarizeFields = (
+    collected: Map<string, number[]>
+  ): Record<string, FieldSummary> => {
+    const fields: Record<string, FieldSummary> = {};
+    for (const [key, values] of collected) {
+      fields[key] = {
+        p50: percentile(values, 50),
+        p95: percentile(values, 95),
+        max: Math.max(...values)
+      };
+    }
+    return fields;
+  };
+
+  const byOutcome: Record<string, OutcomeSummary> = {};
+  for (const [outcome, collected] of outcomeSamples) {
+    byOutcome[outcome] = {
+      count: outcomes[outcome] ?? 0,
+      fields: summarizeFields(collected)
     };
   }
 
-  return { event, count, fields, outcomes, providers };
+  return {
+    event,
+    count,
+    fields: summarizeFields(samples),
+    outcomes,
+    byOutcome,
+    providers
+  };
 }
 
 async function main(): Promise<void> {
