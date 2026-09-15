@@ -1182,8 +1182,9 @@ describe("Warcraft Logs gateway", () => {
   });
 
   it("prefers a class reported by Warcraft Logs over the caller's class", async () => {
-    // Break caught: the per-rank class is the more specific claim; the known
-    // class is only a fallback for when the payload omits one.
+    // Break caught: Warcraft Logs reports `class` as a numeric class id (4 is
+    // Mage), so reading it as a name silently ignored it. The per-rank class is
+    // the more specific claim; the known class is only a fallback.
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
       const body = JSON.parse(String(init?.body)) as { query: string };
@@ -1198,7 +1199,7 @@ describe("Warcraft Logs gateway", () => {
                 name: "Sentinel",
                 server: { slug: "silvermoon", region: { slug: "eu" } },
                 damage: {
-                  data: [{ rankPercent: 91, class: "Mage", spec: "Frost" }]
+                  data: [{ rankPercent: 91, class: 4, spec: "Frost" }]
                 },
                 healing: { data: [] },
                 bossDamage: { data: [] }

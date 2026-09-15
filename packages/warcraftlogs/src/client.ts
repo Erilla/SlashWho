@@ -679,7 +679,7 @@ function decodeRankingRows(
               specName === null
                 ? null
                 : {
-                    className: nonEmptyString(record(characterValue)?.class),
+                    className: reportedClassName(record(characterValue)?.class),
                     specName
                   },
             percentile:
@@ -834,7 +834,7 @@ function characterRankingPercentile(value: unknown): CharacterRanking {
       bestSpec =
         specName === null
           ? null
-          : { className: nonEmptyString(object.class), specName };
+          : { className: reportedClassName(object.class), specName };
     }
     for (const nested of Object.values(object)) visit(nested);
   };
@@ -935,6 +935,31 @@ const unambiguousSpecIconNames: ReadonlyMap<string, string> = (() => {
     )
   );
 })();
+
+// Warcraft Logs reports a rank's class as a numeric class id, not a name.
+// Verified against `gameData { classes { id name } }`.
+const warcraftLogsClassNames: Readonly<Record<number, string>> = {
+  1: "DeathKnight",
+  2: "Druid",
+  3: "Hunter",
+  4: "Mage",
+  5: "Monk",
+  6: "Paladin",
+  7: "Priest",
+  8: "Rogue",
+  9: "Shaman",
+  10: "Warlock",
+  11: "Warrior",
+  12: "DemonHunter",
+  13: "Evoker"
+};
+
+function reportedClassName(value: unknown): string | null {
+  if (typeof value === "number") {
+    return warcraftLogsClassNames[value] ?? null;
+  }
+  return nonEmptyString(value);
+}
 
 function specKey(value: string): string {
   return value.replaceAll(/[^\p{L}\p{N}]/gu, "");
