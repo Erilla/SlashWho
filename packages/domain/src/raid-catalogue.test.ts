@@ -151,3 +151,49 @@ it("orders every current-content window start before its end", () => {
   });
   expect(inverted).toEqual([]);
 });
+
+// Break caught: generating the windows alone moved Sporefall's opening from the
+// reviewed 2026-05-20 to Raider.IO's 2026-06-16, which withholds real kills in
+// that gap. Taking the earlier known start keeps them.
+it("takes the earlier known opening when the two sources disagree", () => {
+  expect(lookupRaidCurrentContentWindow("1305")?.startsAt).toBe(
+    "2026-05-20T00:00:00.000Z"
+  );
+});
+
+// Break caught: a reviewed null end meant no close had been reviewed yet, not
+// that the tier never closes. Treating it as open-ended admitted legacy farm
+// clears once Raider.IO knew the real close.
+it("closes a tier whose reviewed end was still unreviewed", () => {
+  expect(lookupRaidCurrentContentWindow("1305")?.endsAt).toBe(
+    "2026-08-19T23:00:00.000Z"
+  );
+});
+
+// Break caught: preferring the generated end would have moved Manaforge Omega's
+// close earlier than the reviewed one, withholding real progression kills.
+it("keeps the later known close when the reviewed end outlasts the generated one", () => {
+  expect(lookupRaidCurrentContentWindow("1302")?.endsAt).toBe(
+    "2026-03-17T00:00:00.000Z"
+  );
+});
+
+it("widens a reviewed window on both sides from the generated schedule", () => {
+  expect(lookupRaidCurrentContentWindow("1273")).toEqual({
+    startsAt: "2024-09-10T15:00:00.000Z",
+    endsAt: "2025-03-05T23:00:00.000Z"
+  });
+});
+
+// Break caught: historic tiers have no reviewed window at all, and dropping
+// their kills is the defect this window source exists to fix.
+it("covers a historic tier the reviewed windows never reached", () => {
+  expect(lookupRaidCurrentContentWindow("1195")).toEqual({
+    startsAt: "2022-03-01T15:00:00.000Z",
+    endsAt: "2022-08-03T23:00:00.000Z"
+  });
+});
+
+it("leaves an unclosed current tier open-ended", () => {
+  expect(lookupRaidCurrentContentWindow("1317")?.endsAt).toBeNull();
+});
