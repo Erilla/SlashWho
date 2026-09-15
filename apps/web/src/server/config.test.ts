@@ -2,17 +2,22 @@ import { expect, it } from "vitest";
 
 import { loadWebConfig } from "./config";
 
+const validEnv = {
+  DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
+  BOT_API_KEY: "b".repeat(32),
+  RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+  BLIZZARD_CLIENT_ID: "blizzard-client-id",
+  BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
+  EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
+};
+
 it("validates all web runtime secrets and operational limits", () => {
   // Break caught: the web process could start with missing database or weak secrets.
   expect(() => loadWebConfig({})).toThrow();
   expect(
     loadWebConfig({
-      DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
-      BOT_API_KEY: "b".repeat(32),
-      RATE_LIMIT_HASH_SECRET: "r".repeat(32),
-      PUBLIC_READS_PER_MINUTE: "123",
-      BLIZZARD_CLIENT_ID: "blizzard-client-id",
-      BLIZZARD_CLIENT_SECRET: "blizzard-client-secret"
+      ...validEnv,
+      PUBLIC_READS_PER_MINUTE: "123"
     })
   ).toMatchObject({
     databaseUrl: "postgresql://slashwho:secret@db.internal/slashwho",
@@ -22,14 +27,27 @@ it("validates all web runtime secrets and operational limits", () => {
 
 it("does not require Warcraft Logs credentials in the web process", () => {
   // Break caught: web deployments could retain worker-only credentials after evidence collection moved to the worker.
-  const environment = {
-    DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
-    BOT_API_KEY: "b".repeat(32),
-    RATE_LIMIT_HASH_SECRET: "r".repeat(32),
-    BLIZZARD_CLIENT_ID: "blizzard-client-id",
-    BLIZZARD_CLIENT_SECRET: "blizzard-client-secret"
-  };
-
-  const config = loadWebConfig(environment);
+  const config = loadWebConfig(validEnv);
   expect(config.dossier.blizzardClientId).toBe("blizzard-client-id");
+});
+
+it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is missing", () => {
+  // Break caught: the web process could start without the key it needs to
+  // encrypt a visitor-supplied WarcraftLogs credential before queuing it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY, ...rest } = validEnv;
+  expect(() => loadWebConfig(rest)).toThrow(
+    "evidence_job_credential_encryption_key_required"
+  );
+});
+
+it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is malformed", () => {
+  // Break caught: a truncated or non-hex key could pass through unvalidated
+  // and fail unpredictably at encrypt/decrypt time instead of at startup.
+  expect(() =>
+    loadWebConfig({
+      ...validEnv,
+      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "not-a-valid-key"
+    })
+  ).toThrow("invalid_credential_encryption_key");
 });

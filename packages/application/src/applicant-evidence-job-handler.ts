@@ -10,11 +10,15 @@ import type {
   WarcraftLogsWipeEvidence
 } from "@slashwho/warcraftlogs";
 
+import { decryptCredential } from "./credential-encryption";
+
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
   key: CharacterKey;
   status: "queued" | "running" | "retrying" | "complete" | "partial" | "failed";
   createdAt: Date;
+  wclClientIdEncrypted: string | null;
+  wclClientSecretEncrypted: string | null;
 }>;
 
 export type ApplicantEvidenceStore = {
@@ -38,6 +42,11 @@ export type ApplicantEvidenceStore = {
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   evidence: ApplicantEvidenceStore;
   warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  createWarcraftLogsGateway?: (credentials: {
+    clientId: string;
+    clientSecret: string;
+  }) => Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  decryptionKey?: Buffer;
   requestCap: number;
   parseRequestCap: number;
   now?: () => Date;
@@ -85,8 +94,25 @@ export function createApplicantEvidenceJobHandler(
       const run = await options.evidence.claim(runId, activeContext.attempt);
       if (!run) return;
 
+      const gateway =
+        run.wclClientIdEncrypted &&
+        run.wclClientSecretEncrypted &&
+        options.createWarcraftLogsGateway &&
+        options.decryptionKey
+          ? options.createWarcraftLogsGateway({
+              clientId: decryptCredential(
+                run.wclClientIdEncrypted,
+                options.decryptionKey
+              ),
+              clientSecret: decryptCredential(
+                run.wclClientSecretEncrypted,
+                options.decryptionKey
+              )
+            })
+          : options.warcraftLogs;
+
       activeContext.signal.throwIfAborted();
-      const response = await options.warcraftLogs.getFirstKillReports(run.key, {
+      const response = await gateway.getFirstKillReports(run.key, {
         requestCap: options.requestCap,
         parseRequestCap: options.parseRequestCap,
         signal: activeContext.signal

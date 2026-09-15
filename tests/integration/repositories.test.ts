@@ -643,6 +643,136 @@ describe("PostgreSQL repositories", () => {
     }
   });
 
+  it("stores encrypted WCL credentials only when the reservation creates a new run", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    expect(reservation.kind).toBe("reserved");
+    expect(reservation.run.wclClientIdEncrypted).toBe("encrypted-id");
+    expect(reservation.run.wclClientSecretEncrypted).toBe("encrypted-secret");
+  });
+
+  it("clears encrypted WCL credentials when a run is published", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter2"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      completedAt: new Date()
+    });
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBeNull();
+    expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("clears encrypted WCL credentials when a run fails", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter3"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    await repositories.evidence.fail(reservation.run.id, "some_error");
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBeNull();
+    expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("clears stale encrypted WCL credentials left behind by an abandoned run", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter4"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    // Simulate the job never reaching publish()/fail() (a crash, a timeout,
+    // the process being killed) by backdating created_at past the window.
+    await pool.query(
+      `UPDATE character_evidence_runs SET created_at = $2 WHERE id = $1`,
+      [reservation.run.id, new Date(Date.now() - 2 * 60 * 60_000)]
+    );
+
+    const removed = await repositories.evidence.clearStaleCredentials(
+      new Date(Date.now() - 60 * 60_000)
+    );
+
+    expect(removed).toBe(1);
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBeNull();
+    expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("leaves credentials on runs created after the cutoff untouched", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter5"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+
+    const removed = await repositories.evidence.clearStaleCredentials(
+      new Date(Date.now() - 60 * 60_000)
+    );
+
+    expect(removed).toBe(0);
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBe("encrypted-id");
+    expect(found?.wclClientSecretEncrypted).toBe("encrypted-secret");
+  });
+
   describe("manual dossier connections", () => {
     const pendingKey = {
       region: "eu",

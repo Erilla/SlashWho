@@ -1,5 +1,6 @@
 import {
   applicationConfigSchema,
+  parseEncryptionKey,
   type ApplicationConfig
 } from "@slashwho/application";
 
@@ -11,6 +12,7 @@ export type WebConfig = Readonly<{
     raiderIoTimeoutMs: number;
     blizzardClientId: string;
     blizzardClientSecret: string;
+    evidenceJobCredentialEncryptionKey: Buffer;
   }>;
 }>;
 
@@ -32,6 +34,14 @@ function requiredSecret(value: string | undefined, errorCode: string): string {
   const secret = value?.trim();
   if (!secret) throw new Error(errorCode);
   return secret;
+}
+
+function requiredEncryptionKey(value: string | undefined): Buffer {
+  const secret = value?.trim();
+  if (!secret) {
+    throw new Error("evidence_job_credential_encryption_key_required");
+  }
+  return parseEncryptionKey(secret);
 }
 
 function positiveInteger(
@@ -67,6 +77,9 @@ export function loadWebConfig(
       blizzardClientSecret: requiredSecret(
         environment.BLIZZARD_CLIENT_SECRET,
         "blizzard_client_secret_required"
+      ),
+      evidenceJobCredentialEncryptionKey: requiredEncryptionKey(
+        environment.EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY
       )
     }
   };

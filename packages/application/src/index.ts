@@ -27,6 +27,7 @@ export type {
   ApplicantDossierService,
   CreateDossierCommand,
   CreateDossierResult,
+  DossierGatewayOverrides,
   ReadDossierResult
 } from "./applicant-dossier-service";
 export { createRateLimiter } from "./rate-limit";
@@ -52,3 +53,8 @@ export {
   serializeJobStatus,
   serializeSnapshot
 } from "./serializers";
+export {
+  decryptCredential,
+  encryptCredential,
+  parseEncryptionKey
+} from "./credential-encryption";

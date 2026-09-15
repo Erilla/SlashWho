@@ -12,8 +12,10 @@ import type { CharacterKey } from "@slashwho/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
+import { decryptCredential } from "./credential-encryption";
 import { createApplicantDossierService } from "./applicant-dossier-service";
 
+const encryptionKey = Buffer.alloc(32, "k");
 const root = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
 const alt = { region: "eu", realm: "silvermoon", name: "ryalts" } as const;
 const third = { region: "eu", realm: "silvermoon", name: "third" } as const;
@@ -241,7 +243,8 @@ function fixture(
     queue: { enqueueCharacterEvidence },
     blizzard,
     raiderio,
-    config
+    config,
+    evidenceJobCredentialEncryptionKey: encryptionKey
   });
   return {
     dossiers,
@@ -1135,6 +1138,127 @@ describe("applicant dossier service", () => {
       2,
       expect.objectContaining({ key: alt })
     );
+  });
+
+  it("encrypts supplied Warcraft Logs credentials into every evidence reservation", async () => {
+    // Break caught: a visitor's Warcraft Logs secret could reach the durable
+    // evidence run in plain text, or never reach the worker at all.
+    const { dossiers, repositories } = fixture();
+
+    await dossiers.read(root, undefined, {
+      wclCredentials: {
+        clientId: "user-client-id",
+        clientSecret: "user-secret"
+      }
+    });
+
+    const credentials = vi
+      .mocked(repositories.evidence.reserve)
+      .mock.calls.map(([input]) => input.credentials!);
+    expect(credentials).toHaveLength(2);
+    for (const pair of credentials) {
+      expect(pair.wclClientIdEncrypted).not.toBe("user-client-id");
+      expect(pair.wclClientSecretEncrypted).not.toBe("user-secret");
+      expect(decryptCredential(pair.wclClientIdEncrypted, encryptionKey)).toBe(
+        "user-client-id"
+      );
+      expect(
+        decryptCredential(pair.wclClientSecretEncrypted, encryptionKey)
+      ).toBe("user-secret");
+    }
+  });
+
+  it("reserves evidence without credentials when the visitor supplies none", async () => {
+    const { dossiers, repositories } = fixture();
+
+    await dossiers.read(root);
+
+    expect(
+      vi.mocked(repositories.evidence.reserve).mock.calls[0]![0].credentials
+    ).toBeNull();
+  });
+
+  it("serves supplied gateways without reading or writing the shared caches", async () => {
+    // Break caught: results fetched under one visitor's own API keys could be
+    // cached and served to every other visitor, or could be answered from a
+    // cache those keys never populated.
+    const { dossiers, blizzard, raiderio } = fixture();
+    await dossiers.read(root);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+
+    const overrides = {
+      blizzard: {
+        getCompletedAchievements: vi
+          .fn()
+          .mockResolvedValue([
+            { achievementId: "41297", completedAt: "2025-03-01T20:30:00.000Z" }
+          ])
+      },
+      raiderio: {
+        getCharacter: vi.fn(),
+        getMythicBossRankings: vi.fn().mockResolvedValue({
+          kind: "rankings",
+          rows: [
+            {
+              rank: 99,
+              guildName: "Example Guild",
+              guildRealm: "silvermoon",
+              guildRegion: "eu",
+              firstDefeated: "2024-10-01T20:00:00.000Z"
+            }
+          ]
+        })
+      }
+    };
+
+    await expect(
+      dossiers.read(root, undefined, overrides)
+    ).resolves.toMatchObject({
+      dossier: {
+        cuttingEdges: [{ achievementId: "41297" }],
+        raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 99 })])
+      }
+    });
+    expect(overrides.blizzard.getCompletedAchievements).toHaveBeenCalledTimes(
+      1
+    );
+    expect(overrides.raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+
+    // The shared caches still hold only the constructor gateways' results.
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      dossier: {
+        cuttingEdges: [{ achievementId: "40254" }],
+        raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 2 })])
+      }
+    });
+    expect(blizzard.getCompletedAchievements).toHaveBeenCalledTimes(1);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks initial eligibility with a supplied Raider.IO gateway", async () => {
+    const { dossiers, raiderio } = fixture();
+    const override = {
+      getCharacter: vi.fn().mockResolvedValue({
+        key: root,
+        displayName: "Ryii",
+        className: "Mage",
+        level: 80,
+        ownerId: null,
+        profileGuess: null,
+        declaredMain: null,
+        isTournamentProfile: true
+      }),
+      getMythicBossRankings: vi.fn()
+    };
+
+    await expect(
+      dossiers.readInitial(root, undefined, { raiderio: override })
+    ).resolves.toEqual({ kind: "not_ready" });
+    expect(override.getCharacter).toHaveBeenCalledTimes(1);
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
   });
 });
 

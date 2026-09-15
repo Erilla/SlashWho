@@ -1,3 +1,5 @@
+import { parseEncryptionKey } from "@slashwho/application";
+
 export type WorkerConfig = {
   databaseUrl: string;
   healthHost: "127.0.0.1" | "0.0.0.0";
@@ -22,6 +24,7 @@ export type WorkerConfig = {
   fingerprintMinimumIdenticalPercent: number;
   fingerprintSweepCadenceHours: number;
   maintainerAlertWebhookUrl?: string;
+  evidenceJobCredentialEncryptionKey: Buffer;
 };
 
 function positiveInteger(
@@ -106,6 +109,13 @@ export function loadWorkerConfig(
   if (blizzardSweepRequestCap > blizzardHourlyRequestBudget) {
     throw new Error("invalid_blizzard_sweep_request_cap");
   }
+  const evidenceJobCredentialEncryptionKey = (() => {
+    const secret = environment.EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY?.trim();
+    if (!secret) {
+      throw new Error("evidence_job_credential_encryption_key_required");
+    }
+    return parseEncryptionKey(secret);
+  })();
 
   return {
     databaseUrl: environment.DATABASE_URL,
@@ -183,6 +193,7 @@ export function loadWorkerConfig(
     maintainerAlertWebhookUrl: optionalHttpUrl(
       environment.MAINTAINER_ALERT_WEBHOOK_URL,
       "invalid_maintainer_alert_webhook_url"
-    )
+    ),
+    evidenceJobCredentialEncryptionKey
   };
 }

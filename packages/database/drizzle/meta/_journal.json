@@ -99,6 +99,13 @@
       "when": 1789560000000,
       "tag": "0014_manual_connections_by_key",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789570000000,
+      "tag": "0015_evidence_run_credentials",
+      "breakpoints": true
     }
   ]
 }
