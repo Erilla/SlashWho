@@ -224,6 +224,35 @@ describe("job telemetry", () => {
     });
   });
 
+  it("scopes the singleton key so a continuation does not collide", async () => {
+    // Break caught: a continuation job keyed on the bare runId would collide
+    // with the already-completed cycle-1 job for the same run and be
+    // silently dropped by pg-boss's singleton policy.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    const runId = "00000000-0000-4000-8000-000000000014";
+    await queue.start();
+    queueFakes.send.mockClear();
+
+    await queue.enqueue({
+      runId,
+      key: { region: "eu", realm: "silvermoon", name: "root" }
+    });
+    await queue.enqueue({
+      runId,
+      key: { region: "eu", realm: "silvermoon", name: "root" },
+      continuation: true
+    });
+
+    expect(
+      queueFakes.send.mock.calls.map(
+        (call) => (call[2] as { singletonKey?: string } | undefined)
+          ?.singletonKey
+      )
+    ).toEqual([runId, `${runId}:continuation`]);
+  });
+
   it("enqueues evidence without metadata", async () => {
     const queue = createDiscoveryQueue({
       connectionString: "postgres://worker:secret@database/slashwho"

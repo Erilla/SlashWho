@@ -16,6 +16,11 @@ export type JobTelemetry = {
 export type DiscoverCharacterJob = {
   runId: string;
   key: CharacterKey;
+  /**
+   * Set when this job resumes a fingerprint sweep that capped. It skips
+   * Raider.IO re-discovery and the completed-run guard.
+   */
+  continuation?: true;
 } & JobTelemetry;
 
 type FingerprintAdmissionJob = {
@@ -245,14 +250,17 @@ export function createDiscoveryQueue(
 
     async enqueue(payload) {
       if (!ready) throw new Error("discovery_queue_not_ready");
+      const singletonKey = payload.continuation
+        ? `${payload.runId}:continuation`
+        : payload.runId;
       const id = await boss.send(discoverCharacterQueueName, payload, {
-        singletonKey: payload.runId
+        singletonKey
       });
       return (
         id ??
         (await existingSingletonJobId(
           discoverCharacterQueueName,
-          payload.runId
+          singletonKey
         )) ??
         (() => {
           throw new Error("discovery_queue_enqueue_not_created");
