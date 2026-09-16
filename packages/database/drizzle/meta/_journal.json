@@ -120,6 +120,13 @@
       "when": 1789732800000,
       "tag": "0017_snapshot_character_guild",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789819200000,
+      "tag": "0018_fingerprint_sweep_cursor",
+      "breakpoints": true
     }
   ]
 }
