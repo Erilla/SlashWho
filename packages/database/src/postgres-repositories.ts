@@ -60,6 +60,9 @@ interface SnapshotCharacterRow {
   class_name: string;
   level: number;
   raider_io_url: string;
+  guild_name: string | null;
+  guild_region: CharacterKey["region"] | null;
+  guild_realm_slug: string | null;
   discovery_source: StoredSnapshotCharacter["source"];
   display_order: number;
 }
@@ -78,6 +81,18 @@ function mapSnapshotCharacter(
     className: character.class_name,
     level: character.level,
     raiderIoUrl: character.raider_io_url,
+    // Every part must be present to name a guild; a snapshot written before
+    // the columns existed has none of them.
+    guild:
+      character.guild_name &&
+      character.guild_region &&
+      character.guild_realm_slug
+        ? {
+            name: character.guild_name,
+            region: character.guild_region,
+            realm: character.guild_realm_slug
+          }
+        : null,
     source: character.discovery_source,
     displayOrder: character.display_order
   };
@@ -675,6 +690,9 @@ async function loadSnapshot(
       membership.class_name,
       membership.level,
       membership.raider_io_url,
+      membership.guild_name,
+      membership.guild_region,
+      membership.guild_realm_slug,
       membership.discovery_source,
       membership.display_order
     FROM snapshot_characters membership
@@ -798,8 +816,9 @@ async function createSnapshot(
     await client.query(
       `INSERT INTO snapshot_characters
         (snapshot_id, character_id, display_order, discovery_source,
-         display_name, class_name, level, raider_io_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         display_name, class_name, level, raider_io_url,
+         guild_name, guild_region, guild_realm_slug)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         snapshotId,
         characterId,
@@ -808,7 +827,10 @@ async function createSnapshot(
         character.displayName,
         character.className,
         character.level,
-        character.raiderIoUrl
+        character.raiderIoUrl,
+        character.guild?.name ?? null,
+        character.guild?.region ?? null,
+        character.guild?.realm ?? null
       ]
     );
   }
@@ -1296,8 +1318,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await client.query(
               `INSERT INTO snapshot_characters
                 (snapshot_id, character_id, display_order, discovery_source,
-                 display_name, class_name, level, raider_io_url)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                 display_name, class_name, level, raider_io_url,
+                 guild_name, guild_region, guild_realm_slug)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
               [
                 snapshotId,
                 characterId,
@@ -1306,7 +1329,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 character.displayName,
                 character.className,
                 character.level,
-                character.raiderIoUrl
+                character.raiderIoUrl,
+                character.guild?.name ?? null,
+                character.guild?.region ?? null,
+                character.guild?.realm ?? null
               ]
             );
           }

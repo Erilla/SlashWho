@@ -125,7 +125,8 @@ describe("Blizzard gateway", () => {
         key: { region: "eu", realm: "silvermoon", name: "alt" },
         displayName: "Alt",
         className: "Mage",
-        level: 80
+        level: 80,
+        guild: { name: "A Guild", region: "eu", realm: "silvermoon" }
       }
     ]);
     expect(onProfileRequest).toHaveBeenCalledTimes(3);
@@ -169,9 +170,50 @@ describe("Blizzard gateway", () => {
         key: { region: "eu", realm: "silvermoon", name: "keeper" },
         displayName: "Keeper",
         className: "Mage",
-        level: 70
+        level: 70,
+        guild: { name: "A Guild", region: "eu", realm: "silvermoon" }
       }
     ]);
+  });
+
+  it("names the guild each roster member was read from", async () => {
+    // The roster is fetched for one guild, so every member is in it. The guild
+    // is already read to build the roster URL; carrying it costs no request.
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      if (url.pathname === "/data/wow/playable-class/index") {
+        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
+      }
+      if (url.pathname.endsWith("/character/silvermoon/sentinel")) {
+        // A guild need not sit on its members' realm.
+        return Response.json({
+          guild: { name: "Rancour", realm: { slug: "draenor" } }
+        });
+      }
+      if (url.pathname.endsWith("/guild/draenor/rancour/roster")) {
+        return Response.json({
+          members: [
+            {
+              character: {
+                name: "Keeper",
+                realm: { slug: "Silvermoon" },
+                playable_class: { id: 8 },
+                level: 70
+              }
+            }
+          ]
+        });
+      }
+      throw new Error(`unexpected endpoint: ${url.pathname}`);
+    });
+
+    const roster = await gateway.getGuildRoster(key);
+
+    expect(roster[0]?.guild).toEqual({
+      name: "Rancour",
+      region: "eu",
+      realm: "draenor"
+    });
   });
 
   it("returns an empty roster when the root has no guild", async () => {

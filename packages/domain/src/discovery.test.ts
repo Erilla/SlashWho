@@ -44,6 +44,7 @@ function character(
     ownerId: null,
     profileGuess: null,
     declaredMain: null,
+    guild: null,
     ...overrides
   };
 }
@@ -95,6 +96,85 @@ const options = {
 };
 
 describe("discoverCharacter", () => {
+  it("enriches a claimed character's guild, absent from the profile payload", async () => {
+    // The profile list carries no guild at all, so a claimed character's guild
+    // is only knowable from its own character payload.
+    const guild = { name: "Rancour", region: "eu" as const, realm: "draenor" };
+    const outcome = await discoverCharacter(
+      altKey,
+      scriptedGateway({
+        characters: [
+          [altKey, character(altKey, { ownerId: "owner", guild })],
+          [secondAltKey, character(secondAltKey, { guild })]
+        ],
+        claimed: { owner: [character(altKey), character(secondAltKey)] }
+      }),
+      options
+    );
+
+    expect(outcome.kind).toBe("snapshot");
+    if (outcome.kind !== "snapshot") return;
+    expect(
+      outcome.characters.map((item) => [item.key.name, item.guild?.name])
+    ).toEqual([
+      ["alt", "Rancour"],
+      ["second-alt", "Rancour"]
+    ]);
+  });
+
+  it("leaves a guild unresolved rather than downgrading a complete snapshot", async () => {
+    // Break caught: spending the last of the budget on a guild could mark an
+    // otherwise complete snapshot partial. A guild is display data; the
+    // discovered relationship set is unaffected by failing to read one.
+    const outcome = await discoverCharacter(
+      altKey,
+      scriptedGateway({
+        characters: [
+          [
+            altKey,
+            character(altKey, {
+              ownerId: "owner",
+              guild: { name: "Rancour", region: "eu", realm: "draenor" }
+            })
+          ]
+        ],
+        claimed: { owner: [character(altKey), character(secondAltKey)] }
+      }),
+      { ...options, requestCap: 2 }
+    );
+
+    expect(outcome.kind).toBe("snapshot");
+    if (outcome.kind !== "snapshot") return;
+    expect(outcome.state).toBe("complete");
+    expect(
+      outcome.characters.find((item) => item.key.name === "second-alt")?.guild
+    ).toBeNull();
+  });
+
+  it("keeps the snapshot when a guild lookup fails outright", async () => {
+    // A guild is cosmetic. An upstream failure while reading one must not fail
+    // a snapshot whose relationships were already discovered successfully.
+    const gateway = scriptedGateway({
+      characters: [[altKey, character(altKey, { ownerId: "owner" })]],
+      claimed: { owner: [character(altKey), character(secondAltKey)] }
+    });
+    gateway.getCharacter = async (key) =>
+      key.name === "alt"
+        ? character(altKey, { ownerId: "owner" })
+        : Promise.reject(
+            Object.assign(new Error("transient"), { kind: "transient" })
+          );
+
+    const outcome = await discoverCharacter(altKey, gateway, options);
+
+    expect(outcome.kind).toBe("snapshot");
+    if (outcome.kind !== "snapshot") return;
+    expect(outcome.characters.map((item) => item.key.name)).toEqual([
+      "alt",
+      "second-alt"
+    ]);
+  });
+
   it("records a visible owner and its claimed characters in canonical order", async () => {
     // Break caught: owner records could omit claims or depend on upstream array order.
     const outcome = await discoverCharacter(
@@ -350,6 +430,7 @@ describe("discoverCharacter", () => {
           displayName: "alt",
           className: "Mage",
           level: 80,
+          guild: null,
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/alt",
           source: "input"
         }

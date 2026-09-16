@@ -8,6 +8,16 @@ export type CharacterKey = Readonly<{
   name: string;
 }>;
 
+/**
+ * A guild as named by an upstream character payload. It carries its own realm
+ * and region because a character's guild need not sit on the character's realm.
+ */
+export type CharacterGuild = Readonly<{
+  name: string;
+  region: Region;
+  realm: string;
+}>;
+
 function invalidCharacterUrl(): never {
   throw new Error("invalid_character_url");
 }

@@ -147,6 +147,12 @@ export const snapshotCharacters = pgTable(
     displayName: text("display_name").notNull(),
     className: text("class_name").notNull(),
     level: integer("level").notNull(),
+    // The guild as at this snapshot. Nullable because a character can be
+    // guildless, and because snapshots written before this column existed
+    // carry no guild at all.
+    guildName: text("guild_name"),
+    guildRegion: text("guild_region"),
+    guildRealmSlug: text("guild_realm_slug"),
     raiderIoUrl: text("raider_io_url").notNull()
   },
   (table) => [

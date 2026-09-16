@@ -1,4 +1,4 @@
-import type { CharacterKey, Region } from "@slashwho/domain";
+import type { CharacterGuild, CharacterKey, Region } from "@slashwho/domain";
 import { supportedRegions } from "@slashwho/domain";
 import { z } from "zod";
 
@@ -9,6 +9,16 @@ import type { RaiderIoCharacter } from "./types";
 // snapshot, and a value the public schema later rejects makes that snapshot
 // permanently unreadable. The two validators stay separate because they guard
 // different untrusted inputs, but their ranges are reconciled deliberately.
+
+// A guild is absent from the profile-list payload entirely and null for a
+// guildless character, so it is optional AND nullable: neither shape is
+// structural change, and treating either as drift would fail the whole sweep.
+const upstreamGuildSchema = z.object({
+  name: z.string().min(1),
+  realm: z.object({ slug: z.string().min(1) }),
+  region: z.object({ slug: z.string().min(1) })
+});
+
 const upstreamCharacterSchema = z.object({
   name: z.string().min(1),
   level: z.number().int().nonnegative(),
@@ -17,7 +27,8 @@ const upstreamCharacterSchema = z.object({
     slug: z.string().min(1),
     realmType: z.string().optional()
   }),
-  region: z.object({ slug: z.string().min(1) })
+  region: z.object({ slug: z.string().min(1) }),
+  guild: upstreamGuildSchema.nullable().optional()
 });
 
 const declaredMainSchema = z.object({
@@ -103,6 +114,21 @@ function characterKey(
   };
 }
 
+/**
+ * Returns null when the guild falls outside the key space this system can
+ * represent. The character itself is still usable, so an unrepresentable guild
+ * drops the guild rather than the character.
+ */
+function normalizedGuild(
+  guild: z.infer<typeof upstreamGuildSchema> | null | undefined
+): CharacterGuild | null {
+  if (!guild) return null;
+  const region = normalizedRegion(guild.region.slug);
+  const realm = normalizedSlug(guild.realm.slug);
+  if (!region || !realm) return null;
+  return { name: guild.name, region, realm };
+}
+
 function normalizedCharacter(
   character: UpstreamCharacter,
   key: CharacterKey
@@ -112,6 +138,7 @@ function normalizedCharacter(
     displayName: character.name,
     className: character.class.name,
     level: character.level,
+    guild: normalizedGuild(character.guild),
     // Profile lists omit the detail flag, but carry the explicit realm type.
     ...(character.realm.realmType === "tr"
       ? { isTournamentProfile: true }

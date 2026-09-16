@@ -225,6 +225,33 @@ const currentCharacter = {
   activeJob: null
 };
 
+it("carries a character's current guild, which need not share its realm", () => {
+  const withGuild = {
+    ...validDossier,
+    characters: [
+      {
+        ...validDossier.characters[0],
+        guild: { name: "Rancour", region: "eu", realm: "draenor" }
+      }
+    ]
+  };
+
+  expect(applicantDossierSchema.parse(withGuild)).toEqual(withGuild);
+});
+
+it("still reads a snapshot written before characters carried a guild", () => {
+  // The character schema is strict and parses immutable snapshots committed
+  // before this field existed. Requiring a guild would make every one of them
+  // permanently unreadable, so absent and null must both stay acceptable.
+  expect(applicantDossierSchema.safeParse(validDossier).success).toBe(true);
+  expect(
+    applicantDossierSchema.safeParse({
+      ...validDossier,
+      characters: [{ ...validDossier.characters[0], guild: null }]
+    }).success
+  ).toBe(true);
+});
+
 it("rejects internal provenance in a public character response", () => {
   const value = {
     ...currentCharacter,

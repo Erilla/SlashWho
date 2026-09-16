@@ -1,0 +1,21 @@
+{
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Sentinel",
+        "level": 80,
+        "class": { "name": "Mage" },
+        "realm": { "slug": "Silvermoon" },
+        "region": { "slug": "EU" },
+        "guild": {
+          "name": "Rancour",
+          "realm": { "slug": "Draenor" },
+          "region": { "slug": "cn" }
+        }
+      },
+      "user": { "name": "owner-alpha" },
+      "characterCustomizations": { "main_character": null }
+    }
+  }
+}

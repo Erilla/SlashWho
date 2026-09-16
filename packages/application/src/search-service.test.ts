@@ -35,6 +35,7 @@ function snapshot(refreshedAt: Date): StoredSnapshot {
         displayName: "Ryii",
         className: "Mage",
         level: 80,
+        guild: null,
         raiderIoUrl: characterUrl,
         source: "input",
         displayOrder: 0

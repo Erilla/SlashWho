@@ -67,6 +67,7 @@ export async function seedSnapshot(
       refreshedAt: input.refreshedAt,
       characters: characters.map((character, index) => ({
         ...character,
+        guild: null,
         raiderIoUrl: toRaiderIoUrl(character.key),
         source: index === 0 ? "input" : "claimed"
       }))

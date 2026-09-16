@@ -8,6 +8,7 @@ const first: DiscoveredCharacter = {
   displayName: "Ryii",
   className: "Mage",
   level: 80,
+  guild: null,
   raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
   source: "input"
 };
@@ -28,6 +29,7 @@ describe("deduplicateCharacters", () => {
           displayName: "Other",
           className: "Priest",
           level: 78,
+          guild: null,
           raiderIoUrl: "https://raider.io/characters/us/area-52/other",
           source: "claimed"
         }
@@ -39,6 +41,7 @@ describe("deduplicateCharacters", () => {
         displayName: "Other",
         className: "Priest",
         level: 78,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/us/area-52/other",
         source: "claimed"
       }

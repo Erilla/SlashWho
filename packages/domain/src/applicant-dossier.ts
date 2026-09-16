@@ -1,5 +1,5 @@
 import { canonicalCharacterId } from "./deduplicate";
-import type { CharacterKey } from "./character-key";
+import type { CharacterGuild, CharacterKey } from "./character-key";
 import { formatCharacterDisplayName } from "./display-name";
 import {
   lookupJournalEncounter,
@@ -16,6 +16,7 @@ export type DossierCharacter = Readonly<{
   key: CharacterKey;
   displayName: string;
   className?: string | null;
+  guild?: CharacterGuild | null;
   raiderIoUrl?: string;
 }>;
 export type DossierKillParseMetric =

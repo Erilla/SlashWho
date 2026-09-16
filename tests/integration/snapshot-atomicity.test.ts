@@ -26,7 +26,8 @@ function character(name: string): RaiderIoCharacter {
     level: 80,
     ownerId: name === rootKey.name ? "owner" : null,
     profileGuess: null,
-    declaredMain: null
+    declaredMain: null,
+    guild: null
   };
 }
 

@@ -759,6 +759,13 @@ a {
   gap: 0.45rem;
 }
 
+/* Sits beside the name in the character list, subordinate to it: the guild is
+   context for the character, not a second identity competing with it. */
+.dossier-character-guild {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .dossier-character-spinner {
   width: 0.85rem;
   height: 0.85rem;

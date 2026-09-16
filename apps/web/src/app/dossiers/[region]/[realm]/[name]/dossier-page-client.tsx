@@ -16,6 +16,7 @@ import {
   credentialHeaders,
   readStoredCredentials
 } from "../../../../../lib/api-credentials";
+import { dossierTitle } from "../../../../../lib/dossier-title";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
   DossierCharacterName,
@@ -443,6 +444,38 @@ export function DossierPageClient({
   useEffect(() => {
     setIdentitySlot(document.getElementById(headerIdentitySlotId));
   }, []);
+
+  // generateMetadata titles the tab from the route alone, because the guild is
+  // only known once the dossier lands.
+  const rootGuild = dossier?.characters.find(
+    (character) =>
+      character.key.region === identity.region &&
+      character.key.realm.toLowerCase() === identity.realm.toLowerCase() &&
+      character.key.name.toLowerCase() === identity.name.toLowerCase()
+  )?.guild;
+  // The layout's "%s · Who" template applies to metadata, not to an assigned
+  // title, so this carries the suffix itself.
+  const guildTitle = rootGuild
+    ? `${dossierTitle(identity, rootGuild)} · Who`
+    : null;
+  useEffect(() => {
+    if (!guildTitle) return;
+    // The route's own metadata commits during hydration and can land after this
+    // effect, and rendering a <title> here loses to it outright: the head keeps
+    // both and the document takes the first. Reassert instead of racing, so the
+    // guild survives whenever that commit happens.
+    const apply = () => {
+      if (document.title !== guildTitle) document.title = guildTitle;
+    };
+    apply();
+    const observer = new MutationObserver(apply);
+    observer.observe(document.head, {
+      subtree: true,
+      childList: true,
+      characterData: true
+    });
+    return () => observer.disconnect();
+  }, [guildTitle]);
 
   // The header owns this slot, so the identity is laid out by the header grid
   // instead of floating over whatever the header happens to hold.

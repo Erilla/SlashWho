@@ -1,4 +1,4 @@
-import type { CharacterKey } from "@slashwho/domain";
+import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
 
 export type AchievementFingerprint = ReadonlyMap<number, number>;
 
@@ -12,6 +12,12 @@ export type BlizzardRosterCharacter = Readonly<{
   displayName: string;
   className: string;
   level: number;
+  /**
+   * The guild whose roster named this member; the same for every member.
+   * Nullable to match how a guild is carried everywhere else: absent is an
+   * ordinary state, never a reason to fail a sweep.
+   */
+  guild: CharacterGuild | null;
 }>;
 
 /** Called immediately before a request to the Blizzard profile API. */

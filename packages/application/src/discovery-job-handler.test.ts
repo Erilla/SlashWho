@@ -5,12 +5,14 @@ import type {
 } from "@slashwho/database";
 import type {
   CharacterKey,
-  FingerprintCandidate,
   RaiderIoCharacter,
   RaiderIoGateway,
   RaiderIoProfile
 } from "@slashwho/domain";
-import type { BlizzardGateway } from "@slashwho/blizzard";
+import type {
+  BlizzardGateway,
+  BlizzardRosterCharacter
+} from "@slashwho/blizzard";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDiscoveryJobHandler } from "./discovery-job-handler";
@@ -53,7 +55,8 @@ function character(key: CharacterKey): RaiderIoCharacter {
     level: 80,
     ownerId: key === rootKey ? "visible-owner" : null,
     profileGuess: null,
-    declaredMain: null
+    declaredMain: null,
+    guild: null
   };
 }
 
@@ -91,15 +94,21 @@ class MutableGateway implements RaiderIoGateway {
   }
 }
 
+const rosterGuild = {
+  name: "Roster Guild",
+  region: "eu",
+  realm: "silvermoon"
+} as const;
+
 class MutableBlizzardGateway implements BlizzardGateway {
-  roster: readonly FingerprintCandidate[] = [];
+  roster: readonly BlizzardRosterCharacter[] = [];
   fingerprints = new Map<string, ReadonlyMap<number, number>>();
 
   async getGuildRoster(
     _key?: CharacterKey,
     _signal?: AbortSignal,
     onProfileRequest?: () => Promise<void> | void
-  ): Promise<readonly FingerprintCandidate[]> {
+  ): Promise<readonly BlizzardRosterCharacter[]> {
     await onProfileRequest?.();
     if (this.roster.length > 0) await onProfileRequest?.();
     return this.roster;
@@ -492,13 +501,15 @@ describe("discovery job handler", () => {
         key: secondKey,
         displayName: "Second from Blizzard",
         className: "Mage",
-        level: 80
+        level: 80,
+        guild: rosterGuild
       },
       {
         key: fingerprintKey,
         displayName: "Fingerprint Match",
         className: "Priest",
-        level: 80
+        level: 80,
+        guild: null
       }
     ];
     const fingerprint = achievementFingerprint();
@@ -560,7 +571,8 @@ describe("discovery job handler", () => {
         key: fingerprintKey,
         displayName: "Fingerprint Match",
         className: "Priest",
-        level: 80
+        level: 80,
+        guild: null
       }
     ];
     blizzardGateway.fingerprints.set(rootKey.name, achievementFingerprint());
@@ -843,7 +855,8 @@ describe("discovery job handler", () => {
       },
       displayName: `Member${index}`,
       className: "Mage",
-      level: 80
+      level: 80,
+      guild: rosterGuild
     }));
     blizzardGateway.getGuildRoster = async () => roster;
 
@@ -897,7 +910,9 @@ describe("discovery job handler", () => {
         dbCalls: 7,
         dbMaxCallMs: 0,
         raiderIoMs: 0,
-        raiderIoCalls: 2,
+        // Two calls walk the relationships; the rest read each discovered
+        // character's guild, which the profile payload does not carry.
+        raiderIoCalls: 5,
         raiderIoMaxCallMs: 0
       }
     ]);
@@ -929,7 +944,8 @@ describe("discovery job handler", () => {
         key: fingerprintKey,
         displayName: "Fingerprint Match",
         className: "Priest",
-        level: 80
+        level: 80,
+        guild: null
       }
     ];
     const fingerprint = achievementFingerprint();
@@ -1054,7 +1070,7 @@ describe("discovery job handler", () => {
       event: "discovery_run",
       correlationId: "c1",
       queueWaitMs: 1_000,
-      raiderIoCalls: 2,
+      raiderIoCalls: 5,
       raiderIoMs: expect.any(Number),
       raiderIoMaxCallMs: expect.any(Number),
       dbCalls: expect.any(Number),

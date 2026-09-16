@@ -24,26 +24,32 @@ export const dossierEvidenceStateSchema = z.enum([
   "partial"
 ]);
 
+export const dossierGuildSchema = z
+  .object({
+    name: z.string().min(1),
+    region: regionSchema,
+    realm: z.string().min(1)
+  })
+  .strict();
+
 export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
     displayName: z.string().min(1),
     className: z.string().min(1).nullable(),
     raiderIoUrl: z.url(),
+    /**
+     * The character's guild as at the snapshot. Optional as well as nullable:
+     * snapshots committed before this field existed carry no guild at all, and
+     * this schema is strict, so requiring it would make them unreadable.
+     */
+    guild: dossierGuildSchema.nullable().optional(),
     source: dossierSourceLabelSchema,
     evidenceState: dossierEvidenceStateSchema.optional(),
     /** A manually added character a reviewer has excluded from the evidence. */
     excluded: z.literal(true).optional(),
     /** @deprecated Use evidenceState for the precise scan state. */
     researchState: z.enum(["complete", "gathering"]).optional()
-  })
-  .strict();
-
-export const dossierGuildSchema = z
-  .object({
-    name: z.string().min(1),
-    region: regionSchema,
-    realm: z.string().min(1)
   })
   .strict();
 

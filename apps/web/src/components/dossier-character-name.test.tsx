@@ -122,3 +122,29 @@ it("renders keyed character lists as individually styled names", () => {
   expect(names[0]).toHaveClass("dossier-character-name--mage");
   expect(names[1]).toHaveClass("dossier-character-name--priest");
 });
+
+const guilded: DossierCharacter = {
+  ...mage,
+  guild: { name: "Rancour", region: "eu", realm: "draenor" }
+};
+
+it("shows a character's guild only where the caller asks for it", () => {
+  render(<DossierCharacterName character={guilded} showGuild />);
+
+  expect(screen.getByText("<Rancour>")).toBeInTheDocument();
+});
+
+it("omits the guild by default, so inline names stay unchanged", () => {
+  // The same component renders names inside parse, kill and wipe rows, where a
+  // guild on every mention would bury the evidence it sits next to.
+  render(<DossierCharacterName character={guilded} />);
+
+  expect(screen.queryByText("<Rancour>")).not.toBeInTheDocument();
+});
+
+it("renders nothing extra for a guildless character", () => {
+  render(<DossierCharacterName character={mage} showGuild />);
+
+  expect(screen.getByText("Ryii")).toBeInTheDocument();
+  expect(screen.queryByText(/</)).not.toBeInTheDocument();
+});

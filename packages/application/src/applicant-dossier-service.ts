@@ -19,6 +19,7 @@ import {
   lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
+  type CharacterGuild,
   type CharacterKey,
   type DossierCuttingEdgeEvidence,
   type DossierKillEvidence,
@@ -112,6 +113,7 @@ type DossierSubject = Readonly<{
   key: CharacterKey;
   displayName: string;
   className: string | null;
+  guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
 }>;
@@ -441,6 +443,7 @@ function serializeDossierSubject(
     key: character.key,
     displayName: formatCharacterDisplayName(character.displayName),
     className: character.className,
+    guild: character.guild,
     raiderIoUrl: character.raiderIoUrl,
     source:
       character.source === "submitted"
@@ -632,10 +635,11 @@ async function assembleDossier(options: {
   const dossier = buildApplicantDossier({
     root: options.root,
     characters: options.subjects.map(
-      ({ key, displayName, className, raiderIoUrl }) => ({
+      ({ key, displayName, className, guild, raiderIoUrl }) => ({
         key,
         displayName,
         className,
+        guild,
         raiderIoUrl
       })
     ),
@@ -980,6 +984,7 @@ export function createApplicantDossierService(options: {
               key,
               displayName: key.name,
               className: null,
+              guild: null,
               raiderIoUrl: toRaiderIoUrl(key),
               source: "submitted"
             }
@@ -1035,20 +1040,30 @@ export function createApplicantDossierService(options: {
           seen.add(id);
           into.push(candidate);
         };
+        // An undiscovered character has no snapshot to merge yet. Its own run
+        // is still queued, and the next read picks the characters up.
+        const connectedSnapshot = character.pending
+          ? null
+          : await repositories.snapshots.getCurrent(character.key);
+        // A manual connection carries no guild of its own, and `seen` keeps its
+        // row from being replaced by the one its own discovery wrote. Read the
+        // guild across before admitting, or a manually added character would
+        // show none however much is known about it.
+        const connectedGuild =
+          connectedSnapshot?.characters.find(
+            (discovered) =>
+              canonicalCharacterId(discovered.key) ===
+              canonicalCharacterId(character.key)
+          )?.guild ?? null;
         // An excluded character joins the list and nothing else, so the
         // exclusion can be reversed from the same row. Its own discoveries
         // still follow: excluding one character is not undoing the add, and
         // those characters stand on their own evidence.
         admit(
-          { ...character, source: "manually_added" },
+          { ...character, guild: connectedGuild, source: "manually_added" },
           character.excluded ? excluded : manual
         );
-        // An undiscovered character has no snapshot to merge yet. Its own run
-        // is still queued, and the next read picks the characters up.
         if (character.pending) continue;
-        const connectedSnapshot = await repositories.snapshots.getCurrent(
-          character.key
-        );
         for (const discovered of connectedSnapshot?.characters ?? []) {
           admit(discovered);
         }

@@ -1,4 +1,8 @@
-import { toRaiderIoUrl, type CharacterKey } from "./character-key";
+import {
+  toRaiderIoUrl,
+  type CharacterGuild,
+  type CharacterKey
+} from "./character-key";
 import { canonicalCharacterId, type DiscoveredCharacter } from "./deduplicate";
 
 const mandatoryMinimumCommon = 200;
@@ -10,6 +14,12 @@ export type FingerprintCandidate = Readonly<{
   displayName: string;
   className: string;
   level: number;
+  /**
+   * The guild whose roster named this candidate. Optional because isCandidate
+   * does not require it: a gateway that names no guild costs one guild, not the
+   * sweep.
+   */
+  guild?: CharacterGuild | null;
 }>;
 
 export interface FingerprintGateway {
@@ -149,6 +159,12 @@ function discoveredCharacter(
     displayName: candidate.displayName,
     className: candidate.className,
     level: candidate.level,
+    // The sweep reads exactly one roster, the root's own, so every candidate is
+    // in that guild by construction. The guild is already read to build the
+    // roster URL, so carrying it costs no request. It is coalesced rather than
+    // required by isCandidate: a gateway that names no guild should cost this
+    // one guild, not abandon the sweep as structural change.
+    guild: candidate.guild ?? null,
     raiderIoUrl: toRaiderIoUrl(candidate.key),
     source: "fingerprint"
   };

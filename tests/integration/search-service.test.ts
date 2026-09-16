@@ -53,6 +53,7 @@ async function seedSnapshot(
         displayName: key.name[0]!.toUpperCase() + key.name.slice(1),
         className: "Mage",
         level: 80,
+        guild: null,
         raiderIoUrl: `https://raider.io/characters/${key.region}/${key.realm}/${key.name}`,
         source: "input"
       }
@@ -191,6 +192,7 @@ describe("PostgreSQL search policy", () => {
           displayName: "Published",
           className: "Mage",
           level: 80,
+          guild: null,
           raiderIoUrl: `https://raider.io/characters/${key.region}/${key.realm}/${key.name}`,
           source: "input"
         }

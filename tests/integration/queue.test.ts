@@ -497,7 +497,8 @@ describe("durable discovery queue", () => {
             level: 80,
             ownerId: "owner",
             profileGuess: null,
-            declaredMain: null
+            declaredMain: null,
+            guild: null
           };
         },
         async getClaimedCharacters() {
