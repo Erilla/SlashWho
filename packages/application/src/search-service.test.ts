@@ -241,6 +241,9 @@ function policyFixture(
       async requestAdmission() {
         return { kind: "not_due" };
       },
+      async recordContinuationFailure() {
+        return 0;
+      },
       async recordRequest() {},
       async finish() {},
       async release() {},
