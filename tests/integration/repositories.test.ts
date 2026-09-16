@@ -360,6 +360,44 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("re-collects evidence recorded at the previous evidence version", async () => {
+    // Break caught: continuation amends a snapshot's character set after
+    // evidence was already published, so a dossier's evidence run can be
+    // "complete" yet stamped with the version current before that bump.
+    // Bumping CURRENT_EVIDENCE_VERSION must make that stale run collect again
+    // rather than serving a partial cached set forever.
+    const completedAt = new Date("2026-08-04T12:00:00.000Z");
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: completedAt
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      completedAt
+    });
+    await pool.query(
+      "UPDATE character_evidence_runs SET evidence_version = 10 WHERE id = $1",
+      [first.run.id]
+    );
+
+    await expect(
+      repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+        at: new Date("2026-08-04T13:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      kind: "reserved",
+      completed: { run: { id: first.run.id }, kills: [mythicKill()] }
+    });
+  });
+
   it("persists every distinct wipe fight for one boss", async () => {
     // Break caught: a per-boss uniqueness key silently dropped earlier wipes,
     // even though the dossier must show the complete report history.
@@ -433,7 +471,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 10,
+      evidenceVersion: 11,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
