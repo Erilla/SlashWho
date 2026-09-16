@@ -17,7 +17,7 @@
 - `resumeAfter` is **optional** on a `capped` outcome. The roster fetch and the root fingerprint fetch both return `capped` before any candidate is swept; those carry no cursor and must leave the stored cursor unchanged.
 - Amending must never touch `discovery_runs`. Cycle 1 completes the run; later cycles only append to the snapshot.
 - Every new repository write is one transaction, matching the atomicity contract of `createAndFinishFingerprintSweep`.
-- Run `npx eslint <the files you changed>` (repo-wide `pnpm lint` is broken by pre-existing `.worktrees/*` parse errors — see ledger F3) and full `pnpm typecheck` before each commit.
+- Run `npx prettier --check <the files you changed>` AND `npx eslint <the files you changed>` (repo-wide `pnpm lint` is broken by pre-existing `.worktrees/*` parse errors — see ledger F3) and full `pnpm typecheck` before each commit.
 - Integration tests need Docker (Testcontainers `postgres:16-alpine`).
 
 ---
