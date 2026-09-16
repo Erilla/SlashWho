@@ -120,6 +120,10 @@ describe("discoverFingerprintMatches", () => {
     expect(outcome).toEqual({
       kind: "capped",
       requestsUsed: 3,
+      // The cap is reached one candidate later ("z-last"), but "z-last"'s own
+      // fetch never runs -- the cursor stays on "matching", the last
+      // candidate that actually consumed a request.
+      resumeAfter: JSON.stringify(["eu", "silvermoon", "matching"]),
       characters: [
         {
           key: matchingKey,
@@ -320,6 +324,107 @@ describe("discoverFingerprintMatches", () => {
       retryable: true,
       retryAfterMs: 30_000
     });
+  });
+
+  it("reports the last swept candidate when the cap is reached", async () => {
+    const a: CharacterKey = { region: "eu", realm: "silvermoon", name: "aaa" };
+    const z: CharacterKey = { region: "eu", realm: "silvermoon", name: "zzz" };
+    const gateway = gatewayFor([candidate(a), candidate(z)], {
+      [keyId(root)]: fingerprint(300),
+      [keyId(a)]: fingerprint(300),
+      [keyId(z)]: fingerprint(300)
+    });
+
+    // 1 roster + 1 root fingerprint + 1 candidate = 3
+    const outcome = await discoverFingerprintMatches(root, gateway, {
+      ...options,
+      requestCap: 3
+    });
+
+    expect(outcome.kind).toBe("capped");
+    expect(outcome).toMatchObject({
+      resumeAfter: JSON.stringify(["eu", "silvermoon", "aaa"])
+    });
+  });
+
+  it("resumes strictly after the cursor", async () => {
+    const a: CharacterKey = { region: "eu", realm: "silvermoon", name: "aaa" };
+    const z: CharacterKey = { region: "eu", realm: "silvermoon", name: "zzz" };
+    const gateway = gatewayFor([candidate(a), candidate(z)], {
+      [keyId(root)]: fingerprint(300),
+      [keyId(a)]: fingerprint(300),
+      [keyId(z)]: fingerprint(300)
+    });
+
+    const outcome = await discoverFingerprintMatches(root, gateway, {
+      ...options,
+      requestCap: 10,
+      resumeAfter: JSON.stringify(["eu", "silvermoon", "aaa"])
+    });
+
+    expect(outcome.kind).toBe("matched");
+    if (outcome.kind !== "matched") return;
+    expect(outcome.characters.map((match) => match.key.name)).toEqual([
+      "zzz"
+    ]);
+  });
+
+  it("advances the cursor past a candidate with no achievement profile", async () => {
+    const missing: CharacterKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "aaa"
+    };
+    const z: CharacterKey = { region: "eu", realm: "silvermoon", name: "zzz" };
+    const gateway = gatewayFor([candidate(missing), candidate(z)], {
+      [keyId(root)]: fingerprint(300),
+      [keyId(z)]: fingerprint(300)
+      // `missing` deliberately absent -> gateway throws { kind: "not_found" }
+    });
+
+    const outcome = await discoverFingerprintMatches(root, gateway, {
+      ...options,
+      requestCap: 3
+    });
+
+    expect(outcome.kind).toBe("capped");
+    expect(outcome).toMatchObject({
+      resumeAfter: JSON.stringify(["eu", "silvermoon", "aaa"])
+    });
+  });
+
+  it("seals without a cursor when the cursor is past the roster end", async () => {
+    const a: CharacterKey = { region: "eu", realm: "silvermoon", name: "aaa" };
+    const gateway = gatewayFor([candidate(a)], {
+      [keyId(root)]: fingerprint(300),
+      [keyId(a)]: fingerprint(300)
+    });
+
+    const outcome = await discoverFingerprintMatches(root, gateway, {
+      ...options,
+      requestCap: 10,
+      resumeAfter: JSON.stringify(["eu", "silvermoon", "zzz"])
+    });
+
+    expect(outcome).toMatchObject({ kind: "matched", characters: [] });
+    expect(outcome).not.toHaveProperty("resumeAfter");
+  });
+
+  it("omits the cursor when the budget ends before the first candidate", async () => {
+    const a: CharacterKey = { region: "eu", realm: "silvermoon", name: "aaa" };
+    const gateway = gatewayFor([candidate(a)], {
+      [keyId(root)]: fingerprint(300),
+      [keyId(a)]: fingerprint(300)
+    });
+
+    // 1 roster + 1 root fingerprint exhausts the budget
+    const outcome = await discoverFingerprintMatches(root, gateway, {
+      ...options,
+      requestCap: 2
+    });
+
+    expect(outcome.kind).toBe("capped");
+    expect(outcome).not.toHaveProperty("resumeAfter");
   });
 
   it("throws the abort reason without returning a partial result", async () => {
