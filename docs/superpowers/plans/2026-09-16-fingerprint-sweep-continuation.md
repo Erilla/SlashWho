@@ -183,14 +183,18 @@ Declare the tracker next to `matches` in `discoverFingerprintMatches`:
   let lastSweptId: string | undefined;
 ```
 
-Filter after the existing sort:
+Filter after the existing sort. The comparator MUST be `localeCompare`, matching
+`compareCandidates`: code-point `>` disagrees with the sort for non-ASCII
+character names, which would filter out a candidate that sorts after the cursor
+and skip it on every future cycle — the very defect this task removes.
 
 ```ts
     const rootId = canonicalCharacterId(root);
     const sorted = [...roster].sort(compareCandidates);
     const candidates = options.resumeAfter
       ? sorted.filter(
-          (item) => canonicalCharacterId(item.key) > options.resumeAfter!
+          (item) =>
+            canonicalCharacterId(item.key).localeCompare(options.resumeAfter!) > 0
         )
       : sorted;
 ```
