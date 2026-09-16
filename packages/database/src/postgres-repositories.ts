@@ -2435,6 +2435,24 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return loadCompletedEvidence(pool, key);
       },
 
+      async hydratedFightUrls(key) {
+        // Scoped to the runs a dossier actually reads, so a fight whose parse
+        // only ever existed on a superseded run is still treated as missing.
+        const result = await pool.query<{ fight_url: string }>(
+          `SELECT DISTINCT k.fight_url
+           FROM character_mythic_kills k
+           JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+           WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
+             AND r.status IN ('complete', 'partial')
+             AND (k.damage_parse_state = 'available'
+               OR k.healing_parse_state = 'available'
+               OR k.boss_damage_parse_state = 'available')
+           ORDER BY k.fight_url`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows.map((row) => row.fight_url);
+      },
+
       async listStatus(keys) {
         if (keys.length === 0) return [];
         const result = await pool.query<EvidenceRunRow>(

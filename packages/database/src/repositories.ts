@@ -297,6 +297,12 @@ export interface EvidenceRepository {
   ): Promise<void>;
   fail(id: string, code: string): Promise<void>;
   getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
+  /**
+   * Fight URLs already carrying at least one available parse metric, so a
+   * budget-limited collection run can spend its requests on what is missing
+   * instead of redoing the same reports every time.
+   */
+  hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
   /**
    * Clears any lingering encrypted WCL credential columns from evidence runs

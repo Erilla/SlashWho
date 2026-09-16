@@ -5,7 +5,7 @@ import {
   lookupJournalEncounter,
   lookupRaidBossByName,
   lookupRaidByName,
-  lookupRaidCurrentContentWindow,
+  currentContentEligibilityByRaidId,
   lookupUniqueRaidBossByName,
   supportedRaidCatalogue,
   type RaidCatalogueEncounter
@@ -275,12 +275,7 @@ function catalogueEncounter(evidence: {
 }
 
 function currentness(killedAt: string, raidId: string): boolean | null {
-  const window = lookupRaidCurrentContentWindow(raidId);
-  const at = Date.parse(killedAt);
-  return !window || Number.isNaN(at)
-    ? null
-    : at >= Date.parse(window.startsAt) &&
-        (window.endsAt === null || at < Date.parse(window.endsAt));
+  return currentContentEligibilityByRaidId(killedAt, raidId);
 }
 
 function selectParseMetric(

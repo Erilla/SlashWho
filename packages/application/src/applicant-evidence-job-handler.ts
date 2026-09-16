@@ -41,6 +41,12 @@ export type ApplicantEvidenceStore = {
     }>
   ): Promise<void>;
   fail(runId: string, code: WarcraftLogsLimitationCode): Promise<void>;
+  /**
+   * Fight URLs whose parses are already stored for this character, so a
+   * budget-limited run spends its requests on what is still missing rather
+   * than redoing the same reports on every run.
+   */
+  hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
 };
 
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
@@ -160,11 +166,16 @@ export function createApplicantEvidenceJobHandler(
             : options.warcraftLogs;
 
         activeContext.signal.throwIfAborted();
+        const hydratedFightUrls = new Set(
+          await options.evidence.hydratedFightUrls(run.key)
+        );
+        activeContext.signal.throwIfAborted();
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap: options.requestCap,
             parseRequestCap: options.parseRequestCap,
             ...(run.className ? { className: run.className } : {}),
+            hydratedFightUrls,
             signal: activeContext.signal
           })
         );

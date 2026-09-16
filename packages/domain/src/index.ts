@@ -7,7 +7,11 @@ export {
 } from "./character-key";
 export type { CharacterGuild, CharacterKey, Region } from "./character-key";
 export { formatCharacterDisplayName } from "./display-name";
-export { lookupRaiderIoBoss, supportedRaidCatalogue } from "./raid-catalogue";
+export {
+  currentContentEligibility,
+  lookupRaiderIoBoss,
+  supportedRaidCatalogue
+} from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,

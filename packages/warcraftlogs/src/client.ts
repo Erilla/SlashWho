@@ -1,4 +1,8 @@
-import { supportedRegions, type CharacterKey } from "@slashwho/domain";
+import {
+  currentContentEligibility,
+  supportedRegions,
+  type CharacterKey
+} from "@slashwho/domain";
 
 import type {
   WarcraftLogsFirstKillEvidence,
@@ -545,6 +549,10 @@ type RankingScope = Readonly<{
     Readonly<{ encounterId: number; difficulty: number }>
   >;
   earliestKilledAt: string;
+  /** The most recent kill in this report, used to favour the current tier. */
+  latestKilledAt: string;
+  /** Whether this report carries the first kill of any boss. */
+  hasFirstKill: boolean;
 }>;
 
 const unavailableParseMetric: WarcraftLogsParseMetric = {
@@ -1154,6 +1162,12 @@ export function createWarcraftLogsClient(
       requestCap: number;
       parseRequestCap: number;
       className?: string;
+      /**
+       * Fight URLs whose parses are already stored. The budget is small, so a
+       * run spends it on what is still missing rather than redoing the same
+       * reports every time.
+       */
+      hydratedFightUrls?: ReadonlySet<string>;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1217,7 +1231,36 @@ export function createWarcraftLogsClient(
     // Grouped by report alone. A raid night's kills share one report, and one
     // ranking request returns all of them, so grouping any finer would spend a
     // request per boss for data the first request already carried.
+    // A boss's first kill is the evidence the dossier headlines, so the budget
+    // must reach it before any repeat kill of the same boss.
+    const firstKillFightUrls = new Set<string>();
+    const earliestByBoss = new Map<
+      string,
+      { killedAt: string; fightUrl: string }
+    >();
     for (const kill of kills.values()) {
+      const bossKey = `${kill.raidId} ${kill.bossId} ${kill.difficulty}`;
+      const seen = earliestByBoss.get(bossKey);
+      if (!seen || kill.killedAt < seen.killedAt) {
+        earliestByBoss.set(bossKey, {
+          killedAt: kill.killedAt,
+          fightUrl: kill.fightUrl
+        });
+      }
+    }
+    for (const entry of earliestByBoss.values())
+      firstKillFightUrls.add(entry.fightUrl);
+
+    for (const kill of kills.values()) {
+      // A kill outside its raid's current-content window is never shown, so
+      // hydrating it spends a scarce, rate-limited request on nothing. An
+      // unknown window is left alone: absent catalogue data must not silently
+      // disable hydration.
+      if (currentContentEligibility(kill.killedAt, kill.raidName) === false) {
+        continue;
+      }
+      if (options.hydratedFightUrls?.has(kill.fightUrl)) continue;
+      const isFirstKill = firstKillFightUrls.has(kill.fightUrl);
       const existing = groups.get(kill.reportCode);
       const fight = {
         encounterId: Number(kill.bossId),
@@ -1232,12 +1275,19 @@ export function createWarcraftLogsClient(
               earliestKilledAt:
                 kill.killedAt < existing.earliestKilledAt
                   ? kill.killedAt
-                  : existing.earliestKilledAt
+                  : existing.earliestKilledAt,
+              latestKilledAt:
+                kill.killedAt > existing.latestKilledAt
+                  ? kill.killedAt
+                  : existing.latestKilledAt,
+              hasFirstKill: existing.hasFirstKill || isFirstKill
             }
           : {
               reportCode: kill.reportCode,
               fights: new Map([[kill.fightId, fight]]),
-              earliestKilledAt: kill.killedAt
+              earliestKilledAt: kill.killedAt,
+              latestKilledAt: kill.killedAt,
+              hasFirstKill: isFirstKill
             }
       );
     }
@@ -1250,9 +1300,15 @@ export function createWarcraftLogsClient(
       >;
     }> = [];
     const identities = new Map<number, RankingIdentity>();
+    // Reports carrying a boss's first kill come first, newest tier before
+    // oldest, then everything else. The budget is small and the upstream rate
+    // limit tight, so what survives must be the evidence a dossier headlines,
+    // starting with current content. Already-stored fights are skipped above,
+    // so successive runs advance through the rest instead of redoing these.
     for (const group of [...groups.values()].sort(
       (a, b) =>
-        a.earliestKilledAt.localeCompare(b.earliestKilledAt) ||
+        Number(b.hasFirstKill) - Number(a.hasFirstKill) ||
+        b.latestKilledAt.localeCompare(a.latestKilledAt) ||
         a.reportCode.localeCompare(b.reportCode)
     )) {
       // Reserve one request for the shared canonical identity lookup, so a cap

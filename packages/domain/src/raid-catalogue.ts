@@ -335,6 +335,36 @@ function raiderIoBossSlug(bossName: string): string {
     .toLocaleLowerCase("en-US");
 }
 
+/**
+ * Whether a kill falls inside its raid's current-content window.
+ *
+ * `null` means the window is unknown, which is not the same as outside it.
+ * Callers that spend a budget should skip only a definite `false`: a raid with
+ * no catalogued window must not silently disable hydration for everything.
+ */
+export function currentContentEligibility(
+  killedAt: string,
+  raidName: string
+): boolean | null {
+  const raid = lookupRaidByName(raidName);
+  return raid === null
+    ? null
+    : currentContentEligibilityByRaidId(killedAt, raid.raidId);
+}
+
+/** The same rule keyed by journal raid id, for callers that already hold one. */
+export function currentContentEligibilityByRaidId(
+  killedAt: string,
+  raidId: string
+): boolean | null {
+  const window = lookupRaidCurrentContentWindow(raidId);
+  const at = Date.parse(killedAt);
+  return !window || Number.isNaN(at)
+    ? null
+    : at >= Date.parse(window.startsAt) &&
+        (window.endsAt === null || at < Date.parse(window.endsAt));
+}
+
 export function lookupRaiderIoBoss(
   raidName: string,
   bossName: string

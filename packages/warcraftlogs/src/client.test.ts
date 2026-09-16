@@ -111,7 +111,8 @@ function performanceReport(
   fightIds = [26],
   hasMorePages = false,
   code = "performance-report",
-  encounterId = 3306
+  encounterId = 3306,
+  startTime = 1_728_086_400_000
 ): unknown {
   return {
     data: {
@@ -122,7 +123,7 @@ function performanceReport(
             data: [
               {
                 code,
-                startTime: 1_706_918_400_000,
+                startTime,
                 zone: {
                   id: 1047,
                   name: "Fixture",
@@ -316,7 +317,7 @@ describe("Warcraft Logs gateway", () => {
                   data: [
                     {
                       code: "fixture-report-1",
-                      startTime: 1_706_918_400_000,
+                      startTime: 1_728_086_400_000,
                       zone: {
                         id: 1047,
                         name: "Fixture raid",
@@ -872,6 +873,175 @@ describe("Warcraft Logs gateway", () => {
     );
   });
 
+  it("does not spend parse requests on kills the dossier will withhold", async () => {
+    // Break caught: kills outside a raid's current-content window are never
+    // shown, yet hydration spent its scarce, rate-limited budget on them —
+    // years-old reports crowded out the current tier entirely.
+    const requested: string[] = [];
+    // Nerub-ar Palace closed 2025-03-05; this kill lands well after it.
+    const stale = performanceReport(
+      [26],
+      true,
+      "out-of-window-report",
+      3306,
+      Date.parse("2025-08-01T00:00:00.000Z")
+    ) as {
+      data: {
+        characterData: {
+          character: { recentReports: { data: { zone: { name: string } }[] } };
+        };
+      };
+    };
+    stale.data.characterData.character.recentReports.data[0]!.zone.name =
+      "Nerub-ar Palace";
+    const current = performanceReport(
+      [27],
+      false,
+      "in-window-report",
+      3307,
+      Date.parse("2024-10-01T00:00:00.000Z")
+    ) as {
+      data: {
+        characterData: {
+          character: { recentReports: { data: { zone: { name: string } }[] } };
+        };
+      };
+    };
+    current.data.characterData.character.recentReports.data[0]!.zone.name =
+      "Nerub-ar Palace";
+    const reports: unknown[] = [stale, current];
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        requested.push(body.variables?.code ?? "?");
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 8
+    });
+
+    expect(requested).toEqual(["in-window-report"]);
+  });
+
+  it("does not re-request a report whose fights are already hydrated", async () => {
+    // Break caught: every run walked the same reports in the same order, so a
+    // capped run redid work it had already stored and never reached the rest.
+    const requested: string[] = [];
+    const reports = [
+      performanceReport([26], true, "already-hydrated"),
+      performanceReport([27], false, "still-missing")
+    ];
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        requested.push(body.variables?.code ?? "?");
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 8,
+      hydratedFightUrls: new Set([
+        "https://www.warcraftlogs.com/reports/already-hydrated#fight=26"
+      ])
+    });
+
+    expect(requested).toEqual(["still-missing"]);
+  });
+
+  it("hydrates each boss's first kill before repeat kills, newest tier first", async () => {
+    // Break caught: oldest-first spent a small budget on the oldest reports in
+    // a character's history, so the current tier was never hydrated. First
+    // kills are what the dossier headlines, and the newest ones matter most.
+    const inWindow = (
+      fightIds: number[],
+      code: string,
+      encounterId: number,
+      killedAt: string,
+      hasMore: boolean
+    ) => {
+      const report = performanceReport(
+        fightIds,
+        hasMore,
+        code,
+        encounterId,
+        Date.parse(killedAt)
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: { data: { zone: { name: string } }[] };
+            };
+          };
+        };
+      };
+      report.data.characterData.character.recentReports.data[0]!.zone.name =
+        "Nerub-ar Palace";
+      return report;
+    };
+    const requested: string[] = [];
+    const reports = [
+      // A repeat kill of boss 3306, and the newest report of the three.
+      inWindow([28], "repeat-kill", 3306, "2025-02-05T00:00:00.000Z", true),
+      // Boss 3306's first kill.
+      inWindow(
+        [26],
+        "early-first-kill",
+        3306,
+        "2024-10-05T00:00:00.000Z",
+        true
+      ),
+      // Boss 3307's first kill, later than boss 3306's.
+      inWindow([27], "late-first-kill", 3307, "2025-01-05T00:00:00.000Z", false)
+    ];
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        requested.push(body.variables?.code ?? "?");
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 4,
+      parseRequestCap: 8
+    });
+
+    expect(requested).toEqual([
+      "late-first-kill",
+      "early-first-kill",
+      "repeat-kill"
+    ]);
+  });
+
   it("hydrates every boss in a report with a single ranking request", async () => {
     // Break caught: scoping a ranking request to one encounter spent a request
     // per boss, exhausting the parse cap and leaving later kills unhydrated.
@@ -884,7 +1054,7 @@ describe("Warcraft Logs gateway", () => {
               data: [
                 {
                   code: "raid-night",
-                  startTime: 1_706_918_400_000,
+                  startTime: 1_728_086_400_000,
                   zone: {
                     id: 1047,
                     name: "Fixture",
@@ -1370,7 +1540,7 @@ describe("Warcraft Logs gateway", () => {
           journalBossId: null,
           bossOrder: 1234,
           isFinalBoss: false,
-          killedAt: "2024-02-03T01:00:00.000Z",
+          killedAt: "2024-10-05T01:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/earlyReport",
           fightUrl: "https://www.warcraftlogs.com/reports/earlyReport#fight=7",
           guild: null,
@@ -1384,7 +1554,7 @@ describe("Warcraft Logs gateway", () => {
           journalBossId: null,
           bossOrder: 1234,
           isFinalBoss: false,
-          killedAt: "2024-02-05T03:00:00.000Z",
+          killedAt: "2024-10-07T03:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/lateReport",
           fightUrl: "https://www.warcraftlogs.com/reports/lateReport#fight=1",
           guild: null,
@@ -1398,7 +1568,7 @@ describe("Warcraft Logs gateway", () => {
           journalBossId: null,
           bossOrder: 4321,
           isFinalBoss: false,
-          killedAt: "2024-02-04T02:00:00.000Z",
+          killedAt: "2024-10-06T02:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/secondBoss",
           fightUrl: "https://www.warcraftlogs.com/reports/secondBoss#fight=2",
           guild: null,
@@ -1413,7 +1583,7 @@ describe("Warcraft Logs gateway", () => {
           bossName: "Wipe",
           journalBossId: null,
           bossOrder: 9999,
-          attemptedAt: "2024-02-05T03:00:00.000Z",
+          attemptedAt: "2024-10-07T03:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/lateReport",
           fightUrl: "https://www.warcraftlogs.com/reports/lateReport#fight=9"
         }
@@ -1439,7 +1609,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "participantReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         zone: {
                           id: 42,
                           name: "Nerub-ar Palace",
@@ -1547,7 +1717,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "mixedReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         zone: {
                           id: 55,
                           name: "Mythic+ Season 2",
@@ -1638,7 +1808,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "wipeReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         guild: null,
                         zone: {
                           id: 42,
@@ -1725,7 +1895,7 @@ describe("Warcraft Logs gateway", () => {
           raidId: "42",
           bossId: "1234",
           journalBossId: "2345",
-          attemptedAt: "2024-02-03T00:05:00.000Z",
+          attemptedAt: "2024-10-05T00:05:00.000Z",
           fightUrl: "https://www.warcraftlogs.com/reports/wipeReport#fight=1"
         }
       ],
@@ -1748,7 +1918,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "mixedReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         zone: {
                           id: 42,
                           name: "Nerub-ar Palace",
@@ -1825,7 +1995,7 @@ describe("Warcraft Logs gateway", () => {
     // evidence, while ties must not depend on upstream report order.
     const report = (code: string, endTime: number) => ({
       code,
-      startTime: 1_706_918_400_000,
+      startTime: 1_728_086_400_000,
       guild: null,
       zone: {
         id: 42,
@@ -1883,15 +2053,15 @@ describe("Warcraft Logs gateway", () => {
       kind: "evidence",
       wipes: [
         {
-          attemptedAt: "2024-02-03T00:05:00.000Z",
+          attemptedAt: "2024-10-05T00:05:00.000Z",
           fightUrl: "https://www.warcraftlogs.com/reports/a-report#fight=1"
         },
         {
-          attemptedAt: "2024-02-03T00:05:00.000Z",
+          attemptedAt: "2024-10-05T00:05:00.000Z",
           fightUrl: "https://www.warcraftlogs.com/reports/z-report#fight=1"
         },
         {
-          attemptedAt: "2024-02-03T00:02:00.000Z",
+          attemptedAt: "2024-10-05T00:02:00.000Z",
           fightUrl: "https://www.warcraftlogs.com/reports/older-report#fight=1"
         }
       ]
@@ -1913,7 +2083,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "guildReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         guild: {
                           name: "Example Guild",
                           server: {
@@ -1964,7 +2134,7 @@ describe("Warcraft Logs gateway", () => {
       kind: "evidence",
       kills: [
         {
-          killedAt: "2024-02-03T02:00:00.000Z",
+          killedAt: "2024-10-05T02:00:00.000Z",
           journalBossId: "2345",
           guild: {
             name: "Example Guild",
@@ -1989,7 +2159,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "personalReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         guild: null,
                         zone: { id: 42, name: "Nerub-ar Palace" },
                         masterData: {
@@ -2049,7 +2219,7 @@ describe("Warcraft Logs gateway", () => {
                     data: [
                       {
                         code: "realmReport",
-                        startTime: 1_706_918_400_000,
+                        startTime: 1_728_086_400_000,
                         zone: { id: 42, name: "Nerub-ar Palace" },
                         masterData: {
                           actors: [
@@ -2139,7 +2309,7 @@ describe("Warcraft Logs gateway", () => {
     // Break caught: a token used at its provider expiry can fail an otherwise
     // valid GraphQL request, so the cache must refresh it one minute early.
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2024-02-01T00:00:00.000Z"));
+    vi.setSystemTime(new Date("2024-10-03T00:00:00.000Z"));
     try {
       const reportPage = (
         fixture("character-report-valid") as { pages: unknown[] }

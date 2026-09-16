@@ -224,6 +224,44 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("reports only the fight URLs whose parses are already stored", async () => {
+    // Break caught: without this the parse budget redid the same reports every
+    // run, so coverage never advanced past whatever the first run reached.
+    const hydrated = mythicKill({
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=hydrated",
+      performance: {
+        spec: null,
+        damage: { state: "available", percentile: 91 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    });
+    const bare = mythicKill({
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=bare"
+    });
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [hydrated, bare],
+      wipes: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.hydratedFightUrls(rootKey)
+    ).resolves.toEqual([
+      "https://www.warcraftlogs.com/reports/example#fight=hydrated"
+    ]);
+  });
+
   it("carries the character's class onto a claimed evidence run", async () => {
     // Break caught: Warcraft Logs omits a class on its ranks, so evidence
     // collection needs the stored class to settle shared specialisation names.
