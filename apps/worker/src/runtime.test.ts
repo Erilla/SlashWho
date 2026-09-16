@@ -76,6 +76,8 @@ function runtimeFakes() {
   let resumeState: {
     resumeAfter: string;
     snapshotId: string;
+    /** The run that published `snapshotId`, and so owns this cursor. */
+    runId: string;
     limitationCode: string | null;
   } | null = null;
   const queue: DiscoveryQueue = {
@@ -741,6 +743,7 @@ describe("worker runtime", () => {
     fakes.setResumeState({
       resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
       snapshotId: "snapshot-1",
+      runId,
       limitationCode: null
     });
 
@@ -790,6 +793,57 @@ describe("worker runtime", () => {
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
     expect(fakes.enqueued[0]).not.toHaveProperty("continuation");
+    await runtime.stop();
+  });
+
+  it("dispatches a run that does not own the cursor as an ordinary job", async () => {
+    // Break caught: the dispatcher asked whether the ROOT had a cursor, never
+    // whether this RUN owned it. A fresh refresh for a root with a live chain
+    // went out as a continuation: it skipped Raider.IO discovery entirely,
+    // amended another run's snapshot, and never completed itself, so the
+    // visitor's refresh hung forever.
+    const fakes = runtimeFakes();
+    const runId = "00000000-0000-4000-8000-000000000018";
+    const key = {
+      region: "eu" as const,
+      realm: "draenor",
+      name: "refreshed"
+    };
+    fakes.admittedUndispatchedFingerprintRuns.push(runId);
+    fakes.repositories.runs = {
+      async find(id: string) {
+        return id === runId
+          ? {
+              id: runId,
+              rootKey: key,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "anonymous" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          : null;
+      }
+    } as Repositories["runs"];
+    // The cursor belongs to an earlier run of the same root.
+    fakes.setResumeState({
+      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+      snapshotId: "snapshot-1",
+      runId: "00000000-0000-4000-8000-000000000019",
+      limitationCode: null
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.enqueued).toEqual([
+      { runId, key, enqueuedAt: expect.any(String) }
+    ]);
     await runtime.stop();
   });
 

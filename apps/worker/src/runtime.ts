@@ -268,6 +268,12 @@ export async function createWorkerRuntime(
       const resume = await repositories.fingerprintSweeps.getResumeState(
         run.rootKey
       );
+      // The root having a cursor is not enough: the cursor belongs to whichever
+      // run published the snapshot it points at. A fresh refresh for the same
+      // root is a different run, and dispatching it as a continuation would
+      // skip its own discovery entirely and amend someone else's snapshot
+      // without ever completing itself. It goes out as an ordinary job.
+      const continues = resume !== null && resume.runId === runId;
       // No correlationId is available here: this dispatch is a background
       // fingerprint-admission follow-up, not the continuation of an HTTP
       // request, so it stays absent rather than being invented.
@@ -275,7 +281,7 @@ export async function createWorkerRuntime(
         runId,
         key: run.rootKey,
         enqueuedAt: new Date().toISOString(),
-        ...(resume ? { continuation: true as const } : {})
+        ...(continues ? { continuation: true as const } : {})
       });
       await repositories.fingerprintSweeps.markDispatched(runId, new Date());
     };
