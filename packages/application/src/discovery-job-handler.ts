@@ -1,4 +1,5 @@
 import type {
+  DiscoverCharacterJob,
   DiscoveryWorkContext,
   JobTelemetry,
   Repositories
@@ -259,7 +260,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   return {
     async execute(
       runId: string,
-      workContext?: DiscoveryExecutionContext
+      workContext?: DiscoveryExecutionContext,
+      // The delivered job payload. Only `continuation` is read here; taking the
+      // payload type lets the worker hand the job straight through.
+      job?: Partial<DiscoverCharacterJob>
     ): Promise<void> {
       // Created before the first query so the run lookup and claim reach
       // `dbCalls` too; nothing else about the run depends on its lifetime.
@@ -273,7 +277,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       if (!context) {
         const existing = await repositories.runs.find(runId);
         if (!existing) throw new Error("discovery_run_not_found");
-        if (existing.status === "complete" || existing.status === "failed") {
+        // A continuation resumes the sweep of a run that is already complete,
+        // so it is the one caller allowed past this guard.
+        if (
+          !job?.continuation &&
+          (existing.status === "complete" || existing.status === "failed")
+        ) {
           return;
         }
         context = {
@@ -283,7 +292,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         };
       }
 
-      const run = await repositories.runs.claim(runId, context.attempt);
+      // `claim` matches only active statuses, so it refuses the completed run a
+      // continuation resumes; read the run directly instead.
+      const run = job?.continuation
+        ? await repositories.runs.find(runId)
+        : await repositories.runs.claim(runId, context.attempt);
       if (!run) return;
 
       const startedAt = now();
@@ -319,15 +332,30 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           return;
         }
 
-        let outcome: DiscoveryOutcome = await discoverCharacter(
-          run.rootKey,
-          scopedRaiderIoGateway(options.gateway, scope),
-          {
-            requestCap: options.requestCap,
-            isSuppressed: (key) => repositories.suppressions.isActive(key),
-            signal: context.signal
-          }
-        );
+        const resume = job?.continuation
+          ? await repositories.fingerprintSweeps.getResumeState(run.rootKey)
+          : null;
+        if (job?.continuation && !resume) return; // nothing to resume
+
+        let outcome: DiscoveryOutcome = resume
+          ? {
+              kind: "snapshot",
+              state: "partial",
+              // Placeholder only. A continuation performs no Raider.IO
+              // discovery, so this value must never reach the snapshot: the
+              // real limitation is `resume.limitationCode`, stored by cycle 1.
+              limitationCode: "privacy_hidden",
+              characters: []
+            }
+          : await discoverCharacter(
+              run.rootKey,
+              scopedRaiderIoGateway(options.gateway, scope),
+              {
+                requestCap: options.requestCap,
+                isSuppressed: (key) => repositories.suppressions.isActive(key),
+                signal: context.signal
+              }
+            );
         context.signal.throwIfAborted();
         const persistenceTime = now();
         if (
@@ -355,7 +383,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 cadenceCutoff: new Date(
                   admissionTime.getTime() - fingerprint.cadenceMs
                 ),
-                at: admissionTime
+                at: admissionTime,
+                ...(resume ? { continuation: true as const } : {})
               });
 
             if (admission.kind === "waiting") {
@@ -451,7 +480,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       fingerprint.minimumIdenticalPercent,
                     isSuppressed: (key) =>
                       repositories.suppressions.isActive(key),
-                    signal: context.signal
+                    signal: context.signal,
+                    ...(resume ? { resumeAfter: resume.resumeAfter } : {})
                   }
                 );
 
@@ -471,49 +501,83 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     await repositories.runs.fail(runId, "upstream_unavailable");
                     return;
                   }
+                  const stillSweeping =
+                    sweep.kind === "capped" && sweep.resumeAfter !== undefined;
+                  // The Raider.IO limitation this chain must restore when it
+                  // seals. A continuation did no discovery of its own, so it
+                  // uses the value cycle 1 stored rather than its placeholder.
+                  const raiderIoLimitation = resume
+                    ? resume.limitationCode
+                    : outcome.state === "partial"
+                      ? outcome.limitationCode
+                      : null;
                   const limitationCode =
                     sweep.kind === "capped"
                       ? "fingerprint_sweep_capped"
-                      : outcome.state === "partial"
-                        ? outcome.limitationCode
-                        : null;
-                  const excludedTournamentCharacters = new Set(
-                    outcome.state === "partial"
-                      ? outcome.excludedTournamentCharacterIds
-                      : []
-                  );
-                  const characters = deduplicateCharacters([
-                    ...outcome.characters,
-                    ...sweep.characters
-                  ]).filter(
-                    (character) =>
-                      !excludedTournamentCharacters.has(
-                        canonicalCharacterId(character.key)
-                      )
-                  );
+                      : raiderIoLimitation;
+                  const cursor = {
+                    resumeAfter: stillSweeping
+                      ? sweep.resumeAfter!
+                      : sweep.kind === "capped"
+                        ? (resume?.resumeAfter ?? null)
+                        : null,
+                    limitationCode: raiderIoLimitation
+                  };
+
+                  if (resume) {
+                    await repositories.snapshots.amendAndFinishFingerprintSweep(
+                      resume.snapshotId,
+                      [...sweep.characters],
+                      {
+                        reservationId: admission.reservationId,
+                        finishedAt: now(),
+                        limitationCode
+                      },
+                      cursor,
+                      { signal: context.signal }
+                    );
+                  } else {
+                    const excludedTournamentCharacters = new Set(
+                      outcome.state === "partial"
+                        ? outcome.excludedTournamentCharacterIds
+                        : []
+                    );
+                    const characters = deduplicateCharacters([
+                      ...outcome.characters,
+                      ...sweep.characters
+                    ]).filter(
+                      (character) =>
+                        !excludedTournamentCharacters.has(
+                          canonicalCharacterId(character.key)
+                        )
+                    );
+                    record.characterCount = characters.length;
+                    await repositories.snapshots.createAndFinishFingerprintSweep(
+                      {
+                        runId,
+                        rootKey: run.rootKey,
+                        state: limitationCode === null ? "complete" : "partial",
+                        limitationCode,
+                        refreshedAt: fingerprintPersistenceTime,
+                        characters
+                      },
+                      {
+                        reservationId: admission.reservationId,
+                        finishedAt: now(),
+                        limitationCode
+                      },
+                      cursor,
+                      { signal: context.signal }
+                    );
+                  }
                   record.outcome = "snapshot";
                   record.state =
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
-                  record.characterCount = characters.length;
-                  await repositories.snapshots.createAndFinishFingerprintSweep(
-                    {
-                      runId,
-                      rootKey: run.rootKey,
-                      state: limitationCode === null ? "complete" : "partial",
-                      limitationCode,
-                      refreshedAt: fingerprintPersistenceTime,
-                      characters
-                    },
-                    {
-                      reservationId: admission.reservationId,
-                      finishedAt: now(),
-                      limitationCode
-                    },
-                    { resumeAfter: null, limitationCode: null },
-                    { signal: context.signal }
-                  );
                   reservationActive = false;
+                  if (stillSweeping && options.enqueueFingerprintAdmission) {
+                    await options.enqueueFingerprintAdmission(runId);
+                  }
                   return;
                 }
               } catch (error) {

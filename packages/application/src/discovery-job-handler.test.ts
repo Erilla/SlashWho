@@ -1,6 +1,9 @@
 import type {
+  CreateSnapshotInput,
   DiscoveryRun,
+  FingerprintSweepCursor,
   Repositories,
+  SnapshotCharacterInput,
   StoredSnapshot
 } from "@slashwho/database";
 import type {
@@ -136,6 +139,10 @@ function createMemoryRepositories(): Repositories {
   const runs = new Map<string, DiscoveryRun>();
   const snapshots = new Map<string, StoredSnapshot>();
   const negativeCache = new Map<string, Date>();
+  const sweepCursors = new Map<
+    string,
+    { resumeAfter: string; snapshotId: string; limitationCode: string | null }
+  >();
   let runSequence = 0;
   let snapshotSequence = 0;
 
@@ -257,11 +264,40 @@ function createMemoryRepositories(): Repositories {
         await thisRunComplete(input.runId, id);
         return snapshot;
       },
-      async createAndFinishFingerprintSweep(input) {
-        return this.create(input);
+      async createAndFinishFingerprintSweep(input, _fingerprint, cursor) {
+        const snapshot = await this.create(input);
+        rememberCursor(input.rootKey, snapshot.id, cursor);
+        return snapshot;
       },
-      async amendAndFinishFingerprintSweep() {
-        throw new Error("not implemented in this fake");
+      async amendAndFinishFingerprintSweep(
+        snapshotId,
+        characters,
+        fingerprint,
+        cursor
+      ) {
+        // Appends to the published snapshot and never touches `discovery_runs`:
+        // the run that published it is already complete.
+        const existing = snapshots.get(snapshotId);
+        if (!existing) throw new Error("snapshot_not_found");
+        const amended: StoredSnapshot = {
+          ...existing,
+          state: fingerprint.limitationCode === null ? "complete" : "partial",
+          limitationCode: fingerprint.limitationCode,
+          characterCount: existing.characters.length + characters.length,
+          characters: [
+            ...existing.characters,
+            ...characters.map((item, index) => ({
+              ...item,
+              characterId: `20000000-0000-4000-8000-${String(
+                existing.characters.length + index + 1
+              ).padStart(12, "0")}`,
+              displayOrder: existing.characters.length + index
+            }))
+          ]
+        };
+        snapshots.set(snapshotId, amended);
+        rememberCursor(existing.rootKey, snapshotId, cursor);
+        return amended;
       },
       async getCurrent(key) {
         return (
@@ -373,8 +409,8 @@ function createMemoryRepositories(): Repositories {
       async recordRequest() {},
       async finish() {},
       async release() {},
-      async getResumeState() {
-        return null;
+      async getResumeState(key) {
+        return sweepCursors.get(keyId(key)) ?? null;
       },
       async listWaiting() {
         return [];
@@ -391,6 +427,22 @@ function createMemoryRepositories(): Repositories {
       }
     }
   };
+
+  function rememberCursor(
+    key: CharacterKey,
+    snapshotId: string,
+    cursor: FingerprintSweepCursor
+  ) {
+    if (cursor.resumeAfter === null) {
+      sweepCursors.delete(keyId(key));
+      return;
+    }
+    sweepCursors.set(keyId(key), {
+      resumeAfter: cursor.resumeAfter,
+      snapshotId,
+      limitationCode: cursor.limitationCode
+    });
+  }
 
   async function thisRunComplete(runId: string, snapshotId: string) {
     const run = runs.get(runId);
@@ -427,6 +479,158 @@ function handlerFor(
     negativeCacheTtlMs: 300_000,
     ...overrides
   });
+}
+
+function candidate(key: CharacterKey): BlizzardRosterCharacter {
+  return {
+    key,
+    displayName: key.name,
+    className: "Priest",
+    level: 80,
+    guild: rosterGuild
+  };
+}
+
+/**
+ * A roster on a realm that sorts ahead of every realm a test appends by hand,
+ * so an appended candidate is reached last and only a later cycle sweeps it.
+ */
+function rosterOf(count: number): BlizzardRosterCharacter[] {
+  return Array.from({ length: count }, (_unused, index) =>
+    candidate({
+      region: "eu",
+      realm: "argent-dawn",
+      name: `member${String(index).padStart(3, "0")}`
+    })
+  );
+}
+
+/**
+ * `createMemoryRepositories` numbers runs from one and the harness creates
+ * exactly one, so its id is known before the creation promise settles — which
+ * is what lets `handlerHarness` stay synchronous.
+ */
+const harnessRunId = "00000000-0000-4000-8000-000000000001";
+
+function handlerHarness(
+  options: {
+    roster?: BlizzardRosterCharacter[];
+    sweepRequestCap?: number;
+    /** Candidates whose achievements match the root's. */
+    matching?: readonly CharacterKey[];
+    /** The limitation `discoverCharacter` observes; null for a clean run. */
+    raiderIoLimitation?: "privacy_hidden" | null;
+  } = {}
+) {
+  const repositories = createMemoryRepositories();
+  const runCreated = repositories.runs.createOrReuse(rootKey, "anonymous");
+  const raiderIoLimitation = options.raiderIoLimitation ?? null;
+  const sweepRequestCap = options.sweepRequestCap ?? 300;
+
+  let discoverCharacterCalls = 0;
+  let discoveredThisExecution = false;
+  const base = new MutableGateway();
+  const gateway: RaiderIoGateway = {
+    async getCharacter(key, signal) {
+      if (!discoveredThisExecution) {
+        discoveredThisExecution = true;
+        discoverCharacterCalls += 1;
+      }
+      if (raiderIoLimitation === "privacy_hidden") {
+        return { ...character(key), ownerId: null };
+      }
+      return base.getCharacter(key, signal);
+    },
+    getClaimedCharacters: (ownerId, signal) =>
+      base.getClaimedCharacters(ownerId, signal),
+    resolveProfileGuess: (value, signal) =>
+      base.resolveProfileGuess(value, signal)
+  };
+
+  const blizzardGateway = new MutableBlizzardGateway();
+  blizzardGateway.roster = options.roster ?? [];
+  blizzardGateway.fingerprints.set(keyId(rootKey), achievementFingerprint());
+  for (const key of options.matching ?? []) {
+    blizzardGateway.fingerprints.set(keyId(key), achievementFingerprint());
+  }
+
+  let reservations = 0;
+  repositories.fingerprintSweeps.requestAdmission = async () => ({
+    kind: "admitted" as const,
+    reservationId: `harness-reservation-${++reservations}`,
+    requestCap: sweepRequestCap
+  });
+
+  const enqueuedFingerprintAdmissions: string[] = [];
+  const created: CreateSnapshotInput[] = [];
+  const amended: { snapshotId: string; characters: SnapshotCharacterInput[] }[] =
+    [];
+  let snapshot: StoredSnapshot | null = null;
+  const publish =
+    repositories.snapshots.createAndFinishFingerprintSweep.bind(
+      repositories.snapshots
+    );
+  repositories.snapshots.createAndFinishFingerprintSweep = async (
+    input,
+    fingerprint,
+    cursor,
+    createOptions
+  ) => {
+    created.push(input);
+    snapshot = await publish(input, fingerprint, cursor, createOptions);
+    return snapshot;
+  };
+  const amend = repositories.snapshots.amendAndFinishFingerprintSweep.bind(
+    repositories.snapshots
+  );
+  repositories.snapshots.amendAndFinishFingerprintSweep = async (
+    snapshotId,
+    characters,
+    fingerprint,
+    cursor,
+    amendOptions
+  ) => {
+    amended.push({ snapshotId, characters });
+    snapshot = await amend(
+      snapshotId,
+      characters,
+      fingerprint,
+      cursor,
+      amendOptions
+    );
+    return snapshot;
+  };
+
+  const handler = handlerFor(repositories, gateway, {
+    blizzardGateway,
+    enqueueFingerprintAdmission: async (id: string) => {
+      enqueuedFingerprintAdmissions.push(id);
+    }
+  });
+
+  return {
+    repositories,
+    rootKey,
+    runId: harnessRunId,
+    enqueuedFingerprintAdmissions,
+    snapshots: { created, amended },
+    handler: {
+      async execute(...arguments_: Parameters<typeof handler.execute>) {
+        await runCreated;
+        discoveredThisExecution = false;
+        return handler.execute(...arguments_);
+      }
+    },
+    get discoverCharacterCalls() {
+      return discoverCharacterCalls;
+    },
+    snapshotCharacterKeys(): CharacterKey[] {
+      return (snapshot?.characters ?? []).map((item) => item.key);
+    },
+    snapshotLimitationCode(): string | null {
+      return snapshot?.limitationCode ?? null;
+    }
+  };
 }
 
 function delivery(attempt = 1, maxAttempts = 5) {
@@ -1591,5 +1795,132 @@ describe("discovery job handler", () => {
       attempt: 5,
       errorCode: "search_failed"
     });
+  });
+
+  it("re-enqueues a capped sweep as a continuation", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+
+    await harness.handler.execute(harness.runId);
+
+    expect(harness.snapshots.created).toHaveLength(1);
+    expect(harness.snapshots.created[0]!.limitationCode).toBe(
+      "fingerprint_sweep_capped"
+    );
+    expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    await expect(
+      harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
+    ).resolves.not.toBeNull();
+  });
+
+  it("amends rather than republishes on a continuation", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    await harness.handler.execute(harness.runId);
+
+    await harness.handler.execute(harness.runId, undefined, {
+      runId: harness.runId,
+      key: harness.rootKey,
+      enqueuedAt: new Date().toISOString(),
+      continuation: true
+    });
+
+    expect(harness.snapshots.created).toHaveLength(1);
+    expect(harness.snapshots.amended).toHaveLength(1);
+    expect(harness.discoverCharacterCalls).toBe(1); // not re-run
+  });
+
+  it("surfaces a match that only the second cycle reaches", async () => {
+    // The Yawners regression: the match sorts past the first cycle's cap.
+    const late = { region: "eu", realm: "draenor", name: "yawners" } as const;
+    const harness = handlerHarness({
+      roster: [...rosterOf(399), candidate(late)],
+      sweepRequestCap: 50,
+      matching: [late]
+    });
+
+    await harness.handler.execute(harness.runId);
+    expect(harness.snapshotCharacterKeys()).not.toContainEqual(late);
+
+    for (
+      let cycle = 0;
+      harness.enqueuedFingerprintAdmissions.length > 0;
+      cycle += 1
+    ) {
+      if (cycle > 20) throw new Error("continuation did not terminate");
+      harness.enqueuedFingerprintAdmissions.length = 0;
+      await harness.handler.execute(harness.runId, undefined, {
+        runId: harness.runId,
+        key: harness.rootKey,
+        enqueuedAt: new Date().toISOString(),
+        continuation: true
+      });
+    }
+
+    expect(harness.snapshotCharacterKeys()).toContainEqual(late);
+    await expect(
+      harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
+    ).resolves.toBeNull();
+  });
+
+  it("restores the Raider.IO limitation when the chain seals", async () => {
+    // Cycle 1 overwrites limitation_code with fingerprint_sweep_capped. Sealing
+    // must put back what discoverCharacter actually observed, not invent one and
+    // not falsely claim complete.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50,
+      raiderIoLimitation: "privacy_hidden"
+    });
+
+    await harness.handler.execute(harness.runId);
+    expect(harness.snapshotLimitationCode()).toBe("fingerprint_sweep_capped");
+
+    for (
+      let cycle = 0;
+      harness.enqueuedFingerprintAdmissions.length > 0;
+      cycle += 1
+    ) {
+      if (cycle > 20) throw new Error("continuation did not terminate");
+      harness.enqueuedFingerprintAdmissions.length = 0;
+      await harness.handler.execute(harness.runId, undefined, {
+        runId: harness.runId,
+        key: harness.rootKey,
+        enqueuedAt: new Date().toISOString(),
+        continuation: true
+      });
+    }
+
+    expect(harness.snapshotLimitationCode()).toBe("privacy_hidden");
+  });
+
+  it("seals to complete when Raider.IO discovery had no limitation", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50,
+      raiderIoLimitation: null
+    });
+
+    await harness.handler.execute(harness.runId);
+    for (
+      let cycle = 0;
+      harness.enqueuedFingerprintAdmissions.length > 0;
+      cycle += 1
+    ) {
+      if (cycle > 20) throw new Error("continuation did not terminate");
+      harness.enqueuedFingerprintAdmissions.length = 0;
+      await harness.handler.execute(harness.runId, undefined, {
+        runId: harness.runId,
+        key: harness.rootKey,
+        enqueuedAt: new Date().toISOString(),
+        continuation: true
+      });
+    }
+
+    expect(harness.snapshotLimitationCode()).toBeNull();
   });
 });
