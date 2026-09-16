@@ -19,10 +19,18 @@
 export type ExcludeFromBucket = <R>(inner: () => Promise<R>) => Promise<R>;
 
 export type MeasurementScope = {
-  /** Times `work` against `prefix`, recording duration even when it throws. */
+  /**
+   * Times `work` against `prefix`, recording duration even when it throws.
+   * An optional `label` names the individual call: the label of whichever
+   * call turns out to be the longest is reported as `${prefix}MaxCallName`,
+   * so an aggregate total can be attributed to the call that dominated it.
+   * Labels must be static identifiers -- never derived from arguments --
+   * because they reach the log records, which carry no request data.
+   */
   time<T>(
     prefix: string,
-    work: (excluded: ExcludeFromBucket) => Promise<T>
+    work: (excluded: ExcludeFromBucket) => Promise<T>,
+    label?: string
   ): Promise<T>;
   /** Adds to a running total, e.g. `limiterWaitMs`. */
   observe(field: string, value: number): void;
@@ -33,13 +41,14 @@ export type MeasurementScope = {
   /** Sets a boolean flag, e.g. `runJoined`. */
   mark(field: string): void;
   /** Flat fields, ready to spread into a log record. */
-  totals(): Readonly<Record<string, number | boolean>>;
+  totals(): Readonly<Record<string, number | boolean | string>>;
 };
 
 export function createMeasurementScope(
   monotonic: () => number = () => performance.now()
 ): MeasurementScope {
   const values = new Map<string, number>();
+  const names = new Map<string, string>();
   const flags = new Set<string>();
 
   const add = (field: string, value: number) => {
@@ -47,7 +56,7 @@ export function createMeasurementScope(
   };
 
   return {
-    async time(prefix, work) {
+    async time(prefix, work, label) {
       const startedAt = monotonic();
       let excludedMs = 0;
       const excluded: ExcludeFromBucket = async (inner) => {
@@ -70,7 +79,13 @@ export function createMeasurementScope(
         add(`${prefix}Ms`, elapsed);
         add(`${prefix}Calls`, 1);
         const maxField = `${prefix}MaxCallMs`;
-        values.set(maxField, Math.max(values.get(maxField) ?? 0, elapsed));
+        const previousMax = values.get(maxField);
+        // Strictly greater, so a later call of equal duration does not steal
+        // the name from the first call that reached the maximum.
+        if (previousMax === undefined || elapsed > previousMax) {
+          values.set(maxField, elapsed);
+          if (label !== undefined) names.set(`${prefix}MaxCallName`, label);
+        }
       }
     },
 
@@ -96,6 +111,7 @@ export function createMeasurementScope(
     totals() {
       return {
         ...Object.fromEntries(values),
+        ...Object.fromEntries(names),
         ...Object.fromEntries([...flags].map((field) => [field, true]))
       };
     }

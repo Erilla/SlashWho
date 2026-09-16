@@ -29,6 +29,72 @@ describe("measuredRepositories", () => {
     });
   });
 
+  it("names the repository call that produced the longest duration", async () => {
+    const scope = createMeasurementScope(clock([0, 5, 5, 20, 20, 23]));
+    const repositories = {
+      snapshots: {
+        getCurrent: async () => ({ id: "s1" }),
+        create: async () => undefined
+      },
+      rankings: { listForRealm: async () => [] }
+    };
+
+    const measured = measuredRepositories(repositories, scope);
+    await measured.snapshots.getCurrent();
+    await measured.snapshots.create();
+    await measured.rankings.listForRealm();
+
+    expect(scope.totals()).toMatchObject({
+      dbMaxCallMs: 15,
+      dbMaxCallName: "snapshots.create"
+    });
+  });
+
+  it("names a call that rejects when it is the longest", async () => {
+    const scope = createMeasurementScope(clock([0, 9]));
+    const measured = measuredRepositories(
+      {
+        snapshots: {
+          getCurrent: async () => {
+            throw new Error("connection_lost");
+          }
+        }
+      },
+      scope
+    );
+
+    await expect(measured.snapshots.getCurrent()).rejects.toThrow(
+      "connection_lost"
+    );
+    expect(scope.totals()).toMatchObject({
+      dbMaxCallName: "snapshots.getCurrent"
+    });
+  });
+
+  it("names the call rather than any argument it was given", async () => {
+    const scope = createMeasurementScope(clock([0, 5]));
+    const measured = measuredRepositories(
+      { snapshots: { getCurrent: async (key: string) => key.length } },
+      scope
+    );
+
+    await measured.snapshots.getCurrent("eu/silvermoon/tester");
+
+    expect(scope.totals().dbMaxCallName).toBe("snapshots.getCurrent");
+  });
+
+  it("emits neither field when no repository call is made", () => {
+    const scope = createMeasurementScope(clock([0]));
+    measuredRepositories(
+      { snapshots: { getCurrent: async () => null } },
+      scope
+    );
+
+    const totals = scope.totals();
+    expect(totals).not.toHaveProperty("dbMaxCallMs");
+    expect(totals).not.toHaveProperty("dbMaxCallName");
+  });
+
   it("returns the underlying result unchanged", async () => {
     const scope = createMeasurementScope(clock([0, 1]));
     const measured = measuredRepositories(

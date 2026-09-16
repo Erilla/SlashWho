@@ -21,6 +21,58 @@ describe("createMeasurementScope", () => {
     });
   });
 
+  it("names the labelled call that produced the longest duration", async () => {
+    const scope = createMeasurementScope(fakeClock([0, 10, 10, 40, 40, 45]));
+
+    await scope.time("db", async () => undefined, "snapshots.getCurrent");
+    await scope.time("db", async () => undefined, "rankings.listForRealm");
+    await scope.time("db", async () => undefined, "snapshots.create");
+
+    expect(scope.totals()).toMatchObject({
+      dbMaxCallMs: 30,
+      dbMaxCallName: "rankings.listForRealm"
+    });
+  });
+
+  it("keeps the name of the longest call when a later call is equally long", async () => {
+    const scope = createMeasurementScope(fakeClock([0, 10, 10, 20]));
+
+    await scope.time("db", async () => undefined, "snapshots.getCurrent");
+    await scope.time("db", async () => undefined, "snapshots.create");
+
+    expect(scope.totals()).toMatchObject({
+      dbMaxCallMs: 10,
+      dbMaxCallName: "snapshots.getCurrent"
+    });
+  });
+
+  it("names a labelled call that throws", async () => {
+    const scope = createMeasurementScope(fakeClock([0, 25]));
+
+    await expect(
+      scope.time(
+        "db",
+        async () => {
+          throw new Error("connection_lost");
+        },
+        "snapshots.getCurrent"
+      )
+    ).rejects.toThrow("connection_lost");
+
+    expect(scope.totals()).toMatchObject({
+      dbMaxCallMs: 25,
+      dbMaxCallName: "snapshots.getCurrent"
+    });
+  });
+
+  it("emits no name for an unlabelled prefix", async () => {
+    const scope = createMeasurementScope(fakeClock([0, 10]));
+
+    await scope.time("blizzard", async () => undefined);
+
+    expect(scope.totals()).not.toHaveProperty("blizzardMaxCallName");
+  });
+
   it("records the duration of a call that throws", async () => {
     const scope = createMeasurementScope(fakeClock([0, 25]));
 

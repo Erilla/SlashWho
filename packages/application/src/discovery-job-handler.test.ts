@@ -1216,6 +1216,9 @@ describe("discovery job handler", () => {
         dbMs: 0,
         dbCalls: 7,
         dbMaxCallMs: 0,
+        // Every call measures 0ms under this clock, so the first one to be
+        // timed is the one that set the maximum.
+        dbMaxCallName: "runs.claim",
         raiderIoMs: 0,
         // Two calls walk the relationships; the rest read each discovered
         // character's guild, which the profile payload does not carry.
@@ -1333,6 +1336,9 @@ describe("discovery job handler", () => {
         dbMs: 0,
         dbCalls: 4,
         dbMaxCallMs: 0,
+        // Every call measures 0ms under this clock, so the first one to be
+        // timed is the one that set the maximum.
+        dbMaxCallName: "runs.claim",
         raiderIoMs: 0,
         raiderIoCalls: 1,
         raiderIoMaxCallMs: 0

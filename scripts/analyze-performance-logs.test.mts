@@ -7,12 +7,14 @@ const lines = [
     event: "http_request",
     durationMs: 100,
     dbMs: 10,
+    dbMaxCallName: "applicantSnapshots.getByCharacterKey",
     status: 200
   }),
   JSON.stringify({
     event: "http_request",
     durationMs: 200,
     dbMs: 20,
+    dbMaxCallName: "applicantSnapshots.getByCharacterKey",
     status: 200
   }),
   JSON.stringify({
@@ -78,6 +80,17 @@ describe("summarize", () => {
       "raider.io": 1,
       "warcraftlogs.com": 1
     });
+  });
+
+  it("tallies the slowest database call by name", () => {
+    const summary = summarize(lines, "http_request");
+    expect(summary.dbMaxCallNames).toEqual({
+      "applicantSnapshots.getByCharacterKey": 2
+    });
+  });
+
+  it("tallies no names when no record carries one", () => {
+    expect(summarize(lines, "discovery_run").dbMaxCallNames).toEqual({});
   });
 
   it("summarizes upstream_throttle numeric fields", () => {
