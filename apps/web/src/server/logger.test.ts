@@ -36,6 +36,7 @@ const expectedPerformanceFields = [
   "dbMs",
   "dbCalls",
   "dbMaxCallMs",
+  "dbMaxCallName",
   "limiterWaitMs",
   "runJoined",
   "provider",
@@ -100,7 +101,7 @@ it("keeps every allowlisted performance field, with its exact value, through ser
   }
 
   const booleanFields = new Set(["runJoined"]);
-  const stringFields = new Set(["provider"]);
+  const stringFields = new Set(["provider", "dbMaxCallName"]);
   const record: Record<string, unknown> = {
     event: "http_request",
     correlationId: "c1",
@@ -141,4 +142,31 @@ it("still drops a field that is not allowlisted", () => {
   logger.info({ event: "http_request", characterName: "tester" });
 
   expect(JSON.parse(lines[0]!)).not.toHaveProperty("characterName");
+});
+
+it("allows the slowest-call name, which is a static method identifier", () => {
+  // Break caught: the name is the one performance field that is a string, so
+  // it is the only one that could carry request data if it were ever derived
+  // from an argument rather than the repository method. Allowlisting it is
+  // safe precisely because `measuredRepositories` builds it from `group` and
+  // `method`; this asserts the allowlist lets the identifier through while a
+  // neighbouring identity field is still dropped.
+  const lines: string[] = [];
+  const logger = createWebLogger({
+    write: (line: string) => lines.push(line)
+  } as never);
+
+  logger.info({
+    event: "http_request",
+    dbMaxCallMs: 156,
+    dbMaxCallName: "applicantSnapshots.getByCharacterKey",
+    characterName: "tester"
+  });
+
+  const serialized = JSON.parse(lines[0]!) as Record<string, unknown>;
+  expect(serialized).toHaveProperty(
+    "dbMaxCallName",
+    "applicantSnapshots.getByCharacterKey"
+  );
+  expect(serialized).not.toHaveProperty("characterName");
 });

@@ -1559,8 +1559,9 @@ describe("applicant dossier service", () => {
   it("keeps supplied credentials out of every measured total", async () => {
     // Break caught: threading a measurement scope alongside the credential
     // overrides could fold a key into the record the boundary emits. Totals
-    // are numeric by construction; this proves the construction holds on the
-    // path that actually carries a visitor's secret.
+    // are numbers, or a static method identifier, by construction; this
+    // proves the construction holds on the path that carries a visitor's
+    // secret.
     const scope = createMeasurementScope(() => 0);
     const { dossiers } = fixture();
 
@@ -1578,7 +1579,14 @@ describe("applicant dossier service", () => {
 
     const totals = scope.totals();
     expect(Object.keys(totals).length).toBeGreaterThan(0);
-    for (const value of Object.values(totals)) {
+    for (const [field, value] of Object.entries(totals)) {
+      // `dbMaxCallName` is the one total that is not numeric. It is asserted
+      // against the `group.method` shape rather than exempted, so a value
+      // built from anything a caller supplied would fail here too.
+      if (field === "dbMaxCallName") {
+        expect(value).toMatch(/^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/);
+        continue;
+      }
       expect(typeof value).toBe("number");
     }
     expect(JSON.stringify(totals)).not.toContain("user-client-id");

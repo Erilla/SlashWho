@@ -124,6 +124,7 @@ describe("worker logger", () => {
       dbMs: 10,
       dbCalls: 2,
       dbMaxCallMs: 6,
+      dbMaxCallName: "applicantRuns.claimNext",
       outcome: "complete",
       limitationCode: null,
       parseLimitationCode: null,
