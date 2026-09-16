@@ -69,7 +69,7 @@ early for a completed run when no work context is supplied
 queue always supplies a context (`runtime.ts:328`); the second is the path a
 direct `execute(runId)` call takes. Either way a re-dispatched cycle 2 would
 silently do nothing. The existing deferral only works because it returns
-*before* publishing, keeping the run active across the gap.
+_before_ publishing, keeping the run active across the gap.
 
 Leaving the run active until the chain seals was rejected: `getCurrent` requires
 `run.status = 'complete'` (`postgres-repositories.ts:1400`), so the dossier would
@@ -84,7 +84,7 @@ type DiscoverCharacterJob = {
   runId: string;
   key: CharacterKey;
   enqueuedAt: string;
-  continuation?: true;          // new
+  continuation?: true; // new
 };
 ```
 
@@ -247,16 +247,16 @@ characters unwritten.
 
 ## Edge cases
 
-| Case | Behaviour |
-|---|---|
-| Root leaves the guild mid-chain | Roster fetch returns `[]` or a different guild; seal the sweep and clear the cursor. Not an error. |
-| Cursor points past the end of a shrunken roster | Filter yields no candidates; seal. |
-| Fresh refresh requested for the root | New run, new snapshot, cursor reset. The in-flight continuation finds `resume_snapshot_id` superseded and is discarded rather than amending a stale snapshot. |
-| `maxJobLifetimeMs` reached mid-chain | Existing behaviour: the run fails and is retryable. The cursor persists, so a retry resumes rather than restarting. |
-| Continuation admitted but budget exhausted | Existing `waiting` path; cursor untouched. |
-| Budget exhausted before the first candidate | `capped` with no `resumeAfter`; cursor left unchanged so the next cycle retries the same range. |
-| Continuation dispatched for a run with no cursor | Sweep state carries no `resume_after`; dispatch omits `continuation`, and the completed-run guard makes it a no-op as today. |
-| Continuation job enqueued twice | Singleton key `${runId}:continuation` dedupes it, as `runId` does for ordinary jobs. |
+| Case                                             | Behaviour                                                                                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Root leaves the guild mid-chain                  | Roster fetch returns `[]` or a different guild; seal the sweep and clear the cursor. Not an error.                                                            |
+| Cursor points past the end of a shrunken roster  | Filter yields no candidates; seal.                                                                                                                            |
+| Fresh refresh requested for the root             | New run, new snapshot, cursor reset. The in-flight continuation finds `resume_snapshot_id` superseded and is discarded rather than amending a stale snapshot. |
+| `maxJobLifetimeMs` reached mid-chain             | Existing behaviour: the run fails and is retryable. The cursor persists, so a retry resumes rather than restarting.                                           |
+| Continuation admitted but budget exhausted       | Existing `waiting` path; cursor untouched.                                                                                                                    |
+| Budget exhausted before the first candidate      | `capped` with no `resumeAfter`; cursor left unchanged so the next cycle retries the same range.                                                               |
+| Continuation dispatched for a run with no cursor | Sweep state carries no `resume_after`; dispatch omits `continuation`, and the completed-run guard makes it a no-op as today.                                  |
+| Continuation job enqueued twice                  | Singleton key `${runId}:continuation` dedupes it, as `runId` does for ordinary jobs.                                                                          |
 
 ## Testing
 

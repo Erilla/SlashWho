@@ -4,7 +4,7 @@
 
 **Goal:** A fingerprint sweep that hits `BLIZZARD_SWEEP_REQUEST_CAP` resumes from a persisted cursor on a follow-up cycle instead of permanently abandoning the alphabetical tail of the guild roster.
 
-**Architecture:** `discoverFingerprintMatches` returns the canonical id of the last candidate it swept. The handler persists that cursor beside the snapshot it published, then re-enqueues the run as a *continuation* discovery job. A continuation skips Raider.IO re-discovery and the completed-run guard, resumes the sweep past the cursor, and amends the existing snapshot in place. The chain seals when the roster is exhausted.
+**Architecture:** `discoverFingerprintMatches` returns the canonical id of the last candidate it swept. The handler persists that cursor beside the snapshot it published, then re-enqueues the run as a _continuation_ discovery job. A continuation skips Raider.IO re-discovery and the completed-run guard, resumes the sweep past the cursor, and amends the existing snapshot in place. The chain seals when the roster is exhausted.
 
 **Tech Stack:** TypeScript, pnpm workspaces, Vitest (`unit` and `integration` projects), Drizzle migrations over PostgreSQL, pg-boss queue.
 
@@ -25,10 +25,12 @@
 ### Task 1: Return a resume cursor from the sweep
 
 **Files:**
+
 - Modify: `packages/domain/src/fingerprint-discovery.ts`
 - Test: `packages/domain/src/fingerprint-discovery.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `DiscoverFingerprintMatchesOptions.resumeAfter?: string`; the `capped` variant of `FingerprintSweepOutcome` gains `resumeAfter?: string`.
 
@@ -80,7 +82,11 @@ it("resumes strictly after the cursor", async () => {
 });
 
 it("advances the cursor past a candidate with no achievement profile", async () => {
-  const missing: CharacterKey = { region: "eu", realm: "silvermoon", name: "aaa" };
+  const missing: CharacterKey = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "aaa"
+  };
   const z: CharacterKey = { region: "eu", realm: "silvermoon", name: "zzz" };
   const gateway = gatewayFor([candidate(missing), candidate(z)], {
     [keyId(root)]: fingerprint(300),
@@ -179,8 +185,8 @@ and on the outcome:
 Declare the tracker next to `matches` in `discoverFingerprintMatches`:
 
 ```ts
-  const matches: DiscoveredCharacter[] = [];
-  let lastSweptId: string | undefined;
+const matches: DiscoveredCharacter[] = [];
+let lastSweptId: string | undefined;
 ```
 
 Filter after the existing sort. The comparator MUST be `localeCompare`, matching
@@ -189,14 +195,14 @@ character names, which would filter out a candidate that sorts after the cursor
 and skip it on every future cycle — the very defect this task removes.
 
 ```ts
-    const rootId = canonicalCharacterId(root);
-    const sorted = [...roster].sort(compareCandidates);
-    const candidates = options.resumeAfter
-      ? sorted.filter(
-          (item) =>
-            canonicalCharacterId(item.key).localeCompare(options.resumeAfter!) > 0
-        )
-      : sorted;
+const rootId = canonicalCharacterId(root);
+const sorted = [...roster].sort(compareCandidates);
+const candidates = options.resumeAfter
+  ? sorted.filter(
+      (item) =>
+        canonicalCharacterId(item.key).localeCompare(options.resumeAfter!) > 0
+    )
+  : sorted;
 ```
 
 Set the tracker immediately after the request that consumes the budget, so a
@@ -204,56 +210,55 @@ Set the tracker immediately after the request that consumes the budget, so a
 around the candidate fingerprint with:
 
 ```ts
-      let candidateFingerprint:
-        ReadonlyMap<number, number> | typeof budgetExhausted;
-      try {
-        candidateFingerprint = await request(() =>
-          gateway.getAchievementFingerprint(candidate.key, options.signal)
-        );
-      } catch (error) {
-        if (isNotFound(error)) {
-          lastSweptId = candidateId;
-          continue;
-        }
-        throw error;
-      }
-      if (candidateFingerprint === budgetExhausted) break;
-      lastSweptId = candidateId;
+let candidateFingerprint: ReadonlyMap<number, number> | typeof budgetExhausted;
+try {
+  candidateFingerprint = await request(() =>
+    gateway.getAchievementFingerprint(candidate.key, options.signal)
+  );
+} catch (error) {
+  if (isNotFound(error)) {
+    lastSweptId = candidateId;
+    continue;
+  }
+  throw error;
+}
+if (candidateFingerprint === budgetExhausted) break;
+lastSweptId = candidateId;
 ```
 
-`request()` sets `capped` and returns `budgetExhausted` *without* calling the
+`request()` sets `capped` and returns `budgetExhausted` _without_ calling the
 gateway, so the `break` above correctly leaves the cursor on the previous
 candidate.
 
 Return the cursor from both capped exits. In the outer `catch`:
 
 ```ts
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "kind" in error &&
-      error.kind === "fingerprint_cap_reached"
-    ) {
-      return {
-        kind: "capped",
-        characters: matches,
-        requestsUsed,
-        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
-      };
-    }
+if (
+  typeof error === "object" &&
+  error !== null &&
+  "kind" in error &&
+  error.kind === "fingerprint_cap_reached"
+) {
+  return {
+    kind: "capped",
+    characters: matches,
+    requestsUsed,
+    ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+  };
+}
 ```
 
 and at the end:
 
 ```ts
-  return capped
-    ? {
-        kind: "capped",
-        characters: matches,
-        requestsUsed,
-        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
-      }
-    : { kind: "matched", characters: matches, requestsUsed };
+return capped
+  ? {
+      kind: "capped",
+      characters: matches,
+      requestsUsed,
+      ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+    }
+  : { kind: "matched", characters: matches, requestsUsed };
 ```
 
 Leave the two early `return { kind: "capped", characters: [], requestsUsed }`
@@ -277,11 +282,13 @@ git commit -m "feat: return a resume cursor when a fingerprint sweep caps"
 ### Task 2: Persist the cursor columns
 
 **Files:**
+
 - Create: `packages/database/drizzle/0018_fingerprint_sweep_cursor.sql`
 - Modify: `packages/database/src/schema.ts:278-295`
 - Test: `tests/integration/migrations.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `fingerprint_sweep_states.resume_after` (text, nullable), `.resume_snapshot_id` (uuid, nullable, FK to `snapshots`), and `.resume_limitation_code` (text, nullable).
 
@@ -297,7 +304,10 @@ Add to `tests/integration/migrations.test.ts`:
 
 ```ts
 it("adds the fingerprint sweep cursor columns", async () => {
-  const columns = await pool.query<{ column_name: string; is_nullable: string }>(
+  const columns = await pool.query<{
+    column_name: string;
+    is_nullable: string;
+  }>(
     `SELECT column_name, is_nullable
      FROM information_schema.columns
      WHERE table_name = 'fingerprint_sweep_states'
@@ -377,11 +387,13 @@ git commit -m "feat: add fingerprint sweep cursor columns"
 ### Task 3: Read and write the cursor
 
 **Files:**
+
 - Modify: `packages/database/src/repositories.ts:56-64,79-92,329-348`
 - Modify: `packages/database/src/postgres-repositories.ts:856-900,1365-1392`
 - Test: `tests/integration/repositories.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 2's columns.
 - Produces:
   - `FingerprintSweepRepository.getResumeState(key: CharacterKey): Promise<{ resumeAfter: string; snapshotId: string; limitationCode: string | null } | null>`
@@ -394,7 +406,11 @@ Add to `tests/integration/repositories.test.ts`:
 
 ```ts
 it("persists and clears the fingerprint sweep cursor", async () => {
-  const key = { region: "eu", realm: "silvermoon", name: "cursorroot" } as const;
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "cursorroot"
+  } as const;
   const runId = await seedActiveRun(repositories, key);
 
   const admission = await repositories.fingerprintSweeps.requestAdmission({
@@ -504,9 +520,9 @@ In `packages/database/src/postgres-repositories.ts`, widen
 its `fingerprint_sweep_states` upsert with:
 
 ```ts
-  if (input.published) {
-    await client.query(
-      `INSERT INTO fingerprint_sweep_states
+if (input.published) {
+  await client.query(
+    `INSERT INTO fingerprint_sweep_states
         (region, realm_slug, normalized_name, last_published_at,
          resume_after, resume_limitation_code, resume_snapshot_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -519,17 +535,17 @@ its `fingerprint_sweep_states` upsert with:
          resume_after = EXCLUDED.resume_after,
          resume_limitation_code = EXCLUDED.resume_limitation_code,
          resume_snapshot_id = EXCLUDED.resume_snapshot_id`,
-      [
-        row.region,
-        row.realm_slug,
-        row.normalized_name,
-        input.at,
-        input.resumeAfter,
-        input.resumeLimitationCode,
-        input.resumeSnapshotId
-      ]
-    );
-  }
+    [
+      row.region,
+      row.realm_slug,
+      row.normalized_name,
+      input.at,
+      input.resumeAfter,
+      input.resumeLimitationCode,
+      input.resumeSnapshotId
+    ]
+  );
+}
 ```
 
 Keep the rest of the existing upsert exactly as it is; only the two new columns
@@ -633,11 +649,13 @@ git commit -m "feat: persist and read the fingerprint sweep cursor"
 ### Task 4: Amend a published snapshot
 
 **Files:**
+
 - Modify: `packages/database/src/repositories.ts:79-92`
 - Modify: `packages/database/src/postgres-repositories.ts:1365-1392`
 - Test: `tests/integration/repositories.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 3's `FingerprintSweepCursor` and cursor-aware `finishFingerprintSweep`.
 - Produces: `SnapshotRepository.amendAndFinishFingerprintSweep(snapshotId, characters, fingerprint, cursor, options?): Promise<StoredSnapshot>`.
 
@@ -652,21 +670,22 @@ it("appends characters to a published snapshot and seals the sweep", async () =>
   const runId = await seedActiveRun(repositories, key);
   const first = await admitSweep(repositories, runId, key);
 
-  const published = await repositories.snapshots.createAndFinishFingerprintSweep(
-    {
-      runId,
-      rootKey: key,
-      state: "partial",
-      limitationCode: "fingerprint_sweep_capped",
-      refreshedAt: new Date(),
-      characters: [snapshotCharacter(key, "input")]
-    },
-    first,
-    {
-      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-      limitationCode: null
-    }
-  );
+  const published =
+    await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [snapshotCharacter(key, "input")]
+      },
+      first,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+        limitationCode: null
+      }
+    );
 
   const second = await admitSweep(repositories, runId, key);
   const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
@@ -693,21 +712,22 @@ it("ignores a character the snapshot already carries", async () => {
   const runId = await seedActiveRun(repositories, key);
   const first = await admitSweep(repositories, runId, key);
 
-  const published = await repositories.snapshots.createAndFinishFingerprintSweep(
-    {
-      runId,
-      rootKey: key,
-      state: "partial",
-      limitationCode: "fingerprint_sweep_capped",
-      refreshedAt: new Date(),
-      characters: [snapshotCharacter(key, "input")]
-    },
-    first,
-    {
-      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-      limitationCode: null
-    }
-  );
+  const published =
+    await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [snapshotCharacter(key, "input")]
+      },
+      first,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+        limitationCode: null
+      }
+    );
 
   const second = await admitSweep(repositories, runId, key);
   const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
@@ -728,7 +748,11 @@ async function admitSweep(
   repositories: Repositories,
   runId: string,
   key: CharacterKey
-): Promise<{ reservationId: string; finishedAt: Date; limitationCode: string | null }> {
+): Promise<{
+  reservationId: string;
+  finishedAt: Date;
+  limitationCode: string | null;
+}> {
   const at = new Date();
   const admission = await repositories.fingerprintSweeps.requestAdmission({
     runId,
@@ -952,11 +976,13 @@ git commit -m "feat: amend a published snapshot with later sweep matches"
 ### Task 5: Exempt continuations from the cadence gate
 
 **Files:**
+
 - Modify: `packages/database/src/repositories.ts:329-338`
 - Modify: `packages/database/src/postgres-repositories.ts:1785-1836`
 - Test: `tests/integration/repositories.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `requestAdmission` input gains `continuation?: true`.
 
@@ -967,7 +993,11 @@ Without this, cycle 2 is refused: cycle 1 stamps `last_published_at`, and
 
 ```ts
 it("admits a continuation inside the cadence window", async () => {
-  const key = { region: "eu", realm: "silvermoon", name: "cadenceroot" } as const;
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "cadenceroot"
+  } as const;
   const runId = await seedActiveRun(repositories, key);
   const at = new Date();
 
@@ -1061,10 +1091,12 @@ git commit -m "feat: exempt sweep continuations from the cadence gate"
 ### Task 6: Flag continuation jobs on the queue
 
 **Files:**
+
 - Modify: `packages/database/src/queue.ts:15-30,246-260`
 - Test: `packages/database/src/queue.test.ts` (create if absent)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `DiscoverCharacterJob.continuation?: true`; singleton key becomes `${runId}:continuation` for a continuation, `runId` otherwise.
 
@@ -1163,10 +1195,12 @@ git commit -m "feat: scope the singleton key for continuation jobs"
 ### Task 7: Resume the sweep in the handler
 
 **Files:**
+
 - Modify: `packages/application/src/discovery-job-handler.ts:260-300,341-520`
 - Test: `packages/application/src/discovery-job-handler.test.ts`
 
 **Interfaces:**
+
 - Consumes: Tasks 1, 3, 4, 5, 6.
 - Produces: `execute(runId, context?, job?)` honours `job.continuation`; `DiscoveryJobHandlerOptions` unchanged.
 
@@ -1222,7 +1256,11 @@ it("surfaces a match that only the second cycle reaches", async () => {
   await harness.handler.execute(harness.runId);
   expect(harness.snapshotCharacterKeys()).not.toContainEqual(late);
 
-  for (let cycle = 0; harness.enqueuedFingerprintAdmissions.length > 0; cycle += 1) {
+  for (
+    let cycle = 0;
+    harness.enqueuedFingerprintAdmissions.length > 0;
+    cycle += 1
+  ) {
     if (cycle > 20) throw new Error("continuation did not terminate");
     harness.enqueuedFingerprintAdmissions.length = 0;
     await harness.handler.execute(harness.runId, undefined, {
@@ -1252,7 +1290,11 @@ it("restores the Raider.IO limitation when the chain seals", async () => {
   await harness.handler.execute(harness.runId);
   expect(harness.snapshotLimitationCode()).toBe("fingerprint_sweep_capped");
 
-  for (let cycle = 0; harness.enqueuedFingerprintAdmissions.length > 0; cycle += 1) {
+  for (
+    let cycle = 0;
+    harness.enqueuedFingerprintAdmissions.length > 0;
+    cycle += 1
+  ) {
     if (cycle > 20) throw new Error("continuation did not terminate");
     harness.enqueuedFingerprintAdmissions.length = 0;
     await harness.handler.execute(harness.runId, undefined, {
@@ -1274,7 +1316,11 @@ it("seals to complete when Raider.IO discovery had no limitation", async () => {
   });
 
   await harness.handler.execute(harness.runId);
-  for (let cycle = 0; harness.enqueuedFingerprintAdmissions.length > 0; cycle += 1) {
+  for (
+    let cycle = 0;
+    harness.enqueuedFingerprintAdmissions.length > 0;
+    cycle += 1
+  ) {
     if (cycle > 20) throw new Error("continuation did not terminate");
     harness.enqueuedFingerprintAdmissions.length = 0;
     await harness.handler.execute(harness.runId, undefined, {
@@ -1323,32 +1369,32 @@ A completed run is refused on **two** paths and both need the bypass:
 Guard the completed-run early return so a continuation passes through:
 
 ```ts
-      let context = workContext;
-      if (!context) {
-        const existing = await repositories.runs.find(runId);
-        if (!existing) throw new Error("discovery_run_not_found");
-        if (
-          !job?.continuation &&
-          (existing.status === "complete" || existing.status === "failed")
-        ) {
-          return;
-        }
-        context = {
-          attempt: existing.attempt + 1,
-          maxAttempts,
-          signal: new AbortController().signal
-        };
-      }
+let context = workContext;
+if (!context) {
+  const existing = await repositories.runs.find(runId);
+  if (!existing) throw new Error("discovery_run_not_found");
+  if (
+    !job?.continuation &&
+    (existing.status === "complete" || existing.status === "failed")
+  ) {
+    return;
+  }
+  context = {
+    attempt: existing.attempt + 1,
+    maxAttempts,
+    signal: new AbortController().signal
+  };
+}
 ```
 
 A continuation must not go through `repositories.runs.claim`, which expects an
 active run. Read the run directly instead:
 
 ```ts
-      const run = job?.continuation
-        ? await repositories.runs.find(runId)
-        : await repositories.runs.claim(runId, context.attempt);
-      if (!run) return;
+const run = job?.continuation
+  ? await repositories.runs.find(runId)
+  : await repositories.runs.claim(runId, context.attempt);
+if (!run) return;
 ```
 
 - [ ] **Step 4: Skip re-discovery on a continuation**
@@ -1358,30 +1404,30 @@ continuation has no fresh Raider.IO outcome, so it carries an empty snapshot
 outcome whose characters are already in the published snapshot:
 
 ```ts
-        const resume = job?.continuation
-          ? await repositories.fingerprintSweeps.getResumeState(run.rootKey)
-          : null;
-        if (job?.continuation && !resume) return; // nothing to resume
+const resume = job?.continuation
+  ? await repositories.fingerprintSweeps.getResumeState(run.rootKey)
+  : null;
+if (job?.continuation && !resume) return; // nothing to resume
 
-        let outcome: DiscoveryOutcome = resume
-          ? {
-              kind: "snapshot",
-              state: "partial",
-              // Placeholder only. A continuation performs no Raider.IO
-              // discovery, so this value must never reach the snapshot: the
-              // real limitation is `resume.limitationCode`, stored by cycle 1.
-              limitationCode: "privacy_hidden",
-              characters: []
-            }
-          : await discoverCharacter(
-              run.rootKey,
-              scopedRaiderIoGateway(options.gateway, scope),
-              {
-                requestCap: options.requestCap,
-                isSuppressed: (key) => repositories.suppressions.isActive(key),
-                signal: context.signal
-              }
-            );
+let outcome: DiscoveryOutcome = resume
+  ? {
+      kind: "snapshot",
+      state: "partial",
+      // Placeholder only. A continuation performs no Raider.IO
+      // discovery, so this value must never reach the snapshot: the
+      // real limitation is `resume.limitationCode`, stored by cycle 1.
+      limitationCode: "privacy_hidden",
+      characters: []
+    }
+  : await discoverCharacter(
+      run.rootKey,
+      scopedRaiderIoGateway(options.gateway, scope),
+      {
+        requestCap: options.requestCap,
+        isSuppressed: (key) => repositories.suppressions.isActive(key),
+        signal: context.signal
+      }
+    );
 ```
 
 - [ ] **Step 5: Pass the cursor into the sweep and branch on the result**
@@ -1389,117 +1435,103 @@ outcome whose characters are already in the published snapshot:
 Pass `continuation` to admission and `resumeAfter` to the sweep:
 
 ```ts
-            const admission =
-              await repositories.fingerprintSweeps.requestAdmission({
-                runId,
-                key: run.rootKey,
-                requestCap: fingerprint.requestCap,
-                hourlyBudget: fingerprint.hourlyBudget,
-                cadenceCutoff: new Date(
-                  admissionTime.getTime() - fingerprint.cadenceMs
-                ),
-                at: admissionTime,
-                ...(resume ? { continuation: true as const } : {})
-              });
+const admission = await repositories.fingerprintSweeps.requestAdmission({
+  runId,
+  key: run.rootKey,
+  requestCap: fingerprint.requestCap,
+  hourlyBudget: fingerprint.hourlyBudget,
+  cadenceCutoff: new Date(admissionTime.getTime() - fingerprint.cadenceMs),
+  at: admissionTime,
+  ...(resume ? { continuation: true as const } : {})
+});
 ```
 
 ```ts
-                const sweep = await discoverFingerprintMatches(
-                  run.rootKey,
-                  adaptedGateway,
-                  {
-                    requestCap: Number.MAX_SAFE_INTEGER,
-                    minimumCommon: fingerprint.minimumCommon,
-                    minimumIdenticalPercent: fingerprint.minimumIdenticalPercent,
-                    isSuppressed: (key) =>
-                      repositories.suppressions.isActive(key),
-                    signal: context.signal,
-                    ...(resume ? { resumeAfter: resume.resumeAfter } : {})
-                  }
-                );
+const sweep = await discoverFingerprintMatches(run.rootKey, adaptedGateway, {
+  requestCap: Number.MAX_SAFE_INTEGER,
+  minimumCommon: fingerprint.minimumCommon,
+  minimumIdenticalPercent: fingerprint.minimumIdenticalPercent,
+  isSuppressed: (key) => repositories.suppressions.isActive(key),
+  signal: context.signal,
+  ...(resume ? { resumeAfter: resume.resumeAfter } : {})
+});
 ```
 
 Then replace the persistence block. The cursor is `undefined` on a cursor-less
 `capped`, which must leave the stored cursor alone:
 
 ```ts
-                  const stillSweeping =
-                    sweep.kind === "capped" && sweep.resumeAfter !== undefined;
-                  // The Raider.IO limitation this chain must restore when it
-                  // seals. A continuation did no discovery of its own, so it
-                  // uses the value cycle 1 stored rather than its placeholder.
-                  const raiderIoLimitation = resume
-                    ? resume.limitationCode
-                    : outcome.state === "partial"
-                      ? outcome.limitationCode
-                      : null;
-                  const limitationCode =
-                    sweep.kind === "capped"
-                      ? "fingerprint_sweep_capped"
-                      : raiderIoLimitation;
-                  const cursor = {
-                    resumeAfter: stillSweeping
-                      ? sweep.resumeAfter!
-                      : sweep.kind === "capped"
-                        ? (resume?.resumeAfter ?? null)
-                        : null,
-                    limitationCode: raiderIoLimitation
-                  };
+const stillSweeping =
+  sweep.kind === "capped" && sweep.resumeAfter !== undefined;
+// The Raider.IO limitation this chain must restore when it
+// seals. A continuation did no discovery of its own, so it
+// uses the value cycle 1 stored rather than its placeholder.
+const raiderIoLimitation = resume
+  ? resume.limitationCode
+  : outcome.state === "partial"
+    ? outcome.limitationCode
+    : null;
+const limitationCode =
+  sweep.kind === "capped" ? "fingerprint_sweep_capped" : raiderIoLimitation;
+const cursor = {
+  resumeAfter: stillSweeping
+    ? sweep.resumeAfter!
+    : sweep.kind === "capped"
+      ? (resume?.resumeAfter ?? null)
+      : null,
+  limitationCode: raiderIoLimitation
+};
 
-                  if (resume) {
-                    await repositories.snapshots.amendAndFinishFingerprintSweep(
-                      resume.snapshotId,
-                      [...sweep.characters],
-                      {
-                        reservationId: admission.reservationId,
-                        finishedAt: now(),
-                        limitationCode
-                      },
-                      cursor,
-                      { signal: context.signal }
-                    );
-                  } else {
-                    const excludedTournamentCharacters = new Set(
-                      outcome.state === "partial"
-                        ? outcome.excludedTournamentCharacterIds
-                        : []
-                    );
-                    const characters = deduplicateCharacters([
-                      ...outcome.characters,
-                      ...sweep.characters
-                    ]).filter(
-                      (character) =>
-                        !excludedTournamentCharacters.has(
-                          canonicalCharacterId(character.key)
-                        )
-                    );
-                    record.characterCount = characters.length;
-                    await repositories.snapshots.createAndFinishFingerprintSweep(
-                      {
-                        runId,
-                        rootKey: run.rootKey,
-                        state: limitationCode === null ? "complete" : "partial",
-                        limitationCode,
-                        refreshedAt: fingerprintPersistenceTime,
-                        characters
-                      },
-                      {
-                        reservationId: admission.reservationId,
-                        finishedAt: now(),
-                        limitationCode
-                      },
-                      cursor,
-                      { signal: context.signal }
-                    );
-                  }
-                  record.outcome = "snapshot";
-                  record.state = limitationCode === null ? "complete" : "partial";
-                  record.limitationCode = limitationCode;
-                  reservationActive = false;
-                  if (stillSweeping && options.enqueueFingerprintAdmission) {
-                    await options.enqueueFingerprintAdmission(runId);
-                  }
-                  return;
+if (resume) {
+  await repositories.snapshots.amendAndFinishFingerprintSweep(
+    resume.snapshotId,
+    [...sweep.characters],
+    {
+      reservationId: admission.reservationId,
+      finishedAt: now(),
+      limitationCode
+    },
+    cursor,
+    { signal: context.signal }
+  );
+} else {
+  const excludedTournamentCharacters = new Set(
+    outcome.state === "partial" ? outcome.excludedTournamentCharacterIds : []
+  );
+  const characters = deduplicateCharacters([
+    ...outcome.characters,
+    ...sweep.characters
+  ]).filter(
+    (character) =>
+      !excludedTournamentCharacters.has(canonicalCharacterId(character.key))
+  );
+  record.characterCount = characters.length;
+  await repositories.snapshots.createAndFinishFingerprintSweep(
+    {
+      runId,
+      rootKey: run.rootKey,
+      state: limitationCode === null ? "complete" : "partial",
+      limitationCode,
+      refreshedAt: fingerprintPersistenceTime,
+      characters
+    },
+    {
+      reservationId: admission.reservationId,
+      finishedAt: now(),
+      limitationCode
+    },
+    cursor,
+    { signal: context.signal }
+  );
+}
+record.outcome = "snapshot";
+record.state = limitationCode === null ? "complete" : "partial";
+record.limitationCode = limitationCode;
+reservationActive = false;
+if (stillSweeping && options.enqueueFingerprintAdmission) {
+  await options.enqueueFingerprintAdmission(runId);
+}
+return;
 ```
 
 - [ ] **Step 6: Run the tests to verify they pass**
@@ -1520,10 +1552,12 @@ git commit -m "feat: resume a capped fingerprint sweep on a continuation job"
 ### Task 8: Dispatch continuations from the worker
 
 **Files:**
+
 - Modify: `apps/worker/src/runtime.ts:265-275`
 - Test: `apps/worker/src/runtime.test.ts`
 
 **Interfaces:**
+
 - Consumes: Tasks 3, 6, 7.
 - Produces: nothing downstream.
 
@@ -1564,22 +1598,23 @@ Expected: FAIL — the payload never carries `continuation`.
 - [ ] **Step 3: Implement**
 
 ```ts
-    const dispatchAdmittedFingerprintRun = async (runId: string) => {
-      const run = await repositories.runs.find(runId);
-      if (!run) return;
-      const resume =
-        await repositories.fingerprintSweeps.getResumeState(run.rootKey);
-      // No correlationId is available here: this dispatch is a background
-      // fingerprint-admission follow-up, not the continuation of an HTTP
-      // request, so it stays absent rather than being invented.
-      await initializedQueue.enqueue({
-        runId,
-        key: run.rootKey,
-        enqueuedAt: new Date().toISOString(),
-        ...(resume ? { continuation: true as const } : {})
-      });
-      await repositories.fingerprintSweeps.markDispatched(runId, new Date());
-    };
+const dispatchAdmittedFingerprintRun = async (runId: string) => {
+  const run = await repositories.runs.find(runId);
+  if (!run) return;
+  const resume = await repositories.fingerprintSweeps.getResumeState(
+    run.rootKey
+  );
+  // No correlationId is available here: this dispatch is a background
+  // fingerprint-admission follow-up, not the continuation of an HTTP
+  // request, so it stays absent rather than being invented.
+  await initializedQueue.enqueue({
+    runId,
+    key: run.rootKey,
+    enqueuedAt: new Date().toISOString(),
+    ...(resume ? { continuation: true as const } : {})
+  });
+  await repositories.fingerprintSweeps.markDispatched(runId, new Date());
+};
 ```
 
 - [ ] **Step 4: Thread the job into the handler**
@@ -1588,17 +1623,17 @@ At `apps/worker/src/runtime.ts:327`, pass the payload as the third argument,
 keeping the existing context spread exactly as it is:
 
 ```ts
-    await initializedQueue.work(async (payload, context) => {
-      await handler.execute(
-        payload.runId,
-        {
-          ...context,
-          correlationId: payload.correlationId,
-          enqueuedAt: payload.enqueuedAt
-        },
-        payload
-      );
-    });
+await initializedQueue.work(async (payload, context) => {
+  await handler.execute(
+    payload.runId,
+    {
+      ...context,
+      correlationId: payload.correlationId,
+      enqueuedAt: payload.enqueuedAt
+    },
+    payload
+  );
+});
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -1624,16 +1659,18 @@ git commit -m "feat: dispatch fingerprint sweep continuations from the worker"
 ### Task 9: Document the behaviour
 
 **Files:**
+
 - Modify: `docs/deployment/railway.md:86-90,110`
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: nothing.
 
 - [ ] **Step 1: Update the staging verification steps**
 
 `docs/deployment/railway.md:110` tells the operator to use a deliberately
-bounded sweep to exercise a capped run. That now produces a *chain*, so the
+bounded sweep to exercise a capped run. That now produces a _chain_, so the
 expected observation changes. Replace the fingerprint sentence with:
 
 ```
@@ -1666,10 +1703,12 @@ git commit -m "docs: describe fingerprint sweep continuation for operators"
 ### Task 10: Bump the evidence version
 
 **Files:**
+
 - Modify: `packages/database/src/postgres-repositories.ts:166`
 - Test: `tests/integration/repositories.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: nothing.
 
@@ -1724,7 +1763,7 @@ Leave the two explanatory comments above it unchanged.
 
 Run: `pnpm test:integration tests/integration/repositories.test.ts`
 Expected: PASS. `tests/integration/repositories.test.ts:408` pins
-`evidenceVersion: 10` — if it asserts the *current* version rather than an
+`evidenceVersion: 10` — if it asserts the _current_ version rather than an
 arbitrary stored one, update it to 11; if it is testing an unrelated stored
 value, leave it.
 
@@ -1747,24 +1786,24 @@ git commit -m "chore: bump evidence version so continued dossiers re-collect"
 
 Spec coverage checked section by section:
 
-| Spec section | Task |
-|---|---|
-| Mechanism (continuation flag, skip re-discovery) | 6, 7, 8 |
-| Snapshot semantics (amend in place) | 4, 7 |
-| Cursor (last swept canonical id) | 1, 2, 3 |
-| Per-cycle overhead (accepted, no caching) | none needed — no code change |
-| Domain interface | 1 |
-| Queue interface | 6 |
-| Admission (cadence exemption) | 5 |
-| Schema | 2 |
-| Repository (`amendAndFinishFingerprintSweep`) | 4 |
-| Edge: root leaves guild / cursor past roster end | 1 (Step 1 test 4) |
-| Edge: budget exhausted before first candidate | 1 (Step 1 test 5) |
-| Edge: fresh refresh supersedes | 7 (`getResumeState` returns the superseded snapshot id; the new run publishes a new snapshot and resets the cursor) |
-| Edge: `maxJobLifetimeMs` mid-chain | existing behaviour, unchanged |
-| Edge: continuation dispatched with no cursor | 7 (Step 3 early return), 8 |
-| Edge: continuation enqueued twice | 6 |
-| Testing | 1, 3, 4, 5, 6, 7, 8 |
+| Spec section                                     | Task                                                                                                                |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Mechanism (continuation flag, skip re-discovery) | 6, 7, 8                                                                                                             |
+| Snapshot semantics (amend in place)              | 4, 7                                                                                                                |
+| Cursor (last swept canonical id)                 | 1, 2, 3                                                                                                             |
+| Per-cycle overhead (accepted, no caching)        | none needed — no code change                                                                                        |
+| Domain interface                                 | 1                                                                                                                   |
+| Queue interface                                  | 6                                                                                                                   |
+| Admission (cadence exemption)                    | 5                                                                                                                   |
+| Schema                                           | 2                                                                                                                   |
+| Repository (`amendAndFinishFingerprintSweep`)    | 4                                                                                                                   |
+| Edge: root leaves guild / cursor past roster end | 1 (Step 1 test 4)                                                                                                   |
+| Edge: budget exhausted before first candidate    | 1 (Step 1 test 5)                                                                                                   |
+| Edge: fresh refresh supersedes                   | 7 (`getResumeState` returns the superseded snapshot id; the new run publishes a new snapshot and resets the cursor) |
+| Edge: `maxJobLifetimeMs` mid-chain               | existing behaviour, unchanged                                                                                       |
+| Edge: continuation dispatched with no cursor     | 7 (Step 3 early return), 8                                                                                          |
+| Edge: continuation enqueued twice                | 6                                                                                                                   |
+| Testing                                          | 1, 3, 4, 5, 6, 7, 8                                                                                                 |
 
 Every task is independently testable in the order given. Task 4's `admitSweep`
 helper deliberately opens the cadence gate with a future `cadenceCutoff` rather
