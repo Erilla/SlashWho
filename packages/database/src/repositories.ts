@@ -102,6 +102,22 @@ export interface SnapshotRepository {
     cursor: FingerprintSweepCursor,
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
+  /**
+   * Appends fingerprint matches to a snapshot already published by an earlier
+   * cycle of the same sweep. Never touches `discovery_runs`: the run that
+   * published the snapshot is already complete.
+   */
+  amendAndFinishFingerprintSweep(
+    snapshotId: string,
+    characters: SnapshotCharacterInput[],
+    fingerprint: {
+      reservationId: string;
+      finishedAt: Date;
+      limitationCode: string | null;
+    },
+    cursor: FingerprintSweepCursor,
+    options?: { signal?: AbortSignal }
+  ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
   getCurrentContainingCharacter?(
     key: CharacterKey

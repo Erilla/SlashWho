@@ -1418,6 +1418,156 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
+      async amendAndFinishFingerprintSweep(
+        snapshotId,
+        characters,
+        fingerprint,
+        cursor,
+        options
+      ) {
+        if (Number.isNaN(fingerprint.finishedAt.valueOf())) {
+          throw new RangeError("fingerprint_finish_time_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          options?.signal?.throwIfAborted();
+          await client.query("BEGIN");
+
+          const rootResult = await client.query<{
+            region: CharacterKey["region"];
+            realm_slug: string;
+            normalized_name: string;
+            next_order: number;
+          }>(
+            `SELECT root.region, root.realm_slug, root.normalized_name,
+                    COALESCE(MAX(membership.display_order) + 1, 0) AS next_order
+             FROM snapshots snapshot
+             JOIN characters root ON root.id = snapshot.root_character_id
+             LEFT JOIN snapshot_characters membership
+               ON membership.snapshot_id = snapshot.id
+             WHERE snapshot.id = $1
+             GROUP BY root.region, root.realm_slug, root.normalized_name`,
+            [snapshotId]
+          );
+          const rootRow = rootResult.rows[0];
+          if (!rootRow) throw new Error("snapshot_not_found");
+          await lockRoot(client, {
+            region: rootRow.region,
+            realm: rootRow.realm_slug,
+            name: rootRow.normalized_name
+          });
+          await lockFingerprintSweeps(client);
+
+          const existing = await client.query<{
+            region: string;
+            realm_slug: string;
+            normalized_name: string;
+          }>(
+            `SELECT character.region, character.realm_slug,
+                    character.normalized_name
+             FROM snapshot_characters membership
+             JOIN characters character ON character.id = membership.character_id
+             WHERE membership.snapshot_id = $1`,
+            [snapshotId]
+          );
+          const present = new Set(
+            existing.rows.map(
+              (row) =>
+                `${row.region}/${row.realm_slug}/${row.normalized_name}`
+            )
+          );
+
+          let displayOrder = Number(rootRow.next_order);
+          let appended = 0;
+          for (const character of characters) {
+            const id = `${character.key.region}/${character.key.realm}/${character.key.name}`;
+            if (present.has(id)) continue;
+            present.add(id);
+
+            const upserted = await client.query<{ id: string }>(
+              `INSERT INTO characters
+                (region, realm_slug, normalized_name, display_name, class_name,
+                 level, raider_io_url)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (region, realm_slug, normalized_name)
+               DO UPDATE SET
+                 display_name = EXCLUDED.display_name,
+                 class_name = EXCLUDED.class_name,
+                 level = EXCLUDED.level,
+                 raider_io_url = EXCLUDED.raider_io_url,
+                 updated_at = now()
+               RETURNING id`,
+              [
+                character.key.region,
+                character.key.realm,
+                character.key.name,
+                character.displayName,
+                character.className,
+                character.level,
+                character.raiderIoUrl
+              ]
+            );
+            await client.query(
+              `INSERT INTO snapshot_characters
+                (snapshot_id, character_id, display_order, discovery_source,
+                 display_name, class_name, level, raider_io_url,
+                 guild_name, guild_region, guild_realm_slug)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                snapshotId,
+                upserted.rows[0]!.id,
+                displayOrder,
+                character.source,
+                character.displayName,
+                character.className,
+                character.level,
+                character.raiderIoUrl,
+                character.guild?.name ?? null,
+                character.guild?.region ?? null,
+                character.guild?.realm ?? null
+              ]
+            );
+            displayOrder += 1;
+            appended += 1;
+          }
+
+          await client.query(
+            `UPDATE snapshots
+             SET character_count = character_count + $2,
+                 state = $3,
+                 limitation_code = $4
+             WHERE id = $1`,
+            [
+              snapshotId,
+              appended,
+              fingerprint.limitationCode === null ? "complete" : "partial",
+              fingerprint.limitationCode
+            ]
+          );
+
+          await finishFingerprintSweep(client, fingerprint.reservationId, {
+            published: true,
+            at: fingerprint.finishedAt,
+            limitationCode: fingerprint.limitationCode,
+            resumeAfter: cursor.resumeAfter,
+            resumeLimitationCode:
+              cursor.resumeAfter === null ? null : cursor.limitationCode,
+            resumeSnapshotId: cursor.resumeAfter === null ? null : snapshotId
+          });
+
+          const snapshot = await loadSnapshot(client, snapshotId);
+          if (!snapshot) throw new Error("snapshot_not_found");
+          options?.signal?.throwIfAborted();
+          await client.query("COMMIT");
+          return snapshot;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
       async getCurrent(key) {
         const result = await pool.query<{ id: string }>(
           `SELECT snapshot.id

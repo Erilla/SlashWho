@@ -260,6 +260,9 @@ function createMemoryRepositories(): Repositories {
       async createAndFinishFingerprintSweep(input) {
         return this.create(input);
       },
+      async amendAndFinishFingerprintSweep() {
+        throw new Error("not implemented in this fake");
+      },
       async getCurrent(key) {
         return (
           [...snapshots.values()]

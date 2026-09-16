@@ -111,6 +111,30 @@ async function seedCompleteSnapshot(
   return snapshot;
 }
 
+async function admitSweep(
+  repositories: Repositories,
+  runId: string,
+  key: CharacterKey
+): Promise<{ reservationId: string; finishedAt: Date; limitationCode: string | null }> {
+  const at = new Date();
+  const admission = await repositories.fingerprintSweeps.requestAdmission({
+    runId,
+    key,
+    requestCap: 10,
+    hourlyBudget: 100,
+    // A cutoff ahead of `at` keeps the cadence gate open, so this helper can be
+    // called twice for the same root without depending on Task 5.
+    cadenceCutoff: new Date(at.getTime() + 60_000),
+    at
+  });
+  if (admission.kind !== "admitted") throw new Error("not admitted");
+  return {
+    reservationId: admission.reservationId,
+    finishedAt: new Date(),
+    limitationCode: "fingerprint_sweep_capped"
+  };
+}
+
 describe("PostgreSQL repositories", () => {
   let pool: Pool;
   let stop: () => Promise<void>;
@@ -1287,6 +1311,82 @@ describe("PostgreSQL repositories", () => {
     await expect(
       repositories.fingerprintSweeps.getResumeState(key)
     ).resolves.toBeNull();
+  });
+
+  it("appends characters to a published snapshot and seals the sweep", async () => {
+    const key = { region: "eu", realm: "silvermoon", name: "amendroot" } as const;
+    const alt = { region: "eu", realm: "draenor", name: "amendalt" } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const first = await admitSweep(repositories, run.id, key);
+
+    const published = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: run.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      first,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+        limitationCode: null
+      }
+    );
+
+    const second = await admitSweep(repositories, run.id, key);
+    const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
+      published.id,
+      [observation(alt, "fingerprint", "fingerprint")],
+      { ...second, limitationCode: null },
+      { resumeAfter: null, limitationCode: null }
+    );
+
+    expect(amended.id).toBe(published.id);
+    expect(amended.characterCount).toBe(2);
+    expect(amended.characters.map((row) => row.key.name)).toEqual([
+      "amendroot",
+      "amendalt"
+    ]);
+    expect(amended.limitationCode).toBeNull();
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toBeNull();
+  });
+
+  it("ignores a character the snapshot already carries", async () => {
+    const key = { region: "eu", realm: "silvermoon", name: "dupedroot" } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const first = await admitSweep(repositories, run.id, key);
+
+    const published = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: run.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      first,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+        limitationCode: null
+      }
+    );
+
+    const second = await admitSweep(repositories, run.id, key);
+    const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
+      published.id,
+      [observation(key, "input", "fingerprint")],
+      { ...second, limitationCode: null },
+      { resumeAfter: null, limitationCode: null }
+    );
+
+    expect(amended.characterCount).toBe(1);
   });
 
   it("avoids deadlocks for overlapping snapshots with inverse display order", async () => {
