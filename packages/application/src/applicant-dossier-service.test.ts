@@ -78,6 +78,7 @@ function fixture(
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
     gatheringCharacter?: CharacterKey | null;
+    onCacheEvent?: (source: string, event: string) => void;
   } = {}
 ) {
   const runsCreate = vi.fn();
@@ -256,7 +257,8 @@ function fixture(
     blizzard,
     raiderio,
     config,
-    evidenceJobCredentialEncryptionKey: encryptionKey
+    evidenceJobCredentialEncryptionKey: encryptionKey,
+    onCacheEvent: options.onCacheEvent
   });
   return {
     dossiers,
@@ -1039,13 +1041,7 @@ describe("applicant dossier service", () => {
     }
   );
 
-  it.each([
-    "schema_drift",
-    "rate_limited",
-    "unavailable",
-    "not_found",
-    "private"
-  ] as const)(
+  it.each(["schema_drift", "rate_limited", "not_found", "private"] as const)(
     "exposes ranking %s separately from successful unmatched evidence and retries failures",
     async (code) => {
       const { dossiers, raiderio } = fixture();
@@ -1076,6 +1072,110 @@ describe("applicant dossier service", () => {
       expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
     }
   );
+
+  it("exposes ranking unavailable but re-probes it only once per negative TTL", async () => {
+    // Break caught: a persistently unavailable leaderboard cost one limiter
+    // slot and one 15s upstream call on every single dossier read.
+    const { dossiers, raiderio } = fixture();
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "limitation",
+      code: "unavailable"
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        raids: expect.arrayContaining([
+          raidWithKill({ historicWorldRank: null })
+        ]),
+        limitations: [
+          expect.objectContaining({
+            source: "raiderio",
+            code: "unavailable",
+            message: expect.stringContaining("boss world ranks")
+          })
+        ]
+      }
+    });
+    await dossiers.read(root);
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-issues an unavailable ranking lookup once its negative entry expires", async () => {
+    // Break caught: a negative entry that never expired would hide a
+    // leaderboard that had since come back.
+    vi.useFakeTimers();
+    try {
+      const { dossiers, raiderio } = fixture();
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "limitation",
+        code: "unavailable"
+      });
+
+      await dossiers.read(root);
+      await dossiers.read(root);
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(300_000);
+      await dossiers.read(root);
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replays a remembered ranking failure with the timestamp it was observed at", async () => {
+    // Break caught: a five-minute-old failure could be serialised as if it had
+    // just been observed, making a stale limitation look fresh.
+    vi.useFakeTimers();
+    try {
+      const observedAt = new Date("2026-09-16T12:00:00.000Z");
+      vi.setSystemTime(observedAt);
+      const { dossiers, raiderio } = fixture();
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "limitation",
+        code: "unavailable"
+      });
+
+      await dossiers.read(root);
+      vi.setSystemTime(new Date("2026-09-16T12:04:00.000Z"));
+      const replayed = await dossiers.read(root);
+
+      if (replayed.kind !== "ready") throw new Error("Expected dossier");
+      const limitation = replayed.dossier.limitations.find(
+        (item) => item.source === "raiderio"
+      );
+      expect(limitation?.observedAt).toBe(observedAt.toISOString());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a remembered ranking failure as a cache hit, not a repeat failure", async () => {
+    // Break caught: cacheFailures per request stayed pinned at 1 even once the
+    // negative entry was doing its job.
+    const onCacheEvent = vi.fn();
+    const { dossiers, raiderio } = fixture({ onCacheEvent });
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "limitation",
+      code: "unavailable"
+    });
+
+    await dossiers.read(root);
+    onCacheEvent.mockClear();
+    await dossiers.read(root);
+
+    expect(onCacheEvent).toHaveBeenCalledWith("raiderio_rankings", "hit");
+    expect(onCacheEvent).not.toHaveBeenCalledWith(
+      "raiderio_rankings",
+      "failure"
+    );
+    expect(onCacheEvent).not.toHaveBeenCalledWith(
+      "raiderio_rankings",
+      "failure_unavailable"
+    );
+  });
 
   it.each([
     "parse_private",

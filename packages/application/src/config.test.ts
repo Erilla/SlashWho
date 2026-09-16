@@ -15,6 +15,26 @@ describe("dossier application configuration", () => {
     });
   });
 
+  it("shares the negative-cache TTL with the worker rather than redefining it", () => {
+    // Break caught: the read path could remember a failed lookup for a
+    // different length of time than the worker does, from a second knob.
+    expect(applicationConfigSchema.parse(required)).toMatchObject({
+      NEGATIVE_CACHE_TTL_MS: 300_000
+    });
+    expect(
+      applicationConfigSchema.parse({
+        ...required,
+        NEGATIVE_CACHE_TTL_MS: "60000"
+      })
+    ).toMatchObject({ NEGATIVE_CACHE_TTL_MS: 60_000 });
+    expect(() =>
+      applicationConfigSchema.parse({
+        ...required,
+        NEGATIVE_CACHE_TTL_MS: "0"
+      })
+    ).toThrow("invalid_negative_cache_ttl");
+  });
+
   it.each([
     ["DOSSIER_CHARACTER_CAP", 0],
     ["DOSSIER_CHARACTER_CAP", 31]

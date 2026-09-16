@@ -142,3 +142,17 @@ it("accepts only explicit loopback or container health hosts", () => {
     })
   ).toThrow("invalid_worker_health_host");
 });
+
+it("keeps the shared negative-cache TTL behaving exactly as the worker's own did", () => {
+  // Break caught: promoting NEGATIVE_CACHE_TTL_MS to shared configuration
+  // could quietly change the worker's default or drop its validation.
+  expect(loadWorkerConfig(environment)).toMatchObject({
+    negativeCacheTtlMs: 300_000
+  });
+  expect(
+    loadWorkerConfig({ ...environment, NEGATIVE_CACHE_TTL_MS: "60000" })
+  ).toMatchObject({ negativeCacheTtlMs: 60_000 });
+  expect(() =>
+    loadWorkerConfig({ ...environment, NEGATIVE_CACHE_TTL_MS: "0" })
+  ).toThrow("invalid_negative_cache_ttl");
+});

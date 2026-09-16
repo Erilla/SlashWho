@@ -44,6 +44,10 @@ DOSSIER_CHARACTER_CAP=12
 DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
 DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP=20
 DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS=8000
+# Shared between web and worker: how long a failed upstream lookup is
+# remembered. One operational limit with one definition, so it must be
+# identical in both services. Defaults to 300000 milliseconds (5 minutes).
+NEGATIVE_CACHE_TTL_MS=300000
 # Shared between web and worker: encrypts a visitor-supplied WarcraftLogs key
 # while its evidence job is queued. Must be identical in both services.
 # 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
@@ -56,17 +60,17 @@ visitor's own WCL client ID and secret, as request headers on a dossier read,
 but encrypts that pair immediately and never persists it in plaintext; only
 the ciphertext is written to a queued evidence run for the worker to decrypt.
 
-Worker variables. `DISCOVERY_REQUEST_CAP`, `NEGATIVE_CACHE_TTL_MS`, and the
-Blizzard fingerprint settings are read only by the worker, so set them on the
-worker service alone. `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET` must
-be Railway secret variables. `NEGATIVE_CACHE_TTL_MS` defaults to 300000
-milliseconds (5 minutes) when unset; the fingerprint budget defaults shown
-below are the application defaults and can be omitted after the required
-credentials and sweep cap are configured:
+Worker variables. `DISCOVERY_REQUEST_CAP` and the Blizzard fingerprint settings
+are read only by the worker, so set them on the worker service alone.
+`BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET` must be Railway secret
+variables. The fingerprint budget defaults shown below are the application
+defaults and can be omitted after the required credentials and sweep cap are
+configured:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 DISCOVERY_REQUEST_CAP=40
+# Shared with the web service above; keep the two values identical.
 NEGATIVE_CACHE_TTL_MS=300000
 RAIDER_IO_BASE_URL=https://raider.io
 RAIDER_IO_TIMEOUT_MS=10000

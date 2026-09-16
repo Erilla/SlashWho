@@ -22,7 +22,11 @@ export {
   railwayClientIpHeader
 } from "./auth";
 export type { CallerIdentity } from "./auth";
-export { applicationConfigSchema } from "./config";
+export {
+  applicationConfigSchema,
+  parseNegativeCacheTtlMs,
+  NEGATIVE_CACHE_TTL_DEFAULT_MS
+} from "./config";
 export type { ApplicationConfig } from "./config";
 export { createApplicantDossierService } from "./applicant-dossier-service";
 export type {
