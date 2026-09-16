@@ -83,6 +83,11 @@ WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
 # 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
 EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the web service's value>
 EVIDENCE_REQUEST_CAP=500
+# Per-cycle cap, not a per-guild limit: a sweep that reaches it resumes from a
+# stored cursor on a follow-up cycle until the roster is exhausted. Known
+# limitation: a continued cycle does not re-apply the first cycle's
+# tournament-profile exclusions, so a later cycle can re-introduce a tournament
+# character the first cycle filtered out.
 BLIZZARD_SWEEP_REQUEST_CAP=300
 BLIZZARD_HOURLY_REQUEST_BUDGET=28800
 FINGERPRINT_MINIMUM_COMMON=200
@@ -107,7 +112,7 @@ Railway currently documents `X-Real-IP` as the single remote-client header suppl
 - Both Railway configs gate deployment on `/ready` and restart failed processes up to ten times.
 - Worker draining is 35 seconds, longer than the default 30-second job drain, so graceful shutdown gets the full settlement window.
 
-After each staging deploy, verify `/health`, `/ready`, one new search, one stale refresh, one immutable historical snapshot, rate limiting, a suppressed character, and a graceful worker restart. For the new cold search, confirm that submitted-character evidence and `Linked-character research is still running; this evidence covers only the submitted character.` appear before linked-character discovery finishes, then confirm `Linked-character research is complete.` after release. In `test`, temporarily use a deliberately bounded fingerprint sweep to exercise a capped run and confirm `Additional linked characters may exist; this dossier is not exhaustive.` before restoring the normal test budget. Promote only the validated `main` commit by fast-forwarding `prod`.
+After each staging deploy, verify `/health`, `/ready`, one new search, one stale refresh, one immutable historical snapshot, rate limiting, a suppressed character, and a graceful worker restart. For the new cold search, confirm that submitted-character evidence and `Linked-character research is still running; this evidence covers only the submitted character.` appear before linked-character discovery finishes, then confirm `Linked-character research is complete.` after release. In `test`, temporarily use a deliberately bounded fingerprint sweep to exercise a capped run and confirm `Additional linked characters may exist; this dossier is not exhaustive.` appears, then confirm that the continuation cycles run without operator action and the message becomes `Linked-character research is complete.` once the roster is exhausted. Restore the normal test budget afterwards. Promote only the validated `main` commit by fast-forwarding `prod`.
 
 ## Backups
 

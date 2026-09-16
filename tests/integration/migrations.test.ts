@@ -86,10 +86,10 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-4).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 13, tag: "0014_manual_connections_by_key" },
-      { idx: 14, tag: "0015_evidence_run_credentials" },
       { idx: 15, tag: "0016_manual_connection_exclusions" },
-      { idx: 16, tag: "0017_snapshot_character_guild" }
+      { idx: 16, tag: "0017_snapshot_character_guild" },
+      { idx: 17, tag: "0018_fingerprint_sweep_cursor" },
+      { idx: 18, tag: "0019_fingerprint_continuation_failures" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
@@ -144,6 +144,25 @@ describe("database migrations", () => {
         values
       )
     ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("adds the fingerprint sweep cursor columns", async () => {
+    const columns = await pool.query<{
+      column_name: string;
+      is_nullable: string;
+    }>(
+      `SELECT column_name, is_nullable
+       FROM information_schema.columns
+       WHERE table_name = 'fingerprint_sweep_states'
+         AND column_name IN
+           ('resume_after', 'resume_limitation_code', 'resume_snapshot_id')
+       ORDER BY column_name`
+    );
+    expect(columns.rows).toEqual([
+      { column_name: "resume_after", is_nullable: "YES" },
+      { column_name: "resume_limitation_code", is_nullable: "YES" },
+      { column_name: "resume_snapshot_id", is_nullable: "YES" }
+    ]);
   });
 
   it("keeps both legacy and newly reserved evidence at version one", async () => {

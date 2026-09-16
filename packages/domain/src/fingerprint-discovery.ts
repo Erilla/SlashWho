@@ -43,6 +43,12 @@ export type FingerprintSweepOutcome =
       kind: "capped";
       characters: readonly DiscoveredCharacter[];
       requestsUsed: number;
+      /**
+       * Absent when the budget ended before any candidate was swept: the
+       * roster and root-fingerprint fetches both cap out ahead of the loop.
+       * A capped outcome with no cursor must leave a stored cursor unchanged.
+       */
+      resumeAfter?: string;
     }
   | {
       kind: "failure";
@@ -57,6 +63,11 @@ export type DiscoverFingerprintMatchesOptions = {
   minimumIdenticalPercent: number;
   isSuppressed(key: CharacterKey): Promise<boolean>;
   signal?: AbortSignal;
+  /**
+   * Canonical id of the last candidate a previous cycle swept. Resumption is
+   * strictly greater than this, so a candidate is never swept twice.
+   */
+  resumeAfter?: string;
 };
 
 function isNotFound(error: unknown): boolean {
@@ -213,6 +224,7 @@ export async function discoverFingerprintMatches(
   let requestsUsed = 0;
   let capped = false;
   const matches: DiscoveredCharacter[] = [];
+  let lastSweptId: string | undefined;
 
   function throwIfAborted(): void {
     options.signal?.throwIfAborted();
@@ -272,7 +284,14 @@ export async function discoverFingerprintMatches(
     if (!isFingerprint(rootFingerprint)) throw { kind: "schema_drift" };
 
     const rootId = canonicalCharacterId(root);
-    const candidates = [...roster].sort(compareCandidates);
+    const sorted = [...roster].sort(compareCandidates);
+    const candidates = options.resumeAfter
+      ? sorted.filter(
+          (item) =>
+            canonicalCharacterId(item.key).localeCompare(options.resumeAfter!) >
+            0
+        )
+      : sorted;
     const seen = new Set<string>();
     for (const candidate of candidates) {
       throwIfAborted();
@@ -300,10 +319,14 @@ export async function discoverFingerprintMatches(
           gateway.getAchievementFingerprint(candidate.key, options.signal)
         );
       } catch (error) {
-        if (isNotFound(error)) continue;
+        if (isNotFound(error)) {
+          lastSweptId = candidateId;
+          continue;
+        }
         throw error;
       }
       if (candidateFingerprint === budgetExhausted) break;
+      lastSweptId = candidateId;
       if (!isFingerprint(candidateFingerprint)) throw { kind: "schema_drift" };
 
       if (!fingerprintMatches(rootFingerprint, candidateFingerprint, options)) {
@@ -325,12 +348,22 @@ export async function discoverFingerprintMatches(
       "kind" in error &&
       error.kind === "fingerprint_cap_reached"
     ) {
-      return { kind: "capped", characters: matches, requestsUsed };
+      return {
+        kind: "capped",
+        characters: matches,
+        requestsUsed,
+        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+      };
     }
     return failureOutcome(error);
   }
 
   return capped
-    ? { kind: "capped", characters: matches, requestsUsed }
+    ? {
+        kind: "capped",
+        characters: matches,
+        requestsUsed,
+        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+      }
     : { kind: "matched", characters: matches, requestsUsed };
 }

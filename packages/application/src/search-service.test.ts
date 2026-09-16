@@ -148,6 +148,9 @@ function policyFixture(
       async createAndFinishFingerprintSweep() {
         throw new Error("not used");
       },
+      async amendAndFinishFingerprintSweep() {
+        throw new Error("not used");
+      },
       async getCurrent() {
         return options.current ?? null;
       },
@@ -241,9 +244,15 @@ function policyFixture(
       async requestAdmission() {
         return { kind: "not_due" };
       },
+      async recordContinuationFailure() {
+        return 0;
+      },
       async recordRequest() {},
       async finish() {},
       async release() {},
+      async getResumeState() {
+        return null;
+      },
       async listWaiting() {
         return [];
       },

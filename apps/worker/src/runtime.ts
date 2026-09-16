@@ -265,13 +265,23 @@ export async function createWorkerRuntime(
     const dispatchAdmittedFingerprintRun = async (runId: string) => {
       const run = await repositories.runs.find(runId);
       if (!run) return;
+      const resume = await repositories.fingerprintSweeps.getResumeState(
+        run.rootKey
+      );
+      // The root having a cursor is not enough: the cursor belongs to whichever
+      // run published the snapshot it points at. A fresh refresh for the same
+      // root is a different run, and dispatching it as a continuation would
+      // skip its own discovery entirely and amend someone else's snapshot
+      // without ever completing itself. It goes out as an ordinary job.
+      const continues = resume !== null && resume.runId === runId;
       // No correlationId is available here: this dispatch is a background
       // fingerprint-admission follow-up, not the continuation of an HTTP
       // request, so it stays absent rather than being invented.
       await initializedQueue.enqueue({
         runId,
         key: run.rootKey,
-        enqueuedAt: new Date().toISOString()
+        enqueuedAt: new Date().toISOString(),
+        ...(continues ? { continuation: true as const } : {})
       });
       await repositories.fingerprintSweeps.markDispatched(runId, new Date());
     };
@@ -325,11 +335,15 @@ export async function createWorkerRuntime(
       await recoverPendingSearches(repositories, initializedQueue);
     });
     await initializedQueue.work(async (payload, context) => {
-      await handler.execute(payload.runId, {
-        ...context,
-        correlationId: payload.correlationId,
-        enqueuedAt: payload.enqueuedAt
-      });
+      await handler.execute(
+        payload.runId,
+        {
+          ...context,
+          correlationId: payload.correlationId,
+          enqueuedAt: payload.enqueuedAt
+        },
+        payload
+      );
     });
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
       await evidenceHandler.execute(payload, context);

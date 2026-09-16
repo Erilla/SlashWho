@@ -32,6 +32,7 @@ export type {
   EvidenceRunStatus,
   FingerprintAdmission,
   FingerprintAdmissionDispatch,
+  FingerprintSweepCursor,
   FingerprintSweepRepository,
   NegativeCacheEntry,
   NegativeCacheRepository,

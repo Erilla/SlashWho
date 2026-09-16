@@ -283,7 +283,21 @@ export const fingerprintSweepStates = pgTable(
     normalizedName: text("normalized_name").notNull(),
     lastPublishedAt: timestamp("last_published_at", {
       withTimezone: true
-    })
+    }),
+    resumeAfter: text("resume_after"),
+    resumeLimitationCode: text("resume_limitation_code"),
+    resumeSnapshotId: uuid("resume_snapshot_id").references(
+      () => snapshots.id,
+      {
+        onDelete: "set null"
+      }
+    ),
+    /**
+     * Consecutive continuation cycles that re-enqueued without advancing the
+     * cursor. Reset to zero whenever the cursor advances, so a chain making
+     * progress is never bounded; only a stuck one is.
+     */
+    continuationFailures: integer("continuation_failures").notNull().default(0)
   },
   (table) => [
     primaryKey({

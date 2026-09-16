@@ -75,6 +75,26 @@ export interface SnapshotHistoryPage {
   nextCursor: string | null;
 }
 
+export interface FingerprintSweepCursor {
+  /** Canonical id of the last candidate swept, or null to seal the sweep. */
+  resumeAfter: string | null;
+  /**
+   * The Raider.IO limitation observed by the run that started this sweep.
+   * `snapshots.limitation_code` is overwritten with `fingerprint_sweep_capped`
+   * while the chain runs, so this is the only surviving copy and it is what the
+   * sealing cycle restores.
+   */
+  limitationCode: string | null;
+  /**
+   * True when this cycle moved the sweep forward -- it swept at least one new
+   * candidate, or it exhausted the roster. False only for a cycle that swept
+   * nothing new (the budget ran out before the first candidate), which is what
+   * distinguishes a stuck chain from a slow one: `continuation_failures` is
+   * reset on progress and preserved otherwise.
+   */
+  advanced: boolean;
+}
+
 export interface SnapshotRepository {
   create(
     input: CreateSnapshotInput,
@@ -87,8 +107,33 @@ export interface SnapshotRepository {
       finishedAt: Date;
       limitationCode: string | null;
     },
+    cursor: FingerprintSweepCursor,
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
+  /**
+   * Appends fingerprint matches to a snapshot already published by an earlier
+   * cycle of the same sweep. Never touches `discovery_runs`: the run that
+   * published the snapshot is already complete.
+   *
+   * Returns `null` without writing anything when `runId` no longer owns the
+   * cursor -- the stored `resume_snapshot_id` has moved on, or the snapshot
+   * belongs to another run. Ownership is re-checked under the root lock, so a
+   * fresh refresh that publishes concurrently discards this continuation
+   * instead of having its own cursor overwritten by a dead one.
+   */
+  amendAndFinishFingerprintSweep(
+    snapshotId: string,
+    characters: SnapshotCharacterInput[],
+    fingerprint: {
+      /** The run that must still own the cursor for this amend to apply. */
+      runId: string;
+      reservationId: string;
+      finishedAt: Date;
+      limitationCode: string | null;
+    },
+    cursor: FingerprintSweepCursor,
+    options?: { signal?: AbortSignal }
+  ): Promise<StoredSnapshot | null>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
   getCurrentContainingCharacter?(
     key: CharacterKey
@@ -340,6 +385,12 @@ export interface FingerprintSweepRepository {
     hourlyBudget: number;
     cadenceCutoff: Date;
     at: Date;
+    /**
+     * A continuation finishes the sweep already in progress rather than
+     * starting a new one, so it is exempt from the cadence gate. Every other
+     * gate still applies.
+     */
+    continuation?: true;
   }): Promise<FingerprintAdmission>;
   recordRequest(reservationId: string, count: number, at: Date): Promise<void>;
   finish(
@@ -347,6 +398,23 @@ export interface FingerprintSweepRepository {
     input: { published: boolean; at: Date; limitationCode: string | null }
   ): Promise<void>;
   release(reservationId: string, at: Date): Promise<void>;
+  getResumeState(key: CharacterKey): Promise<{
+    resumeAfter: string;
+    snapshotId: string;
+    /**
+     * The run that published `snapshotId`, and so the only run allowed to
+     * continue this chain. A dispatch or amend for any other run is a no-op:
+     * the cursor belongs to a sweep that run is not part of.
+     */
+    runId: string;
+    limitationCode: string | null;
+  } | null>;
+  /**
+   * Counts one continuation cycle that re-enqueued without advancing the
+   * cursor and returns the new consecutive total. The count is reset to zero by
+   * any cycle that does advance it.
+   */
+  recordContinuationFailure(key: CharacterKey): Promise<number>;
   listWaiting(limit: number, offset?: number): Promise<readonly string[]>;
   listAdmittedUndispatched(limit: number): Promise<readonly string[]>;
   markDispatched(runId: string, at: Date): Promise<void>;

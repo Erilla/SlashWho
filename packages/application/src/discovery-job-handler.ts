@@ -1,4 +1,5 @@
 import type {
+  DiscoverCharacterJob,
   DiscoveryWorkContext,
   JobTelemetry,
   Repositories
@@ -217,6 +218,18 @@ function isFingerprintReleaseRetryableError(
   );
 }
 
+/**
+ * Consecutive continuation cycles that may re-enqueue without advancing the
+ * cursor before the chain gives up. A chain making progress is never bounded by
+ * this -- the counter resets whenever the cursor moves -- so it only catches a
+ * roster whose upstream is persistently failing, which would otherwise loop
+ * through the admission gate forever burning the hourly budget.
+ *
+ * Giving up leaves the cursor set, so the next natural sweep of this root
+ * resumes from where the chain stopped instead of restarting at candidate one.
+ */
+const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
+
 export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   const now = options.now ?? (() => new Date());
   const random = options.random ?? Math.random;
@@ -259,7 +272,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   return {
     async execute(
       runId: string,
-      workContext?: DiscoveryExecutionContext
+      workContext?: DiscoveryExecutionContext,
+      // The delivered job payload. Only `continuation` is read here; taking the
+      // payload type lets the worker hand the job straight through.
+      job?: Partial<DiscoverCharacterJob>
     ): Promise<void> {
       // Created before the first query so the run lookup and claim reach
       // `dbCalls` too; nothing else about the run depends on its lifetime.
@@ -273,7 +289,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       if (!context) {
         const existing = await repositories.runs.find(runId);
         if (!existing) throw new Error("discovery_run_not_found");
-        if (existing.status === "complete" || existing.status === "failed") {
+        // A continuation resumes the sweep of a run that is already complete,
+        // so it is the one caller allowed past this guard.
+        if (
+          !job?.continuation &&
+          (existing.status === "complete" || existing.status === "failed")
+        ) {
           return;
         }
         context = {
@@ -283,7 +304,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         };
       }
 
-      const run = await repositories.runs.claim(runId, context.attempt);
+      // `claim` matches only active statuses, so it refuses the completed run a
+      // continuation resumes; read the run directly instead.
+      const run = job?.continuation
+        ? await repositories.runs.find(runId)
+        : await repositories.runs.claim(runId, context.attempt);
       if (!run) return;
 
       const startedAt = now();
@@ -307,33 +332,92 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         fingerprintDurationMs: 0
       };
 
+      // Hoisted out of the try so the outer catch can tell a continuation from
+      // an ordinary delivery: an unexpected throw mid-chain must re-enqueue,
+      // not end the chain with the cursor still set.
+      let resume: Awaited<
+        ReturnType<Repositories["fingerprintSweeps"]["getResumeState"]>
+      > = null;
+      /**
+       * Re-enqueues a continuation cycle that made no progress, giving up once
+       * the same chain has done so too many times in a row. Returns true when
+       * the chain was re-enqueued and false when it gave up.
+       */
+      const continueWithoutProgress = async (): Promise<boolean> => {
+        const failures =
+          await repositories.fingerprintSweeps.recordContinuationFailure(
+            run.rootKey
+          );
+        if (failures >= MAX_CONTINUATION_NON_PROGRESS_CYCLES) return false;
+        await options.enqueueFingerprintAdmission?.(runId);
+        return true;
+      };
+
       try {
         context.signal.throwIfAborted();
+        resume = job?.continuation
+          ? await repositories.fingerprintSweeps.getResumeState(run.rootKey)
+          : null;
+        if (job?.continuation && !resume) {
+          // The chain already sealed (or was never started): a benign no-op,
+          // labelled so the logs do not read as an anomaly.
+          record.outcome = "continuation_without_cursor";
+          return;
+        }
+        if (resume && resume.runId !== runId) {
+          // The cursor belongs to a different run's sweep -- a fresh refresh
+          // for this root published its own snapshot and took the chain over.
+          // Continuing would amend a snapshot this run does not own; discard
+          // this cycle instead, leaving the live chain's cursor untouched.
+          resume = null;
+          record.outcome = "continuation_superseded";
+          return;
+        }
+
+        /**
+         * The job lifetime bounds one delivery of one run, measured from that
+         * run's creation. A continuation resumes a run cycle 1 already
+         * completed, possibly hours earlier while the hourly budget gated the
+         * chain, so `run.createdAt` says nothing about how long this delivery
+         * has taken. Applying the bound anyway would fail an already complete
+         * run -- which throws, is swallowed by the outer catch, and abandons
+         * the roster tail exactly as the bug this feature removes. Nothing is
+         * lost: the chain is bounded by construction, because the cursor
+         * advances strictly across a finite roster.
+         */
+        const withinJobLifetime = (at: Date): boolean =>
+          resume !== null ||
+          at.getTime() - run.createdAt.getTime() < maxJobLifetimeMs;
+
         const executionTime = startedAt;
-        if (
-          executionTime.getTime() - run.createdAt.getTime() >=
-          maxJobLifetimeMs
-        ) {
+        if (!withinJobLifetime(executionTime)) {
           record.outcome = "lifetime_exceeded";
           await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
 
-        let outcome: DiscoveryOutcome = await discoverCharacter(
-          run.rootKey,
-          scopedRaiderIoGateway(options.gateway, scope),
-          {
-            requestCap: options.requestCap,
-            isSuppressed: (key) => repositories.suppressions.isActive(key),
-            signal: context.signal
-          }
-        );
+        let outcome: DiscoveryOutcome = resume
+          ? {
+              kind: "snapshot",
+              state: "partial",
+              // Placeholder only. A continuation performs no Raider.IO
+              // discovery, so this value must never reach the snapshot: the
+              // real limitation is `resume.limitationCode`, stored by cycle 1.
+              limitationCode: "privacy_hidden",
+              characters: []
+            }
+          : await discoverCharacter(
+              run.rootKey,
+              scopedRaiderIoGateway(options.gateway, scope),
+              {
+                requestCap: options.requestCap,
+                isSuppressed: (key) => repositories.suppressions.isActive(key),
+                signal: context.signal
+              }
+            );
         context.signal.throwIfAborted();
         const persistenceTime = now();
-        if (
-          persistenceTime.getTime() - run.createdAt.getTime() >=
-          maxJobLifetimeMs
-        ) {
+        if (!withinJobLifetime(persistenceTime)) {
           record.outcome = "lifetime_exceeded";
           await repositories.runs.fail(runId, "upstream_unavailable");
           return;
@@ -355,7 +439,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 cadenceCutoff: new Date(
                   admissionTime.getTime() - fingerprint.cadenceMs
                 ),
-                at: admissionTime
+                at: admissionTime,
+                ...(resume ? { continuation: true as const } : {})
               });
 
             if (admission.kind === "waiting") {
@@ -451,68 +536,144 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       fingerprint.minimumIdenticalPercent,
                     isSuppressed: (key) =>
                       repositories.suppressions.isActive(key),
-                    signal: context.signal
+                    signal: context.signal,
+                    ...(resume ? { resumeAfter: resume.resumeAfter } : {})
                   }
                 );
 
                 if (sweep.kind === "failure") {
                   await releaseReservation();
+                  if (resume) {
+                    // A continuation must never reach the run-retry machinery
+                    // below: `markRetrying` and `fail` both assume an active
+                    // run, and this one is already complete. The chain retries
+                    // as a fresh continuation instead, throttled by the
+                    // admission gate exactly as the `waiting` path already is,
+                    // and bounded so a dead upstream cannot cycle forever.
+                    record.outcome = (await continueWithoutProgress())
+                      ? "continuation_retrying"
+                      : "continuation_abandoned";
+                    return;
+                  }
                   fingerprintFailure = sweep;
                 } else {
                   context.signal.throwIfAborted();
                   const fingerprintPersistenceTime = now();
-                  if (
-                    fingerprintPersistenceTime.getTime() -
-                      run.createdAt.getTime() >=
-                    maxJobLifetimeMs
-                  ) {
+                  if (!withinJobLifetime(fingerprintPersistenceTime)) {
                     record.outcome = "lifetime_exceeded";
                     await releaseReservation();
                     await repositories.runs.fail(runId, "upstream_unavailable");
                     return;
                   }
+                  const stillSweeping =
+                    sweep.kind === "capped" && sweep.resumeAfter !== undefined;
+                  // The Raider.IO limitation this chain must restore when it
+                  // seals. A continuation did no discovery of its own, so it
+                  // uses the value cycle 1 stored rather than its placeholder.
+                  const raiderIoLimitation = resume
+                    ? resume.limitationCode
+                    : outcome.state === "partial"
+                      ? outcome.limitationCode
+                      : null;
                   const limitationCode =
                     sweep.kind === "capped"
                       ? "fingerprint_sweep_capped"
-                      : outcome.state === "partial"
-                        ? outcome.limitationCode
-                        : null;
-                  const excludedTournamentCharacters = new Set(
-                    outcome.state === "partial"
-                      ? outcome.excludedTournamentCharacterIds
-                      : []
-                  );
-                  const characters = deduplicateCharacters([
-                    ...outcome.characters,
-                    ...sweep.characters
-                  ]).filter(
-                    (character) =>
-                      !excludedTournamentCharacters.has(
-                        canonicalCharacterId(character.key)
-                      )
-                  );
+                      : raiderIoLimitation;
+                  const cursor = {
+                    resumeAfter: stillSweeping
+                      ? sweep.resumeAfter!
+                      : sweep.kind === "capped"
+                        ? (resume?.resumeAfter ?? null)
+                        : null,
+                    limitationCode: raiderIoLimitation,
+                    // Progress is a cursor that moved or a roster exhausted.
+                    // A `capped` that swept nothing re-stores the cursor it
+                    // was given, and must not reset the give-up counter.
+                    advanced: stillSweeping || sweep.kind === "matched"
+                  };
+
+                  if (resume) {
+                    const amended =
+                      await repositories.snapshots.amendAndFinishFingerprintSweep(
+                        resume.snapshotId,
+                        [...sweep.characters],
+                        {
+                          runId,
+                          reservationId: admission.reservationId,
+                          finishedAt: now(),
+                          limitationCode
+                        },
+                        cursor,
+                        { signal: context.signal }
+                      );
+                    if (amended === null) {
+                      // The repository re-checked ownership under the root lock
+                      // and found the chain taken over by a newer run while
+                      // this cycle swept. Nothing was written; release the
+                      // reservation and discard this cycle without
+                      // re-enqueuing, exactly as a superseded continuation
+                      // should end.
+                      await releaseReservation();
+                      record.outcome = "continuation_superseded";
+                      return;
+                    }
+                  } else {
+                    const excludedTournamentCharacters = new Set(
+                      outcome.state === "partial"
+                        ? outcome.excludedTournamentCharacterIds
+                        : []
+                    );
+                    const characters = deduplicateCharacters([
+                      ...outcome.characters,
+                      ...sweep.characters
+                    ]).filter(
+                      (character) =>
+                        !excludedTournamentCharacters.has(
+                          canonicalCharacterId(character.key)
+                        )
+                    );
+                    record.characterCount = characters.length;
+                    await repositories.snapshots.createAndFinishFingerprintSweep(
+                      {
+                        runId,
+                        rootKey: run.rootKey,
+                        state: limitationCode === null ? "complete" : "partial",
+                        limitationCode,
+                        refreshedAt: fingerprintPersistenceTime,
+                        characters
+                      },
+                      {
+                        reservationId: admission.reservationId,
+                        finishedAt: now(),
+                        limitationCode
+                      },
+                      cursor,
+                      { signal: context.signal }
+                    );
+                  }
                   record.outcome = "snapshot";
                   record.state =
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
-                  record.characterCount = characters.length;
-                  await repositories.snapshots.createAndFinishFingerprintSweep(
-                    {
-                      runId,
-                      rootKey: run.rootKey,
-                      state: limitationCode === null ? "complete" : "partial",
-                      limitationCode,
-                      refreshedAt: fingerprintPersistenceTime,
-                      characters
-                    },
-                    {
-                      reservationId: admission.reservationId,
-                      finishedAt: now(),
-                      limitationCode
-                    },
-                    { signal: context.signal }
-                  );
                   reservationActive = false;
+                  // Only `matched` seals the chain. A continuation therefore
+                  // re-enqueues on any other result -- including a `capped`
+                  // that swept nothing and so carries no new cursor, which
+                  // would otherwise stall the chain with its tail unswept.
+                  const sealed = sweep.kind === "matched";
+                  if (resume) {
+                    if (!sealed && !stillSweeping) {
+                      // Capped without sweeping a single candidate: the cursor
+                      // is unchanged, so this cycle counts against the bound.
+                      if (!(await continueWithoutProgress())) {
+                        record.outcome = "continuation_abandoned";
+                      }
+                    } else if (!sealed) {
+                      await options.enqueueFingerprintAdmission?.(runId);
+                    }
+                  } else if (stillSweeping) {
+                    await options.enqueueFingerprintAdmission?.(runId);
+                  }
                   return;
                 }
               } catch (error) {
@@ -533,6 +694,22 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
           if (fingerprintFailure) {
             outcome = fingerprintFailure;
+          } else if (resume) {
+            // A continuation that did not finish through the amend path has
+            // nothing to publish: its outcome is a placeholder carrying no
+            // characters, and the run it resumes is already complete. Reaching
+            // the publication below would overwrite the snapshot this
+            // continuation exists to extend. Only the sweep block above may
+            // conclude a continuation; its `waiting` branch still re-enqueues
+            // and returns on its own.
+            //
+            // Re-enqueue rather than return: the cursor is still set, so
+            // stopping here would strand the roster tail for good. The
+            // give-up counter bounds it if the sweep stays unavailable.
+            record.outcome = (await continueWithoutProgress())
+              ? "continuation_sweep_unavailable"
+              : "continuation_abandoned";
+            return;
           } else {
             context.signal.throwIfAborted();
             record.outcome = "snapshot";
@@ -610,7 +787,18 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
         const current = await repositories.runs.find(runId);
         if (current?.status === "complete" || current?.status === "failed") {
-          if (current.status === "complete") return;
+          if (current.status === "complete") {
+            // An unexpected throw mid-chain used to end here silently with the
+            // cursor still set, abandoning the roster tail exactly as the bug
+            // this feature removes. A continuation re-enqueues instead; the
+            // give-up counter stops it looping on a permanent fault.
+            if (resume) {
+              record.outcome = (await continueWithoutProgress())
+                ? "continuation_retrying"
+                : "continuation_abandoned";
+            }
+            return;
+          }
           throw error;
         }
         const failureTime = now();
