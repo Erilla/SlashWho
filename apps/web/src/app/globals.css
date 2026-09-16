@@ -383,8 +383,11 @@ a {
   margin-left: 0;
 }
 
+/* Never shrinks: the source pill is the evidence the row exists to show, so
+   when the row is short of width the name block gives way, not this. */
 .dossier-character-actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 0.5rem;
 }
@@ -467,10 +470,15 @@ a {
   }
 }
 
+/* The connected-characters column carries a name, a guild, upstream icons and
+   a source pill on one row, so it is the track that runs out of room first.
+   The extra width it needs is taken from the gap rather than from the evidence
+   column: dropping the gap to 2rem and shifting the ratio to 0.75/1.25 widens
+   the left track by ~44px while the evidence track gives up under 4px. */
 .dossier-layout {
   display: grid;
-  grid-template-columns: minmax(16rem, 0.7fr) minmax(0, 1.3fr);
-  gap: clamp(2rem, 5vw, 4.5rem);
+  grid-template-columns: minmax(16rem, 0.75fr) minmax(0, 1.25fr);
+  gap: 2rem;
   align-items: start;
   padding-top: 2rem;
 }
@@ -580,7 +588,7 @@ a {
 /* An excluded character stays readable: it is dimmed to say it contributes
    nothing, and its "Excluded" badge carries the state for anyone the dimming
    does not reach. Its own menu keeps full contrast so it can be restored. */
-.dossier-character-row--excluded > div:first-child,
+.dossier-character-row--excluded .dossier-character-identity,
 .dossier-character-row--excluded .source-badge:not(.source-badge--excluded),
 .dossier-character-row--excluded .profile-links {
   opacity: 0.55;
@@ -753,6 +761,14 @@ a {
   font-size: 0.85rem;
 }
 
+/* The flex default of `min-width: auto` would hold these at their content
+   width and push the row into overflow; zeroing it lets the guild inside them
+   be the thing that gives way. */
+.dossier-character-identity,
+.dossier-character-name-line {
+  min-width: 0;
+}
+
 .dossier-character-name-line {
   display: flex;
   align-items: center;
@@ -760,10 +776,17 @@ a {
 }
 
 /* Sits beside the name in the character list, subordinate to it: the guild is
-   context for the character, not a second identity competing with it. */
+   context for the character, not a second identity competing with it. That
+   ranking is also why it is the guild that truncates when the row is short of
+   width — the character's own name and its source pill both stay whole. The
+   trigger is the row running out of room rather than a viewport breakpoint,
+   because the constraint is the panel's width, not the window's. */
 .dossier-character-guild {
+  overflow: hidden;
   color: var(--muted);
   font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dossier-character-spinner {

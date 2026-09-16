@@ -110,7 +110,7 @@ export function DossierCharacterList({
             }`}
             key={`${character.key.region}/${character.key.realm}/${character.key.name}`}
           >
-            <div>
+            <div className="dossier-character-identity">
               <div className="dossier-character-name-line">
                 <DossierCharacterName character={character} showGuild />
                 {!character.evidenceState &&
