@@ -79,6 +79,54 @@ describe("DossierRefreshControl", () => {
     await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
   });
 
+  it("cannot be pressed while a collection is already running", async () => {
+    // Break caught: the button re-enabled the moment its request returned, so
+    // it invited a second press during the five minutes the collection it just
+    // queued was still running — which reserve would quietly no-op.
+    const onRefresh = vi.fn();
+    render(
+      <DossierRefreshControl
+        busy
+        lastCollectedAt="2026-09-16T11:00:00.000Z"
+        now={() => now}
+        onRefresh={onRefresh}
+      />
+    );
+
+    const button = screen.getByRole("button", { name: /refresh/i });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    await userEvent.click(button);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it("says why it is disabled rather than only greying out", async () => {
+    render(
+      <DossierRefreshControl
+        busy
+        lastCollectedAt="2026-09-16T11:00:00.000Z"
+        now={() => now}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/collecting/i)).toBeTruthy();
+  });
+
+  it("can be pressed once nothing is running", () => {
+    render(
+      <DossierRefreshControl
+        busy={false}
+        lastCollectedAt="2026-09-16T11:00:00.000Z"
+        now={() => now}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /refresh/i }).hasAttribute("disabled")
+    ).toBe(false);
+  });
+
   it("reports a light refresh differently from a full one", async () => {
     // Break caught: the two do very different amounts of work, so saying
     // "refreshed" for both would misrepresent what just happened.

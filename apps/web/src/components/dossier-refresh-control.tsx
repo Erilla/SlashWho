@@ -27,10 +27,17 @@ function formatAge(milliseconds: number): string {
 export function DossierRefreshControl({
   lastCollectedAt,
   onRefresh,
+  busy = false,
   now = () => new Date()
 }: Readonly<{
   lastCollectedAt: string | null;
   onRefresh: () => Promise<RefreshOutcome>;
+  /**
+   * Whether a collection is already running for this dossier. Pressing during
+   * one would reserve nothing — an in-flight run is joined, not duplicated —
+   * so the press would look like the button not working.
+   */
+  busy?: boolean;
   now?: () => Date;
 }>) {
   const [pending, setPending] = useState(false);
@@ -52,9 +59,9 @@ export function DossierRefreshControl({
     <div className="dossier-refresh">
       <button
         className="dossier-refresh-button"
-        disabled={pending}
+        disabled={pending || busy}
         onClick={() => {
-          if (pending) return;
+          if (pending || busy) return;
           setPending(true);
           setOutcome(null);
           void onRefresh()
@@ -68,12 +75,17 @@ export function DossierRefreshControl({
       {/* A live region only while it has an outcome to announce: the resting
           state is static text, not something a screen reader should interrupt
           for. */}
-      <p className="dossier-refresh-age" role={outcome ? "status" : undefined}>
-        {outcome === "light"
-          ? "Checked for new kills"
-          : outcome === "full"
-            ? "Re-collecting evidence"
-            : (age ?? "Not collected yet")}
+      <p
+        className="dossier-refresh-age"
+        role={outcome || busy ? "status" : undefined}
+      >
+        {busy
+          ? "Collecting…"
+          : outcome === "light"
+            ? "Checked for new kills"
+            : outcome === "full"
+              ? "Re-collecting evidence"
+              : (age ?? "Not collected yet")}
       </p>
     </div>
   );
