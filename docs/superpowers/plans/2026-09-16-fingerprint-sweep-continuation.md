@@ -338,6 +338,12 @@ ALTER TABLE "fingerprint_sweep_states"
 `ON DELETE SET NULL` makes a continuation whose snapshot was reaped a no-op
 rather than an FK error.
 
+Also add the migration to `packages/database/drizzle/meta/_journal.json` (next
+`idx`, tag `0018_fingerprint_sweep_cursor`, matching the shape of the existing
+entries). The migration runner reads that journal to decide which `.sql` files to
+apply, so a migration missing from it never executes. Do NOT hand-edit anything
+under `meta/*_snapshot.json`.
+
 - [ ] **Step 4: Update the Drizzle schema**
 
 In `packages/database/src/schema.ts`, inside `fingerprintSweepStates`:
