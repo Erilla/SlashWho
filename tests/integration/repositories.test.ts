@@ -1233,7 +1233,7 @@ describe("PostgreSQL repositories", () => {
           finishedAt: new Date("2026-08-08T12:00:00.000Z"),
           limitationCode: null
         },
-        { resumeAfter: null, limitationCode: null }
+        { resumeAfter: null, limitationCode: null, advanced: true }
       )
     ).rejects.toThrow("fingerprint_reservation_not_active");
 
@@ -1284,7 +1284,7 @@ describe("PostgreSQL repositories", () => {
         finishedAt: at,
         limitationCode: null
       },
-      { resumeAfter: null, limitationCode: null }
+      { resumeAfter: null, limitationCode: null, advanced: true }
     );
 
     expect(
@@ -1340,7 +1340,8 @@ describe("PostgreSQL repositories", () => {
         },
         {
           resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-          limitationCode: "privacy_hidden"
+          limitationCode: "privacy_hidden",
+          advanced: true
         }
       );
 
@@ -1349,6 +1350,9 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toEqual({
       resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
       snapshotId: snapshot.id,
+      // The run that published the snapshot, and so the only one allowed to
+      // continue this chain.
+      runId: run.id,
       limitationCode: "privacy_hidden"
     });
   });
@@ -1388,7 +1392,8 @@ describe("PostgreSQL repositories", () => {
         first,
         {
           resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-          limitationCode: null
+          limitationCode: null,
+          advanced: true
         }
       );
 
@@ -1396,17 +1401,17 @@ describe("PostgreSQL repositories", () => {
     const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
       published.id,
       [observation(alt, "fingerprint", "fingerprint")],
-      { ...second, limitationCode: null },
-      { resumeAfter: null, limitationCode: null }
+      { ...second, runId: run.id, limitationCode: null },
+      { resumeAfter: null, limitationCode: null, advanced: true }
     );
 
-    expect(amended.id).toBe(published.id);
-    expect(amended.characterCount).toBe(2);
-    expect(amended.characters.map((row) => row.key.name)).toEqual([
+    expect(amended!.id).toBe(published.id);
+    expect(amended!.characterCount).toBe(2);
+    expect(amended!.characters.map((row) => row.key.name)).toEqual([
       "amendroot",
       "amendalt"
     ]);
-    expect(amended.limitationCode).toBeNull();
+    expect(amended!.limitationCode).toBeNull();
     await expect(
       repositories.fingerprintSweeps.getResumeState(key)
     ).resolves.toBeNull();
@@ -1435,7 +1440,8 @@ describe("PostgreSQL repositories", () => {
         first,
         {
           resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-          limitationCode: null
+          limitationCode: null,
+          advanced: true
         }
       );
 
@@ -1443,11 +1449,328 @@ describe("PostgreSQL repositories", () => {
     const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
       published.id,
       [observation(key, "input", "fingerprint")],
-      { ...second, limitationCode: null },
-      { resumeAfter: null, limitationCode: null }
+      { ...second, runId: run.id, limitationCode: null },
+      { resumeAfter: null, limitationCode: null, advanced: true }
     );
 
-    expect(amended.characterCount).toBe(1);
+    expect(amended!.characterCount).toBe(1);
+  });
+
+  it("rolls back an amend wholly when the sweep cannot be finished", async () => {
+    // Break caught: the appended characters commit while the reservation stays
+    // open, leaving the snapshot enlarged, its count wrong and the cursor
+    // unmoved -- a partial cycle no later cycle can reconcile.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "rollbackroot"
+    } as const;
+    const alt = {
+      region: "eu",
+      realm: "draenor",
+      name: "rollbackalt"
+    } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const first = await admitSweep(repositories, run.id, key);
+    const cursor = JSON.stringify(["eu", "draenor", "valadares"]);
+    const published =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: new Date(),
+          characters: [observation(key, "input")]
+        },
+        first,
+        { resumeAfter: cursor, limitationCode: null, advanced: true }
+      );
+
+    await expect(
+      repositories.snapshots.amendAndFinishFingerprintSweep(
+        published.id,
+        [observation(alt, "fingerprint", "fingerprint")],
+        {
+          runId: run.id,
+          // No such reservation: the finish step throws after the characters
+          // and the count update have already been written in this transaction.
+          reservationId: "00000000-0000-4000-8000-000000000999",
+          finishedAt: new Date(),
+          limitationCode: null
+        },
+        { resumeAfter: null, limitationCode: null, advanced: true }
+      )
+    ).rejects.toThrow("fingerprint_reservation_not_active");
+
+    const after = await repositories.snapshots.find(published.id);
+    expect(after?.characterCount).toBe(1);
+    expect(after?.characters.map((row) => row.key.name)).toEqual([
+      "rollbackroot"
+    ]);
+    expect(after?.limitationCode).toBe("fingerprint_sweep_capped");
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toMatchObject({ resumeAfter: cursor });
+  });
+
+  it("refuses to amend a snapshot the cursor no longer points at", async () => {
+    // Break caught: an in-flight continuation amended a snapshot a fresh
+    // refresh had already superseded, and overwrote the new chain's cursor with
+    // the dead one's -- destroying the live chain.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "supersededroot"
+    } as const;
+    const alt = {
+      region: "eu",
+      realm: "draenor",
+      name: "supersededalt"
+    } as const;
+    const first = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(first.id);
+    const firstSweep = await admitSweep(repositories, first.id, key);
+    const stale = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: first.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      firstSweep,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "stale"]),
+        limitationCode: null,
+        advanced: true
+      }
+    );
+
+    const second = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(second.id);
+    const secondSweep = await admitSweep(repositories, second.id, key);
+    const live = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: second.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      secondSweep,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "live"]),
+        limitationCode: null,
+        advanced: true
+      }
+    );
+
+    const thirdSweep = await admitSweep(repositories, first.id, key);
+    await expect(
+      repositories.snapshots.amendAndFinishFingerprintSweep(
+        stale.id,
+        [observation(alt, "fingerprint", "fingerprint")],
+        { ...thirdSweep, runId: first.id, limitationCode: null },
+        { resumeAfter: null, limitationCode: null, advanced: true }
+      )
+    ).resolves.toBeNull();
+
+    await expect(repositories.snapshots.find(stale.id)).resolves.toMatchObject({
+      characterCount: 1
+    });
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toMatchObject({
+      resumeAfter: JSON.stringify(["eu", "draenor", "live"]),
+      snapshotId: live.id,
+      runId: second.id
+    });
+  });
+
+  it("keeps a continuation's run complete when its admission is deferred", async () => {
+    // Break caught: a deferred admission reverted the run to `queued`, which a
+    // continuation's complete run can never satisfy, so the repository threw
+    // and the chain died exactly when the hourly budget was saturated.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "deferredroot"
+    } as const;
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const blockerRun = await repositories.runs.createOrReuse(
+      altKey,
+      "anonymous"
+    );
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const sweep = await admitSweep(repositories, run.id, key);
+    const published =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: at,
+          characters: [observation(key, "input")]
+        },
+        sweep,
+        {
+          resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+          limitationCode: null,
+          advanced: true
+        }
+      );
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "complete"
+    });
+
+    // Saturate the hourly budget so the continuation can only wait.
+    const blocker = await repositories.fingerprintSweeps.requestAdmission({
+      runId: blockerRun.id,
+      key: altKey,
+      requestCap: 3,
+      hourlyBudget: 3,
+      cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+      at
+    });
+    expect(blocker.kind).toBe("admitted");
+
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: run.id,
+        key,
+        requestCap: 1,
+        hourlyBudget: 3,
+        cadenceCutoff: new Date("2026-08-03T12:00:00.000Z"),
+        at,
+        continuation: true
+      })
+    ).resolves.toMatchObject({ kind: "waiting" });
+
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "complete",
+      snapshotId: published.id
+    });
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toMatchObject({ snapshotId: published.id, runId: run.id });
+  });
+
+  it("leaves a cursor it does not own alone when a reservation is finished", async () => {
+    // Break caught: `finish` cleared the resume columns unconditionally, so any
+    // caller finishing a reservation for this root would wipe a live chain.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "finishroot"
+    } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const first = await admitSweep(repositories, run.id, key);
+    const cursor = JSON.stringify(["eu", "draenor", "valadares"]);
+    await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: run.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      first,
+      { resumeAfter: cursor, limitationCode: null, advanced: true }
+    );
+
+    const second = await admitSweep(repositories, run.id, key);
+    await repositories.fingerprintSweeps.finish(second.reservationId, {
+      published: true,
+      at: new Date(),
+      limitationCode: null
+    });
+
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toMatchObject({ resumeAfter: cursor });
+  });
+
+  it("counts only continuation cycles that made no progress", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "failureroot"
+    } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const first = await admitSweep(repositories, run.id, key);
+    await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: run.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      first,
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "one"]),
+        limitationCode: null,
+        advanced: true
+      }
+    );
+
+    await expect(
+      repositories.fingerprintSweeps.recordContinuationFailure(key)
+    ).resolves.toBe(1);
+    await expect(
+      repositories.fingerprintSweeps.recordContinuationFailure(key)
+    ).resolves.toBe(2);
+
+    // A cycle that does not advance preserves the count...
+    const stalled = await admitSweep(repositories, run.id, key);
+    await repositories.snapshots.amendAndFinishFingerprintSweep(
+      (await repositories.fingerprintSweeps.getResumeState(key))!.snapshotId,
+      [],
+      { ...stalled, runId: run.id, limitationCode: "fingerprint_sweep_capped" },
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "one"]),
+        limitationCode: null,
+        advanced: false
+      }
+    );
+    await expect(
+      repositories.fingerprintSweeps.recordContinuationFailure(key)
+    ).resolves.toBe(3);
+
+    // ...and one that does advance clears it.
+    const advancing = await admitSweep(repositories, run.id, key);
+    await repositories.snapshots.amendAndFinishFingerprintSweep(
+      (await repositories.fingerprintSweeps.getResumeState(key))!.snapshotId,
+      [],
+      {
+        ...advancing,
+        runId: run.id,
+        limitationCode: "fingerprint_sweep_capped"
+      },
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "two"]),
+        limitationCode: null,
+        advanced: true
+      }
+    );
+    await expect(
+      repositories.fingerprintSweeps.recordContinuationFailure(key)
+    ).resolves.toBe(1);
   });
 
   it("avoids deadlocks for overlapping snapshots with inverse display order", async () => {

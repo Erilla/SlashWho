@@ -866,9 +866,17 @@ async function finishFingerprintSweep(
     published: boolean;
     at: Date;
     limitationCode: string | null;
-    resumeAfter: string | null;
-    resumeLimitationCode: string | null;
-    resumeSnapshotId: string | null;
+    /**
+     * Omitted by a caller that has no claim on the sweep cursor. The resume
+     * columns are then left exactly as they are, so finishing one reservation
+     * cannot wipe a cursor belonging to a chain it knows nothing about.
+     */
+    cursor?: {
+      resumeAfter: string | null;
+      resumeLimitationCode: string | null;
+      resumeSnapshotId: string | null;
+      advanced: boolean;
+    };
   }
 ): Promise<void> {
   const reservation = await client.query<{
@@ -898,32 +906,53 @@ async function finishFingerprintSweep(
      WHERE id = $1`,
     [row.admission_id]
   );
-  if (input.published) {
+  if (!input.published) return;
+  const cursor = input.cursor;
+  if (!cursor) {
     await client.query(
       `INSERT INTO fingerprint_sweep_states
-        (region, realm_slug, normalized_name, last_published_at,
-         resume_after, resume_limitation_code, resume_snapshot_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+        (region, realm_slug, normalized_name, last_published_at)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (region, realm_slug, normalized_name)
        DO UPDATE SET
          last_published_at = greatest(
            fingerprint_sweep_states.last_published_at,
            EXCLUDED.last_published_at
-         ),
-         resume_after = EXCLUDED.resume_after,
-         resume_limitation_code = EXCLUDED.resume_limitation_code,
-         resume_snapshot_id = EXCLUDED.resume_snapshot_id`,
-      [
-        row.region,
-        row.realm_slug,
-        row.normalized_name,
-        input.at,
-        input.resumeAfter,
-        input.resumeLimitationCode,
-        input.resumeSnapshotId
-      ]
+         )`,
+      [row.region, row.realm_slug, row.normalized_name, input.at]
     );
+    return;
   }
+  await client.query(
+    `INSERT INTO fingerprint_sweep_states
+      (region, realm_slug, normalized_name, last_published_at,
+       resume_after, resume_limitation_code, resume_snapshot_id,
+       continuation_failures)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+     ON CONFLICT (region, realm_slug, normalized_name)
+     DO UPDATE SET
+       last_published_at = greatest(
+         fingerprint_sweep_states.last_published_at,
+         EXCLUDED.last_published_at
+       ),
+       resume_after = EXCLUDED.resume_after,
+       resume_limitation_code = EXCLUDED.resume_limitation_code,
+       resume_snapshot_id = EXCLUDED.resume_snapshot_id,
+       continuation_failures = CASE
+         WHEN $8 THEN 0
+         ELSE fingerprint_sweep_states.continuation_failures
+       END`,
+    [
+      row.region,
+      row.realm_slug,
+      row.normalized_name,
+      input.at,
+      cursor.resumeAfter,
+      cursor.resumeLimitationCode,
+      cursor.resumeSnapshotId,
+      cursor.advanced
+    ]
+  );
 }
 
 async function requireUpdated(
@@ -1408,10 +1437,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             published: true,
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
-            resumeAfter: cursor.resumeAfter,
-            resumeLimitationCode:
-              cursor.resumeAfter === null ? null : cursor.limitationCode,
-            resumeSnapshotId: cursor.resumeAfter === null ? null : snapshot.id
+            cursor: {
+              resumeAfter: cursor.resumeAfter,
+              resumeLimitationCode:
+                cursor.resumeAfter === null ? null : cursor.limitationCode,
+              resumeSnapshotId:
+                cursor.resumeAfter === null ? null : snapshot.id,
+              advanced: cursor.advanced
+            }
           });
           options?.signal?.throwIfAborted();
           await client.query("COMMIT");
@@ -1443,16 +1476,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             region: CharacterKey["region"];
             realm_slug: string;
             normalized_name: string;
-            next_order: number;
           }>(
-            `SELECT root.region, root.realm_slug, root.normalized_name,
-                    COALESCE(MAX(membership.display_order) + 1, 0) AS next_order
+            `SELECT root.region, root.realm_slug, root.normalized_name
              FROM snapshots snapshot
              JOIN characters root ON root.id = snapshot.root_character_id
-             LEFT JOIN snapshot_characters membership
-               ON membership.snapshot_id = snapshot.id
-             WHERE snapshot.id = $1
-             GROUP BY root.region, root.realm_slug, root.normalized_name`,
+             WHERE snapshot.id = $1`,
             [snapshotId]
           );
           const rootRow = rootResult.rows[0];
@@ -1463,6 +1491,45 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             name: rootRow.normalized_name
           });
           await lockFingerprintSweeps(client);
+
+          // Ownership, re-read under the root lock and before any write: a
+          // fresh refresh for this root publishes its own snapshot and resets
+          // the cursor, which makes this continuation's snapshot dead. Amending
+          // it anyway would extend an orphan and, worse, overwrite the live
+          // chain's cursor with this one's. Abort instead, touching neither the
+          // snapshot nor the state row.
+          const ownership = await client.query<{
+            resume_snapshot_id: string | null;
+            discovery_run_id: string | null;
+          }>(
+            `SELECT state.resume_snapshot_id, snapshot.discovery_run_id
+             FROM fingerprint_sweep_states state
+             LEFT JOIN snapshots snapshot
+               ON snapshot.id = state.resume_snapshot_id
+             WHERE state.region = $1
+               AND state.realm_slug = $2
+               AND state.normalized_name = $3`,
+            [rootRow.region, rootRow.realm_slug, rootRow.normalized_name]
+          );
+          const owner = ownership.rows[0];
+          if (
+            !owner ||
+            owner.resume_snapshot_id !== snapshotId ||
+            owner.discovery_run_id !== fingerprint.runId
+          ) {
+            await client.query("ROLLBACK");
+            return null;
+          }
+
+          const orderResult = await client.query<{ next_order: number }>(
+            // Read under the lock: a concurrent amend that committed between
+            // the snapshot lookup and the lock would otherwise hand this one a
+            // stale `display_order` to reuse.
+            `SELECT COALESCE(MAX(display_order) + 1, 0) AS next_order
+             FROM snapshot_characters
+             WHERE snapshot_id = $1`,
+            [snapshotId]
+          );
 
           const existing = await client.query<{
             region: string;
@@ -1482,7 +1549,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             )
           );
 
-          let displayOrder = Number(rootRow.next_order);
+          let displayOrder = Number(orderResult.rows[0]!.next_order);
           let appended = 0;
           for (const character of characters) {
             const id = `${character.key.region}/${character.key.realm}/${character.key.name}`;
@@ -1554,10 +1621,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             published: true,
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
-            resumeAfter: cursor.resumeAfter,
-            resumeLimitationCode:
-              cursor.resumeAfter === null ? null : cursor.limitationCode,
-            resumeSnapshotId: cursor.resumeAfter === null ? null : snapshotId
+            cursor: {
+              resumeAfter: cursor.resumeAfter,
+              resumeLimitationCode:
+                cursor.resumeAfter === null ? null : cursor.limitationCode,
+              resumeSnapshotId: cursor.resumeAfter === null ? null : snapshotId,
+              advanced: cursor.advanced
+            }
           });
 
           const snapshot = await loadSnapshot(client, snapshotId);
@@ -2069,7 +2139,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             input.at,
             input.continuation ? admissionId : undefined
           );
-          if (result.kind === "waiting") {
+          // A continuation's run was completed by cycle 1 and must stay
+          // complete: it has already published its snapshot, and reverting it
+          // to `queued` both fails (no row matches) and would lie about a
+          // finished dossier. Deferral for a continuation is carried entirely
+          // by the re-enqueued admission job, not by the run's status.
+          if (result.kind === "waiting" && !input.continuation) {
             const deferred = await client.query(
               `UPDATE discovery_runs
                SET status = 'queued', attempt = greatest(attempt - 1, 0),
@@ -2137,12 +2212,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           await lockFingerprintSweeps(client);
-          await finishFingerprintSweep(client, reservationId, {
-            ...input,
-            resumeAfter: null,
-            resumeLimitationCode: null,
-            resumeSnapshotId: null
-          });
+          // No cursor argument: this caller finishes a reservation without any
+          // knowledge of the sweep chain, so it must not clear a cursor it does
+          // not own. Only the create/amend paths, which computed the cursor
+          // themselves, may write those columns.
+          await finishFingerprintSweep(client, reservationId, input);
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -2189,19 +2263,42 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           resume_after: string | null;
           resume_limitation_code: string | null;
           resume_snapshot_id: string | null;
+          discovery_run_id: string | null;
         }>(
-          `SELECT resume_after, resume_limitation_code, resume_snapshot_id
-           FROM fingerprint_sweep_states
-           WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          `SELECT state.resume_after, state.resume_limitation_code,
+                  state.resume_snapshot_id, snapshot.discovery_run_id
+           FROM fingerprint_sweep_states state
+           LEFT JOIN snapshots snapshot
+             ON snapshot.id = state.resume_snapshot_id
+           WHERE state.region = $1
+             AND state.realm_slug = $2
+             AND state.normalized_name = $3`,
           [key.region, key.realm, key.name]
         );
         const row = result.rows[0];
+        // `discovery_run_id` names the only run allowed to continue this chain.
+        // Without it the cursor points at nothing amendable, so it reads as no
+        // cursor at all rather than as a continuation nobody owns.
         if (!row?.resume_after || !row.resume_snapshot_id) return null;
+        if (!row.discovery_run_id) return null;
         return {
           resumeAfter: row.resume_after,
           snapshotId: row.resume_snapshot_id,
+          runId: row.discovery_run_id,
           limitationCode: row.resume_limitation_code
         };
+      },
+
+      async recordContinuationFailure(key) {
+        const result = await pool.query<{ continuation_failures: number }>(
+          `UPDATE fingerprint_sweep_states
+           SET continuation_failures = continuation_failures + 1
+           WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+           RETURNING continuation_failures`,
+          [key.region, key.realm, key.name]
+        );
+        // No state row means no cursor to be stuck on, so nothing to bound.
+        return Number(result.rows[0]?.continuation_failures ?? 0);
       },
 
       async listWaiting(limit, offset = 0) {
