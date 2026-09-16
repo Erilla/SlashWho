@@ -53,12 +53,40 @@ tail, so every roster candidate is eventually fingerprinted.
 
 ### Mechanism
 
-Continuation rides the existing fingerprint-admission re-enqueue path rather
-than introducing a job type. When a sweep is deferred today, the handler calls
+Continuation rides the existing fingerprint-admission re-enqueue path and the
+existing discovery queue. When a sweep is deferred today, the handler calls
 `enqueueFingerprintAdmission(runId)` and the poller in
-`apps/worker/src/runtime.ts:276` re-dispatches it. A continuation is the same
-shape: the run stays alive, is re-admitted through the ordinary gate, and
-resumes from a persisted cursor.
+`apps/worker/src/runtime.ts:276` re-dispatches an ordinary discovery job for
+that run.
+
+That path cannot be reused unchanged. Publishing in cycle 1 completes the run
+(`createSnapshot` sets `discovery_runs.status = 'complete'`,
+`postgres-repositories.ts:1340`), and `execute()` returns immediately for a
+completed run (`discovery-job-handler.ts:274`), so a re-dispatched cycle 2 would
+silently do nothing. The existing deferral only works because it returns
+*before* publishing, keeping the run active across the gap.
+
+Leaving the run active until the chain seals was rejected: `getCurrent` requires
+`run.status = 'complete'` (`postgres-repositories.ts:1400`), so the dossier would
+show nothing until the whole roster was swept, which is the deferred-publication
+behaviour this design exists to avoid.
+
+Instead the job payload marks the continuation. `DiscoverCharacterJob` gains one
+optional field, and `execute()` branches on it before the completed-run guard:
+
+```ts
+type DiscoverCharacterJob = {
+  runId: string;
+  key: CharacterKey;
+  enqueuedAt: string;
+  continuation?: true;          // new
+};
+```
+
+A continuation skips the completed-run guard and skips `discoverCharacter`
+entirely, going straight to the sweep with the stored cursor. Skipping
+re-discovery is not merely an optimisation: re-running the full Raider.IO sweep
+each cycle would burn budget and race the amend.
 
 ```
 discoverFingerprintMatches(root, gateway, {..., resumeAfter})
@@ -70,13 +98,18 @@ discoverFingerprintMatches(root, gateway, {..., resumeAfter})
         `- cap hit    -> { kind: "capped",  characters, requestsUsed,
                             resumeAfter: <last swept canonical id> }
 
-handler:
-  capped + resumeAfter present
-    |- amendAndFinishFingerprintSweep(snapshotId, characters, cursor)
-    |- release reservation
-    `- enqueueFingerprintAdmission(runId)
-  matched (roster exhausted)
-    `- amend and seal: cursor cleared
+handler execute(runId, ctx, job):
+  job.continuation
+    |- skip completed-run guard, skip discoverCharacter
+    `- load cursor from fingerprint_sweep_states, sweep, amend
+
+  sweep capped, resumeAfter present
+    |- cycle 1: createAndFinishFingerprintSweep (publishes, completes run)
+    |  cycle n: amendAndFinishFingerprintSweep(snapshotId, characters, cursor)
+    |- persist cursor + resume_snapshot_id
+    `- enqueueFingerprintAdmission(runId)   -> dispatches with continuation: true
+  sweep matched (roster exhausted)
+    `- publish or amend, then seal: cursor cleared
 ```
 
 Cycle 1 publishes the snapshot exactly as it does today, so the dossier is not
@@ -133,6 +166,18 @@ any candidate is swept: the roster fetch and the root fingerprint each return
 cursor unchanged, so the next cycle retries the same range rather than skipping
 it.
 
+### Queue
+
+`packages/database/src/queue.ts`. `DiscoverCharacterJob` gains `continuation?:
+true`. The singleton key must change: it is currently `payload.runId`
+(`queue.ts:249`), so a continuation would collide with the completed cycle-1 job
+for the same run and be dropped. It becomes `runId` for an ordinary job and
+`${runId}:continuation` for a continuation, keeping the existing dedupe
+behaviour within each kind.
+
+`dispatchAdmittedFingerprintRun` (`apps/worker/src/runtime.ts:265`) sets
+`continuation: true` when the run's sweep state carries a cursor.
+
 ### Schema
 
 `packages/database/drizzle/0018_fingerprint_sweep_cursor.sql`, extending
@@ -178,6 +223,8 @@ characters unwritten.
 | `maxJobLifetimeMs` reached mid-chain | Existing behaviour: the run fails and is retryable. The cursor persists, so a retry resumes rather than restarting. |
 | Continuation admitted but budget exhausted | Existing `waiting` path; cursor untouched. |
 | Budget exhausted before the first candidate | `capped` with no `resumeAfter`; cursor left unchanged so the next cycle retries the same range. |
+| Continuation dispatched for a run with no cursor | Sweep state carries no `resume_after`; dispatch omits `continuation`, and the completed-run guard makes it a no-op as today. |
+| Continuation job enqueued twice | Singleton key `${runId}:continuation` dedupes it, as `runId` does for ordinary jobs. |
 
 ## Testing
 
@@ -201,8 +248,10 @@ Test-driven, following the existing suites.
   ordering stops being a defect and becomes the property that makes the cursor
   stable. No change.
 - **Root fingerprint caching across cycles.** See per-cycle overhead above.
-- **A dedicated continuation job type.** The admission re-enqueue path already
-  carries this.
+- **A dedicated continuation queue or run lifecycle.** The existing discovery
+  queue and admission re-enqueue path carry this, with one optional payload flag
+  and a scoped singleton key. Giving continuations their own discovery run was
+  considered and rejected as a second run/snapshot relationship to maintain.
 - **`FINGERPRINT_MAX_CONTINUATIONS`.** The 30-minute run lifetime
   (`discovery-job-handler.ts:225`) already bounds the chain. A guild large enough
   to exhaust it produces a visible, retryable truncation instead of today's
