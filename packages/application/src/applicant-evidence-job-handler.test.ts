@@ -363,6 +363,38 @@ describe("applicant evidence job handler", () => {
     );
   });
 
+  it("reads only the most recent reports for a light refresh", async () => {
+    // Break caught: a manual refresh inside its cooldown must still look for a
+    // new raid night, but re-scanning a whole history would spend the same
+    // rate-limited budget as a full collection.
+    const evidence = store();
+    const getFirstKillReports = vi.fn(async () => ({
+      kind: "evidence" as const,
+      kills: [],
+      wipes: []
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports } as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports"
+      >,
+      requestCap: 500,
+      parseRequestCap: 8,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(
+      { runId: run.id, mode: "light" },
+      { attempt: 1, maxAttempts: 5, signal: new AbortController().signal }
+    );
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({ requestCap: 1 })
+    );
+  });
+
   it("passes the character's known class to the gateway", async () => {
     // Break caught: Warcraft Logs omits a class on its ranks, so without this
     // the four specialisation names shared by two classes resolve to no icon.

@@ -212,7 +212,7 @@ describe("DossierPageClient staged research", () => {
     expect(heading).toHaveTextContent("Ryii<Rancour>");
     expect(heading).not.toHaveTextContent(/silvermoon|draenor/i);
     expect(
-      heading.parentElement?.querySelector(".identity-meta")
+      heading.closest("header")?.querySelector(".identity-meta")
     ).toHaveTextContent("EU · silvermoon");
   });
 

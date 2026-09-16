@@ -77,6 +77,7 @@ function fixture(
     wipeCapable?: boolean;
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
+    evidenceCompletedAt?: Date;
     gatheringCharacter?: CharacterKey | null;
     onCacheEvent?: (source: string, event: string) => void;
   } = {}
@@ -146,7 +147,7 @@ function fixture(
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
           startedAt: new Date("2026-09-11T12:00:00.000Z"),
-          completedAt: new Date()
+          completedAt: options.evidenceCompletedAt ?? new Date()
         },
         completed: {
           run: {
@@ -162,7 +163,7 @@ function fixture(
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
-            completedAt: new Date()
+            completedAt: options.evidenceCompletedAt ?? new Date()
           },
           kills: [
             ...(options.includeCachedKills === false ? [] : cachedKills),
@@ -1005,6 +1006,22 @@ describe("applicant dossier service", () => {
     ).resolves.toBe(active);
     expect(search.create).toHaveBeenCalledTimes(1);
     expect(runsCreate).not.toHaveBeenCalled();
+  });
+
+  it("reports when the dossier's evidence was last collected", async () => {
+    // Break caught: the refresh control shows how stale a dossier is and
+    // chooses its own mode from the same value, so the reader can tell why a
+    // press did a light refresh rather than a full one.
+    const { dossiers } = fixture({
+      evidenceCompletedAt: new Date("2026-09-16T09:30:00.000Z")
+    });
+
+    const result = await dossiers.read(root);
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: { lastCollectedAt: "2026-09-16T09:30:00.000Z" }
+    });
   });
 
   it("assembles current snapshot evidence from the durable cache without calling Warcraft Logs", async () => {
