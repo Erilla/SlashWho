@@ -18,7 +18,7 @@ export async function POST(
   _request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_refresh", async () => {
+  return withHttpRequest("dossier_refresh", async (scope) => {
     let character: ReturnType<typeof parseCharacterRoute>;
     try {
       character = parseCharacterRoute(await context.params);
@@ -27,7 +27,7 @@ export async function POST(
     }
     if (!character.canonical) return apiError("invalid_character_url");
     const { dossiers } = await getContainer();
-    const result = await dossiers.refreshCharacter(character.key);
+    const result = await dossiers.refreshCharacter(character.key, scope);
     return Response.json(
       dossierRefreshResponseSchema.parse({
         mode: result.mode,

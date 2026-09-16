@@ -1,6 +1,8 @@
 import type { Repositories, DiscoveryQueue } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 
+import { measuredRepositories } from "./measured-repositories";
+import type { MeasurementScope } from "./measurement";
 import { refreshMode, type RefreshMode } from "./refresh-mode";
 
 export type RefreshCharacterResult = Readonly<{
@@ -24,14 +26,24 @@ export async function refreshCharacter(options: {
   cooldownMs: number;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  /**
+   * Refresh is the one path a reader can trigger collection from, so its
+   * database work is measured like every other endpoint's rather than leaving
+   * the load it causes invisible in the logs.
+   */
+  scope?: MeasurementScope;
 }): Promise<RefreshCharacterResult> {
-  const completed = await options.repositories.evidence.getCompleted(
-    options.key
-  );
+  const evidence = options.scope
+    ? measuredRepositories(
+        { evidence: options.repositories.evidence },
+        options.scope
+      ).evidence
+    : options.repositories.evidence;
+  const completed = await evidence.getCompleted(options.key);
   const lastCollectedAt = completed?.run.completedAt ?? null;
   const mode = refreshMode(lastCollectedAt, options.at, options.cooldownMs);
 
-  const reservation = await options.repositories.evidence.reserve({
+  const reservation = await evidence.reserve({
     key: options.key,
     freshnessCutoff: options.at,
     at: options.at
@@ -41,10 +53,7 @@ export async function refreshCharacter(options: {
       reservation.run.id,
       { enqueuedAt: options.at.toISOString(), mode }
     );
-    await options.repositories.evidence.markEnqueued(
-      reservation.run.id,
-      queueJobId
-    );
+    await evidence.markEnqueued(reservation.run.id, queueJobId);
   }
   return { mode, lastCollectedAt };
 }

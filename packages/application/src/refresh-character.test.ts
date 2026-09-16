@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createMeasurementScope } from "./measurement";
 import { refreshCharacter } from "./refresh-character";
 
 const key = { region: "eu" as const, realm: "silvermoon", name: "ryii" };
@@ -73,6 +74,32 @@ describe("refreshCharacter", () => {
     await expect(h.run()).resolves.toMatchObject({
       lastCollectedAt: lastCompletedAt
     });
+  });
+
+  it("measures the database work it does", async () => {
+    // Break caught: refresh is the one path a reader can trigger collection
+    // from, so an unmeasured one leaves the load it causes invisible in the
+    // logs while every other endpoint reports its breakdown.
+    const h = harness(new Date("2026-09-16T11:00:00.000Z"));
+    let ticks = 0;
+    const scope = createMeasurementScope(() => (ticks += 5));
+
+    await refreshCharacter({
+      key,
+      at,
+      cooldownMs,
+      scope,
+      repositories: {
+        evidence: {
+          reserve: h.reserve,
+          getCompleted: h.getCompleted,
+          markEnqueued: h.markEnqueued
+        }
+      } as never,
+      queue: { enqueueCharacterEvidence: h.enqueueCharacterEvidence } as never
+    });
+
+    expect(scope.totals()).toMatchObject({ dbCalls: 3 });
   });
 
   it("joins a collection already running rather than queuing a second", async () => {
