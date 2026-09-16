@@ -90,6 +90,15 @@ const partiallyExpanded = dossier(
   "Additional linked characters may exist; this dossier is not exhaustive.",
   "Partial evidence"
 );
+// Rancour is a Draenor guild while Ryii is on Silvermoon, so this fixture also
+// pins that the heading never invents a realm suffix for the guild.
+const guilded: ApplicantDossier = {
+  ...expanded,
+  characters: expanded.characters.map((character) => ({
+    ...character,
+    guild: { name: "Rancour", region: "eu" as const, realm: "draenor" }
+  }))
+};
 const rateLimited = {
   ...expanded,
   limitations: [
@@ -170,6 +179,95 @@ describe("DossierPageClient staged research", () => {
     });
     expect(badge).toHaveTextContent("RyiiEU · silvermoon");
     expect(headerSlot).toContainElement(badge);
+  });
+
+  it("names the guild in the heading, as the tab title already does", () => {
+    // Break caught: the tab read "Ryii <Rancour> @ Silvermoon" while the <h1>
+    // read "Ryii" alone, which reads as a bug rather than a choice.
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={guilded}
+        jobId={null}
+      />
+    );
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent("Ryii<Rancour>");
+    expect(document.title).toBe("Ryii <Rancour> @ Silvermoon · Who");
+  });
+
+  it("keeps the realm out of the heading, and off the guild", () => {
+    // Break caught: the realm already sits on the .identity-meta line beneath,
+    // and Rancour is a Draenor guild, so a realm suffix there would be false.
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={guilded}
+        jobId={null}
+      />
+    );
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent("Ryii<Rancour>");
+    expect(heading).not.toHaveTextContent(/silvermoon|draenor/i);
+    expect(
+      heading.parentElement?.querySelector(".identity-meta")
+    ).toHaveTextContent("EU · silvermoon");
+  });
+
+  it("names the guild in the header identity badge too", async () => {
+    // Break caught: the badge is the same subject-of-the-page identity as the
+    // <h1>, so leaving it alone would keep one place the guild goes missing.
+    const headerSlot = document.createElement("div");
+    headerSlot.id = headerIdentitySlotId;
+    document.body.append(headerSlot);
+
+    let observe: ((entries: IntersectionObserverEntry[]) => void) | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: (entries: IntersectionObserverEntry[]) => void) {
+          observe = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={guilded}
+        jobId={null}
+      />
+    );
+    act(() =>
+      observe?.([{ isIntersecting: false } as IntersectionObserverEntry])
+    );
+
+    const badge = await screen.findByRole("status", {
+      name: "Current character"
+    });
+    expect(badge).toHaveTextContent("Ryii<Rancour>EU · silvermoon");
+  });
+
+  it("leaves the guild off the names inline in kill rows", () => {
+    // Break caught: flipping DossierCharacterName's showGuild default instead of
+    // passing it at the two heading call sites would bury the evidence beside
+    // every inline mention. This is the regression that default exists to stop.
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={guilded}
+        jobId={null}
+      />
+    );
+
+    const killRow = document.querySelector(".dossier-boss-first-kill");
+    expect(killRow).not.toBeNull();
+    expect(killRow).toHaveTextContent("Ryii");
+    expect(killRow).not.toHaveTextContent("Rancour");
   });
 
   it("shows a loading indicator while applicant research is in progress", () => {
