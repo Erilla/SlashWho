@@ -73,6 +73,11 @@ function runtimeFakes() {
   const admittedFingerprintRuns = new Set<string>();
   const admittedUndispatchedFingerprintRuns: string[] = [];
   const dispatchedFingerprintRuns: string[] = [];
+  let resumeState: {
+    resumeAfter: string;
+    snapshotId: string;
+    limitationCode: string | null;
+  } | null = null;
   const queue: DiscoveryQueue = {
     async start() {
       queueReady = true;
@@ -181,6 +186,9 @@ function runtimeFakes() {
         const index = admittedUndispatchedFingerprintRuns.indexOf(runId);
         if (index >= 0) admittedUndispatchedFingerprintRuns.splice(index, 1);
       },
+      async getResumeState() {
+        return resumeState;
+      },
       cleanupExpired: cleanup.fingerprintRequests
     }
   } as unknown as Repositories;
@@ -220,6 +228,9 @@ function runtimeFakes() {
     admittedFingerprintRuns,
     admittedUndispatchedFingerprintRuns,
     dispatchedFingerprintRuns,
+    setResumeState: (state: typeof resumeState) => {
+      resumeState = state;
+    },
     queue,
     get connectionAttempts() {
       return connectionAttempts;
@@ -502,17 +513,16 @@ describe("worker runtime", () => {
       maxAttempts: 5,
       signal: new AbortController().signal
     };
-    await fakes.workHandler?.(
-      {
-        runId: "00000000-0000-4000-8000-000000000003",
-        key: { region: "eu", realm: "silvermoon", name: "private-value" }
-      },
-      context
-    );
+    const payload = {
+      runId: "00000000-0000-4000-8000-000000000003",
+      key: { region: "eu" as const, realm: "silvermoon", name: "private-value" }
+    };
+    await fakes.workHandler?.(payload, context);
 
     expect(fakes.handler.execute).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000003",
-      context
+      context,
+      payload
     );
     await runtime.stop();
   });
@@ -530,15 +540,17 @@ describe("worker runtime", () => {
       maxAttempts: 5,
       signal: new AbortController().signal
     };
-    await fakes.workHandler?.(
-      {
-        runId: "00000000-0000-4000-8000-000000000004",
-        key: { region: "eu", realm: "silvermoon", name: "private-value" },
-        correlationId: "corr-4",
-        enqueuedAt: "2026-08-05T08:00:00.000Z"
+    const payload = {
+      runId: "00000000-0000-4000-8000-000000000004",
+      key: {
+        region: "eu" as const,
+        realm: "silvermoon",
+        name: "private-value"
       },
-      context
-    );
+      correlationId: "corr-4",
+      enqueuedAt: "2026-08-05T08:00:00.000Z"
+    };
+    await fakes.workHandler?.(payload, context);
 
     expect(fakes.handler.execute).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000004",
@@ -546,7 +558,8 @@ describe("worker runtime", () => {
         ...context,
         correlationId: "corr-4",
         enqueuedAt: "2026-08-05T08:00:00.000Z"
-      }
+      },
+      payload
     );
     await runtime.stop();
   });
@@ -689,6 +702,127 @@ describe("worker runtime", () => {
       { runId, key, enqueuedAt: expect.any(String) }
     ]);
     expect(fakes.dispatchedFingerprintRuns).toEqual([runId]);
+    await runtime.stop();
+  });
+
+  it("dispatches a run with a stored cursor as a continuation", async () => {
+    // Break caught: a resumed sweep could re-dispatch as an ordinary job,
+    // sending the handler down the fresh-start path instead of resuming from
+    // its stored cursor.
+    const fakes = runtimeFakes();
+    const runId = "00000000-0000-4000-8000-000000000015";
+    const key = {
+      region: "eu" as const,
+      realm: "draenor",
+      name: "valadares"
+    };
+    fakes.admittedUndispatchedFingerprintRuns.push(runId);
+    fakes.repositories.runs = {
+      async find(id: string) {
+        return id === runId
+          ? {
+              id: runId,
+              rootKey: key,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "anonymous" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          : null;
+      }
+    } as Repositories["runs"];
+    fakes.setResumeState({
+      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+      snapshotId: "snapshot-1",
+      limitationCode: null
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.enqueued).toEqual([
+      expect.objectContaining({ runId, continuation: true })
+    ]);
+    await runtime.stop();
+  });
+
+  it("dispatches a run with no cursor as an ordinary job", async () => {
+    // Break caught: every admitted dispatch could be marked as a continuation
+    // regardless of whether a cursor exists, sending fresh sweeps down the
+    // resume path they have no state for.
+    const fakes = runtimeFakes();
+    const runId = "00000000-0000-4000-8000-000000000016";
+    const key = {
+      region: "eu" as const,
+      realm: "silvermoon",
+      name: "fresh"
+    };
+    fakes.admittedUndispatchedFingerprintRuns.push(runId);
+    fakes.repositories.runs = {
+      async find(id: string) {
+        return id === runId
+          ? {
+              id: runId,
+              rootKey: key,
+              rootCharacterId: null,
+              queueJobId: null,
+              status: "queued" as const,
+              callerClass: "anonymous" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          : null;
+      }
+    } as Repositories["runs"];
+    fakes.setResumeState(null);
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.enqueued[0]).not.toHaveProperty("continuation");
+    await runtime.stop();
+  });
+
+  it("threads the job payload through to the discovery handler", async () => {
+    // Break caught: the worker could stop passing the job payload to the
+    // handler, leaving a resumed handler with no cursor to resume from even
+    // though the queue dispatched it as a continuation.
+    const fakes = runtimeFakes();
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    const payload = {
+      runId: "00000000-0000-4000-8000-000000000017",
+      key: { region: "eu" as const, realm: "draenor", name: "valadares" },
+      enqueuedAt: "2026-09-13T12:00:00.000Z",
+      continuation: true as const
+    };
+    const context = {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    };
+
+    await fakes.workHandler?.(payload, context);
+
+    expect(fakes.handler.execute).toHaveBeenCalledWith(
+      payload.runId,
+      {
+        ...context,
+        correlationId: undefined,
+        enqueuedAt: payload.enqueuedAt
+      },
+      payload
+    );
     await runtime.stop();
   });
 
