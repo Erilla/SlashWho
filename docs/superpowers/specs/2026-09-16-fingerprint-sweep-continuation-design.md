@@ -194,6 +194,21 @@ ALTER TABLE fingerprint_sweep_states
 `ON DELETE SET NULL` degrades a continuation into a no-op rather than an FK
 error if the snapshot is reaped.
 
+### Admission
+
+`requestAdmission` refuses a continuation as written. `finishFingerprintSweep`
+sets `fingerprint_sweep_states.last_published_at` on publication
+(`postgres-repositories.ts:888`), and `requestAdmission` returns `not_due` when
+that timestamp is newer than `cadenceCutoff`
+(`postgres-repositories.ts:1824`). Cycle 1 publishes, so cycle 2 would be
+refused for the whole `FINGERPRINT_SWEEP_CADENCE_HOURS` window.
+
+`requestAdmission` therefore takes `continuation?: true` and skips the cadence
+branch when set. The gate exists to stop the same root being re-swept too often;
+a continuation is finishing the sweep already in progress, not starting a new
+one. Every other gate — the hourly budget, the waiting queue, reservation
+accounting — still applies unchanged.
+
 ### Repository
 
 `packages/database/src/repositories.ts`, mirroring the existing
@@ -208,6 +223,11 @@ amendAndFinishFingerprintSweep(
   options?: { signal?: AbortSignal }
 ): Promise<StoredSnapshot>;
 ```
+
+`createAndFinishFingerprintSweep` gains the same `cursor` parameter, so cycle 1
+persists its cursor in the transaction that publishes the snapshot. Both write
+the cursor through `finishFingerprintSweep`, which already upserts
+`fingerprint_sweep_states` on publication.
 
 One transaction, matching the atomicity contract of the existing create-and-finish
 call, so a crash mid-cycle cannot leave the reservation finished with the
