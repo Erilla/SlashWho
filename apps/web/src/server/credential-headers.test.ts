@@ -94,6 +94,47 @@ describe("readCredentialOverrides", () => {
     }
   });
 
+  it("prefers a visitor's Raider.IO key over the server's configured key", async () => {
+    // Break caught: a visitor who supplies their own key could still spend the
+    // server's rate-limit budget, defeating the point of visitor-supplied
+    // credentials. The visitor key wins; the server key is only the fallback.
+    const configWithServerKey = loadWebConfig({
+      DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
+      BOT_API_KEY: "b".repeat(32),
+      RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+      BLIZZARD_CLIENT_ID: "blizzard-client-id",
+      BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
+      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64),
+      RAIDER_IO_ACCESS_KEY: "server-key"
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ name: "Ryii" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    try {
+      // The client captures globalThis.fetch at construction, so the stub has
+      // to be in place before the override is built.
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+      const headers = new Headers({ "x-raiderio-access-key": "visitor-key" });
+      const overrides = readCredentialOverrides(headers, configWithServerKey);
+
+      await overrides
+        .raiderio!.getCharacter({
+          region: "eu",
+          realm: "silvermoon",
+          name: "ryii"
+        })
+        .catch(() => undefined);
+
+      const url = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
+      expect(url.searchParams.get("access_key")).toBe("visitor-key");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("returns WCL credentials as plain data, not a gateway", () => {
     // Break caught: WCL credentials could be built into a gateway here even
     // though only the worker (Task 7) has the decrypted values it needs.

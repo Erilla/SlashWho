@@ -315,3 +315,96 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
     retryAfterMs: null
   });
 });
+
+it.each([
+  { raiderIoAccessKey: "server-key", expected: "server-key" },
+  { raiderIoAccessKey: undefined, expected: undefined }
+])(
+  "threads the configured Raider.IO access key into the shared gateway (%j)",
+  async ({ raiderIoAccessKey, expected }) => {
+    // Break caught: the server key could be parsed from the environment and
+    // then never reach the client, leaving the shared gateway anonymous; or an
+    // absent key could be forwarded as an empty access_key parameter.
+    const pool = {
+      async query() {
+        return {};
+      },
+      async end() {}
+    };
+    const queue = {
+      async start() {},
+      async enqueue() {
+        return "54f14e37-7df7-43db-91d5-21e797d1d145";
+      },
+      async enqueueFingerprintAdmission() {
+        return "54f14e37-7df7-43db-91d5-21e797d1d145";
+      },
+      async enqueueCharacterEvidence() {
+        return "54f14e37-7df7-43db-91d5-21e797d1d145";
+      },
+      async work() {},
+      async workFingerprintAdmissions() {},
+      async workCharacterEvidence() {},
+      async scheduleMaintenanceCleanup() {},
+      async stop() {},
+      isReady() {
+        return true;
+      }
+    } satisfies DiscoveryQueue;
+    let capturedAccessKey: string | undefined;
+    let sawAccessKeyProperty = false;
+
+    await createWebContainer(
+      {
+        databaseUrl: "postgresql://db/slashwho",
+        application: {
+          BOT_API_KEY: "b".repeat(32),
+          RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+          ANONYMOUS_SEARCHES_PER_HOUR: 10,
+          BOT_SEARCHES_PER_HOUR: 60,
+          PUBLIC_READS_PER_MINUTE: 300,
+          FRESHNESS_HOURS: 24,
+          DOSSIER_CHARACTER_CAP: 12,
+          DOSSIER_PROVIDER_CONCURRENCY: 4
+        },
+        dossier: {
+          raiderIoBaseUrl: "https://raider.io",
+          raiderIoTimeoutMs: 10_000,
+          raiderIoAccessKey,
+          blizzardClientId: "blizzard-client-id",
+          blizzardClientSecret: "blizzard-client-secret",
+          evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
+        }
+      },
+      {
+        createPool() {
+          return pool;
+        },
+        async runMigrations() {},
+        createRepositories() {
+          return {} as Repositories;
+        },
+        createQueue() {
+          return queue;
+        },
+        createSearchService() {
+          return {} as never;
+        },
+        createRaiderIoGateway(options) {
+          sawAccessKeyProperty = "accessKey" in options;
+          capturedAccessKey = options.accessKey;
+          return {} as never;
+        },
+        createBlizzardGateway() {
+          return {} as never;
+        },
+        createApplicantDossierService() {
+          return {} as never;
+        }
+      }
+    );
+
+    expect(sawAccessKeyProperty).toBe(true);
+    expect(capturedAccessKey).toBe(expected);
+  }
+);

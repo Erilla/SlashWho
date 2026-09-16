@@ -19,6 +19,7 @@ import type { WorkerConfig } from "./config";
 import {
   createFingerprintAlertNotifier,
   createFingerprintIntegration,
+  createRaiderIoGateway,
   createWorkerRuntime
 } from "./runtime";
 
@@ -998,5 +999,55 @@ describe("worker runtime", () => {
       timeoutMs: 12_345
     });
     expect(fakes.ended).toBe(true);
+  });
+});
+
+describe("createRaiderIoGateway", () => {
+  function jsonFetchMock() {
+    return vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ name: "Sentinel" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })
+    );
+  }
+
+  it("sends the configured access key on the worker's own requests", async () => {
+    // Break caught: the worker could parse a server key and never attach it,
+    // leaving discovery sweeps on the anonymous rate limit.
+    const fetchMock = jsonFetchMock();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = createRaiderIoGateway({
+        ...config,
+        raiderIoAccessKey: "server-key"
+      });
+      await gateway
+        .getCharacter({ region: "eu", realm: "silvermoon", name: "sentinel" })
+        .catch(() => undefined);
+
+      const url = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
+      expect(url.searchParams.get("access_key")).toBe("server-key");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("sends no access_key parameter when no key is configured", async () => {
+    // Break caught: an unset key could be attached as an empty parameter,
+    // breaking anonymous access for local dev and contributors without a key.
+    const fetchMock = jsonFetchMock();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = createRaiderIoGateway(config);
+      await gateway
+        .getCharacter({ region: "eu", realm: "silvermoon", name: "sentinel" })
+        .catch(() => undefined);
+
+      const url = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
+      expect(url.searchParams.has("access_key")).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

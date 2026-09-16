@@ -136,23 +136,35 @@ export function createFingerprintAlertNotifier(
   };
 }
 
+/**
+ * The worker's own Raider.IO client. It carries the server-configured access
+ * key when one is set, and is anonymous when it is not — there is no visitor
+ * on this path to supply a key of their own.
+ */
+export function createRaiderIoGateway(
+  config: WorkerConfig,
+  logger?: DiscoveryLogger
+): RaiderIoGateway {
+  return createRaiderIoClient({
+    fetch: globalThis.fetch,
+    baseUrl: config.raiderIoBaseUrl,
+    timeoutMs: config.raiderIoTimeoutMs,
+    accessKey: config.raiderIoAccessKey,
+    onThrottle: (event) =>
+      logger?.info({
+        event: "upstream_throttle",
+        provider: "raiderio",
+        retryAfterMs: event.retryAfterMs ?? null
+      })
+  });
+}
+
 const defaultDependencies: WorkerRuntimeDependencies = {
   createPool: (connectionString) => new Pool({ connectionString }),
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
-  createGateway: (config, logger) =>
-    createRaiderIoClient({
-      fetch: globalThis.fetch,
-      baseUrl: config.raiderIoBaseUrl,
-      timeoutMs: config.raiderIoTimeoutMs,
-      onThrottle: (event) =>
-        logger?.info({
-          event: "upstream_throttle",
-          provider: "raiderio",
-          retryAfterMs: event.retryAfterMs ?? null
-        })
-    }),
+  createGateway: createRaiderIoGateway,
   createEvidenceGateway: (config, logger) =>
     createWarcraftLogsClient({
       fetch: globalThis.fetch,
