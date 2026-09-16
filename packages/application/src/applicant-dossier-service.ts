@@ -691,9 +691,21 @@ async function assembleDossier(options: {
 const DOSSIER_CACHE_TTL_MS = 15 * 60_000;
 const RANKING_KEYS_PER_DOSSIER = 25;
 const ACHIEVEMENT_KEYS_PER_DOSSIER = 10;
-// 40 buys headroom for the `web` replicas this sizing is meant to survive:
-// replicas are process-local, so each one holds its own cache and two of them
-// halve the concurrency a single instance covers.
+// The multiple is the number of concurrent cold reads of distinct rosters that
+// fit inside the 15-minute window before entries start evicting each other.
+//
+// Replicas are not what this covers. Each `web` replica holds its own
+// process-local cache, so replication splits traffic across instances rather
+// than crowding one -- it costs hit rate, because every replica cold-loads the
+// same keys independently, not capacity per instance.
+//
+// This also sets each cache's in-flight ceiling, since `createBoundedCache`
+// rejects a load once `pending.size` reaches `maxEntries`. That is a far
+// backstop at these sizes rather than the operative limit: ranking loads are
+// admitted by `providerConcurrency` before they reach the cache, so a read has
+// at most `DOSSIER_PROVIDER_CONCURRENCY` in flight, and achievement loads are
+// gathered one character at a time. Parallelising that gather (#241) raises
+// the achievement cache's in-flight count per read and should re-check this.
 const CONCURRENT_COLD_DOSSIERS = 40;
 
 // Maps a bounded cache's per-call outcome onto the requesting scope's own
