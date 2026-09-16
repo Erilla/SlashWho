@@ -549,7 +549,7 @@ describe("discovery job handler", () => {
         reservationId: "reservation-1",
         limitationCode: null
       }),
-      expect.any(Object),
+      { resumeAfter: null, limitationCode: null },
       expect.any(Object)
     );
   });
@@ -601,7 +601,7 @@ describe("discovery job handler", () => {
         reservationId: "reservation-capped",
         limitationCode: "fingerprint_sweep_capped"
       }),
-      expect.any(Object),
+      { resumeAfter: null, limitationCode: null },
       expect.any(Object)
     );
   });
