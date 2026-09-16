@@ -378,28 +378,28 @@ a {
   white-space: nowrap;
 }
 
-.dossier-heading > .profile-links {
+/* Descendant rather than direct child: the links now sit inside the heading's
+   actions column. */
+.dossier-heading .profile-links {
   flex: none;
   margin-left: 0;
 }
 
-/* The name and its refresh control share a row, so how stale the evidence is
-   reads next to the character it belongs to rather than at the page edge. */
-.dossier-identity-row {
+/* The refresh control sits under the profile links, right-aligned with them,
+   so the heading reads as name on the left and actions on the right rather
+   than crowding the guild name. */
+.dossier-heading-actions {
+  flex: none;
   display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.dossier-identity-row > h1 {
-  margin: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.6rem;
 }
 
 .dossier-refresh {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 0.25rem;
 }
 

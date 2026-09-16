@@ -500,24 +500,11 @@ export function DossierPageClient({
         <header className="dossier-heading">
           <div ref={identityRef}>
             <p className="eyebrow">Applicant dossier</p>
-            <div className="dossier-identity-row">
-              <h1>
-                <span className="dossier-character-name-line">
-                  <DossierCharacterName character={identity} showGuild />
-                </span>
-              </h1>
-              <DossierRefreshControl
-                lastCollectedAt={dossier?.lastCollectedAt ?? null}
-                onRefresh={async () => {
-                  const response = await fetch(
-                    `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
-                    { method: "POST" }
-                  );
-                  if (!response.ok) throw new Error("refresh_failed");
-                  return (await response.json()) as { mode: "full" | "light" };
-                }}
-              />
-            </div>
+            <h1>
+              <span className="dossier-character-name-line">
+                <DossierCharacterName character={identity} showGuild />
+              </span>
+            </h1>
             <p className="identity-meta">
               {identity.region.toUpperCase()} · {identity.realm}
             </p>
@@ -531,9 +518,22 @@ export function DossierPageClient({
               ) : null
             )}
           </div>
-          <CharacterProfileLinks
-            character={{ key: identity, displayName: rootDisplayName }}
-          />
+          <div className="dossier-heading-actions">
+            <CharacterProfileLinks
+              character={{ key: identity, displayName: rootDisplayName }}
+            />
+            <DossierRefreshControl
+              lastCollectedAt={dossier?.lastCollectedAt ?? null}
+              onRefresh={async () => {
+                const response = await fetch(
+                  `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
+                  { method: "POST" }
+                );
+                if (!response.ok) throw new Error("refresh_failed");
+                return (await response.json()) as { mode: "full" | "light" };
+              }}
+            />
+          </div>
         </header>
         {identityHidden && identitySlot
           ? createPortal(identityBadge, identitySlot)
