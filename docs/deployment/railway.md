@@ -84,7 +84,10 @@ WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
 EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the web service's value>
 EVIDENCE_REQUEST_CAP=500
 # Per-cycle cap, not a per-guild limit: a sweep that reaches it resumes from a
-# stored cursor on a follow-up cycle until the roster is exhausted.
+# stored cursor on a follow-up cycle until the roster is exhausted. Known
+# limitation: a continued cycle does not re-apply the first cycle's
+# tournament-profile exclusions, so a later cycle can re-introduce a tournament
+# character the first cycle filtered out.
 BLIZZARD_SWEEP_REQUEST_CAP=300
 BLIZZARD_HOURLY_REQUEST_BUDGET=28800
 FINGERPRINT_MINIMUM_COMMON=200
