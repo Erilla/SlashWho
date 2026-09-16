@@ -523,6 +523,7 @@ export function DossierPageClient({
               character={{ key: identity, displayName: rootDisplayName }}
             />
             <DossierRefreshControl
+              busy={dossier?.research.state === "gathering"}
               lastCollectedAt={dossier?.lastCollectedAt ?? null}
               onRefresh={async () => {
                 const response = await fetch(
