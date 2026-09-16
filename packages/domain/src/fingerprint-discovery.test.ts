@@ -369,6 +369,34 @@ describe("discoverFingerprintMatches", () => {
     ]);
   });
 
+  it("resumes using localeCompare ordering, not code-point ordering", async () => {
+    // "é" (0xE9) sorts after "f" (0x66) by code point but before it under
+    // localeCompare, matching compareCandidates. A resume filter using plain
+    // `>` would treat a cursor on "é" as greater than "f" and drop "f"
+    // forever; the filter must agree with the sort so nothing is skipped.
+    const accented: CharacterKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "é"
+    };
+    const f: CharacterKey = { region: "eu", realm: "silvermoon", name: "f" };
+    const gateway = gatewayFor([candidate(accented), candidate(f)], {
+      [keyId(root)]: fingerprint(300),
+      [keyId(accented)]: fingerprint(300),
+      [keyId(f)]: fingerprint(300)
+    });
+
+    const outcome = await discoverFingerprintMatches(root, gateway, {
+      ...options,
+      requestCap: 10,
+      resumeAfter: JSON.stringify(["eu", "silvermoon", "é"])
+    });
+
+    expect(outcome.kind).toBe("matched");
+    if (outcome.kind !== "matched") return;
+    expect(outcome.characters.map((match) => match.key.name)).toEqual(["f"]);
+  });
+
   it("advances the cursor past a candidate with no achievement profile", async () => {
     const missing: CharacterKey = {
       region: "eu",
