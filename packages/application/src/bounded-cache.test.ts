@@ -184,12 +184,168 @@ it("counts a negative entry against capacity and evicts it in turn", async () =>
 
   await expect(cache("a", load)).rejects.toThrow("unavailable");
   await cache("b", async () => 2);
-  // "a" is the oldest of two entries and still within its negative TTL.
-  await expect(cache("a", load)).rejects.toThrow("unavailable");
-  expect(calls).toBe(1);
-
-  // A third key pushes the negative entry out, exactly as it would a value.
+  // Never read again, the negative entry is the least recently used of the
+  // two, so a third key pushes it out exactly as it would a value.
   await cache("c", async () => 3);
+
   await expect(cache("a", load)).rejects.toThrow("unavailable");
   expect(calls).toBe(2);
+  // "b" and "c" occupied the two slots, so the negative entry really was the
+  // one evicted rather than simply having expired.
+  expect(await cache("c", async () => 99)).toBe(3);
+});
+
+it("keeps a negative entry in LRU recency order like any other entry", async () => {
+  // #242 x #243: a negative entry must take part in recency, not just in
+  // sizing. A remembered failure that is read every time must outlive a value
+  // that is not, or the read path re-probes exactly the lookup it remembered.
+  let calls = 0;
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 2,
+    negativeTtlMs: 10_000,
+    cacheFailure: () => true
+  });
+  const load = async () => {
+    calls += 1;
+    throw new Error("unavailable");
+  };
+
+  await expect(cache("hot", load)).rejects.toThrow("unavailable");
+  await cache("cold", async () => 2);
+  // Replaying the negative entry promotes it, making "cold" least recent.
+  await expect(cache("hot", load)).rejects.toThrow("unavailable");
+
+  await cache("newest", async () => 3);
+
+  // "cold" was evicted; the negative entry survived on recency.
+  await expect(cache("hot", load)).rejects.toThrow("unavailable");
+  expect(calls).toBe(1);
+  expect(await cache("cold", async () => 4)).toBe(4);
+});
+
+it("evicts the least recently read entry rather than the oldest inserted", async () => {
+  // Break caught: FIFO eviction drops a boss every dossier looks up as
+  // readily as one looked up once, so a working set larger than
+  // `maxEntries` evicts exactly the entries most worth keeping.
+  const cache = createBoundedCache<number>({ ttlMs: 10_000, maxEntries: 2 });
+  await cache("hot", async () => 1);
+  await cache("cold", async () => 2);
+  // Reading "hot" again makes "cold" the least recently used entry.
+  expect(await cache("hot", async () => 99)).toBe(1);
+
+  await cache("newest", async () => 3);
+
+  expect(await cache("hot", async () => 99)).toBe(1);
+  expect(await cache("cold", async () => 4)).toBe(4);
+});
+
+it("does not extend an entry's TTL when a read hits it", async () => {
+  // Break caught: re-inserting on hit to maintain recency order could
+  // re-stamp `expiresAt`, so a hot key would never expire and would serve
+  // indefinitely stale upstream data instead of re-fetching on schedule.
+  let clock = 0;
+  const cache = createBoundedCache<number>({
+    ttlMs: 10,
+    maxEntries: 2,
+    now: () => clock
+  });
+  expect(await cache("a", async () => 1)).toBe(1);
+  clock = 9;
+  expect(await cache("a", async () => 2)).toBe(1);
+
+  clock = 10;
+
+  expect(await cache("a", async () => 3)).toBe(3);
+});
+
+it("reads the clock once per lookup rather than once per stored entry", async () => {
+  // Break caught: sweeping every entry on every lookup, with the clock read
+  // inside the loop, costs a full map traversal and one `Date.now()` per
+  // stored entry per lookup — tens of thousands of clock reads per dossier.
+  const clock = vi.fn(() => 0);
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 50,
+    now: clock
+  });
+  for (let index = 0; index < 20; index += 1) {
+    await cache(`key-${index}`, async () => index);
+  }
+  clock.mockClear();
+
+  expect(await cache("key-0", async () => -1)).toBe(0);
+
+  expect(clock).toHaveBeenCalledTimes(1);
+});
+
+it("reloads an expired entry in place rather than evicting a live one", async () => {
+  // Break caught: moving the unconditional `entries.delete(key)` inside the
+  // live branch looks like a simplification, but then an expired entry is
+  // still occupying a slot when its reload stores. Capacity eviction fires
+  // and takes the head -- a live entry -- while `Map.set` rewrites the
+  // expired key in place, so the cache loses a good entry to refresh a dead
+  // one.
+  let clock = 0;
+  const cache = createBoundedCache<string>({
+    ttlMs: 10,
+    maxEntries: 2,
+    now: () => clock
+  });
+  await cache("stale", async () => "stale-1");
+  clock = 5;
+  await cache("live", async () => "live-1");
+  clock = 6;
+  // Promote "stale" so the live entry, not the expiring one, sits at the head.
+  expect(await cache("stale", async () => "unused")).toBe("stale-1");
+
+  clock = 12;
+  expect(await cache("stale", async () => "stale-2")).toBe("stale-2");
+
+  expect(await cache("live", async () => "live-2")).toBe("live-1");
+});
+
+it("reports a read of an expired entry as a miss rather than a hit", async () => {
+  // Break caught: expiry moved from a sweep to a check on the entry being
+  // read, so the expired-read path is the one whose control flow changed;
+  // callers' hit/miss accounting must not shift with it.
+  const events = vi.fn();
+  let clock = 0;
+  const cache = createBoundedCache<number>({
+    ttlMs: 10,
+    maxEntries: 2,
+    now: () => clock,
+    observe: events
+  });
+  await cache("a", async () => 1);
+  events.mockClear();
+
+  clock = 10;
+  expect(await cache("a", async () => 2)).toBe(2);
+
+  expect(events).toHaveBeenCalledWith("miss");
+  expect(events).not.toHaveBeenCalledWith("hit");
+});
+
+it("reads the clock a bounded number of times when an expired entry reloads", async () => {
+  // Break caught: the hit path alone would not notice a sweep reintroduced
+  // on the miss/expired path, which is where the old per-entry clock read
+  // cost the most.
+  let clock = 0;
+  const reads = vi.fn(() => clock);
+  const cache = createBoundedCache<number>({
+    ttlMs: 10,
+    maxEntries: 50,
+    now: reads
+  });
+  for (let index = 0; index < 20; index += 1) {
+    await cache(`key-${index}`, async () => index);
+  }
+  clock = 10;
+  reads.mockClear();
+
+  expect(await cache("key-0", async () => -1)).toBe(-1);
+
+  // One read for the expiry check, one to stamp the reloaded entry.
+  expect(reads).toHaveBeenCalledTimes(2);
 });

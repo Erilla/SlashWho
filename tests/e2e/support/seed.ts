@@ -12,6 +12,11 @@ type SeedCharacter = Readonly<{
   displayName: string;
   className: string;
   level: number;
+  guild?: Readonly<{
+    name: string;
+    region: CharacterKey["region"];
+    realm: string;
+  }> | null;
 }>;
 
 type SeedSnapshotInput = Readonly<{
@@ -67,7 +72,7 @@ export async function seedSnapshot(
       refreshedAt: input.refreshedAt,
       characters: characters.map((character, index) => ({
         ...character,
-        guild: null,
+        guild: character.guild ?? null,
         raiderIoUrl: toRaiderIoUrl(character.key),
         source: index === 0 ? "input" : "claimed"
       }))

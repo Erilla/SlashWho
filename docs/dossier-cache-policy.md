@@ -7,12 +7,12 @@ characters included; shared per-character evidence remains reusable within its
 own freshness window. This preserves the domain rule that dossiers are views,
 not stored records.
 
-| Source                                                             | Storage                                 | Freshness and bound                                                                                        |
-| ------------------------------------------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Warcraft Logs normalized kills, parse states, and safe limitations | PostgreSQL, per character               | `FRESHNESS_HOURS` (24 hours by default); one active scan per character; terminal runs retained for 30 days |
-| Blizzard Cutting Edge completions                                  | Web-process memory, per character       | 15 minutes after success; 1,000 entries and at most 1,000 pending loads                                    |
-| Raider.IO guild boss rankings                                      | Web-process memory, per raid/boss query | 15 minutes after success; 256 entries and at most 256 pending loads                                        |
-| Blizzard and Warcraft Logs OAuth tokens                            | Owning process memory                   | Provider expiry minus 60 seconds; one shared token refresh                                                 |
+| Source                                                             | Storage                                 | Freshness and bound                                                                                           |
+| ------------------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Warcraft Logs normalized kills, parse states, and safe limitations | PostgreSQL, per character               | `FRESHNESS_HOURS` (24 hours by default); one active scan per character; terminal runs retained for 30 days    |
+| Blizzard Cutting Edge completions                                  | Web-process memory, per character       | Served 15 minutes after success, held until re-read or evicted; 400 entries and at most 400 pending loads     |
+| Raider.IO guild boss rankings                                      | Web-process memory, per raid/boss query | Served 15 minutes after success, held until re-read or evicted; 1,000 entries and at most 1,000 pending loads |
+| Blizzard and Warcraft Logs OAuth tokens                            | Owning process memory                   | Provider expiry minus 60 seconds; one shared token refresh                                                    |
 
 Only catalogue-recognized Cutting Edge IDs and completion dates enter the
 achievement cache. Full achievement responses and discovery fingerprints are
@@ -44,9 +44,22 @@ observations in that environment, not defaults, guarantees, or a cost formula.
 
 Concurrent reads of a key share a promise. Independent browser cancellation
 does not cancel the shared upstream request, which has a 15-second timeout.
-Expired memory entries are discarded on the next cache access; oldest entries
-are evicted at capacity. Restarting a process clears its cache. Replicas each
-have their own memory cache; only WCL scan reservations coordinate across them.
+An expired memory entry is discarded when that entry is next read; the lookup
+path does not sweep the whole cache. At capacity the least recently read entry
+is evicted, so a boss every dossier looks up survives while one looked up once
+does not displace it. A read hit does not extend an entry's freshness window:
+its 15 minutes run from the load, so a hot key still re-fetches on schedule.
+Restarting a process clears its cache. Replicas each have their own memory
+cache, so each one cold-loads the same keys independently; only WCL scan
+reservations coordinate across them.
+
+Both memory caches are sized the same way, as one dossier's measured working
+set times 40 concurrent cold reads of distinct rosters inside the 15-minute
+window: ~25 ranking keys per dossier gives 1,000 entries, and ~10 achievement
+keys gives 400. An expired value stays resident until that key is read again
+or eviction reaches it, so the 15 minutes bound how long a value is _served_,
+not how long it is _held_; the entry count remains the bound on what a process
+retains.
 
 Failed achievement/ranking loads are not cached as empty successful results.
 The achievement panel explains that newly earned achievements may take up to
@@ -73,5 +86,6 @@ never character names, URLs, payloads or credentials. WCL run status and
 completed timestamps remain queryable in the evidence tables.
 
 Verification covers repeated and concurrent reads, TTL expiry, failed refresh,
-snapshot membership changes, bounded memory eviction, shared token refresh,
-concurrent database reservations, atomic publication and retention cascading.
+snapshot membership changes, least-recently-used memory eviction, shared token
+refresh, concurrent database reservations, atomic publication and retention
+cascading.

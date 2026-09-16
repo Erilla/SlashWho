@@ -2,15 +2,29 @@ export type BoundedCacheOutcome =
   "hit" | "miss" | "shared" | "failure" | "capacity";
 
 /**
- * A stored entry is either a loaded value or a remembered rejection. Both are
- * held in the same map, so a negative entry ages out, counts against
- * `maxEntries`, and is evicted on exactly the same terms as a value.
+ * A stored entry is either a loaded value or a remembered rejection. Both live
+ * in the same map, so a negative entry takes part in LRU recency, counts
+ * against `maxEntries`, and is evicted on exactly the same terms as a value.
  */
 type CacheEntry<T> =
   | { kind: "value"; value: T; expiresAt: number }
   | { kind: "failure"; error: unknown; expiresAt: number };
 
-/** Process-local normalized data only. Pending entries are never evicted. */
+/**
+ * Process-local normalized data only. Pending entries are never evicted.
+ *
+ * Eviction is least-recently-used: a read hit re-inserts its entry so `Map`
+ * insertion order is recency order, and eviction drops the entry at the head.
+ * A boss every dossier looks up therefore survives, while one looked up once
+ * does not displace it. The re-insert carries `expiresAt` over unchanged --
+ * an entry's TTL runs from its load, so a hot key still expires and re-fetches
+ * on schedule rather than living forever.
+ *
+ * Expiry is checked lazily, on the entry actually being read. There is no
+ * sweep of the whole map on the lookup path: LRU eviction is what bounds
+ * memory, and a sweep per lookup cost a full traversal plus one clock read
+ * per stored entry.
+ */
 export function createBoundedCache<T>(options: {
   ttlMs: number;
   maxEntries: number;
@@ -53,17 +67,18 @@ export function createBoundedCache<T>(options: {
       }
       entries.set(key, entry);
     };
-    for (const [storedKey, entry] of entries) {
-      if (entry.expiresAt <= now()) entries.delete(storedKey);
-    }
     const entry = entries.get(key);
     if (entry) {
-      // A replayed rejection is a hit: it cost no upstream call. Reporting it
-      // as a repeat `failure` would make the failure counters grow precisely
-      // when the cache is doing its job.
-      emit("hit");
-      if (entry.kind === "failure") throw entry.error;
-      return entry.value;
+      entries.delete(key);
+      if (entry.expiresAt > now()) {
+        entries.set(key, entry);
+        // A replayed rejection is a hit: it cost no upstream call. Reporting
+        // it as a repeat `failure` would make the failure counters grow
+        // precisely when the cache is doing its job.
+        emit("hit");
+        if (entry.kind === "failure") throw entry.error;
+        return entry.value;
+      }
     }
     const active = pending.get(key);
     if (active) {

@@ -572,3 +572,127 @@ test("keeps the scrolled header identity clear of the header search", async ({
     expect(geometry.width).toBeGreaterThan(0);
   }
 });
+
+test("keeps the source pill intact beside a long guild name", async ({
+  page
+}) => {
+  // Break caught: the connected-characters row was already an exact fit before
+  // guilds were shown beside the name, so a long guild tipped it over and the
+  // clipped panel cut the source pill off the row's right edge.
+  const key = { region: "eu", realm: "silvermoon", name: "guilded" } as const;
+  // The long guild belongs on a connected character, not the root: only a
+  // non-root row carries the upstream icon links, and it is that row — icons
+  // plus pill plus guild — that the report measured overflowing. The third row
+  // pairs the same guild with a long name, past the width any track can give,
+  // to pin down how the row degrades once it genuinely runs out of room.
+  const guild = {
+    name: "Echoes of Eternity",
+    region: "eu" as const,
+    realm: "silvermoon"
+  };
+  const characters = [
+    {
+      key,
+      displayName: "Guilded",
+      className: "Mage",
+      level: 80,
+      guild: null
+    },
+    {
+      key: { region: "eu" as const, realm: "silvermoon", name: "riln" },
+      displayName: "Riln",
+      className: "Mage",
+      level: 79,
+      guild
+    },
+    {
+      key: { region: "eu" as const, realm: "silvermoon", name: "guildedalt" },
+      displayName: "Guildedalt",
+      className: "Mage",
+      level: 78,
+      guild
+    }
+  ];
+  await seedSnapshot({
+    key,
+    displayName: "Guilded",
+    refreshedAt: new Date(),
+    characters
+  });
+  await Promise.all(
+    characters.map((character) =>
+      seedCharacterEvidence(character.key, { withSampleKills: false })
+    )
+  );
+
+  await page.goto("/dossiers/eu/silvermoon/guilded");
+  const rows = page.locator(".dossier-character-row");
+  await expect(rows).toHaveCount(3);
+
+  const rowGeometry = () =>
+    rows.evaluateAll((elements) =>
+      elements.map((element) => {
+        const guild = element.querySelector(".dossier-character-guild");
+        const pill = element.querySelector(".source-badge")!;
+        const list = element.closest<HTMLElement>(".dossier-character-list")!;
+        const pillBounds = pill.getBoundingClientRect();
+        const listBounds = list.getBoundingClientRect();
+        return {
+          overflow: element.scrollWidth - element.clientWidth,
+          guildText: guild?.textContent ?? null,
+          guildTruncated: guild
+            ? guild.scrollWidth > guild.clientWidth + 1
+            : false,
+          // The panel clips its overflow, so the pill is only genuinely
+          // readable inside the list's own box, not merely inside the row.
+          pillClipped:
+            pillBounds.right > listBounds.right + 1 ||
+            pillBounds.left < listBounds.left - 1,
+          pillWidth: pillBounds.width
+        };
+      })
+    );
+
+  // Desktop: the reported row shows the full guild and the full pill, with no
+  // row overflow. A row with no guild is untouched.
+  await page.setViewportSize({ width: 1855, height: 900 });
+  const desktop = await rowGeometry();
+  expect(desktop[0].guildText).toBeNull();
+  expect(desktop[1].guildText).toBe("<Echoes of Eternity>");
+  expect(desktop[1].guildTruncated).toBe(false);
+  // The long-named row cannot fit both, and the guild is what gives way: it
+  // truncates to an ellipsis while the pill beside it stays whole.
+  expect(desktop[2].guildTruncated).toBe(true);
+  for (const row of desktop) {
+    expect(row.overflow).toBeLessThanOrEqual(0);
+    expect(row.pillClipped).toBe(false);
+    expect(row.pillWidth).toBeGreaterThan(0);
+  }
+
+  // The width for the guild comes out of the gap, not the evidence column,
+  // which measured 743.6px before the fix and must stay within a few px of it.
+  const evidenceWidth = await page
+    .getByRole("region", { name: "Historic Cutting Edge" })
+    .evaluate((element) => element.getBoundingClientRect().width);
+  expect(evidenceWidth).toBeGreaterThan(735);
+
+  // Narrower, where the left track is on its floor and widening cannot help:
+  // the pill is still never clipped, and the guild gives way instead.
+  for (const width of [780, 820, 900, 1024, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const row of await rowGeometry()) {
+      expect({ width, overflowing: row.overflow > 0 }).toEqual({
+        width,
+        overflowing: false
+      });
+      expect({ width, clipped: row.pillClipped }).toEqual({
+        width,
+        clipped: false
+      });
+      expect({ width, pillCollapsed: row.pillWidth <= 0 }).toEqual({
+        width,
+        pillCollapsed: false
+      });
+    }
+  }
+});
