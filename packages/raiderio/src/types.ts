@@ -83,6 +83,13 @@ export type MythicBossRankingsResult =
       kind: "limitation";
       code: RaiderIoEvidenceLimitation;
       retryAfterMs?: number;
+      /**
+       * When the limitation was actually observed, as an ISO timestamp. Set by
+       * the dossier gateway so a replayed (negatively cached) limitation is
+       * reported with the age of the failure that produced it rather than the
+       * time it was replayed.
+       */
+      observedAt?: string;
     };
 
 export interface RaiderIoGateway {

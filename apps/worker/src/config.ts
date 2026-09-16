@@ -1,4 +1,7 @@
-import { parseEncryptionKey } from "@slashwho/application";
+import {
+  parseEncryptionKey,
+  parseNegativeCacheTtlMs
+} from "@slashwho/application";
 
 export type WorkerConfig = {
   databaseUrl: string;
@@ -149,10 +152,9 @@ export function loadWorkerConfig(
       40,
       "invalid_discovery_request_cap"
     ),
-    negativeCacheTtlMs: positiveInteger(
-      environment.NEGATIVE_CACHE_TTL_MS,
-      300_000,
-      "invalid_negative_cache_ttl"
+    // Shared with the dossier read path — see parseNegativeCacheTtlMs.
+    negativeCacheTtlMs: parseNegativeCacheTtlMs(
+      environment.NEGATIVE_CACHE_TTL_MS
     ),
     raiderIoBaseUrl:
       environment.RAIDER_IO_BASE_URL?.trim() || "https://raider.io",

@@ -55,7 +55,8 @@ it("migrates and initializes the durable queue before serving searches", async (
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
         DOSSIER_CHARACTER_CAP: 12,
-        DOSSIER_PROVIDER_CONCURRENCY: 4
+        DOSSIER_PROVIDER_CONCURRENCY: 4,
+        NEGATIVE_CACHE_TTL_MS: 300_000
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
@@ -162,7 +163,8 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
         DOSSIER_CHARACTER_CAP: 12,
-        DOSSIER_PROVIDER_CONCURRENCY: 4
+        DOSSIER_PROVIDER_CONCURRENCY: 4,
+        NEGATIVE_CACHE_TTL_MS: 300_000
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
@@ -263,7 +265,8 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
         DOSSIER_CHARACTER_CAP: 12,
-        DOSSIER_PROVIDER_CONCURRENCY: 4
+        DOSSIER_PROVIDER_CONCURRENCY: 4,
+        NEGATIVE_CACHE_TTL_MS: 300_000
       },
       dossier: {
         raiderIoBaseUrl: "https://raider.io",
@@ -365,7 +368,8 @@ it.each([
           PUBLIC_READS_PER_MINUTE: 300,
           FRESHNESS_HOURS: 24,
           DOSSIER_CHARACTER_CAP: 12,
-          DOSSIER_PROVIDER_CONCURRENCY: 4
+          DOSSIER_PROVIDER_CONCURRENCY: 4,
+          NEGATIVE_CACHE_TTL_MS: 300_000
         },
         dossier: {
           raiderIoBaseUrl: "https://raider.io",

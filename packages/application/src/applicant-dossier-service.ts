@@ -620,7 +620,9 @@ async function enrichHistoricRanks(options: {
           source: "raiderio",
           character: null,
           code: result.code,
-          observedAt: new Date().toISOString(),
+          // A replayed negative-cache entry carries the timestamp of the
+          // failure that produced it, so it never looks fresher than it is.
+          observedAt: result.observedAt ?? new Date().toISOString(),
           ...(result.retryAfterMs === undefined
             ? {}
             : {
@@ -837,7 +839,18 @@ export function createApplicantDossierService(options: {
     Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
   >({
     ttlMs: DOSSIER_CACHE_TTL_MS,
+    // A negative entry occupies the slot its positive counterpart would have:
+    // it is keyed by the same `rankingKey`, so remembering failures adds no
+    // keys to the working set and the sizing above still holds.
     maxEntries: RANKING_KEYS_PER_DOSSIER * CONCURRENT_COLD_DOSSIERS,
+    negativeTtlMs: options.config.NEGATIVE_CACHE_TTL_MS,
+    // `unavailable` only. `not_found` and `private` are stable facts about the
+    // target and are already handled as such; `rate_limited` carries its own
+    // `retryAfterMs`, which a flat negative TTL would fight; and `schema_drift`
+    // is a signal we want to keep seeing at full volume rather than suppress.
+    cacheFailure: (error) =>
+      error instanceof RankingLookupFailure &&
+      error.result.code === "unavailable",
     observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
   });
   // A null cache is a visitor-supplied gateway: it keeps the shared timeout,
@@ -910,7 +923,13 @@ export function createApplicantDossierService(options: {
                 `failure_${response.code}`
               );
             }
-            throw new RankingLookupFailure(response);
+            // Stamped here, not where the limitation is serialised: an
+            // `unavailable` result may be replayed from the negative cache
+            // minutes later, and must keep the age of this observation.
+            throw new RankingLookupFailure({
+              ...response,
+              observedAt: new Date().toISOString()
+            });
           }
           return response;
         };

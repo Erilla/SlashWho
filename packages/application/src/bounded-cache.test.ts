@@ -76,6 +76,154 @@ it("notifies a per-call observer in addition to the constructor-level one", asyn
   expect(constructorEvents).toHaveBeenCalledWith("hit");
 });
 
+it("replays a remembered failure without re-running the load", async () => {
+  let now = 0;
+  let calls = 0;
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 4,
+    negativeTtlMs: 100,
+    cacheFailure: (error) => (error as Error).message === "unavailable",
+    now: () => now
+  });
+  const load = async () => {
+    calls += 1;
+    throw new Error("unavailable");
+  };
+
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+  expect(calls).toBe(1);
+
+  now = 100;
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+  expect(calls).toBe(2);
+});
+
+it("replays the original rejection value, not a fresh one", async () => {
+  const thrown: Error[] = [];
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 4,
+    negativeTtlMs: 100,
+    cacheFailure: () => true
+  });
+  // A new error object per call, so a replay that re-ran the load would hand
+  // back a different instance — which is what a stale timestamp would look like.
+  const load = async () => {
+    const failure = new Error("unavailable");
+    thrown.push(failure);
+    throw failure;
+  };
+
+  const first = await cache("a", load).catch((error: unknown) => error);
+  const replayed = await cache("a", load).catch((error: unknown) => error);
+
+  expect(thrown).toHaveLength(1);
+  expect(replayed).toBe(first);
+});
+
+it("remembers only the failures cacheFailure accepts", async () => {
+  const calls = { unavailable: 0, drift: 0 };
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 4,
+    negativeTtlMs: 100,
+    cacheFailure: (error) => (error as Error).message === "unavailable"
+  });
+  const unavailable = async () => {
+    calls.unavailable += 1;
+    throw new Error("unavailable");
+  };
+  const drift = async () => {
+    calls.drift += 1;
+    throw new Error("schema_drift");
+  };
+
+  await expect(cache("a", unavailable)).rejects.toThrow("unavailable");
+  await expect(cache("a", unavailable)).rejects.toThrow("unavailable");
+  await expect(cache("b", drift)).rejects.toThrow("schema_drift");
+  await expect(cache("b", drift)).rejects.toThrow("schema_drift");
+
+  expect(calls).toEqual({ unavailable: 1, drift: 2 });
+});
+
+it("reports a remembered failure as a hit, not a repeat failure", async () => {
+  const events = vi.fn();
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 4,
+    negativeTtlMs: 100,
+    cacheFailure: () => true,
+    observe: events
+  });
+  const load = async () => {
+    throw new Error("unavailable");
+  };
+
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+  events.mockClear();
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+
+  expect(events).toHaveBeenCalledWith("hit");
+  expect(events).not.toHaveBeenCalledWith("failure");
+});
+
+it("counts a negative entry against capacity and evicts it in turn", async () => {
+  let calls = 0;
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 2,
+    negativeTtlMs: 10_000,
+    cacheFailure: () => true
+  });
+  const load = async () => {
+    calls += 1;
+    throw new Error("unavailable");
+  };
+
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+  await cache("b", async () => 2);
+  // Never read again, the negative entry is the least recently used of the
+  // two, so a third key pushes it out exactly as it would a value.
+  await cache("c", async () => 3);
+
+  await expect(cache("a", load)).rejects.toThrow("unavailable");
+  expect(calls).toBe(2);
+  // "b" and "c" occupied the two slots, so the negative entry really was the
+  // one evicted rather than simply having expired.
+  expect(await cache("c", async () => 99)).toBe(3);
+});
+
+it("keeps a negative entry in LRU recency order like any other entry", async () => {
+  // #242 x #243: a negative entry must take part in recency, not just in
+  // sizing. A remembered failure that is read every time must outlive a value
+  // that is not, or the read path re-probes exactly the lookup it remembered.
+  let calls = 0;
+  const cache = createBoundedCache<number>({
+    ttlMs: 10_000,
+    maxEntries: 2,
+    negativeTtlMs: 10_000,
+    cacheFailure: () => true
+  });
+  const load = async () => {
+    calls += 1;
+    throw new Error("unavailable");
+  };
+
+  await expect(cache("hot", load)).rejects.toThrow("unavailable");
+  await cache("cold", async () => 2);
+  // Replaying the negative entry promotes it, making "cold" least recent.
+  await expect(cache("hot", load)).rejects.toThrow("unavailable");
+
+  await cache("newest", async () => 3);
+
+  // "cold" was evicted; the negative entry survived on recency.
+  await expect(cache("hot", load)).rejects.toThrow("unavailable");
+  expect(calls).toBe(1);
+  expect(await cache("cold", async () => 4)).toBe(4);
+});
+
 it("evicts the least recently read entry rather than the oldest inserted", async () => {
   // Break caught: FIFO eviction drops a boss every dossier looks up as
   // readily as one looked up once, so a working set larger than
