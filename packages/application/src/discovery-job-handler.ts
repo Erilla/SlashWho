@@ -510,6 +510,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       finishedAt: now(),
                       limitationCode
                     },
+                    { resumeAfter: null, limitationCode: null },
                     { signal: context.signal }
                   );
                   reservationActive = false;

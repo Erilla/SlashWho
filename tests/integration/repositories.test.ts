@@ -1166,7 +1166,8 @@ describe("PostgreSQL repositories", () => {
           reservationId: "00000000-0000-4000-8000-000000000999",
           finishedAt: new Date("2026-08-08T12:00:00.000Z"),
           limitationCode: null
-        }
+        },
+        { resumeAfter: null, limitationCode: null }
       )
     ).rejects.toThrow("fingerprint_reservation_not_active");
 
@@ -1216,7 +1217,8 @@ describe("PostgreSQL repositories", () => {
         reservationId: admission.reservationId,
         finishedAt: at,
         limitationCode: null
-      }
+      },
+      { resumeAfter: null, limitationCode: null }
     );
 
     expect(
@@ -1234,6 +1236,57 @@ describe("PostgreSQL repositories", () => {
         at: new Date("2026-08-08T12:01:00.000Z")
       })
     ).resolves.toEqual({ kind: "not_due" });
+  });
+
+  it("persists and clears the fingerprint sweep cursor", async () => {
+    const key = { region: "eu", realm: "silvermoon", name: "cursorroot" } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key,
+      requestCap: 10,
+      hourlyBudget: 100,
+      cadenceCutoff: new Date(Date.now() - 60_000),
+      at: new Date()
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+
+    const snapshot = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: run.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: new Date(),
+        characters: [observation(key, "input")]
+      },
+      {
+        reservationId: admission.reservationId,
+        finishedAt: new Date(),
+        limitationCode: "fingerprint_sweep_capped"
+      },
+      {
+        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+        limitationCode: "privacy_hidden"
+      }
+    );
+
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toEqual({
+      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+      snapshotId: snapshot.id,
+      limitationCode: "privacy_hidden"
+    });
+  });
+
+  it("returns no resume state when the cursor was never set", async () => {
+    const key = { region: "eu", realm: "silvermoon", name: "nocursor" } as const;
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toBeNull();
   });
 
   it("avoids deadlocks for overlapping snapshots with inverse display order", async () => {

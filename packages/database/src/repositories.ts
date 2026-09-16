@@ -75,6 +75,18 @@ export interface SnapshotHistoryPage {
   nextCursor: string | null;
 }
 
+export interface FingerprintSweepCursor {
+  /** Canonical id of the last candidate swept, or null to seal the sweep. */
+  resumeAfter: string | null;
+  /**
+   * The Raider.IO limitation observed by the run that started this sweep.
+   * `snapshots.limitation_code` is overwritten with `fingerprint_sweep_capped`
+   * while the chain runs, so this is the only surviving copy and it is what the
+   * sealing cycle restores.
+   */
+  limitationCode: string | null;
+}
+
 export interface SnapshotRepository {
   create(
     input: CreateSnapshotInput,
@@ -87,6 +99,7 @@ export interface SnapshotRepository {
       finishedAt: Date;
       limitationCode: string | null;
     },
+    cursor: FingerprintSweepCursor,
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
@@ -341,6 +354,11 @@ export interface FingerprintSweepRepository {
     input: { published: boolean; at: Date; limitationCode: string | null }
   ): Promise<void>;
   release(reservationId: string, at: Date): Promise<void>;
+  getResumeState(key: CharacterKey): Promise<{
+    resumeAfter: string;
+    snapshotId: string;
+    limitationCode: string | null;
+  } | null>;
   listWaiting(limit: number, offset?: number): Promise<readonly string[]>;
   listAdmittedUndispatched(limit: number): Promise<readonly string[]>;
   markDispatched(runId: string, at: Date): Promise<void>;

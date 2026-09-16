@@ -856,7 +856,14 @@ async function createSnapshot(
 async function finishFingerprintSweep(
   client: PoolClient,
   reservationId: string,
-  input: { published: boolean; at: Date; limitationCode: string | null }
+  input: {
+    published: boolean;
+    at: Date;
+    limitationCode: string | null;
+    resumeAfter: string | null;
+    resumeLimitationCode: string | null;
+    resumeSnapshotId: string | null;
+  }
 ): Promise<void> {
   const reservation = await client.query<{
     admission_id: string;
@@ -888,14 +895,27 @@ async function finishFingerprintSweep(
   if (input.published) {
     await client.query(
       `INSERT INTO fingerprint_sweep_states
-        (region, realm_slug, normalized_name, last_published_at)
-       VALUES ($1, $2, $3, $4)
+        (region, realm_slug, normalized_name, last_published_at,
+         resume_after, resume_limitation_code, resume_snapshot_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (region, realm_slug, normalized_name)
-       DO UPDATE SET last_published_at = greatest(
-         fingerprint_sweep_states.last_published_at,
-         EXCLUDED.last_published_at
-       )`,
-      [row.region, row.realm_slug, row.normalized_name, input.at]
+       DO UPDATE SET
+         last_published_at = greatest(
+           fingerprint_sweep_states.last_published_at,
+           EXCLUDED.last_published_at
+         ),
+         resume_after = EXCLUDED.resume_after,
+         resume_limitation_code = EXCLUDED.resume_limitation_code,
+         resume_snapshot_id = EXCLUDED.resume_snapshot_id`,
+      [
+        row.region,
+        row.realm_slug,
+        row.normalized_name,
+        input.at,
+        input.resumeAfter,
+        input.resumeLimitationCode,
+        input.resumeSnapshotId
+      ]
     );
   }
 }
@@ -1362,7 +1382,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
-      async createAndFinishFingerprintSweep(input, fingerprint, options) {
+      async createAndFinishFingerprintSweep(
+        input,
+        fingerprint,
+        cursor,
+        options
+      ) {
         if (Number.isNaN(fingerprint.finishedAt.valueOf())) {
           throw new RangeError("fingerprint_finish_time_invalid");
         }
@@ -1376,7 +1401,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await finishFingerprintSweep(client, fingerprint.reservationId, {
             published: true,
             at: fingerprint.finishedAt,
-            limitationCode: fingerprint.limitationCode
+            limitationCode: fingerprint.limitationCode,
+            resumeAfter: cursor.resumeAfter,
+            resumeLimitationCode:
+              cursor.resumeAfter === null ? null : cursor.limitationCode,
+            resumeSnapshotId: cursor.resumeAfter === null ? null : snapshot.id
           });
           options?.signal?.throwIfAborted();
           await client.query("COMMIT");
@@ -1951,7 +1980,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           await lockFingerprintSweeps(client);
-          await finishFingerprintSweep(client, reservationId, input);
+          await finishFingerprintSweep(client, reservationId, {
+            ...input,
+            resumeAfter: null,
+            resumeLimitationCode: null,
+            resumeSnapshotId: null
+          });
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -1991,6 +2025,26 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         } finally {
           client.release();
         }
+      },
+
+      async getResumeState(key) {
+        const result = await pool.query<{
+          resume_after: string | null;
+          resume_limitation_code: string | null;
+          resume_snapshot_id: string | null;
+        }>(
+          `SELECT resume_after, resume_limitation_code, resume_snapshot_id
+           FROM fingerprint_sweep_states
+           WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        const row = result.rows[0];
+        if (!row?.resume_after || !row.resume_snapshot_id) return null;
+        return {
+          resumeAfter: row.resume_after,
+          snapshotId: row.resume_snapshot_id,
+          limitationCode: row.resume_limitation_code
+        };
       },
 
       async listWaiting(limit, offset = 0) {

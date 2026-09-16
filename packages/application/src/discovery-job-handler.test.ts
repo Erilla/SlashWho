@@ -370,6 +370,9 @@ function createMemoryRepositories(): Repositories {
       async recordRequest() {},
       async finish() {},
       async release() {},
+      async getResumeState() {
+        return null;
+      },
       async listWaiting() {
         return [];
       },
@@ -546,6 +549,7 @@ describe("discovery job handler", () => {
         reservationId: "reservation-1",
         limitationCode: null
       }),
+      expect.any(Object),
       expect.any(Object)
     );
   });
@@ -597,6 +601,7 @@ describe("discovery job handler", () => {
         reservationId: "reservation-capped",
         limitationCode: "fingerprint_sweep_capped"
       }),
+      expect.any(Object),
       expect.any(Object)
     );
   });

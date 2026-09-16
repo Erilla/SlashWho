@@ -241,6 +241,9 @@ function policyFixture(
       async recordRequest() {},
       async finish() {},
       async release() {},
+      async getResumeState() {
+        return null;
+      },
       async listWaiting() {
         return [];
       },
