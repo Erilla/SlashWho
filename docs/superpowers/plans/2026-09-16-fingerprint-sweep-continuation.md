@@ -279,7 +279,13 @@ git commit -m "feat: return a resume cursor when a fingerprint sweep caps"
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `fingerprint_sweep_states.resume_after` (text, nullable) and `.resume_snapshot_id` (uuid, nullable, FK to `snapshots`).
+- Produces: `fingerprint_sweep_states.resume_after` (text, nullable), `.resume_snapshot_id` (uuid, nullable, FK to `snapshots`), and `.resume_limitation_code` (text, nullable).
+
+`resume_limitation_code` carries cycle 1's **Raider.IO** limitation forward.
+Cycle 1 overwrites `snapshots.limitation_code` with `fingerprint_sweep_capped`,
+destroying whatever `discoverCharacter` observed (e.g. `privacy_hidden`). Without
+somewhere to park it, the sealing cycle has nothing truthful to restore and the
+dossier can never report complete research again.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -291,11 +297,13 @@ it("adds the fingerprint sweep cursor columns", async () => {
     `SELECT column_name, is_nullable
      FROM information_schema.columns
      WHERE table_name = 'fingerprint_sweep_states'
-       AND column_name IN ('resume_after', 'resume_snapshot_id')
+       AND column_name IN
+         ('resume_after', 'resume_limitation_code', 'resume_snapshot_id')
      ORDER BY column_name`
   );
   expect(columns.rows).toEqual([
     { column_name: "resume_after", is_nullable: "YES" },
+    { column_name: "resume_limitation_code", is_nullable: "YES" },
     { column_name: "resume_snapshot_id", is_nullable: "YES" }
   ]);
 });
@@ -312,6 +320,8 @@ Create `packages/database/drizzle/0018_fingerprint_sweep_cursor.sql`:
 
 ```sql
 ALTER TABLE "fingerprint_sweep_states" ADD COLUMN "resume_after" text;
+--> statement-breakpoint
+ALTER TABLE "fingerprint_sweep_states" ADD COLUMN "resume_limitation_code" text;
 --> statement-breakpoint
 ALTER TABLE "fingerprint_sweep_states" ADD COLUMN "resume_snapshot_id" uuid;
 --> statement-breakpoint
@@ -333,6 +343,7 @@ In `packages/database/src/schema.ts`, inside `fingerprintSweepStates`:
       withTimezone: true
     }),
     resumeAfter: text("resume_after"),
+    resumeLimitationCode: text("resume_limitation_code"),
     resumeSnapshotId: uuid("resume_snapshot_id").references(() => snapshots.id, {
       onDelete: "set null"
     })
@@ -363,9 +374,9 @@ git commit -m "feat: add fingerprint sweep cursor columns"
 **Interfaces:**
 - Consumes: Task 2's columns.
 - Produces:
-  - `FingerprintSweepRepository.getResumeState(key: CharacterKey): Promise<{ resumeAfter: string; snapshotId: string } | null>`
-  - `createAndFinishFingerprintSweep(input, fingerprint, cursor, options?)` where `cursor` is `{ resumeAfter: string | null }`
-  - `finishFingerprintSweep(client, reservationId, input)` gains `resumeAfter: string | null` and `resumeSnapshotId: string | null` on `input`.
+  - `FingerprintSweepRepository.getResumeState(key: CharacterKey): Promise<{ resumeAfter: string; snapshotId: string; limitationCode: string | null } | null>`
+  - `createAndFinishFingerprintSweep(input, fingerprint, cursor, options?)` where `cursor` is `FingerprintSweepCursor`
+  - `finishFingerprintSweep(client, reservationId, input)` gains `resumeAfter: string | null`, `resumeLimitationCode: string | null` and `resumeSnapshotId: string | null` on `input`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -400,14 +411,18 @@ it("persists and clears the fingerprint sweep cursor", async () => {
       finishedAt: new Date(),
       limitationCode: "fingerprint_sweep_capped"
     },
-    { resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]) }
+    {
+      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+      limitationCode: "privacy_hidden"
+    }
   );
 
   await expect(
     repositories.fingerprintSweeps.getResumeState(key)
   ).resolves.toEqual({
     resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-    snapshotId: snapshot.id
+    snapshotId: snapshot.id,
+    limitationCode: "privacy_hidden"
   });
 });
 
@@ -436,15 +451,24 @@ In `packages/database/src/repositories.ts`:
 export interface FingerprintSweepCursor {
   /** Canonical id of the last candidate swept, or null to seal the sweep. */
   resumeAfter: string | null;
+  /**
+   * The Raider.IO limitation observed by the run that started this sweep.
+   * `snapshots.limitation_code` is overwritten with `fingerprint_sweep_capped`
+   * while the chain runs, so this is the only surviving copy and it is what the
+   * sealing cycle restores.
+   */
+  limitationCode: string | null;
 }
 ```
 
 Add to `FingerprintSweepRepository`:
 
 ```ts
-  getResumeState(
-    key: CharacterKey
-  ): Promise<{ resumeAfter: string; snapshotId: string } | null>;
+  getResumeState(key: CharacterKey): Promise<{
+    resumeAfter: string;
+    snapshotId: string;
+    limitationCode: string | null;
+  } | null>;
 ```
 
 Change the `SnapshotRepository` signature:
@@ -474,8 +498,8 @@ its `fingerprint_sweep_states` upsert with:
     await client.query(
       `INSERT INTO fingerprint_sweep_states
         (region, realm_slug, normalized_name, last_published_at,
-         resume_after, resume_snapshot_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         resume_after, resume_limitation_code, resume_snapshot_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (region, realm_slug, normalized_name)
        DO UPDATE SET
          last_published_at = greatest(
@@ -483,6 +507,7 @@ its `fingerprint_sweep_states` upsert with:
            EXCLUDED.last_published_at
          ),
          resume_after = EXCLUDED.resume_after,
+         resume_limitation_code = EXCLUDED.resume_limitation_code,
          resume_snapshot_id = EXCLUDED.resume_snapshot_id`,
       [
         row.region,
@@ -490,6 +515,7 @@ its `fingerprint_sweep_states` upsert with:
         row.normalized_name,
         input.at,
         input.resumeAfter,
+        input.resumeLimitationCode,
         input.resumeSnapshotId
       ]
     );
@@ -520,6 +546,8 @@ existing ordering already gives:
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
             resumeAfter: cursor.resumeAfter,
+            resumeLimitationCode:
+              cursor.resumeAfter === null ? null : cursor.limitationCode,
             resumeSnapshotId: cursor.resumeAfter === null ? null : snapshot.id
           });
           options?.signal?.throwIfAborted();
@@ -535,8 +563,9 @@ existing ordering already gives:
 ```
 
 Every other caller of `finishFingerprintSweep` (the `release`/`finish` paths)
-passes `resumeAfter: null, resumeSnapshotId: null`; they publish nothing, so the
-`input.published` branch does not run and the values are inert.
+passes `resumeAfter: null, resumeLimitationCode: null, resumeSnapshotId: null`.
+The public `finish` may publish, so those nulls correctly clear any stored cursor
+— a sweep finished outside the continuation path is not resumable.
 
 Add `getResumeState` to the fingerprint sweep repository:
 
@@ -544,9 +573,10 @@ Add `getResumeState` to the fingerprint sweep repository:
       async getResumeState(key) {
         const result = await pool.query<{
           resume_after: string | null;
+          resume_limitation_code: string | null;
           resume_snapshot_id: string | null;
         }>(
-          `SELECT resume_after, resume_snapshot_id
+          `SELECT resume_after, resume_limitation_code, resume_snapshot_id
            FROM fingerprint_sweep_states
            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
           [key.region, key.realm, key.name]
@@ -555,10 +585,15 @@ Add `getResumeState` to the fingerprint sweep repository:
         if (!row?.resume_after || !row.resume_snapshot_id) return null;
         return {
           resumeAfter: row.resume_after,
-          snapshotId: row.resume_snapshot_id
+          snapshotId: row.resume_snapshot_id,
+          limitationCode: row.resume_limitation_code
         };
       },
 ```
+
+`resume_limitation_code` is legitimately null (a complete Raider.IO discovery has
+no limitation), so it must NOT join the guard above — only `resume_after` and
+`resume_snapshot_id` decide whether a sweep is resumable.
 
 Both columns must be present: a cursor without its snapshot (the
 `ON DELETE SET NULL` case) is not resumable.
@@ -572,7 +607,8 @@ Expected: PASS.
 
 Run: `pnpm typecheck`
 Expected: errors at every `createAndFinishFingerprintSweep` call. Pass
-`{ resumeAfter: null }` at each — the handler gets its real cursor in Task 7.
+`{ resumeAfter: null, limitationCode: null }` at each — the handler gets its real
+cursor in Task 7.
 
 - [ ] **Step 7: Lint, typecheck, commit**
 
@@ -616,7 +652,10 @@ it("appends characters to a published snapshot and seals the sweep", async () =>
       characters: [snapshotCharacter(key, "input")]
     },
     first,
-    { resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]) }
+    {
+      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+      limitationCode: null
+    }
   );
 
   const second = await admitSweep(repositories, runId, key);
@@ -624,7 +663,7 @@ it("appends characters to a published snapshot and seals the sweep", async () =>
     published.id,
     [snapshotCharacter(alt, "fingerprint")],
     { ...second, limitationCode: null },
-    { resumeAfter: null }
+    { resumeAfter: null, limitationCode: null }
   );
 
   expect(amended.id).toBe(published.id);
@@ -654,7 +693,10 @@ it("ignores a character the snapshot already carries", async () => {
       characters: [snapshotCharacter(key, "input")]
     },
     first,
-    { resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]) }
+    {
+      resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+      limitationCode: null
+    }
   );
 
   const second = await admitSweep(repositories, runId, key);
@@ -662,7 +704,7 @@ it("ignores a character the snapshot already carries", async () => {
     published.id,
     [snapshotCharacter(key, "fingerprint")],
     { ...second, limitationCode: null },
-    { resumeAfter: null }
+    { resumeAfter: null, limitationCode: null }
   );
 
   expect(amended.characterCount).toBe(1);
@@ -863,6 +905,8 @@ In `packages/database/src/postgres-repositories.ts`, after
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
             resumeAfter: cursor.resumeAfter,
+            resumeLimitationCode:
+              cursor.resumeAfter === null ? null : cursor.limitationCode,
             resumeSnapshotId: cursor.resumeAfter === null ? null : snapshotId
           });
 
@@ -1184,7 +1228,60 @@ it("surfaces a match that only the second cycle reaches", async () => {
     harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
   ).resolves.toBeNull();
 });
+
+it("restores the Raider.IO limitation when the chain seals", async () => {
+  // Cycle 1 overwrites limitation_code with fingerprint_sweep_capped. Sealing
+  // must put back what discoverCharacter actually observed, not invent one and
+  // not falsely claim complete.
+  const harness = handlerHarness({
+    roster: rosterOf(400),
+    sweepRequestCap: 50,
+    raiderIoLimitation: "privacy_hidden"
+  });
+
+  await harness.handler.execute(harness.runId);
+  expect(harness.snapshotLimitationCode()).toBe("fingerprint_sweep_capped");
+
+  for (let cycle = 0; harness.enqueuedFingerprintAdmissions.length > 0; cycle += 1) {
+    if (cycle > 20) throw new Error("continuation did not terminate");
+    harness.enqueuedFingerprintAdmissions.length = 0;
+    await harness.handler.execute(harness.runId, undefined, {
+      runId: harness.runId,
+      key: harness.rootKey,
+      enqueuedAt: new Date().toISOString(),
+      continuation: true
+    });
+  }
+
+  expect(harness.snapshotLimitationCode()).toBe("privacy_hidden");
+});
+
+it("seals to complete when Raider.IO discovery had no limitation", async () => {
+  const harness = handlerHarness({
+    roster: rosterOf(400),
+    sweepRequestCap: 50,
+    raiderIoLimitation: null
+  });
+
+  await harness.handler.execute(harness.runId);
+  for (let cycle = 0; harness.enqueuedFingerprintAdmissions.length > 0; cycle += 1) {
+    if (cycle > 20) throw new Error("continuation did not terminate");
+    harness.enqueuedFingerprintAdmissions.length = 0;
+    await harness.handler.execute(harness.runId, undefined, {
+      runId: harness.runId,
+      key: harness.rootKey,
+      enqueuedAt: new Date().toISOString(),
+      continuation: true
+    });
+  }
+
+  expect(harness.snapshotLimitationCode()).toBeNull();
+});
 ```
+
+`handlerHarness` needs `raiderIoLimitation` (drives the fake `discoverCharacter`
+outcome's state/limitation) and `snapshotLimitationCode()` (reads the current
+value on the single snapshot, whether created or amended).
 
 Build `handlerHarness` on the fakes the test file already uses; do not introduce
 a second fake-repository style.
@@ -1257,8 +1354,15 @@ outcome whose characters are already in the published snapshot:
         if (job?.continuation && !resume) return; // nothing to resume
 
         let outcome: DiscoveryOutcome = resume
-          ? { kind: "snapshot", state: "partial",
-              limitationCode: "request_cap", characters: [] }
+          ? {
+              kind: "snapshot",
+              state: "partial",
+              // Placeholder only. A continuation performs no Raider.IO
+              // discovery, so this value must never reach the snapshot: the
+              // real limitation is `resume.limitationCode`, stored by cycle 1.
+              limitationCode: "privacy_hidden",
+              characters: []
+            }
           : await discoverCharacter(
               run.rootKey,
               scopedRaiderIoGateway(options.gateway, scope),
@@ -1311,18 +1415,25 @@ Then replace the persistence block. The cursor is `undefined` on a cursor-less
 ```ts
                   const stillSweeping =
                     sweep.kind === "capped" && sweep.resumeAfter !== undefined;
+                  // The Raider.IO limitation this chain must restore when it
+                  // seals. A continuation did no discovery of its own, so it
+                  // uses the value cycle 1 stored rather than its placeholder.
+                  const raiderIoLimitation = resume
+                    ? resume.limitationCode
+                    : outcome.state === "partial"
+                      ? outcome.limitationCode
+                      : null;
                   const limitationCode =
                     sweep.kind === "capped"
                       ? "fingerprint_sweep_capped"
-                      : outcome.state === "partial"
-                        ? outcome.limitationCode
-                        : null;
+                      : raiderIoLimitation;
                   const cursor = {
                     resumeAfter: stillSweeping
                       ? sweep.resumeAfter!
                       : sweep.kind === "capped"
                         ? (resume?.resumeAfter ?? null)
-                        : null
+                        : null,
+                    limitationCode: raiderIoLimitation
                   };
 
                   if (resume) {
@@ -1538,6 +1649,86 @@ Beside `BLIZZARD_SWEEP_REQUEST_CAP=300` at `docs/deployment/railway.md:86`, add:
 ```bash
 git add docs/deployment/railway.md
 git commit -m "docs: describe fingerprint sweep continuation for operators"
+```
+
+---
+
+### Task 10: Bump the evidence version
+
+**Files:**
+- Modify: `packages/database/src/postgres-repositories.ts:166`
+- Test: `tests/integration/repositories.test.ts`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: nothing.
+
+Continuation adds characters to snapshots that already exist, so dossiers that
+were published mid-chain hold evidence gathered before their full character set
+was known. Bumping `CURRENT_EVIDENCE_VERSION` makes the reuse gate at
+`postgres-repositories.ts:2145` treat every completed evidence run as stale, so
+those dossiers re-collect instead of serving a partial cached set forever.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/integration/repositories.test.ts`:
+
+```ts
+it("re-collects evidence recorded at the previous version", async () => {
+  const key = { region: "eu", realm: "silvermoon", name: "evversion" } as const;
+  const runId = await seedCompletedEvidenceRun(repositories, key);
+  await pool.query(
+    "UPDATE character_evidence_runs SET evidence_version = 10 WHERE id = $1",
+    [runId]
+  );
+
+  const reserved = await repositories.characterEvidence.reserve(key, {
+    freshnessCutoff: new Date(Date.now() - 60_000),
+    at: new Date()
+  });
+
+  expect(reserved.kind).not.toBe("fresh");
+});
+```
+
+Match the file's existing evidence-reservation helpers and the real `reserve`
+signature rather than inventing one; the assertion that matters is that version
+10 is no longer reusable.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm test:integration tests/integration/repositories.test.ts -t "previous version"`
+Expected: FAIL — version 10 still satisfies the reuse gate.
+
+- [ ] **Step 3: Bump the constant**
+
+In `packages/database/src/postgres-repositories.ts`:
+
+```ts
+const CURRENT_EVIDENCE_VERSION = 11;
+```
+
+Leave the two explanatory comments above it unchanged.
+
+- [ ] **Step 4: Check the existing version-sensitive tests**
+
+Run: `pnpm test:integration tests/integration/repositories.test.ts`
+Expected: PASS. `tests/integration/repositories.test.ts:408` pins
+`evidenceVersion: 10` — if it asserts the *current* version rather than an
+arbitrary stored one, update it to 11; if it is testing an unrelated stored
+value, leave it.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `pnpm test`
+Expected: PASS.
+
+- [ ] **Step 6: Lint, typecheck, commit**
+
+```bash
+pnpm lint && pnpm typecheck
+git add packages/database/src/postgres-repositories.ts tests/integration/repositories.test.ts
+git commit -m "chore: bump evidence version so continued dossiers re-collect"
 ```
 
 ---
