@@ -397,7 +397,7 @@ export async function discoverCharacter(
           ? { ...observed, guild: detailed.guild }
           : observed
       );
-    } catch (error) {
+    } catch {
       if (options.signal?.aborted) throw options.signal.reason;
       // An upstream failure here costs one guild, never the snapshot.
       withGuilds.push(observed);
