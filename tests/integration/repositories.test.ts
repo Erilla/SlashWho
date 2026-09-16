@@ -115,7 +115,11 @@ async function admitSweep(
   repositories: Repositories,
   runId: string,
   key: CharacterKey
-): Promise<{ reservationId: string; finishedAt: Date; limitationCode: string | null }> {
+): Promise<{
+  reservationId: string;
+  finishedAt: Date;
+  limitationCode: string | null;
+}> {
   const at = new Date();
   const admission = await repositories.fingerprintSweeps.requestAdmission({
     runId,
@@ -1263,7 +1267,11 @@ describe("PostgreSQL repositories", () => {
   });
 
   it("persists and clears the fingerprint sweep cursor", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "cursorroot" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "cursorroot"
+    } as const;
     const run = await repositories.runs.createOrReuse(key, "anonymous");
     await repositories.runs.markRunning(run.id);
 
@@ -1277,25 +1285,26 @@ describe("PostgreSQL repositories", () => {
     });
     if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
 
-    const snapshot = await repositories.snapshots.createAndFinishFingerprintSweep(
-      {
-        runId: run.id,
-        rootKey: key,
-        state: "partial",
-        limitationCode: "fingerprint_sweep_capped",
-        refreshedAt: new Date(),
-        characters: [observation(key, "input")]
-      },
-      {
-        reservationId: admission.reservationId,
-        finishedAt: new Date(),
-        limitationCode: "fingerprint_sweep_capped"
-      },
-      {
-        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-        limitationCode: "privacy_hidden"
-      }
-    );
+    const snapshot =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: new Date(),
+          characters: [observation(key, "input")]
+        },
+        {
+          reservationId: admission.reservationId,
+          finishedAt: new Date(),
+          limitationCode: "fingerprint_sweep_capped"
+        },
+        {
+          resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+          limitationCode: "privacy_hidden"
+        }
+      );
 
     await expect(
       repositories.fingerprintSweeps.getResumeState(key)
@@ -1307,34 +1316,43 @@ describe("PostgreSQL repositories", () => {
   });
 
   it("returns no resume state when the cursor was never set", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "nocursor" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "nocursor"
+    } as const;
     await expect(
       repositories.fingerprintSweeps.getResumeState(key)
     ).resolves.toBeNull();
   });
 
   it("appends characters to a published snapshot and seals the sweep", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "amendroot" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "amendroot"
+    } as const;
     const alt = { region: "eu", realm: "draenor", name: "amendalt" } as const;
     const run = await repositories.runs.createOrReuse(key, "anonymous");
     await repositories.runs.markRunning(run.id);
     const first = await admitSweep(repositories, run.id, key);
 
-    const published = await repositories.snapshots.createAndFinishFingerprintSweep(
-      {
-        runId: run.id,
-        rootKey: key,
-        state: "partial",
-        limitationCode: "fingerprint_sweep_capped",
-        refreshedAt: new Date(),
-        characters: [observation(key, "input")]
-      },
-      first,
-      {
-        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-        limitationCode: null
-      }
-    );
+    const published =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: new Date(),
+          characters: [observation(key, "input")]
+        },
+        first,
+        {
+          resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+          limitationCode: null
+        }
+      );
 
     const second = await admitSweep(repositories, run.id, key);
     const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
@@ -1357,26 +1375,31 @@ describe("PostgreSQL repositories", () => {
   });
 
   it("ignores a character the snapshot already carries", async () => {
-    const key = { region: "eu", realm: "silvermoon", name: "dupedroot" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "dupedroot"
+    } as const;
     const run = await repositories.runs.createOrReuse(key, "anonymous");
     await repositories.runs.markRunning(run.id);
     const first = await admitSweep(repositories, run.id, key);
 
-    const published = await repositories.snapshots.createAndFinishFingerprintSweep(
-      {
-        runId: run.id,
-        rootKey: key,
-        state: "partial",
-        limitationCode: "fingerprint_sweep_capped",
-        refreshedAt: new Date(),
-        characters: [observation(key, "input")]
-      },
-      first,
-      {
-        resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
-        limitationCode: null
-      }
-    );
+    const published =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: new Date(),
+          characters: [observation(key, "input")]
+        },
+        first,
+        {
+          resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+          limitationCode: null
+        }
+      );
 
     const second = await admitSweep(repositories, run.id, key);
     const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
@@ -2083,7 +2106,11 @@ describe("PostgreSQL repositories", () => {
       fingerprint_sweep_admissions,
       fingerprint_sweep_states
       CASCADE`);
-    const key = { region: "eu", realm: "silvermoon", name: "cadenceroot" } as const;
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "cadenceroot"
+    } as const;
     const run = await repositories.runs.createOrReuse(key, "anonymous");
     await repositories.runs.markRunning(run.id);
     const at = new Date();

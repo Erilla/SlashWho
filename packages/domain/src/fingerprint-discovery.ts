@@ -288,9 +288,8 @@ export async function discoverFingerprintMatches(
     const candidates = options.resumeAfter
       ? sorted.filter(
           (item) =>
-            canonicalCharacterId(item.key).localeCompare(
-              options.resumeAfter!
-            ) > 0
+            canonicalCharacterId(item.key).localeCompare(options.resumeAfter!) >
+            0
         )
       : sorted;
     const seen = new Set<string>();

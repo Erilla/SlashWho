@@ -247,8 +247,8 @@ describe("job telemetry", () => {
 
     expect(
       queueFakes.send.mock.calls.map(
-        (call) => (call[2] as { singletonKey?: string } | undefined)
-          ?.singletonKey
+        (call) =>
+          (call[2] as { singletonKey?: string } | undefined)?.singletonKey
       )
     ).toEqual([runId, `${runId}:continuation`]);
   });

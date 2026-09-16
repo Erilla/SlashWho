@@ -286,9 +286,12 @@ export const fingerprintSweepStates = pgTable(
     }),
     resumeAfter: text("resume_after"),
     resumeLimitationCode: text("resume_limitation_code"),
-    resumeSnapshotId: uuid("resume_snapshot_id").references(() => snapshots.id, {
-      onDelete: "set null"
-    })
+    resumeSnapshotId: uuid("resume_snapshot_id").references(
+      () => snapshots.id,
+      {
+        onDelete: "set null"
+      }
+    )
   },
   (table) => [
     primaryKey({

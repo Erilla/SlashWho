@@ -1478,8 +1478,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           );
           const present = new Set(
             existing.rows.map(
-              (row) =>
-                `${row.region}/${row.realm_slug}/${row.normalized_name}`
+              (row) => `${row.region}/${row.realm_slug}/${row.normalized_name}`
             )
           );
 

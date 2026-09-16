@@ -147,7 +147,10 @@ describe("database migrations", () => {
   });
 
   it("adds the fingerprint sweep cursor columns", async () => {
-    const columns = await pool.query<{ column_name: string; is_nullable: string }>(
+    const columns = await pool.query<{
+      column_name: string;
+      is_nullable: string;
+    }>(
       `SELECT column_name, is_nullable
        FROM information_schema.columns
        WHERE table_name = 'fingerprint_sweep_states'

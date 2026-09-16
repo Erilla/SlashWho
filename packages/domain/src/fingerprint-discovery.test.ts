@@ -364,9 +364,7 @@ describe("discoverFingerprintMatches", () => {
 
     expect(outcome.kind).toBe("matched");
     if (outcome.kind !== "matched") return;
-    expect(outcome.characters.map((match) => match.key.name)).toEqual([
-      "zzz"
-    ]);
+    expect(outcome.characters.map((match) => match.key.name)).toEqual(["zzz"]);
   });
 
   it("resumes using localeCompare ordering, not code-point ordering", async () => {
