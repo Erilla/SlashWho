@@ -165,9 +165,14 @@ export function loadWorkerConfig(
       500,
       "invalid_evidence_request_cap"
     ),
+    // One request hydrates a whole report, and hydration now spends the budget
+    // on each boss's first kill starting from the current tier. 24 covers a
+    // tier's first kills in a couple of runs while staying well clear of the
+    // Warcraft Logs throttling seen at higher volumes; already-stored fights
+    // are skipped, so successive runs advance rather than repeat.
     evidenceParseRequestCap: positiveInteger(
       environment.EVIDENCE_PARSE_REQUEST_CAP,
-      8,
+      24,
       "invalid_evidence_parse_request_cap"
     ),
     blizzardBaseUrl: optionalHttpUrl(

@@ -359,6 +359,9 @@ function createMemoryRepositories(): Repositories {
       async listStatus() {
         return [];
       },
+      async hydratedFightUrls() {
+        return [];
+      },
       async clearStaleCredentials() {
         return 0;
       }

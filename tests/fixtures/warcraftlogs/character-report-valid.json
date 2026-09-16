@@ -4,13 +4,18 @@
       "data": {
         "characterData": {
           "character": {
-            "server": { "normalizedName": "Silvermoon" },
+            "server": {
+              "normalizedName": "Silvermoon"
+            },
             "recentReports": {
               "data": [
                 {
                   "code": "lateReport",
-                  "startTime": 1707098400000,
-                  "zone": { "id": 42, "name": "Nerub-ar Palace" },
+                  "startTime": 1728266400000,
+                  "zone": {
+                    "id": 42,
+                    "name": "Nerub-ar Palace"
+                  },
                   "masterData": {
                     "actors": [
                       {
@@ -65,13 +70,18 @@
       "data": {
         "characterData": {
           "character": {
-            "server": { "normalizedName": "Silvermoon" },
+            "server": {
+              "normalizedName": "Silvermoon"
+            },
             "recentReports": {
               "data": [
                 {
                   "code": "earlyReport",
-                  "startTime": 1706918400000,
-                  "zone": { "id": 42, "name": "Nerub-ar Palace" },
+                  "startTime": 1728086400000,
+                  "zone": {
+                    "id": 42,
+                    "name": "Nerub-ar Palace"
+                  },
                   "masterData": {
                     "actors": [
                       {
@@ -97,8 +107,11 @@
                 },
                 {
                   "code": "secondBoss",
-                  "startTime": 1707004800000,
-                  "zone": { "id": 42, "name": "Nerub-ar Palace" },
+                  "startTime": 1728172800000,
+                  "zone": {
+                    "id": 42,
+                    "name": "Nerub-ar Palace"
+                  },
                   "masterData": {
                     "actors": [
                       {

@@ -19,7 +19,10 @@ const run = {
   className: null as string | null
 };
 
-function store(activeRun: typeof run = run): ApplicantEvidenceStore & {
+function store(
+  activeRun: typeof run = run,
+  hydrated: readonly string[] = []
+): ApplicantEvidenceStore & {
   published: Array<{
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
@@ -40,7 +43,10 @@ function store(activeRun: typeof run = run): ApplicantEvidenceStore & {
     async publish(runId, result) {
       published.push({ runId, result });
     },
-    async fail() {}
+    async fail() {},
+    async hydratedFightUrls() {
+      return hydrated;
+    }
   };
 }
 
@@ -109,6 +115,7 @@ describe("applicant evidence job handler", () => {
     expect(getFirstKillReports).toHaveBeenCalledWith(key, {
       requestCap: 500,
       parseRequestCap: 8,
+      hydratedFightUrls: new Set(),
       signal: expect.any(AbortSignal)
     });
     expect(evidence.published).toEqual([
@@ -293,7 +300,8 @@ describe("applicant evidence job handler", () => {
       }),
       publish: vi.fn().mockResolvedValue(undefined),
       find: vi.fn(),
-      fail: vi.fn()
+      fail: vi.fn(),
+      hydratedFightUrls: vi.fn().mockResolvedValue([])
     };
     const handler = createApplicantEvidenceJobHandler({
       evidence,
@@ -315,6 +323,44 @@ describe("applicant evidence job handler", () => {
       clientSecret: "user-secret"
     });
     expect(perRunGateway.getFirstKillReports).toHaveBeenCalled();
+  });
+
+  it("tells the gateway which fights are already hydrated", async () => {
+    // Break caught: without this the parse budget redid the same reports every
+    // run, so coverage never advanced past whatever the first run reached.
+    const evidence = store(run, [
+      "https://www.warcraftlogs.com/reports/example#fight=1"
+    ]);
+    const getFirstKillReports = vi.fn(async () => ({
+      kind: "evidence" as const,
+      kills: [],
+      wipes: []
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports } as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports"
+      >,
+      requestCap: 500,
+      parseRequestCap: 8,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        hydratedFightUrls: new Set([
+          "https://www.warcraftlogs.com/reports/example#fight=1"
+        ])
+      })
+    );
   });
 
   it("passes the character's known class to the gateway", async () => {
@@ -365,6 +411,9 @@ describe("applicant evidence job handler", () => {
         },
         async publish() {},
         async fail() {},
+        async hydratedFightUrls() {
+          return [];
+        },
         ...overrides
       };
     }

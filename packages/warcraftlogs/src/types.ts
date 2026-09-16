@@ -99,6 +99,11 @@ export interface WarcraftLogsGateway {
       parseRequestCap: number;
       /** The character's known class, used to settle shared specialisation names. */
       className?: string;
+      /**
+       * Fight URLs whose parses are already stored, so a budget-limited run
+       * spends its requests on what is still missing.
+       */
+      hydratedFightUrls?: ReadonlySet<string>;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

@@ -76,7 +76,7 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
     warcraftLogsClientId: environment.WARCRAFT_LOGS_CLIENT_ID,
     warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
     evidenceRequestCap: 500,
-    evidenceParseRequestCap: 8
+    evidenceParseRequestCap: 24
   });
 });
 
