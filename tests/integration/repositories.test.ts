@@ -348,6 +348,69 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("does not report a fight whose parse only exists on a superseded run", async () => {
+    // Break caught: hydration was reported from every run ever, so a fight the
+    // newest run stores blank was skipped forever and the dossier stayed empty.
+    const fightUrl =
+      "https://www.warcraftlogs.com/reports/example#fight=superseded";
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [
+        mythicKill({
+          fightUrl,
+          performance: {
+            spec: null,
+            damage: { state: "available", percentile: 91 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      wipes: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    const second = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (second.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(second.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill({ fightUrl })],
+      wipes: [],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+
+    // The parse carry-forward added in #252 now stops a publish reaching this
+    // state, but the runs written blank before it exist in production and are
+    // what the dossier reads. Blanking the newest run's row reproduces them.
+    await pool.query(
+      `UPDATE character_mythic_kills
+       SET damage_parse_state = 'unavailable', damage_percentile = NULL
+       WHERE evidence_run_id = $1`,
+      [second.run.id]
+    );
+
+    const stored = await repositories.evidence.getCompleted(rootKey);
+    const hydrated = await repositories.evidence.hydratedFightUrls(rootKey);
+    expect(stored?.kills[0]?.performance.damage).toEqual({
+      state: "unavailable"
+    });
+    expect(hydrated).not.toContain(fightUrl);
+  });
+
   it("carries the character's class onto a claimed evidence run", async () => {
     // Break caught: Warcraft Logs omits a class on its ranks, so evidence
     // collection needs the stored class to settle shared specialisation names.
