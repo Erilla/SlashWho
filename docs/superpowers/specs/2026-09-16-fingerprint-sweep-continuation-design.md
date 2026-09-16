@@ -209,7 +209,14 @@ that timestamp is newer than `cadenceCutoff`
 refused for the whole `FINGERPRINT_SWEEP_CADENCE_HOURS` window.
 
 `requestAdmission` therefore takes `continuation?: true` and skips the cadence
-branch when set. The gate exists to stop the same root being re-swept too often;
+branch when set. That is necessary but not sufficient: the shared helper
+`admitFingerprintWaitingRun` (`postgres-repositories.ts:229`), which picks the
+head of the waiting queue, re-applies the same cadence check independently. It
+takes an optional `bypassCadenceFor` admission id that widens eligibility for
+that one row only. Queue fairness is preserved because a continuation's
+admission row is inserted with `requested_at = now`, and selection is
+`ORDER BY requested_at` ascending, so it can never preempt an older eligible
+waiting row. The gate exists to stop the same root being re-swept too often;
 a continuation is finishing the sweep already in progress, not starting a new
 one. Every other gate — the hourly budget, the waiting queue, reservation
 accounting — still applies unchanged.
