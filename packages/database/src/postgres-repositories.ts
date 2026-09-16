@@ -229,7 +229,11 @@ async function fingerprintRetryAt(client: Queryable, at: Date): Promise<Date> {
 async function admitFingerprintWaitingRun(
   client: Queryable,
   admissionId: string,
-  at: Date
+  at: Date,
+  // A continuation already skipped the cadence gate in requestAdmission; this
+  // keeps that exemption scoped to only its own admission row when the
+  // (global, cross-run) head-of-queue candidate is picked here.
+  bypassCadenceFor?: string
 ): Promise<Extract<FingerprintAdmission, { kind: "admitted" | "waiting" }>> {
   const head = await client.query<{
     id: string;
@@ -247,10 +251,12 @@ async function admitFingerprintWaitingRun(
        AND (
          state.last_published_at IS NULL
          OR state.last_published_at <= admission.cadence_cutoff
+         OR admission.id = $1
        )
      ORDER BY admission.requested_at, admission.queue_order
      LIMIT 1
-     FOR UPDATE OF admission`
+     FOR UPDATE OF admission`,
+    [bypassCadenceFor ?? null]
   );
   const candidate = head.rows[0];
   if (!candidate || candidate.id !== admissionId) {
@@ -2001,6 +2007,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.key.region, input.key.realm, input.key.name]
           );
           if (
+            !input.continuation &&
             state.rows[0]?.last_published_at &&
             state.rows[0].last_published_at > input.cadenceCutoff
           ) {
@@ -2060,7 +2067,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const result = await admitFingerprintWaitingRun(
             client,
             admissionId,
-            input.at
+            input.at,
+            input.continuation ? admissionId : undefined
           );
           if (result.kind === "waiting") {
             const deferred = await client.query(

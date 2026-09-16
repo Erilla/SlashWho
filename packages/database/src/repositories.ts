@@ -363,6 +363,12 @@ export interface FingerprintSweepRepository {
     hourlyBudget: number;
     cadenceCutoff: Date;
     at: Date;
+    /**
+     * A continuation finishes the sweep already in progress rather than
+     * starting a new one, so it is exempt from the cadence gate. Every other
+     * gate still applies.
+     */
+    continuation?: true;
   }): Promise<FingerprintAdmission>;
   recordRequest(reservationId: string, count: number, at: Date): Promise<void>;
   finish(

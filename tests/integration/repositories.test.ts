@@ -2076,4 +2076,55 @@ describe("PostgreSQL repositories", () => {
       })
     ).resolves.toEqual({ kind: "not_due" });
   });
+
+  it("admits a continuation inside the cadence window", async () => {
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const key = { region: "eu", realm: "silvermoon", name: "cadenceroot" } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const at = new Date();
+
+    const first = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key,
+      requestCap: 10,
+      hourlyBudget: 100,
+      cadenceCutoff: new Date(at.getTime() - 60_000),
+      at
+    });
+    expect(first.kind).toBe("admitted");
+    await repositories.fingerprintSweeps.finish(
+      (first as { reservationId: string }).reservationId,
+      { published: true, at, limitationCode: "fingerprint_sweep_capped" }
+    );
+
+    // Same cadence window: an ordinary request is not due...
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: run.id,
+        key,
+        requestCap: 10,
+        hourlyBudget: 100,
+        cadenceCutoff: new Date(at.getTime() - 60_000),
+        at
+      })
+    ).resolves.toMatchObject({ kind: "not_due" });
+
+    // ...but a continuation is admitted.
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: run.id,
+        key,
+        requestCap: 10,
+        hourlyBudget: 100,
+        cadenceCutoff: new Date(at.getTime() - 60_000),
+        at,
+        continuation: true
+      })
+    ).resolves.toMatchObject({ kind: "admitted" });
+  });
 });
