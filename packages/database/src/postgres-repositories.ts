@@ -163,7 +163,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 11;
+const CURRENT_EVIDENCE_VERSION = 12;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -578,6 +578,65 @@ function mergePerformanceValues(
     healing: mergeParseMetric(previous.healing, incoming.healing),
     bossDamage: mergeParseMetric(previous.bossDamage, incoming.bossDamage)
   };
+}
+
+/**
+ * Parses already stored for a character, keyed by fight.
+ *
+ * Collection deliberately does not re-fetch a fight it has already hydrated, so
+ * every publish — not only a partial one — has to carry those values forward.
+ * Without this a complete run writes the skipped fights back blank.
+ */
+async function loadStoredPerformanceByFightUrl(
+  client: Queryable,
+  key: CharacterKey
+): Promise<Map<string, ReturnType<typeof parsePerformanceValues>>> {
+  const result = await client.query<
+    Pick<
+      CharacterMythicKillRow,
+      | "fight_url"
+      | "spec_name"
+      | "spec_icon_url"
+      | "damage_parse_state"
+      | "damage_percentile"
+      | "healing_parse_state"
+      | "healing_percentile"
+      | "boss_damage_parse_state"
+      | "boss_damage_percentile"
+    >
+  >(
+    `SELECT DISTINCT ON (k.fight_url)
+            k.fight_url, k.spec_name, k.spec_icon_url,
+            k.damage_parse_state, k.damage_percentile,
+            k.healing_parse_state, k.healing_percentile,
+            k.boss_damage_parse_state, k.boss_damage_percentile
+     FROM character_mythic_kills k
+     JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+     WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
+       AND r.status IN ('complete', 'partial')
+     ORDER BY k.fight_url, r.completed_at DESC NULLS LAST`,
+    [key.region, key.realm, key.name]
+  );
+  return new Map(
+    result.rows.map((row) => [
+      row.fight_url,
+      parsePerformanceValues({
+        spec:
+          row.spec_name === null || row.spec_icon_url === null
+            ? null
+            : { name: row.spec_name, iconUrl: row.spec_icon_url },
+        damage: mapParseMetric(row.damage_parse_state, row.damage_percentile),
+        healing: mapParseMetric(
+          row.healing_parse_state,
+          row.healing_percentile
+        ),
+        bossDamage: mapParseMetric(
+          row.boss_damage_parse_state,
+          row.boss_damage_percentile
+        )
+      })
+    ])
+  );
 }
 
 async function loadPositiveEvidenceForPartial(
@@ -2615,6 +2674,17 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                   name: activeRun.normalized_name
                 })
               : null;
+          // A complete publish must not resurrect kills the run no longer
+          // found, but it must still carry forward parses for kills it did,
+          // because collection skips fights it has already hydrated.
+          const storedPerformance = await loadStoredPerformanceByFightUrl(
+            client,
+            {
+              region: activeRun.region,
+              realm: activeRun.realm_slug,
+              name: activeRun.normalized_name
+            }
+          );
           const kills = new Map<string, (typeof incomingKills)[number]>(
             previous?.kills.map((kill) => [
               kill.fightUrl,
@@ -2622,7 +2692,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]) ?? []
           );
           for (const kill of incomingKills) {
-            const stored = kills.get(kill.kill.fightUrl);
+            const stored =
+              kills.get(kill.kill.fightUrl) ??
+              (storedPerformance.has(kill.kill.fightUrl)
+                ? {
+                    kill: kill.kill,
+                    performance: storedPerformance.get(kill.kill.fightUrl)!
+                  }
+                : undefined);
             kills.set(
               kill.kill.fightUrl,
               stored === undefined
