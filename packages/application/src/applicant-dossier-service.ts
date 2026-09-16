@@ -121,7 +121,10 @@ export interface ApplicantDossierService {
    * Re-collects one character on demand, without the evidence-version bump
    * that would sweep every character at once.
    */
-  refreshCharacter(key: CharacterKey): Promise<RefreshCharacterResult>;
+  refreshCharacter(
+    key: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<RefreshCharacterResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -1097,13 +1100,14 @@ export function createApplicantDossierService(options: {
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
-    async refreshCharacter(key) {
+    async refreshCharacter(key, scope) {
       return refreshCharacter({
         key,
         at: new Date(),
         cooldownMs: REFRESH_COOLDOWN_MS,
         repositories: options.repositories,
-        queue: options.queue
+        queue: options.queue,
+        ...(scope ? { scope } : {})
       });
     },
 
