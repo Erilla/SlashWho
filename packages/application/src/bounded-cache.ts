@@ -1,7 +1,21 @@
 export type BoundedCacheOutcome =
   "hit" | "miss" | "shared" | "failure" | "capacity";
 
-/** Process-local normalized data only. Pending entries are never evicted. */
+/**
+ * Process-local normalized data only. Pending entries are never evicted.
+ *
+ * Eviction is least-recently-used: a read hit re-inserts its entry so `Map`
+ * insertion order is recency order, and eviction drops the entry at the head.
+ * A boss every dossier looks up therefore survives, while one looked up once
+ * does not displace it. The re-insert carries `expiresAt` over unchanged --
+ * an entry's TTL runs from its load, so a hot key still expires and re-fetches
+ * on schedule rather than living forever.
+ *
+ * Expiry is checked lazily, on the entry actually being read. There is no
+ * sweep of the whole map on the lookup path: LRU eviction is what bounds
+ * memory, and a sweep per lookup cost a full traversal plus one clock read
+ * per stored entry.
+ */
 export function createBoundedCache<T>(options: {
   ttlMs: number;
   maxEntries: number;
@@ -24,13 +38,14 @@ export function createBoundedCache<T>(options: {
       options.observe?.(event);
       observe?.(event);
     };
-    for (const [storedKey, entry] of entries) {
-      if (entry.expiresAt <= now()) entries.delete(storedKey);
-    }
     const entry = entries.get(key);
     if (entry) {
-      emit("hit");
-      return entry.value;
+      entries.delete(key);
+      if (entry.expiresAt > now()) {
+        entries.set(key, entry);
+        emit("hit");
+        return entry.value;
+      }
     }
     const active = pending.get(key);
     if (active) {

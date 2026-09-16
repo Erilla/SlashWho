@@ -749,6 +749,35 @@ async function assembleDossier(options: {
   });
 }
 
+// Both dossier caches are sized the same way, so the asymmetry that had
+// rankings at 256 and achievements at 1,000 cannot silently return: one
+// dossier's measured per-key working set times the number of concurrent cold
+// reads of distinct rosters that should fit inside the TTL window without
+// evicting each other.
+//
+// Measured from a `test` log capture (see #243): a cold dossier touches ~25
+// ranking keys (`raiderIoRankingsCalls` p95 23.6, max 25) and ~10 achievement
+// keys.
+const DOSSIER_CACHE_TTL_MS = 15 * 60_000;
+const RANKING_KEYS_PER_DOSSIER = 25;
+const ACHIEVEMENT_KEYS_PER_DOSSIER = 10;
+// The multiple is the number of concurrent cold reads of distinct rosters that
+// fit inside the 15-minute window before entries start evicting each other.
+//
+// Replicas are not what this covers. Each `web` replica holds its own
+// process-local cache, so replication splits traffic across instances rather
+// than crowding one -- it costs hit rate, because every replica cold-loads the
+// same keys independently, not capacity per instance.
+//
+// This also sets each cache's in-flight ceiling, since `createBoundedCache`
+// rejects a load once `pending.size` reaches `maxEntries`. That is a far
+// backstop at these sizes rather than the operative limit: ranking loads are
+// admitted by `providerConcurrency` before they reach the cache, so a read has
+// at most `DOSSIER_PROVIDER_CONCURRENCY` in flight, and achievement loads are
+// gathered one character at a time. Parallelising that gather (#241) raises
+// the achievement cache's in-flight count per read and should re-check this.
+const CONCURRENT_COLD_DOSSIERS = 40;
+
 // Maps a bounded cache's per-call outcome onto the requesting scope's own
 // counters. Attributed per call (via the cache's optional per-call observer
 // parameter), never broadcast to every scope sharing the process-wide cache
@@ -794,8 +823,8 @@ export function createApplicantDossierService(options: {
   const achievements = createBoundedCache<
     Awaited<ReturnType<BlizzardGateway["getCompletedAchievements"]>>
   >({
-    ttlMs: 15 * 60_000,
-    maxEntries: 1_000,
+    ttlMs: DOSSIER_CACHE_TTL_MS,
+    maxEntries: ACHIEVEMENT_KEYS_PER_DOSSIER * CONCURRENT_COLD_DOSSIERS,
     observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
   });
   // The limiter instance is shared across every request so it actually
@@ -807,8 +836,8 @@ export function createApplicantDossierService(options: {
   const rankings = createBoundedCache<
     Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
   >({
-    ttlMs: 15 * 60_000,
-    maxEntries: 256,
+    ttlMs: DOSSIER_CACHE_TTL_MS,
+    maxEntries: RANKING_KEYS_PER_DOSSIER * CONCURRENT_COLD_DOSSIERS,
     observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
   });
   // A null cache is a visitor-supplied gateway: it keeps the shared timeout,
