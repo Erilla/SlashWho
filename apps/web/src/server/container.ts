@@ -45,6 +45,7 @@ export type WebContainerDependencies = Readonly<{
     fetch: typeof globalThis.fetch;
     baseUrl: string;
     timeoutMs: number;
+    accessKey?: string;
     onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): RaiderIoGateway;
   createBlizzardGateway(options: {
@@ -112,6 +113,7 @@ export async function createWebContainer(
         fetch: globalThis.fetch,
         baseUrl: config.dossier.raiderIoBaseUrl,
         timeoutMs: config.dossier.raiderIoTimeoutMs,
+        accessKey: config.dossier.raiderIoAccessKey,
         onThrottle: (event) =>
           webLogger.info({
             event: "upstream_throttle",

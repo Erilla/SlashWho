@@ -522,6 +522,179 @@ describe("applicant dossier service", () => {
       vi.useRealTimers();
     }
   });
+
+  // A root that cannot establish the account on its own, a middle subject
+  // under test, and a fingerprint tail that is only read when the middle
+  // subject failed to establish it.
+  function accountEstablishingSnapshot(
+    source: StoredSnapshot["characters"][number]["source"]
+  ): StoredSnapshot {
+    const [submitted, linked] = storedSnapshot().characters;
+    return storedSnapshot([
+      { ...submitted!, source: "claimed", level: 80 },
+      { ...linked!, key: third, displayName: "Third", level: 50, source },
+      { ...linked!, key: alt, level: 10, source: "fingerprint" }
+    ]);
+  }
+
+  it.each([
+    "input",
+    "declared_main",
+    "profile_guess",
+    "fingerprint",
+    // Not `discovery_source` values, but both are `DossierSubject["source"]`
+    // and both reach this code through other read paths. The stored snapshot
+    // is just the cheapest vehicle for putting them in a mixed subject list.
+    "submitted",
+    "manually_added"
+  ] as unknown as StoredSnapshot["characters"][number]["source"][])(
+    "lets a %s subject establish the account for the fingerprint tail",
+    async (source) => {
+      // Break caught: partitioning the subjects as "claimed vs the rest"
+      // would stop every one of these sources establishing the account, and
+      // the fingerprint tail would be read again for nothing.
+      const { dossiers, blizzard } = fixture({
+        snapshot: accountEstablishingSnapshot(source)
+      });
+
+      await dossiers.read(root);
+
+      expect(
+        vi
+          .mocked(blizzard.getCompletedAchievements)
+          .mock.calls.map(([key]) => key)
+      ).toEqual([root, third]);
+    }
+  );
+
+  it("still reads the fingerprint tail when only claimed subjects answered", async () => {
+    // The negative control for the table above: `claimed` is the one source
+    // that cannot establish the account, so the tail is not redundant.
+    const { dossiers, blizzard } = fixture({
+      snapshot: accountEstablishingSnapshot("claimed")
+    });
+
+    await dossiers.read(root);
+
+    expect(
+      vi
+        .mocked(blizzard.getCompletedAchievements)
+        .mock.calls.map(([key]) => key)
+    ).toEqual([root, third, alt]);
+  });
+
+  it("fans non-fingerprint achievement reads out concurrently", async () => {
+    // Break caught: a serial `for…await` put one full Blizzard round-trip per
+    // subject on the critical path of a cold dossier read -- ten calls at
+    // ~540ms against a p95 wall time of 7.7s.
+    const { dossiers, blizzard } = fixture({
+      snapshot: storedSnapshot(
+        [80, 50, 10].map((level, index) => ({
+          ...storedSnapshot().characters[1]!,
+          key: [root, third, alt][index]!,
+          level,
+          source: "claimed" as const
+        }))
+      )
+    });
+    const release: Array<() => void> = [];
+    vi.mocked(blizzard.getCompletedAchievements).mockImplementation(
+      async () => {
+        await new Promise<void>((resolve) => release.push(resolve));
+        return [
+          { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+        ];
+      }
+    );
+
+    const read = dossiers.read(root);
+    // Under a serial loop only the first subject is ever dispatched while the
+    // others are outstanding, so this wait is what fails without the fan-out.
+    await vi.waitFor(() => expect(release).toHaveLength(3));
+    for (const resolve of release) resolve();
+
+    await expect(read).resolves.toMatchObject({ kind: "ready" });
+  });
+
+  it("orders batch limitations by subject, not by which call settled first", async () => {
+    // Break caught: collecting a concurrent batch by pushing inside the async
+    // callback reorders the dossier's limitations under any latency skew.
+    const { dossiers, blizzard } = fixture({
+      snapshot: storedSnapshot(
+        [80, 50, 10].map((level, index) => ({
+          ...storedSnapshot().characters[1]!,
+          key: [root, third, alt][index]!,
+          level,
+          source: "claimed" as const
+        }))
+      )
+    });
+    const settle: Array<() => void> = [];
+    vi.mocked(blizzard.getCompletedAchievements).mockImplementation(
+      async () => {
+        await new Promise<void>((resolve) => settle.push(resolve));
+        throw new Error("offline");
+      }
+    );
+
+    const read = dossiers.read(root);
+    await vi.waitFor(() => expect(settle).toHaveLength(3));
+    // Exactly reverse subject order.
+    for (const resolve of [...settle].reverse()) resolve();
+
+    const result = await read;
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(
+      result.dossier.limitations
+        .filter((entry) => entry.source === "blizzard")
+        .map((entry) => entry.character)
+    ).toEqual([root, third, alt]);
+  });
+
+  it("rejects once when a read is aborted mid-batch", async () => {
+    // Break caught: rethrowing an abort straight out of a concurrent batch
+    // abandons the siblings that are still in flight, and every one of them
+    // then rejects with nothing listening.
+    const { dossiers, blizzard } = fixture({
+      snapshot: storedSnapshot(
+        [80, 50, 10].map((level, index) => ({
+          ...storedSnapshot().characters[1]!,
+          key: [root, third, alt][index]!,
+          level,
+          source: "claimed" as const
+        }))
+      )
+    });
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", record);
+    try {
+      const dispatched: CharacterKey[] = [];
+      const release: Array<() => void> = [];
+      vi.mocked(blizzard.getCompletedAchievements).mockImplementation(
+        async (key) => {
+          dispatched.push(key);
+          await new Promise<void>((resolve) => release.push(resolve));
+          return [
+            { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+          ];
+        }
+      );
+      const controller = new AbortController();
+      const read = dossiers.read(root, controller.signal);
+      await vi.waitFor(() => expect(dispatched).toHaveLength(3));
+
+      controller.abort();
+      await expect(read).rejects.toThrow();
+      for (const resolve of release) resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", record);
+    }
+  });
+
   it.each([
     raiderUrl,
     "https://www.warcraftlogs.com/character/eu/silvermoon/ryii"
@@ -1659,8 +1832,9 @@ describe("applicant dossier service", () => {
   it("keeps supplied credentials out of every measured total", async () => {
     // Break caught: threading a measurement scope alongside the credential
     // overrides could fold a key into the record the boundary emits. Totals
-    // are numeric by construction; this proves the construction holds on the
-    // path that actually carries a visitor's secret.
+    // are numbers, or a static method identifier, by construction; this
+    // proves the construction holds on the path that carries a visitor's
+    // secret.
     const scope = createMeasurementScope(() => 0);
     const { dossiers } = fixture();
 
@@ -1678,7 +1852,14 @@ describe("applicant dossier service", () => {
 
     const totals = scope.totals();
     expect(Object.keys(totals).length).toBeGreaterThan(0);
-    for (const value of Object.values(totals)) {
+    for (const [field, value] of Object.entries(totals)) {
+      // `dbMaxCallName` is the one total that is not numeric. It is asserted
+      // against the `group.method` shape rather than exempted, so a value
+      // built from anything a caller supplied would fail here too.
+      if (field === "dbMaxCallName") {
+        expect(value).toMatch(/^[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/);
+        continue;
+      }
       expect(typeof value).toBe("number");
     }
     expect(JSON.stringify(totals)).not.toContain("user-client-id");

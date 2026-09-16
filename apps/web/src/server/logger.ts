@@ -28,6 +28,11 @@ const allowlist = new Set([
   "dbMs",
   "dbCalls",
   "dbMaxCallMs",
+  // The `group.method` of the call that produced `dbMaxCallMs`. A string,
+  // unlike every other performance field, but a static identifier built from
+  // the repository property keys in `measuredRepositories` -- never from a
+  // query argument -- so no character name, realm, or URL can arrive here.
+  "dbMaxCallName",
   "limiterWaitMs",
   "runJoined",
   // upstream_throttle: a fixed literal from a closed provider set, and the

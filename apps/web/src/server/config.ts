@@ -10,6 +10,7 @@ export type WebConfig = Readonly<{
   dossier: Readonly<{
     raiderIoBaseUrl: string;
     raiderIoTimeoutMs: number;
+    raiderIoAccessKey?: string;
     blizzardClientId: string;
     blizzardClientSecret: string;
     evidenceJobCredentialEncryptionKey: Buffer;
@@ -28,6 +29,10 @@ function parseDatabaseUrl(value: string | undefined): string {
     throw new Error("invalid_database_url");
   }
   return value;
+}
+
+function optionalSecret(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }
 
 function requiredSecret(value: string | undefined, errorCode: string): string {
@@ -70,6 +75,7 @@ export function loadWebConfig(
         10_000,
         "invalid_raider_io_timeout_ms"
       ),
+      raiderIoAccessKey: optionalSecret(environment.RAIDER_IO_ACCESS_KEY),
       blizzardClientId: requiredSecret(
         environment.BLIZZARD_CLIENT_ID,
         "blizzard_client_id_required"

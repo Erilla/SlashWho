@@ -14,6 +14,7 @@ export type WorkerConfig = {
   negativeCacheTtlMs: number;
   raiderIoBaseUrl: string;
   raiderIoTimeoutMs: number;
+  raiderIoAccessKey?: string;
   blizzardClientId: string;
   blizzardClientSecret: string;
   warcraftLogsClientId: string;
@@ -52,6 +53,10 @@ function integerInRange(
     throw new Error(code);
   }
   return parsed;
+}
+
+function optionalSecret(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }
 
 function requiredString(value: string | undefined, code: string): string {
@@ -158,6 +163,7 @@ export function loadWorkerConfig(
       10_000,
       "invalid_raiderio_timeout"
     ),
+    raiderIoAccessKey: optionalSecret(environment.RAIDER_IO_ACCESS_KEY),
     blizzardClientId,
     blizzardClientSecret,
     warcraftLogsClientId,

@@ -147,6 +147,38 @@ describe("Raider.IO gateway", () => {
     expect(requestedUrl.searchParams.get("access_key")).toBe("test-access-key");
   });
 
+  it("sends no access_key parameter when no key is configured", async () => {
+    // Break caught: an absent key could be forwarded as an empty access_key,
+    // which is not the anonymous request Raider.IO expects — and anonymous
+    // access has to keep working for local dev and contributors without a key.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          viewUserCharactersApi: {
+            name: "Foo",
+            characters: []
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    );
+    const client = createRaiderIoClient({
+      fetch: fetchMock,
+      baseUrl: "https://raider.io",
+      timeoutMs: 5_000
+    });
+
+    await client.getClaimedCharacters("Foo");
+
+    const requestedUrl = new URL(
+      (fetchMock.mock.calls[0]![0] as URL).toString()
+    );
+    expect(requestedUrl.searchParams.has("access_key")).toBe(false);
+  });
+
   it("normalizes a character and exposes its visible owner", async () => {
     await expect(
       clientFor("character-visible-owner").getCharacter(sentinel)

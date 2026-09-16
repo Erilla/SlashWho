@@ -156,3 +156,23 @@ it("keeps the shared negative-cache TTL behaving exactly as the worker's own did
     loadWorkerConfig({ ...environment, NEGATIVE_CACHE_TTL_MS: "0" })
   ).toThrow("invalid_negative_cache_ttl");
 });
+
+it("reads an optional Raider.IO access key and trims it", () => {
+  // Break caught: a configured server key could be ignored, leaving discovery
+  // sweeps on the anonymous rate limit they were configured to escape.
+  expect(
+    loadWorkerConfig({ ...environment, RAIDER_IO_ACCESS_KEY: "  server-key  " })
+      .raiderIoAccessKey
+  ).toBe("server-key");
+});
+
+it("leaves the Raider.IO access key undefined when it is absent or blank", () => {
+  // Break caught: an unset or whitespace-only key could become an empty string
+  // and be sent as access_key=, breaking anonymous access for local dev and
+  // contributors without a key.
+  expect(loadWorkerConfig(environment).raiderIoAccessKey).toBeUndefined();
+  expect(
+    loadWorkerConfig({ ...environment, RAIDER_IO_ACCESS_KEY: "   " })
+      .raiderIoAccessKey
+  ).toBeUndefined();
+});

@@ -28,6 +28,12 @@ export type PerformanceSummary = {
    */
   byOutcome: Record<string, OutcomeSummary>;
   providers: Record<string, number>;
+  /**
+   * How often each repository call was the slowest one in a request. `dbMs`
+   * on its own says a request spent a second in the database; this says which
+   * call to look at first.
+   */
+  dbMaxCallNames: Record<string, number>;
 };
 
 export function percentile(samples: readonly number[], target: number): number {
@@ -51,7 +57,12 @@ export function summarize(
   const outcomeSamples = new Map<string, Map<string, number[]>>();
   const outcomes: Record<string, number> = {};
   const providers: Record<string, number> = {};
+  const dbMaxCallNames: Record<string, number> = {};
   let count = 0;
+
+  const tally = (target: Record<string, number>, key: string) => {
+    target[key] = (target[key] ?? 0) + 1;
+  };
 
   const collect = (
     target: Map<string, number[]>,
@@ -100,8 +111,9 @@ export function summarize(
         if (perOutcome) collect(perOutcome, key, value);
       }
     }
-    if (typeof record.provider === "string") {
-      providers[record.provider] = (providers[record.provider] ?? 0) + 1;
+    if (typeof record.provider === "string") tally(providers, record.provider);
+    if (typeof record.dbMaxCallName === "string") {
+      tally(dbMaxCallNames, record.dbMaxCallName);
     }
   }
 
@@ -133,7 +145,8 @@ export function summarize(
     fields: summarizeFields(samples),
     outcomes,
     byOutcome,
-    providers
+    providers,
+    dbMaxCallNames
   };
 }
 
