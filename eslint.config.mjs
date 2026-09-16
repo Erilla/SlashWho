@@ -4,7 +4,9 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
+      "**/.claude/worktrees/**",
       "**/.next/**",
+      "**/.worktrees/**",
       "**/coverage/**",
       "**/dist/**",
       "**/node_modules/**"
