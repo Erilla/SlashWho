@@ -74,6 +74,12 @@ export type ApplicantEvidenceJobInput =
       runId: string;
       correlationId?: string;
       enqueuedAt?: string;
+      /**
+       * `light` reads only the most recent page of reports. A manual refresh
+       * inside its cooldown uses it to look for a new raid night without
+       * spending a whole history's worth of requests.
+       */
+      mode?: "full" | "light";
     }>;
 
 function toCharacterMythicKillInput(
@@ -170,9 +176,13 @@ export function createApplicantEvidenceJobHandler(
           await options.evidence.hydratedFightUrls(run.key)
         );
         activeContext.signal.throwIfAborted();
+        // A light refresh reads one page of reports. The gateway marks a
+        // page-capped scan as a request-cap limitation, so the run publishes
+        // as partial and the kills it did not revisit are preserved.
+        const requestCap = job.mode === "light" ? 1 : options.requestCap;
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
-            requestCap: options.requestCap,
+            requestCap,
             parseRequestCap: options.parseRequestCap,
             ...(run.className ? { className: run.className } : {}),
             hydratedFightUrls,

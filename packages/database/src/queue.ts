@@ -29,6 +29,11 @@ type FingerprintAdmissionJob = {
 
 export type CollectCharacterEvidenceJob = {
   runId: string;
+  /**
+   * `light` reads only the most recent page of reports, for a manual refresh
+   * inside its cooldown. Absent means a full collection.
+   */
+  mode?: "full" | "light";
 } & JobTelemetry;
 
 export type DiscoveryWorkContext = {
@@ -50,7 +55,10 @@ export interface DiscoveryQueue {
   start(): Promise<void>;
   enqueue(payload: DiscoverCharacterJob): Promise<string>;
   enqueueFingerprintAdmission(runId: string): Promise<string>;
-  enqueueCharacterEvidence(runId: string, meta?: JobTelemetry): Promise<string>;
+  enqueueCharacterEvidence(
+    runId: string,
+    meta?: JobTelemetry & { mode?: "full" | "light" }
+  ): Promise<string>;
   work(
     handler: (
       payload: DiscoverCharacterJob,

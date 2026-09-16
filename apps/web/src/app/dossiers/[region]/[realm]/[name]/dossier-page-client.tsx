@@ -26,6 +26,7 @@ import { DossierCuttingEdgeList } from "../../../../../components/dossier-cuttin
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierRateLimitCountdown } from "../../../../../components/dossier-rate-limit-countdown";
+import { DossierRefreshControl } from "../../../../../components/dossier-refresh-control";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
 import { CharacterProfileLinks } from "../../../../../components/profile-links";
 import { headerIdentitySlotId } from "../../../../../components/site-header";
@@ -499,11 +500,24 @@ export function DossierPageClient({
         <header className="dossier-heading">
           <div ref={identityRef}>
             <p className="eyebrow">Applicant dossier</p>
-            <h1>
-              <span className="dossier-character-name-line">
-                <DossierCharacterName character={identity} showGuild />
-              </span>
-            </h1>
+            <div className="dossier-identity-row">
+              <h1>
+                <span className="dossier-character-name-line">
+                  <DossierCharacterName character={identity} showGuild />
+                </span>
+              </h1>
+              <DossierRefreshControl
+                lastCollectedAt={dossier?.lastCollectedAt ?? null}
+                onRefresh={async () => {
+                  const response = await fetch(
+                    `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
+                    { method: "POST" }
+                  );
+                  if (!response.ok) throw new Error("refresh_failed");
+                  return (await response.json()) as { mode: "full" | "light" };
+                }}
+              />
+            </div>
             <p className="identity-meta">
               {identity.region.toUpperCase()} · {identity.realm}
             </p>

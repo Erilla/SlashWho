@@ -37,6 +37,17 @@ import type {
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { encryptCredential } from "./credential-encryption";
+import {
+  refreshCharacter,
+  type RefreshCharacterResult
+} from "./refresh-character";
+
+/**
+ * How long after a collection a manual refresh does the light path instead.
+ * Deliberately invisible: pressing inside it still looks for a new raid night
+ * rather than refusing.
+ */
+const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
 import { createConcurrencyLimiter } from "./concurrency";
 import { measuredRepositories } from "./measured-repositories";
 import type { MeasurementScope } from "./measurement";
@@ -106,6 +117,11 @@ export interface ApplicantDossierService {
     input: { characterUrl: string },
     scope?: MeasurementScope
   ): Promise<ConnectedCharacterRemovalResult>;
+  /**
+   * Re-collects one character on demand, without the evidence-version bump
+   * that would sweep every character at once.
+   */
+  refreshCharacter(key: CharacterKey): Promise<RefreshCharacterResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -124,6 +140,8 @@ type EvidenceResult = Readonly<{
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
   evidenceState: DossierEvidenceState;
+  /** When this character's evidence last finished collecting. */
+  collectedAt: Date | null;
 }>;
 type CuttingEdgeEvidenceResult = Readonly<{
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
@@ -372,6 +390,7 @@ async function gatherCharacterEvidence(
   }
   return {
     limitations,
+    collectedAt: completed?.run.completedAt ?? null,
     kills:
       completed?.kills.map((kill) => cachedKill(kill, character.key)) ?? [],
     wipes:
@@ -723,8 +742,18 @@ async function assembleDossier(options: {
     cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
     limitations: [...limitations, ...ranked.limitations]
   });
+  // The oldest of the characters' collections, so the value reads as
+  // "everything is at least this fresh" rather than tracking whichever
+  // character happened to collect most recently.
+  const collectedTimes = evidence.flatMap((item) =>
+    item.collectedAt ? [item.collectedAt.getTime()] : []
+  );
   return applicantDossierSchema.parse({
     ...dossier,
+    lastCollectedAt:
+      collectedTimes.length === 0
+        ? null
+        : new Date(Math.min(...collectedTimes)).toISOString(),
     research: evidence.some((item) => item.gathering)
       ? {
           state: "gathering" as const,
@@ -1066,6 +1095,16 @@ export function createApplicantDossierService(options: {
         target
       );
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
+    },
+
+    async refreshCharacter(key) {
+      return refreshCharacter({
+        key,
+        at: new Date(),
+        cooldownMs: REFRESH_COOLDOWN_MS,
+        repositories: options.repositories,
+        queue: options.queue
+      });
     },
 
     async readInitial(key, signal, overrides, scope) {

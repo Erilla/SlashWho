@@ -209,7 +209,15 @@ export const applicantDossierSchema = z
     characters: z.array(dossierCharacterSchema),
     raids: z.array(dossierRaidSchema),
     cuttingEdges: z.array(dossierCuttingEdgeSchema),
-    limitations: z.array(dossierLimitationSchema)
+    limitations: z.array(dossierLimitationSchema),
+    /**
+     * When this dossier's evidence was last collected, as the oldest of its
+     * characters' completed runs — so it reads as "everything is at least this
+     * fresh" rather than flattering the dossier with the most recent one.
+     * Null before anything has been collected, and absent on payloads written
+     * before this field existed — including the frozen demo snapshot.
+     */
+    lastCollectedAt: z.string().datetime().nullable().optional()
   })
   .strict();
 
@@ -229,6 +237,20 @@ export type ApplicantDossierCharacterParses = z.infer<
 export type CreateDossierRequest = z.infer<typeof createDossierRequestSchema>;
 export type ConnectedCharacterExclusionRequest = z.infer<
   typeof connectedCharacterExclusionRequestSchema
+>;
+export const dossierRefreshResponseSchema = z
+  .object({
+    /**
+     * `full` re-collects the character's history. `light` reads only the most
+     * recent reports, which is what a refresh inside its cooldown does, so the
+     * control can say which happened rather than pretending they are the same.
+     */
+    mode: z.enum(["full", "light"]),
+    lastCollectedAt: z.string().datetime().nullable()
+  })
+  .strict();
+export type DossierRefreshResponse = z.infer<
+  typeof dossierRefreshResponseSchema
 >;
 export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;
