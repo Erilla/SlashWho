@@ -44,6 +44,10 @@ DOSSIER_CHARACTER_CAP=12
 DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
 DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP=20
 DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS=8000
+# Optional secret, shared in purpose with the worker but set per service:
+# raises our Raider.IO rate limit above the anonymous allowance. Omit it to
+# call Raider.IO anonymously.
+RAIDER_IO_ACCESS_KEY=<Raider.IO API key>
 # Shared between web and worker: encrypts a visitor-supplied WarcraftLogs key
 # while its evidence job is queued. Must be identical in both services.
 # 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
@@ -70,6 +74,10 @@ DISCOVERY_REQUEST_CAP=40
 NEGATIVE_CACHE_TTL_MS=300000
 RAIDER_IO_BASE_URL=https://raider.io
 RAIDER_IO_TIMEOUT_MS=10000
+# Optional secret: raises our Raider.IO rate limit above the anonymous
+# allowance. The discovery sweep is the heaviest Raider.IO consumer, so this
+# is the service that benefits most. Omit it to call Raider.IO anonymously.
+RAIDER_IO_ACCESS_KEY=<Raider.IO API key>
 DATABASE_STARTUP_ATTEMPTS=5
 DATABASE_STARTUP_RETRY_MS=1000
 WORKER_DRAIN_TIMEOUT_MS=30000
@@ -94,6 +102,17 @@ FINGERPRINT_MINIMUM_COMMON=200
 FINGERPRINT_MINIMUM_IDENTICAL_PERCENT=20
 FINGERPRINT_SWEEP_CADENCE_HOURS=168
 ```
+
+`RAIDER_IO_ACCESS_KEY` is optional in both services and must be a Railway
+secret variable where it is set. When present it is sent as the `access_key`
+query parameter on every Raider.IO request that service makes, raising our
+rate-limit headroom; when absent, both services call Raider.IO anonymously
+exactly as before, which is the supported configuration for local development
+and for contributors without a key. Setting it in one service and not the
+other is valid — each service uses its own value. On the web service it is
+only the fallback: a visitor who supplies their own key in the
+`x-raiderio-access-key` header spends their own budget instead, and their key
+takes precedence for that request.
 
 `MAINTAINER_ALERT_WEBHOOK_URL` is optional and worker-only. Set it as a secret
 variable to receive the internal budget and admission-pressure alerts; leave it

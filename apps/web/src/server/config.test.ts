@@ -51,3 +51,23 @@ it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is malformed", () => {
     })
   ).toThrow("invalid_credential_encryption_key");
 });
+
+it("reads an optional Raider.IO access key and trims it", () => {
+  // Break caught: a configured server key could be ignored, leaving the web
+  // process on the anonymous rate limit it was configured to escape.
+  expect(
+    loadWebConfig({ ...validEnv, RAIDER_IO_ACCESS_KEY: "  server-key  " })
+      .dossier.raiderIoAccessKey
+  ).toBe("server-key");
+});
+
+it("leaves the Raider.IO access key undefined when it is absent or blank", () => {
+  // Break caught: an unset or whitespace-only key could become an empty
+  // string and be sent as access_key=, breaking anonymous access for local
+  // dev and contributors without a key.
+  expect(loadWebConfig(validEnv).dossier.raiderIoAccessKey).toBeUndefined();
+  expect(
+    loadWebConfig({ ...validEnv, RAIDER_IO_ACCESS_KEY: "   " }).dossier
+      .raiderIoAccessKey
+  ).toBeUndefined();
+});
