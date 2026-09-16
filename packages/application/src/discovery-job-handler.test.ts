@@ -520,12 +520,14 @@ function handlerHarness(
     matching?: readonly CharacterKey[];
     /** The limitation `discoverCharacter` observes; null for a clean run. */
     raiderIoLimitation?: "privacy_hidden" | null;
+    maxJobLifetimeMs?: number;
+    now?: () => Date;
   } = {}
 ) {
   const repositories = createMemoryRepositories();
   const runCreated = repositories.runs.createOrReuse(rootKey, "anonymous");
   const raiderIoLimitation = options.raiderIoLimitation ?? null;
-  const sweepRequestCap = options.sweepRequestCap ?? 300;
+  let sweepRequestCap = options.sweepRequestCap ?? 300;
 
   let discoverCharacterCalls = 0;
   let discoveredThisExecution = false;
@@ -563,13 +565,14 @@ function handlerHarness(
 
   const enqueuedFingerprintAdmissions: string[] = [];
   const created: CreateSnapshotInput[] = [];
-  const amended: { snapshotId: string; characters: SnapshotCharacterInput[] }[] =
-    [];
+  const amended: {
+    snapshotId: string;
+    characters: SnapshotCharacterInput[];
+  }[] = [];
   let snapshot: StoredSnapshot | null = null;
-  const publish =
-    repositories.snapshots.createAndFinishFingerprintSweep.bind(
-      repositories.snapshots
-    );
+  const publish = repositories.snapshots.createAndFinishFingerprintSweep.bind(
+    repositories.snapshots
+  );
   repositories.snapshots.createAndFinishFingerprintSweep = async (
     input,
     fingerprint,
@@ -605,13 +608,22 @@ function handlerHarness(
     blizzardGateway,
     enqueueFingerprintAdmission: async (id: string) => {
       enqueuedFingerprintAdmissions.push(id);
-    }
+    },
+    ...(options.maxJobLifetimeMs === undefined
+      ? {}
+      : { maxJobLifetimeMs: options.maxJobLifetimeMs }),
+    ...(options.now ? { now: options.now } : {})
   });
 
   return {
     repositories,
     rootKey,
+    blizzardGateway,
     runId: harnessRunId,
+    /** The cap the next admission reserves, so a cycle can be starved. */
+    set sweepRequestCap(value: number) {
+      sweepRequestCap = value;
+    },
     enqueuedFingerprintAdmissions,
     snapshots: { created, amended },
     handler: {
@@ -1958,5 +1970,116 @@ describe("discovery job handler", () => {
     await expect(
       harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
     ).resolves.not.toBeNull();
+  });
+
+  it("seals a chain that outlives the job lifetime", async () => {
+    // Break caught: every lifetime check measures from cycle 1's createdAt, so
+    // a chain gated across the hourly budget -- the large rosters this feature
+    // exists for -- failed an already complete run, swallowed the throw, and
+    // abandoned the tail on fingerprint_sweep_capped forever.
+    let currentTime = new Date("2026-08-05T08:00:00.000Z");
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50,
+      maxJobLifetimeMs: 60_000,
+      now: () => currentTime
+    });
+
+    await harness.handler.execute(harness.runId);
+    // Every later cycle starts well past the run's one-minute job lifetime.
+    currentTime = new Date("2026-08-05T09:00:00.000Z");
+
+    for (
+      let cycle = 0;
+      harness.enqueuedFingerprintAdmissions.length > 0;
+      cycle += 1
+    ) {
+      if (cycle > 20) throw new Error("continuation did not terminate");
+      harness.enqueuedFingerprintAdmissions.length = 0;
+      await harness.handler.execute(harness.runId, undefined, {
+        runId: harness.runId,
+        key: harness.rootKey,
+        enqueuedAt: currentTime.toISOString(),
+        continuation: true
+      });
+    }
+
+    expect(harness.snapshotLimitationCode()).toBeNull();
+    await expect(
+      harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
+    ).resolves.toBeNull();
+    await expect(
+      harness.repositories.runs.find(harness.runId)
+    ).resolves.toMatchObject({ status: "complete" });
+  });
+
+  it("re-enqueues a continuation whose sweep fails transiently", async () => {
+    // Break caught: one flaky Blizzard call routed the continuation into
+    // markRetrying/fail on a complete run, and nothing re-enqueued.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    await harness.handler.execute(harness.runId);
+    const published = await harness.repositories.snapshots.getCurrent(rootKey);
+    const cursor =
+      await harness.repositories.fingerprintSweeps.getResumeState(rootKey);
+    harness.enqueuedFingerprintAdmissions.length = 0;
+    harness.blizzardGateway.getGuildRoster = async () => {
+      throw Object.assign(new Error("transient"), {
+        kind: "transient",
+        retryAfterMs: 30_000
+      });
+    };
+
+    await expect(
+      harness.handler.execute(harness.runId, undefined, {
+        runId: harness.runId,
+        key: harness.rootKey,
+        enqueuedAt: new Date().toISOString(),
+        continuation: true
+      })
+    ).resolves.toBeUndefined();
+
+    expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    expect(harness.snapshots.amended).toHaveLength(0);
+    await expect(
+      harness.repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toEqual(published);
+    await expect(
+      harness.repositories.runs.find(harness.runId)
+    ).resolves.toMatchObject({ status: "complete" });
+    await expect(
+      harness.repositories.fingerprintSweeps.getResumeState(rootKey)
+    ).resolves.toEqual(cursor);
+  });
+
+  it("re-enqueues a continuation capped before it swept anything", async () => {
+    // Break caught: a budget that ran out on the roster fetch produces a capped
+    // outcome with no cursor. The cursor is rightly left alone, but with no
+    // re-enqueue the chain simply stopped with its tail unswept.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    await harness.handler.execute(harness.runId);
+    const cursor =
+      await harness.repositories.fingerprintSweeps.getResumeState(rootKey);
+    harness.enqueuedFingerprintAdmissions.length = 0;
+    // Enough for the roster fetch and the root fingerprint, and no candidate.
+    harness.sweepRequestCap = 3;
+
+    await harness.handler.execute(harness.runId, undefined, {
+      runId: harness.runId,
+      key: harness.rootKey,
+      enqueuedAt: new Date().toISOString(),
+      continuation: true
+    });
+
+    expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    await expect(
+      harness.repositories.fingerprintSweeps.getResumeState(rootKey)
+    ).resolves.toEqual(cursor);
+    expect(harness.snapshotLimitationCode()).toBe("fingerprint_sweep_capped");
   });
 });

@@ -322,20 +322,37 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
       try {
         context.signal.throwIfAborted();
+        const resume = job?.continuation
+          ? await repositories.fingerprintSweeps.getResumeState(run.rootKey)
+          : null;
+        if (job?.continuation && !resume) {
+          // The chain already sealed (or was never started): a benign no-op,
+          // labelled so the logs do not read as an anomaly.
+          record.outcome = "continuation_without_cursor";
+          return;
+        }
+
+        /**
+         * The job lifetime bounds one delivery of one run, measured from that
+         * run's creation. A continuation resumes a run cycle 1 already
+         * completed, possibly hours earlier while the hourly budget gated the
+         * chain, so `run.createdAt` says nothing about how long this delivery
+         * has taken. Applying the bound anyway would fail an already complete
+         * run -- which throws, is swallowed by the outer catch, and abandons
+         * the roster tail exactly as the bug this feature removes. Nothing is
+         * lost: the chain is bounded by construction, because the cursor
+         * advances strictly across a finite roster.
+         */
+        const withinJobLifetime = (at: Date): boolean =>
+          resume !== null ||
+          at.getTime() - run.createdAt.getTime() < maxJobLifetimeMs;
+
         const executionTime = startedAt;
-        if (
-          executionTime.getTime() - run.createdAt.getTime() >=
-          maxJobLifetimeMs
-        ) {
+        if (!withinJobLifetime(executionTime)) {
           record.outcome = "lifetime_exceeded";
           await repositories.runs.fail(runId, "upstream_unavailable");
           return;
         }
-
-        const resume = job?.continuation
-          ? await repositories.fingerprintSweeps.getResumeState(run.rootKey)
-          : null;
-        if (job?.continuation && !resume) return; // nothing to resume
 
         let outcome: DiscoveryOutcome = resume
           ? {
@@ -358,10 +375,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             );
         context.signal.throwIfAborted();
         const persistenceTime = now();
-        if (
-          persistenceTime.getTime() - run.createdAt.getTime() >=
-          maxJobLifetimeMs
-        ) {
+        if (!withinJobLifetime(persistenceTime)) {
           record.outcome = "lifetime_exceeded";
           await repositories.runs.fail(runId, "upstream_unavailable");
           return;
@@ -487,15 +501,21 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
                 if (sweep.kind === "failure") {
                   await releaseReservation();
+                  if (resume) {
+                    // A continuation must never reach the run-retry machinery
+                    // below: `markRetrying` and `fail` both assume an active
+                    // run, and this one is already complete. The chain retries
+                    // as a fresh continuation instead, throttled by the
+                    // admission gate exactly as the `waiting` path already is.
+                    record.outcome = "continuation_retrying";
+                    await options.enqueueFingerprintAdmission?.(runId);
+                    return;
+                  }
                   fingerprintFailure = sweep;
                 } else {
                   context.signal.throwIfAborted();
                   const fingerprintPersistenceTime = now();
-                  if (
-                    fingerprintPersistenceTime.getTime() -
-                      run.createdAt.getTime() >=
-                    maxJobLifetimeMs
-                  ) {
+                  if (!withinJobLifetime(fingerprintPersistenceTime)) {
                     record.outcome = "lifetime_exceeded";
                     await releaseReservation();
                     await repositories.runs.fail(runId, "upstream_unavailable");
@@ -575,7 +595,15 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
                   reservationActive = false;
-                  if (stillSweeping && options.enqueueFingerprintAdmission) {
+                  // Only `matched` seals the chain. A continuation therefore
+                  // re-enqueues on any other result -- including a `capped`
+                  // that swept nothing and so carries no new cursor, which
+                  // would otherwise stall the chain with its tail unswept.
+                  const sealed = sweep.kind === "matched";
+                  if (
+                    (resume ? !sealed : stillSweeping) &&
+                    options.enqueueFingerprintAdmission
+                  ) {
                     await options.enqueueFingerprintAdmission(runId);
                   }
                   return;
@@ -606,6 +634,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             // continuation exists to extend. Only the sweep block above may
             // conclude a continuation; its `waiting` branch still re-enqueues
             // and returns on its own.
+            record.outcome = "continuation_sweep_unavailable";
             return;
           } else {
             context.signal.throwIfAborted();
