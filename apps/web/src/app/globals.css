@@ -789,6 +789,33 @@ a {
   white-space: nowrap;
 }
 
+/* The heading and the sticky header badge are the subject of the page, so the
+   guild rides on the name's own line there rather than stacking under it. The
+   size is relative, because the heading scales with the viewport. */
+.dossier-heading h1 .dossier-character-name-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35em;
+}
+
+.dossier-heading h1 .dossier-character-guild {
+  font-size: 0.4em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  /* The heading capitalises, which is right for a character name but would
+     rewrite a guild that chose to be lowercase. */
+  text-transform: none;
+}
+
+.dossier-header-identity .dossier-character-name-line {
+  gap: 0.35rem;
+}
+
+.dossier-header-identity .dossier-character-guild {
+  font-size: 0.85rem;
+}
+
 .dossier-character-spinner {
   width: 0.85rem;
   height: 0.85rem;

@@ -485,7 +485,9 @@ export function DossierPageClient({
       role="status"
       aria-label="Current character"
     >
-      <DossierCharacterName character={identity} />
+      <span className="dossier-character-name-line">
+        <DossierCharacterName character={identity} showGuild />
+      </span>
       <span>
         {identity.region.toUpperCase()} · {identity.realm}
       </span>
@@ -498,7 +500,9 @@ export function DossierPageClient({
           <div ref={identityRef}>
             <p className="eyebrow">Applicant dossier</p>
             <h1>
-              <DossierCharacterName character={identity} />
+              <span className="dossier-character-name-line">
+                <DossierCharacterName character={identity} showGuild />
+              </span>
             </h1>
             <p className="identity-meta">
               {identity.region.toUpperCase()} · {identity.realm}
