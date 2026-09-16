@@ -393,43 +393,112 @@ async function gatherCharacterEvidence(
   };
 }
 
+type CuttingEdgeOutcome =
+  | Readonly<{
+      kind: "evidence";
+      supported: readonly DossierCuttingEdgeEvidence[];
+      /** True when this subject alone settles the account for the tail. */
+      establishes: boolean;
+    }>
+  | Readonly<{ kind: "limitation"; limitation: DossierLimitation }>
+  | Readonly<{ kind: "abort"; error: unknown }>;
+
+/**
+ * Two phases rather than one serial loop.
+ *
+ * The sequencing this replaces was protecting one thing: once a subject
+ * yields an account-wide achievement, the remaining `fingerprint` subjects
+ * are redundant. But the two halves of that rule are asymmetric. Only
+ * `fingerprint` subjects are ever skipped, while every source except
+ * `claimed` can establish the account. So every non-`fingerprint` subject is
+ * a pure producer of the flag and never a consumer of it: nothing it learns
+ * depends on what ran before it, and serialising them buys nothing.
+ *
+ * Phase 1 therefore fans all non-`fingerprint` subjects out under the shared
+ * provider limiter. Phase 2 keeps the `fingerprint` tail sequential, because
+ * each of those can still establish the account for the rest -- and skips it
+ * outright when phase 1 already did, which saves the calls rather than
+ * merely reordering them.
+ */
 async function gatherCuttingEdgeEvidence(
   subjects: readonly DossierSubject[],
   options: {
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+    concurrency: ReturnType<typeof createConcurrencyLimiter>;
     signal?: AbortSignal;
   }
 ): Promise<CuttingEdgeEvidenceResult> {
-  const cuttingEdges: DossierCuttingEdgeEvidence[] = [];
-  const limitations: DossierLimitation[] = [];
-  let fingerprintAccountEstablished = false;
-  for (const character of subjects) {
-    if (character.source === "fingerprint" && fingerprintAccountEstablished)
-      continue;
+  // Never throws: an abort is returned as an outcome so a concurrent batch
+  // can be settled in full before it is rethrown. A bare rethrow would leave
+  // this subject's siblings in flight and their rejections unhandled.
+  async function read(character: DossierSubject): Promise<CuttingEdgeOutcome> {
     try {
-      const achievements = await options.blizzard.getCompletedAchievements(
-        character.key,
-        options.signal
+      const achievements = await options.concurrency.run(() =>
+        options.blizzard.getCompletedAchievements(character.key, options.signal)
       );
       const supported = achievements.filter((achievement) =>
         isAccountWideCuttingEdgeAchievement(achievement.achievementId)
       );
-      cuttingEdges.push(...supported);
-      if (character.source !== "claimed" && supported.length > 0) {
-        fingerprintAccountEstablished = true;
-      }
+      return {
+        kind: "evidence",
+        supported,
+        establishes: character.source !== "claimed" && supported.length > 0
+      };
     } catch (error) {
-      if (isAbort(error, options.signal)) throw error;
-      limitations.push(
-        limitation(
+      if (isAbort(error, options.signal)) return { kind: "abort", error };
+      return {
+        kind: "limitation",
+        limitation: limitation(
           "blizzard",
           character.key,
           blizzardLimitationCode(error),
           new Date(),
           retryAfterAt(error)
         )
-      );
+      };
     }
+  }
+
+  const leading: number[] = [];
+  const tail: number[] = [];
+  subjects.forEach((character, index) =>
+    (character.source === "fingerprint" ? tail : leading).push(index)
+  );
+
+  // Indexed by the subject's own position, never appended on completion: a
+  // concurrent batch settles in whatever order the provider answers, and the
+  // dossier's limitation ordering is part of what a reviewer reads.
+  const outcomes = new Array<CuttingEdgeOutcome | undefined>(subjects.length);
+  await Promise.all(
+    leading.map(async (index) => {
+      outcomes[index] = await read(subjects[index]!);
+    })
+  );
+  // Settled in full above, so rethrowing here abandons nothing in flight.
+  // The first abort in subject order is chosen so the rejection is the same
+  // one whatever order the batch happened to settle in.
+  const aborted = outcomes.find((outcome) => outcome?.kind === "abort");
+  if (aborted?.kind === "abort") throw aborted.error;
+
+  let fingerprintAccountEstablished = outcomes.some(
+    (outcome) => outcome?.kind === "evidence" && outcome.establishes
+  );
+  for (const index of tail) {
+    if (fingerprintAccountEstablished) break;
+    const outcome = await read(subjects[index]!);
+    if (outcome.kind === "abort") throw outcome.error;
+    outcomes[index] = outcome;
+    if (outcome.kind === "evidence" && outcome.establishes) {
+      fingerprintAccountEstablished = true;
+    }
+  }
+
+  const cuttingEdges: DossierCuttingEdgeEvidence[] = [];
+  const limitations: DossierLimitation[] = [];
+  for (const outcome of outcomes) {
+    if (outcome?.kind === "evidence") cuttingEdges.push(...outcome.supported);
+    else if (outcome?.kind === "limitation")
+      limitations.push(outcome.limitation);
   }
   return { cuttingEdges, limitations };
 }
@@ -616,6 +685,7 @@ async function assembleDossier(options: {
     ),
     gatherCuttingEdgeEvidence(options.subjects, {
       blizzard: options.blizzard,
+      concurrency: options.concurrency,
       signal: options.signal
     })
   ]);
