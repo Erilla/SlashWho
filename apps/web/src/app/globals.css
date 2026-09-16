@@ -1061,12 +1061,18 @@ a {
 }
 
 .dossier-boss-list {
-  border-top: 1px solid var(--border);
+  border-top: 2px solid var(--border-strong);
 }
 
+/* Each boss is a self-contained block, so the divider between bosses is
+   deliberately heavier than the hairlines used inside one. */
 .dossier-boss {
-  padding: 1rem 0;
-  border-bottom: 1px solid var(--border);
+  padding: 1.5rem 0;
+  border-bottom: 2px solid var(--border-strong);
+}
+
+.dossier-boss:last-child {
+  border-bottom: 0;
 }
 
 .dossier-boss-heading {
@@ -1158,6 +1164,8 @@ a {
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 650;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .dossier-evidence-list {
