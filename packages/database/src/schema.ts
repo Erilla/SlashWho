@@ -291,7 +291,13 @@ export const fingerprintSweepStates = pgTable(
       {
         onDelete: "set null"
       }
-    )
+    ),
+    /**
+     * Consecutive continuation cycles that re-enqueued without advancing the
+     * cursor. Reset to zero whenever the cursor advances, so a chain making
+     * progress is never bounded; only a stuck one is.
+     */
+    continuationFailures: integer("continuation_failures").notNull().default(0)
   },
   (table) => [
     primaryKey({
