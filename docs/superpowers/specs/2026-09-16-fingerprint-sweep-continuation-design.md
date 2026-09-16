@@ -61,8 +61,13 @@ that run.
 
 That path cannot be reused unchanged. Publishing in cycle 1 completes the run
 (`createSnapshot` sets `discovery_runs.status = 'complete'`,
-`postgres-repositories.ts:1340`), and `execute()` returns immediately for a
-completed run (`discovery-job-handler.ts:274`), so a re-dispatched cycle 2 would
+`postgres-repositories.ts:1340`), and a completed run is then refused twice
+over: `runs.claim` matches only active statuses
+(`postgres-repositories.ts:1140`) and returns `null`, and `execute()` returns
+early for a completed run when no work context is supplied
+(`discovery-job-handler.ts:274`). The first is the production path, since the
+queue always supplies a context (`runtime.ts:328`); the second is the path a
+direct `execute(runId)` call takes. Either way a re-dispatched cycle 2 would
 silently do nothing. The existing deferral only works because it returns
 *before* publishing, keeping the run active across the gap.
 

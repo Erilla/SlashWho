@@ -1204,6 +1204,15 @@ Expected: FAIL — `execute` takes no job argument and never re-enqueues on cap.
     ): Promise<void> {
 ```
 
+A completed run is refused on **two** paths and both need the bypass:
+
+1. `repositories.runs.claim` matches only `status IN (active states)`
+   (`postgres-repositories.ts:1140`) and returns `null` for a completed run.
+   This is the production path — the queue always supplies `workContext`
+   (`runtime.ts:328`), so the `if (!context)` block below never runs there.
+2. The `if (!context)` early return, which is the path tests take when calling
+   `execute(runId)` directly.
+
 Guard the completed-run early return so a continuation passes through:
 
 ```ts
@@ -1454,12 +1463,20 @@ Expected: FAIL — the payload never carries `continuation`.
 
 - [ ] **Step 4: Thread the job into the handler**
 
-Find where `initializedQueue.work(...)` calls `handler.execute` and pass the
-payload as the third argument:
+At `apps/worker/src/runtime.ts:327`, pass the payload as the third argument,
+keeping the existing context spread exactly as it is:
 
 ```ts
-    await initializedQueue.work(async (payload, workContext) => {
-      await handler.execute(payload.runId, workContext, payload);
+    await initializedQueue.work(async (payload, context) => {
+      await handler.execute(
+        payload.runId,
+        {
+          ...context,
+          correlationId: payload.correlationId,
+          enqueuedAt: payload.enqueuedAt
+        },
+        payload
+      );
     });
 ```
 
