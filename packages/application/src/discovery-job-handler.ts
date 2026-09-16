@@ -598,6 +598,15 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
           if (fingerprintFailure) {
             outcome = fingerprintFailure;
+          } else if (resume) {
+            // A continuation that did not finish through the amend path has
+            // nothing to publish: its outcome is a placeholder carrying no
+            // characters, and the run it resumes is already complete. Reaching
+            // the publication below would overwrite the snapshot this
+            // continuation exists to extend. Only the sweep block above may
+            // conclude a continuation; its `waiting` branch still re-enqueues
+            // and returns on its own.
+            return;
           } else {
             context.signal.throwIfAborted();
             record.outcome = "snapshot";

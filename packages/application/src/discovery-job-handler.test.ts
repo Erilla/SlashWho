@@ -1923,4 +1923,40 @@ describe("discovery job handler", () => {
 
     expect(harness.snapshotLimitationCode()).toBeNull();
   });
+
+  it("publishes nothing when a continuation reaches a handler with no sweep configured", async () => {
+    // Break caught: credentials rotated out between cycles leave a queued
+    // continuation dispatched to a handler that skips the sweep block
+    // entirely. Its outcome is a characterless placeholder, so falling through
+    // to the plain publish path would overwrite a good dossier with an empty
+    // snapshot and re-complete an already complete run.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    await harness.handler.execute(harness.runId);
+    const published = await harness.repositories.snapshots.getCurrent(rootKey);
+    const create = vi.spyOn(harness.repositories.snapshots, "create");
+
+    await createDiscoveryJobHandler({
+      repositories: harness.repositories,
+      gateway: new MutableGateway(),
+      requestCap: 12,
+      now: () => new Date("2026-08-05T08:00:00.000Z")
+    }).execute(harness.runId, undefined, {
+      runId: harness.runId,
+      key: harness.rootKey,
+      enqueuedAt: new Date().toISOString(),
+      continuation: true
+    });
+
+    expect(create).not.toHaveBeenCalled();
+    expect(harness.snapshots.created).toHaveLength(1);
+    await expect(
+      harness.repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toEqual(published);
+    await expect(
+      harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
+    ).resolves.not.toBeNull();
+  });
 });
