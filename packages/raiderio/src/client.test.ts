@@ -15,6 +15,9 @@ type FixtureName =
   | "character-declared-main"
   | "character-declared-main-out-of-scope"
   | "character-renamed-root"
+  | "character-guild"
+  | "character-guild-null"
+  | "character-guild-unsupported-region"
   | "profile-valid"
   | "profile-invalid"
   | "profile-forbidden"
@@ -154,8 +157,39 @@ describe("Raider.IO gateway", () => {
       level: 80,
       ownerId: "owner-alpha",
       profileGuess: "public-alias",
-      declaredMain: null
+      declaredMain: null,
+      guild: null
     });
+  });
+
+  it("normalizes a character's guild, which need not share its realm", async () => {
+    const character = await clientFor("character-guild").getCharacter(sentinel);
+
+    expect(character.guild).toEqual({
+      name: "Rancour",
+      region: "eu",
+      realm: "draenor"
+    });
+  });
+
+  it("represents an explicitly guildless character as null", async () => {
+    const character = await clientFor("character-guild-null").getCharacter(
+      sentinel
+    );
+
+    expect(character.guild).toBeNull();
+  });
+
+  it("treats a guild outside the key space as absent, not as schema drift", async () => {
+    // A guild on an unsupported region cannot be canonicalized. Rejecting it
+    // would raise non-retryable schema_drift and permanently fail the search,
+    // so the character is kept and only its guild is dropped.
+    const character = await clientFor(
+      "character-guild-unsupported-region"
+    ).getCharacter(sentinel);
+
+    expect(character.guild).toBeNull();
+    expect(character.displayName).toBe("Sentinel");
   });
 
   it("combines delivery cancellation with the request timeout", async () => {
@@ -266,7 +300,8 @@ describe("Raider.IO gateway", () => {
           level: 80,
           ownerId: null,
           profileGuess: null,
-          declaredMain: null
+          declaredMain: null,
+          guild: null
         },
         {
           key: { region: "us", realm: "area-52", name: "secondalt" },
@@ -275,7 +310,8 @@ describe("Raider.IO gateway", () => {
           level: 76,
           ownerId: null,
           profileGuess: null,
-          declaredMain: null
+          declaredMain: null,
+          guild: null
         }
       ]
     });
@@ -340,7 +376,8 @@ describe("Raider.IO gateway", () => {
           level: 78,
           ownerId: null,
           profileGuess: null,
-          declaredMain: null
+          declaredMain: null,
+          guild: null
         }
       ]
     });

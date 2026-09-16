@@ -36,6 +36,7 @@ function observation(
     displayName,
     className: "Mage",
     level: 80,
+    guild: null,
     raiderIoUrl: `https://raider.io/characters/${key.region}/${key.realm}/${key.name}`,
     source
   };

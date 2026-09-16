@@ -3,7 +3,7 @@ import type {
   PublicErrorCode,
   SnapshotState
 } from "@slashwho/contracts";
-import type { CharacterKey } from "@slashwho/domain";
+import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
 
 export type CallerClass = "anonymous" | "bot";
 export type EvidenceRunStatus =
@@ -32,6 +32,8 @@ export interface SnapshotCharacterInput {
   displayName: string;
   className: string;
   level: number;
+  /** The guild as at this snapshot, or null when guildless or unknown. */
+  guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: DiscoverySource;
 }

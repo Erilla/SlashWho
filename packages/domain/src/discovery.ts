@@ -1,4 +1,8 @@
-import { toRaiderIoUrl, type CharacterKey } from "./character-key";
+import {
+  toRaiderIoUrl,
+  type CharacterGuild,
+  type CharacterKey
+} from "./character-key";
 import {
   canonicalCharacterId,
   deduplicateCharacters,
@@ -11,6 +15,8 @@ export interface RaiderIoCharacter {
   readonly displayName: string;
   readonly className: string;
   readonly level: number;
+  /** The character's guild as at this observation, or null when guildless. */
+  readonly guild: CharacterGuild | null;
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;
@@ -160,6 +166,7 @@ function discoveredCharacter(
     displayName: character.displayName,
     className: character.className,
     level: character.level,
+    guild: character.guild,
     raiderIoUrl: toRaiderIoUrl(character.key),
     source
   };
@@ -229,6 +236,18 @@ export async function discoverCharacter(
       capped = true;
       return budgetExhausted;
     }
+    budget -= 1;
+    return operation();
+  }
+
+  // A guild is display data, not a relationship. Running out of budget while
+  // reading one leaves that name without a guild, but it must not set `capped`:
+  // the discovered set is complete either way, and marking the snapshot partial
+  // would overstate a limitation the reader can see no trace of.
+  async function optionalRequest<T>(
+    operation: () => Promise<T>
+  ): Promise<T | typeof budgetExhausted> {
+    if (budget === 0) return budgetExhausted;
     budget -= 1;
     return operation();
   }
@@ -357,6 +376,34 @@ export async function discoverCharacter(
       !tournamentCharacters.has(canonicalCharacterId(character.key))
   );
 
+  // The profile-list payload carries no guild, so a character discovered only
+  // through an owner's claims has none. Reading it needs that character's own
+  // payload, spent from whatever budget the relationship sweep left behind and
+  // only after deduplication, so no request is wasted on a character the
+  // snapshot will not carry.
+  const withGuilds: DiscoveredCharacter[] = [];
+  for (const observed of characters) {
+    if (observed.guild !== null) {
+      withGuilds.push(observed);
+      continue;
+    }
+    try {
+      const detailed = await optionalRequest(() =>
+        gateway.getCharacter(observed.key, options.signal)
+      );
+      throwIfAborted();
+      withGuilds.push(
+        detailed !== budgetExhausted && isRaiderIoCharacter(detailed)
+          ? { ...observed, guild: detailed.guild }
+          : observed
+      );
+    } catch {
+      if (options.signal?.aborted) throw options.signal.reason;
+      // An upstream failure here costs one guild, never the snapshot.
+      withGuilds.push(observed);
+    }
+  }
+
   // A snapshot is anchored to its root character. Without a root observation the
   // repository write cannot complete, so refuse rather than publishing a snapshot
   // that is guaranteed to roll back and burn every retry.
@@ -376,7 +423,7 @@ export async function discoverCharacter(
       ...(tournamentCharacters.size > 0
         ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
         : {}),
-      characters
+      characters: withGuilds
     };
   }
   if (privacyHidden) {
@@ -387,7 +434,7 @@ export async function discoverCharacter(
       ...(tournamentCharacters.size > 0
         ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
         : {}),
-      characters
+      characters: withGuilds
     };
   }
   if (omittedMembers) {
@@ -398,8 +445,8 @@ export async function discoverCharacter(
       ...(tournamentCharacters.size > 0
         ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
         : {}),
-      characters
+      characters: withGuilds
     };
   }
-  return { kind: "snapshot", state: "complete", characters };
+  return { kind: "snapshot", state: "complete", characters: withGuilds };
 }

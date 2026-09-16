@@ -136,9 +136,12 @@ export function loadWorkerConfig(
       1_000,
       "invalid_database_startup_retry"
     ),
+    // A sweep spends one request per character to read its guild, on top of the
+    // root and owner-profile lookups the relationship walk needs. At 12 a
+    // wide account exhausted the budget and published a partial snapshot.
     discoveryRequestCap: positiveInteger(
       environment.DISCOVERY_REQUEST_CAP,
-      12,
+      40,
       "invalid_discovery_request_cap"
     ),
     negativeCacheTtlMs: positiveInteger(

@@ -33,6 +33,7 @@ function storedSnapshot(
       displayName: "Ryii",
       className: "Mage",
       level: 80,
+      guild: null,
       raiderIoUrl: raiderUrl,
       source: "input",
       displayOrder: 0
@@ -43,6 +44,7 @@ function storedSnapshot(
       displayName: "Ryalts",
       className: "Priest",
       level: 80,
+      guild: null,
       raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
       source: "fingerprint",
       displayOrder: 1
@@ -215,6 +217,7 @@ function fixture(
       ownerId: null,
       profileGuess: null,
       declaredMain: null,
+      guild: null,
       isTournamentProfile: false
     }),
     getMythicBossRankings: vi.fn().mockResolvedValue({
@@ -366,6 +369,7 @@ describe("applicant dossier service", () => {
       ownerId: null,
       profileGuess: null,
       declaredMain: null,
+      guild: null,
       isTournamentProfile: true
     });
     await expect(dossiers.readInitial(root)).resolves.toEqual({
@@ -1362,6 +1366,7 @@ describe("applicant dossier service", () => {
           displayName: "Ryalts",
           className: "Priest",
           level: 80,
+          guild: null,
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
           source: "fingerprint",
           displayOrder: 7
@@ -1372,6 +1377,7 @@ describe("applicant dossier service", () => {
           displayName: "Third",
           className: "Warrior",
           level: 80,
+          guild: null,
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/third",
           source: "claimed",
           displayOrder: 0
@@ -1437,6 +1443,7 @@ describe("applicant dossier service", () => {
       ownerId: null,
       profileGuess: null,
       declaredMain: null,
+      guild: null,
       isTournamentProfile: false
     });
 
@@ -1659,6 +1666,7 @@ describe("applicant dossier service", () => {
         ownerId: null,
         profileGuess: null,
         declaredMain: null,
+        guild: null,
         isTournamentProfile: true
       }),
       getMythicBossRankings: vi.fn()
@@ -1738,6 +1746,7 @@ describe("manually connected characters", () => {
         displayName: "manual",
         className: null,
         level: 0,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: true
       }
@@ -1805,6 +1814,7 @@ describe("manually connected characters", () => {
         displayName: "Manual",
         className: "Warrior",
         level: 80,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false
       }
@@ -1821,6 +1831,7 @@ describe("manually connected characters", () => {
                 displayName: "Manual",
                 className: "Warrior",
                 level: 80,
+                guild: null,
                 raiderIoUrl:
                   "https://raider.io/characters/eu/silvermoon/manual",
                 source: "input",
@@ -1832,6 +1843,7 @@ describe("manually connected characters", () => {
                 displayName: "Manualalt",
                 className: "Rogue",
                 level: 80,
+                guild: null,
                 raiderIoUrl:
                   "https://raider.io/characters/eu/silvermoon/manualalt",
                 source: "fingerprint",
@@ -1868,6 +1880,7 @@ describe("manually connected characters", () => {
         displayName: "Manual",
         className: "Warrior",
         level: 80,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
         excluded: true
@@ -1901,6 +1914,7 @@ describe("manually connected characters", () => {
         displayName: "Manual",
         className: "Warrior",
         level: 80,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
         excluded: true
@@ -1929,6 +1943,7 @@ describe("manually connected characters", () => {
         displayName: "Manual",
         className: "Warrior",
         level: 80,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
         excluded: true
@@ -1946,6 +1961,7 @@ describe("manually connected characters", () => {
                 displayName: "Manualalt",
                 className: "Rogue",
                 level: 80,
+                guild: null,
                 raiderIoUrl:
                   "https://raider.io/characters/eu/silvermoon/manualalt",
                 source: "fingerprint",
@@ -1979,6 +1995,7 @@ describe("manually connected characters", () => {
         displayName: "Manual",
         className: "Warrior",
         level: 80,
+        guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
         excluded: true

@@ -112,7 +112,7 @@ export function DossierCharacterList({
           >
             <div>
               <div className="dossier-character-name-line">
-                <DossierCharacterName character={character} />
+                <DossierCharacterName character={character} showGuild />
                 {!character.evidenceState &&
                 character.researchState === "gathering" ? (
                   <svg

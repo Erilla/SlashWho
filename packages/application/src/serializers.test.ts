@@ -25,6 +25,7 @@ const snapshot: StoredSnapshot = {
       displayName: "Ryii",
       className: "Mage",
       level: 80,
+      guild: null,
       raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
       source: "input",
       displayOrder: 0
@@ -35,6 +36,7 @@ const snapshot: StoredSnapshot = {
       displayName: "Related",
       className: "Priest",
       level: 80,
+      guild: null,
       raiderIoUrl: "https://raider.io/characters/us/area-52/related",
       source: "profile_guess",
       displayOrder: 1

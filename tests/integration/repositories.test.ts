@@ -34,6 +34,7 @@ function observation(
     displayName,
     className: "Mage",
     level: 80,
+    guild: null,
     raiderIoUrl: `https://raider.io/characters/${key.region}/${key.realm}/${key.name}`,
     source
   };
@@ -135,6 +136,36 @@ describe("PostgreSQL repositories", () => {
       rate_limit_events,
       manual_dossier_connections
       CASCADE`);
+  });
+
+  it("round-trips a character's guild through the snapshot", async () => {
+    // The guild columns are written by hand-built SQL and read back by a
+    // mapper that treats a partially missing guild as none. Every other
+    // fixture stores null, so without this the non-null path never runs
+    // against a real database.
+    const guild = {
+      name: "Rancour",
+      region: "eu" as const,
+      realm: "draenor"
+    };
+    await seedCompleteSnapshot(repositories, {
+      characters: [
+        { ...observation(rootKey, "Ryii"), guild },
+        observation(altKey, "Ryalts", "claimed")
+      ]
+    });
+
+    const snapshot = await repositories.snapshots.getCurrent(rootKey);
+
+    expect(
+      snapshot?.characters.map((character) => [
+        character.key.name,
+        character.guild
+      ])
+    ).toEqual([
+      [rootKey.name, guild],
+      [altKey.name, null]
+    ]);
   });
 
   it("keeps enriched parses when a later partial run cannot re-enrich them", async () => {
@@ -1171,7 +1202,15 @@ describe("PostgreSQL repositories", () => {
         state: "complete",
         limitationCode: null,
         refreshedAt: at,
-        characters: [observation(rootKey, "Ryii")]
+        characters: [
+          {
+            ...observation(rootKey, "Ryii"),
+            // A fingerprint match is read from the root's own guild roster, so
+            // it carries a guild. This path writes through its own INSERT,
+            // separate from snapshots.create.
+            guild: { name: "Rancour", region: "eu", realm: "draenor" }
+          }
+        ]
       },
       {
         reservationId: admission.reservationId,
@@ -1179,6 +1218,10 @@ describe("PostgreSQL repositories", () => {
         limitationCode: null
       }
     );
+
+    expect(
+      (await repositories.snapshots.getCurrent(rootKey))?.characters[0]?.guild
+    ).toEqual({ name: "Rancour", region: "eu", realm: "draenor" });
 
     const nextRun = await repositories.runs.createOrReuse(rootKey, "anonymous");
     await expect(

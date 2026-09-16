@@ -1,10 +1,12 @@
-import type { CharacterKey } from "@slashwho/domain";
+import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
 
 export interface RaiderIoCharacter {
   readonly key: CharacterKey;
   readonly displayName: string;
   readonly className: string;
   readonly level: number;
+  /** The character's guild as at this observation, or null when guildless. */
+  readonly guild: CharacterGuild | null;
   readonly ownerId: string | null;
   readonly profileGuess: string | null;
   readonly declaredMain: CharacterKey | null;

@@ -1,4 +1,4 @@
-import type { CharacterKey } from "./character-key";
+import type { CharacterGuild, CharacterKey } from "./character-key";
 
 export type DiscoverySource =
   "input" | "claimed" | "declared_main" | "profile_guess" | "fingerprint";
@@ -8,6 +8,8 @@ export interface DiscoveredCharacter {
   readonly displayName: string;
   readonly className: string;
   readonly level: number;
+  /** The character's guild as at this discovery, or null when unknown. */
+  readonly guild: CharacterGuild | null;
   readonly raiderIoUrl: string;
   readonly source: DiscoverySource;
 }

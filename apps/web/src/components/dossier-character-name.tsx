@@ -37,7 +37,11 @@ function sameCharacter(left: CharacterKey, right: CharacterKey): boolean {
 function resolveCharacter(
   reference: CharacterReference,
   characters: readonly DossierCharacter[]
-): Readonly<{ displayName: string; className: string | null }> {
+): Readonly<{
+  displayName: string;
+  className: string | null;
+  guild?: DossierCharacter["guild"];
+}> {
   if ("displayName" in reference) return reference;
 
   return (
@@ -72,10 +76,17 @@ export function DossierCharacterProvider({
 
 export function DossierCharacterName({
   character,
-  className: additionalClassName
+  className: additionalClassName,
+  showGuild = false
 }: Readonly<{
   character: CharacterReference;
   className?: string;
+  /**
+   * Off by default. This component also renders names inline in parse, kill and
+   * wipe rows, where a guild on every mention would bury the evidence beside it,
+   * so only the character list asks for one.
+   */
+  showGuild?: boolean;
 }>) {
   const characters = useContext(DossierCharactersContext);
   const resolved = resolveCharacter(character, characters);
@@ -90,9 +101,16 @@ export function DossierCharacterName({
     .join(" ");
 
   return (
-    <span className={className}>
-      {formatCharacterDisplayName(resolved.displayName)}
-    </span>
+    <>
+      <span className={className}>
+        {formatCharacterDisplayName(resolved.displayName)}
+      </span>
+      {showGuild && resolved.guild ? (
+        <span className="dossier-character-guild">
+          {`<${resolved.guild.name}>`}
+        </span>
+      ) : null}
+    </>
   );
 }
 

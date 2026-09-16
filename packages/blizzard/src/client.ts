@@ -108,7 +108,8 @@ function finiteNumber(value: unknown): number | null {
 function normalizedRosterCharacter(
   value: unknown,
   region: CharacterKey["region"],
-  classNames: ReadonlyMap<number, string>
+  classNames: ReadonlyMap<number, string>,
+  guild: BlizzardRosterCharacter["guild"]
 ): BlizzardRosterCharacter | null {
   const member = valueRecord(value);
   const character = member && valueRecord(member.character);
@@ -145,7 +146,7 @@ function normalizedRosterCharacter(
     return null;
   }
 
-  return { key, displayName, className, level };
+  return { key, displayName, className, level, guild };
 }
 
 function fingerprintFromResponse(
@@ -409,7 +410,14 @@ export function createBlizzardClient(
         // members array is structural change.
         return roster.members
           .map((member) =>
-            normalizedRosterCharacter(member, key.region, classNames)
+            normalizedRosterCharacter(member, key.region, classNames, {
+              name,
+              // A guild lives in its root's region: the roster is fetched from
+              // that region's namespace, so there is no other region it could
+              // be in.
+              region: key.region,
+              realm: realmSlug
+            })
           )
           .filter(
             (member): member is BlizzardRosterCharacter => member !== null

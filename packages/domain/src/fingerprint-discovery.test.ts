@@ -28,12 +28,16 @@ function fingerprint(
   );
 }
 
-function candidate(key: CharacterKey): FingerprintCandidate {
+function candidate(
+  key: CharacterKey,
+  guild?: FingerprintCandidate["guild"]
+): FingerprintCandidate {
   return {
     key,
     displayName: key.name,
     className: "Mage",
-    level: 80
+    level: 80,
+    ...(guild ? { guild } : {})
   };
 }
 
@@ -66,6 +70,26 @@ const options = {
 };
 
 describe("discoverFingerprintMatches", () => {
+  it("carries the roster's guild onto every fingerprint match", async () => {
+    // The sweep reads one roster, the root's own, so a match is in that guild by
+    // construction. Asserted here because the guild costs no extra request and
+    // would otherwise silently regress to null.
+    const guild = { name: "Rancour", region: "eu" as const, realm: "draenor" };
+    const identical = fingerprint(400);
+    const outcome = await discoverFingerprintMatches(
+      root,
+      gatewayFor([candidate(matchingKey, guild)], {
+        [keyId(root)]: identical,
+        [keyId(matchingKey)]: identical
+      }),
+      options
+    );
+
+    expect(outcome.kind).toBe("matched");
+    if (outcome.kind !== "matched") return;
+    expect(outcome.characters.map((item) => item.guild)).toEqual([guild]);
+  });
+
   it("fetches the root once, skips suppressed and cross-region candidates, and stops at its cap", async () => {
     // Break caught: roster order or excluded candidates could consume the sweep
     // budget, preventing an otherwise matching same-region character from being
@@ -102,6 +126,7 @@ describe("discoverFingerprintMatches", () => {
           displayName: "matching",
           className: "Mage",
           level: 80,
+          guild: null,
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/matching",
           source: "fingerprint"
         }
@@ -213,6 +238,7 @@ describe("discoverFingerprintMatches", () => {
           displayName: "matching",
           className: "Mage",
           level: 80,
+          guild: null,
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/matching",
           source: "fingerprint"
         }
