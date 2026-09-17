@@ -284,7 +284,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
         parses={firstKill.parses}
       />
       <DossierParseList
-        label="Best shown parses"
+        label="Best parses"
         loading={loading}
         parses={boss.bestParses}
       />

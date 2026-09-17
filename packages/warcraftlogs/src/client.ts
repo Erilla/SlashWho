@@ -6,6 +6,7 @@ import {
 
 import type {
   WarcraftLogsFirstKillEvidence,
+  WarcraftLogsTierBestParse,
   WarcraftLogsGateway,
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
@@ -94,6 +95,38 @@ const reportFightParsesQuery = `
           compare: Rankings
           fightIDs: $fightIDs
           playerMetric: bossdps
+          timeframe: Historical
+        )
+      }
+    }
+  }
+`;
+
+// One request per zone, aliased across the three metrics, returning every
+// encounter in that zone. This is what the "best parse" row needs and the only
+// bounded way to get it: report rankings cost one request per report and a
+// character's history is unbounded, so a budget-capped scan could only ever
+// report the best of whatever reports it happened to reach.
+const characterZoneParsesQuery = `
+  query CharacterZoneParses($name: String!, $realm: String!, $region: String!, $zoneID: Int!) {
+    characterData {
+      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        damage: zoneRankings(
+          zoneID: $zoneID
+          metric: dps
+          difficulty: ${MYTHIC_DIFFICULTY}
+          timeframe: Historical
+        )
+        healing: zoneRankings(
+          zoneID: $zoneID
+          metric: hps
+          difficulty: ${MYTHIC_DIFFICULTY}
+          timeframe: Historical
+        )
+        bossDamage: zoneRankings(
+          zoneID: $zoneID
+          metric: bossdps
+          difficulty: ${MYTHIC_DIFFICULTY}
           timeframe: Historical
         )
       }
@@ -316,6 +349,7 @@ function firstKillReports(
           kind: "evidence",
           kills: [...kills.values()],
           wipes: [...wipes.values()],
+          tierBests: [],
           limitation: { kind: "limitation", code: "schema_drift" }
         }
       : { kind: "limitation", code: "schema_drift" };
@@ -502,6 +536,7 @@ function firstKillReports(
 
   return {
     kind: "evidence",
+    tierBests: [],
     kills: [...kills.values()].sort(
       (a, b) =>
         a.bossOrder - b.bossOrder ||
@@ -1013,6 +1048,131 @@ function normalizedPerformance(
   return performance;
 }
 
+type ZoneScope = Readonly<{
+  /** The Warcraft Logs zone id, as the fights themselves report it. */
+  zoneId: number;
+  raidName: string;
+  /** The most recent displayed kill in this zone, used to favour live tiers. */
+  latestKilledAt: string;
+}>;
+
+function characterRankingsUrl(
+  key: CharacterKey,
+  zoneId: number,
+  encounterId: number
+): string {
+  const path = [key.region, key.realm, key.name]
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `https://www.warcraftlogs.com/character/${path}#zone=${zoneId}&boss=${encounterId}&difficulty=${MYTHIC_DIFFICULTY}`;
+}
+
+/**
+ * Turns one zone's aliased `zoneRankings` response into a best parse per
+ * encounter. Unlike report rankings there is no fight for a row to agree with,
+ * so the only identity check available is the one the request already made: it
+ * named this character, this zone and Mythic difficulty.
+ */
+function decodeZoneRankings(
+  value: unknown,
+  scope: ZoneScope,
+  key: CharacterKey,
+  knownClassName?: string
+): readonly WarcraftLogsTierBestParse[] | WarcraftLogsLimitation {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const characterData = data && record(data.characterData);
+  const character = characterData && characterData.character;
+  // A character Warcraft Logs will not serve is a parse-side gap, never a
+  // reason to discard the kill evidence already collected for them.
+  if (character === null) {
+    return { kind: "limitation", code: "parse_unavailable" };
+  }
+  const entry = record(character);
+  if (!entry) return { kind: "limitation", code: "parse_schema_drift" };
+
+  const metrics = [
+    "damage",
+    "healing",
+    "bossDamage"
+  ] as const satisfies readonly RankingMetricName[];
+  const percentiles = new Map<string, number>();
+  const bossNames = new Map<number, string>();
+  const specs = new Map<number, SpecIdentity>();
+  for (const metric of metrics) {
+    const metricValue = record(entry[metric]);
+    const rankings = metricValue && metricValue.rankings;
+    if (!Array.isArray(rankings)) {
+      return { kind: "limitation", code: "parse_schema_drift" };
+    }
+    for (const rankingValue of rankings) {
+      const ranking = record(rankingValue);
+      const encounter = ranking && record(ranking.encounter);
+      const encounterId = encounter && positiveInteger(encounter.id);
+      const bossName = encounter && nonEmptyString(encounter.name);
+      if (!ranking || !encounterId || !bossName) {
+        return { kind: "limitation", code: "parse_schema_drift" };
+      }
+      bossNames.set(encounterId, bossName);
+      // `bestSpec` is the specialisation the reported ranking was set in;
+      // `spec` is only the character's most recent one, so it is the fallback.
+      const specName =
+        nonEmptyString(ranking.bestSpec) ?? nonEmptyString(ranking.spec);
+      if (specName !== null && !specs.has(encounterId)) {
+        specs.set(encounterId, {
+          className: reportedClassName(ranking.class),
+          specName
+        });
+      }
+      const rankPercent = ranking.rankPercent;
+      // An encounter listed without a percentile for this metric is ordinary:
+      // a healer is not ranked on damage. Skipping leaves that metric
+      // unavailable rather than inventing a zero.
+      if (
+        typeof rankPercent !== "number" ||
+        !Number.isFinite(rankPercent) ||
+        rankPercent < 0 ||
+        rankPercent > 100
+      ) {
+        continue;
+      }
+      const percentileKey = `${encounterId}:${metric}`;
+      percentiles.set(
+        percentileKey,
+        Math.max(percentiles.get(percentileKey) ?? rankPercent, rankPercent)
+      );
+    }
+  }
+
+  const metricFor = (
+    encounterId: number,
+    metric: RankingMetricName
+  ): WarcraftLogsParseMetric => {
+    const percentile = percentiles.get(`${encounterId}:${metric}`);
+    return percentile === undefined
+      ? unavailableParseMetric
+      : { state: "available", percentile };
+  };
+  return [...bossNames]
+    .filter(([encounterId]) =>
+      metrics.some((metric) => percentiles.has(`${encounterId}:${metric}`))
+    )
+    .map(([encounterId, bossName]) => ({
+      raidId: String(scope.zoneId),
+      raidName: scope.raidName,
+      bossId: String(encounterId),
+      bossName,
+      rankingsUrl: characterRankingsUrl(key, scope.zoneId, encounterId),
+      performance: {
+        spec: specPerformance(specs.get(encounterId) ?? null, knownClassName),
+        damage: metricFor(encounterId, "damage"),
+        healing: metricFor(encounterId, "healing"),
+        bossDamage: metricFor(encounterId, "bossDamage")
+      }
+    }))
+    .sort((a, b) => Number(a.bossId) - Number(b.bossId));
+}
+
 function hasMoreReportPages(value: unknown): boolean | null {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
@@ -1227,6 +1387,88 @@ export function createWarcraftLogsClient(
     }
 
     let parseLimitation: WarcraftLogsLimitation | undefined;
+    let parseRequests = 0;
+
+    // The zones whose kills this dossier can display, newest raid night first.
+    // A kill outside its raid's current-content window is never shown, so its
+    // zone is not worth a request; an unknown window is left in, because
+    // missing catalogue data must not silently disable collection.
+    const zones = new Map<string, ZoneScope>();
+    for (const kill of kills.values()) {
+      if (currentContentEligibility(kill.killedAt, kill.raidName) === false) {
+        continue;
+      }
+      const zoneId = Number(kill.raidId);
+      if (!Number.isSafeInteger(zoneId) || zoneId <= 0) continue;
+      const seen = zones.get(kill.raidId);
+      zones.set(
+        kill.raidId,
+        seen
+          ? {
+              ...seen,
+              latestKilledAt:
+                kill.killedAt > seen.latestKilledAt
+                  ? kill.killedAt
+                  : seen.latestKilledAt
+            }
+          : {
+              zoneId,
+              raidName: kill.raidName,
+              latestKilledAt: kill.killedAt
+            }
+      );
+    }
+    // Half of what is left once the canonical identity request is reserved, so
+    // a character with a long history still advances its per-fight hydration.
+    // One request covers a whole tier, so the newest zones — the ones a
+    // reviewer is reading — are reached immediately and deeper tiers land on
+    // later runs. A budget with nothing to spare after per-fight hydration
+    // buys no zones at all rather than starving the row that needs an exact
+    // fight.
+    const zoneRequestCap = Math.floor((options.parseRequestCap - 1) / 2);
+    const tierBests: WarcraftLogsTierBestParse[] = [];
+    // Kept apart from `parseLimitation` so a zone-rankings failure never hides
+    // a later per-fight failure, nor stops per-fight hydration being tried.
+    let tierParseLimitation: WarcraftLogsLimitation | undefined;
+    const orderedZones = [...zones.values()].sort(
+      (a, b) =>
+        b.latestKilledAt.localeCompare(a.latestKilledAt) || a.zoneId - b.zoneId
+    );
+    if (orderedZones.length > zoneRequestCap) {
+      tierParseLimitation = { kind: "limitation", code: "parse_request_cap" };
+    }
+    for (const zone of orderedZones.slice(0, zoneRequestCap)) {
+      parseRequests += 1;
+      const rankings = await graphql(
+        characterZoneParsesQuery,
+        {
+          name: key.name,
+          realm: key.realm,
+          region: key.region,
+          zoneID: zone.zoneId
+        },
+        options.signal
+      ).catch((error: unknown) => {
+        if (options.signal?.reason?.name !== "TimeoutError") throw error;
+        return { kind: "limitation" as const, code: "unavailable" as const };
+      });
+      if (rankings.kind !== "success") {
+        tierParseLimitation = toParseLimitation(rankings);
+        break;
+      }
+      const decoded = decodeZoneRankings(
+        rankings.value,
+        zone,
+        key,
+        options.className
+      );
+      if (isLimitation(decoded)) {
+        tierParseLimitation = decoded;
+        break;
+      }
+      tierBests.push(...decoded);
+    }
+
     const groups = new Map<string, RankingScope>();
     // Grouped by report alone. A raid night's kills share one report, and one
     // ranking request returns all of them, so grouping any finer would spend a
@@ -1291,7 +1533,6 @@ export function createWarcraftLogsClient(
             }
       );
     }
-    let parseRequests = 0;
     const decodedGroups: Array<{
       group: RankingScope;
       decoded: Extract<
@@ -1417,16 +1658,25 @@ export function createWarcraftLogsClient(
         b.attemptedAt.localeCompare(a.attemptedAt) ||
         a.fightUrl.localeCompare(b.fightUrl)
     );
+    const reportedParseLimitation = parseLimitation ?? tierParseLimitation;
     return sortedKills.length || sortedWipes.length
       ? {
           kind: "evidence",
           kills: sortedKills,
           wipes: sortedWipes,
+          tierBests,
           ...(scanLimitation ? { limitation: scanLimitation } : {}),
-          ...(parseLimitation ? { parseLimitation } : {})
+          ...(reportedParseLimitation
+            ? { parseLimitation: reportedParseLimitation }
+            : {})
         }
       : (scanLimitation ??
-          parseLimitation ?? { kind: "evidence", kills: [], wipes: [] });
+          reportedParseLimitation ?? {
+            kind: "evidence",
+            kills: [],
+            wipes: [],
+            tierBests: []
+          });
   }
 
   return { resolveCharacter, getFirstKillReports };

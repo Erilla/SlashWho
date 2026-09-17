@@ -8,6 +8,7 @@ import type {
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
+  StoredCharacterTierBestParse,
   StoredSnapshotCharacter
 } from "@slashwho/database";
 import {
@@ -24,6 +25,7 @@ import {
   type DossierCuttingEdgeEvidence,
   type DossierKillEvidence,
   type DossierWipeEvidence,
+  type DossierTierBestParse,
   type DossierLimitation
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
@@ -140,6 +142,7 @@ type DossierEvidenceState = "waiting" | "scanning" | "complete" | "partial";
 type EvidenceResult = Readonly<{
   kills: readonly DossierKillEvidence[];
   wipes: readonly DossierWipeEvidence[];
+  tierBests: readonly DossierTierBestParse[];
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
   evidenceState: DossierEvidenceState;
@@ -312,6 +315,19 @@ function cachedKill(
   };
 }
 
+function cachedTierBest(
+  tierBest: StoredCharacterTierBestParse,
+  character: CharacterKey
+): DossierTierBestParse {
+  return {
+    raidName: tierBest.raidName,
+    bossName: tierBest.bossName,
+    character,
+    rankingsUrl: tierBest.rankingsUrl,
+    performance: tierBest.performance
+  };
+}
+
 function cachedWipe(
   wipe: StoredCharacterMythicWipe,
   character: CharacterKey
@@ -398,6 +414,10 @@ async function gatherCharacterEvidence(
       completed?.kills.map((kill) => cachedKill(kill, character.key)) ?? [],
     wipes:
       completed?.wipes.map((wipe) => cachedWipe(wipe, character.key)) ?? [],
+    tierBests:
+      completed?.tierBests.map((tierBest) =>
+        cachedTierBest(tierBest, character.key)
+      ) ?? [],
     warcraftLogsComplete:
       reservation.kind === "fresh" &&
       completed?.run.status === "complete" &&
@@ -739,6 +759,7 @@ async function assembleDossier(options: {
     ),
     kills: ranked.kills,
     wipes: evidence.flatMap((item) => item.wipes),
+    tierBests: evidence.flatMap((item) => item.tierBests),
     completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
       item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
     ),

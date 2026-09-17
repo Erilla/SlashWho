@@ -31,10 +31,38 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        query?: string;
         variables?: { name?: string; realm?: string };
       };
       const name = body.variables?.name ?? "fixture";
       const serverName = body.variables?.realm ?? "fixture-realm";
+      // Zone rankings are a separate request from the report list. Answering
+      // them with a report payload would read as schema drift and put a parse
+      // limitation on every seeded dossier.
+      if (body.query?.includes("CharacterZoneParses")) {
+        const rankings = [
+          {
+            encounter: { id: 1234, name: "Queen Ansurek" },
+            rankPercent: 88.4,
+            bestSpec: "Assassination",
+            totalKills: 2
+          }
+        ];
+        response.end(
+          JSON.stringify({
+            data: {
+              characterData: {
+                character: {
+                  damage: { rankings },
+                  healing: { rankings: [] },
+                  bossDamage: { rankings }
+                }
+              }
+            }
+          })
+        );
+        return;
+      }
       response.end(
         JSON.stringify({
           data: {

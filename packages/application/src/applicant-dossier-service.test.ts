@@ -4,6 +4,7 @@ import type {
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
+  StoredCharacterTierBestParse,
   StoredSnapshot
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
@@ -72,6 +73,7 @@ function fixture(
     providerConcurrency?: number;
     additionalKills?: readonly StoredCharacterMythicKill[];
     wipes?: readonly StoredCharacterMythicWipe[];
+    tierBests?: readonly StoredCharacterTierBestParse[];
     includeCachedKills?: boolean;
     evidenceStatus?: "complete" | "partial";
     wipeCapable?: boolean;
@@ -174,6 +176,7 @@ function fixture(
             ...(options.additionalKills ?? [])
           ],
           wipes: options.wipes ?? [],
+          tierBests: options.tierBests ?? [],
           wipeCapable: options.wipeCapable ?? true
         }
       })),

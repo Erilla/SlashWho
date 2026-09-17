@@ -1,5 +1,6 @@
 import type {
   CharacterMythicKillInput,
+  CharacterTierBestParseInput,
   DiscoveryWorkContext
 } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
@@ -37,6 +38,7 @@ export type ApplicantEvidenceStore = {
       retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
+      tierBests: readonly CharacterTierBestParseInput[];
       completedAt: Date;
     }>
   ): Promise<void>;
@@ -205,6 +207,7 @@ export function createApplicantEvidenceJobHandler(
             ...(retryAfterAt ? { retryAfterAt } : {}),
             kills: [],
             wipes: [],
+            tierBests: [],
             completedAt: now()
           });
           return;
@@ -227,6 +230,7 @@ export function createApplicantEvidenceJobHandler(
             : {}),
           kills: response.kills.map(toCharacterMythicKillInput),
           wipes: response.wipes,
+          tierBests: response.tierBests,
           completedAt: now()
         });
       } catch (error) {

@@ -83,7 +83,7 @@ it("can omit the visible character name while retaining accessible attribution",
 it("renders whole-number percentile values without the percentile suffix", () => {
   render(
     <DossierParseList
-      label="Best shown parses"
+      label="Best parses"
       parses={[
         {
           ...parses[0],
@@ -106,7 +106,7 @@ it("renders whole-number percentile values without the percentile suffix", () =>
 it("shows a spinner for unavailable metrics while research is gathering", () => {
   render(
     <DossierParseList
-      label="Best shown parses"
+      label="Best parses"
       loading
       parses={[
         {

@@ -219,7 +219,7 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   const firstKillParses = boss.locator(
     ":scope > [aria-label='First kill parses']"
   );
-  const bestParses = boss.locator(":scope > [aria-label='Best shown parses']");
+  const bestParses = boss.locator(":scope > [aria-label='Best parses']");
   await expect(firstKillParses).toBeVisible();
   await expect(bestParses).toBeVisible();
   await expect(

@@ -64,6 +64,43 @@ function emptyRankingsResponse(code: string): Response {
   });
 }
 
+function emptyZoneRankingsResponse(): Response {
+  return jsonResponse({
+    data: {
+      characterData: {
+        character: {
+          damage: { rankings: [] },
+          healing: { rankings: [] },
+          bossDamage: { rankings: [] }
+        }
+      }
+    }
+  });
+}
+
+function zoneRankingsResponse(
+  rankings: readonly unknown[],
+  metrics: readonly ("damage" | "healing" | "bossDamage")[] = [
+    "damage",
+    "healing",
+    "bossDamage"
+  ]
+): Response {
+  return jsonResponse({
+    data: {
+      characterData: {
+        character: {
+          damage: { rankings: metrics.includes("damage") ? rankings : [] },
+          healing: { rankings: metrics.includes("healing") ? rankings : [] },
+          bossDamage: {
+            rankings: metrics.includes("bossDamage") ? rankings : []
+          }
+        }
+      }
+    }
+  });
+}
+
 function clientFor(
   responder: (url: URL, init?: RequestInit) => Response | Promise<Response>
 ) {
@@ -77,6 +114,28 @@ function clientFor(
         query: string;
         variables: { code?: string };
       };
+      // Zone rankings are their own request. A responder written for the
+      // report path would answer it with a report payload, so tests that do
+      // not care about tier bests get an empty zone instead.
+      if (body.query.includes("CharacterZoneParses")) {
+        let character: unknown;
+        try {
+          character = (
+            (await response.clone().json()) as {
+              data?: { characterData?: { character?: unknown } };
+            }
+          ).data?.characterData?.character;
+        } catch {
+          return emptyZoneRankingsResponse();
+        }
+        const shaped =
+          character === null ||
+          (typeof character === "object" &&
+            character !== null &&
+            "damage" in character &&
+            !("recentReports" in character));
+        if (!shaped) return emptyZoneRankingsResponse();
+      }
       if (body.query.includes("ReportFightParses")) {
         let payload: { data?: { reportData?: unknown } };
         try {
@@ -852,8 +911,11 @@ describe("Warcraft Logs gateway", () => {
     });
 
     const result = await client.getFirstKillReports(key, {
+      // Six leaves room for the zone-rankings request, the three report groups
+      // and the one shared canonical identity lookup. A per-group identity
+      // lookup would still exhaust it before the third group.
       requestCap: 3,
-      parseRequestCap: 4
+      parseRequestCap: 6
     });
     expect(result.kind).toBe("evidence");
     if (result.kind !== "evidence") return;
@@ -932,6 +994,228 @@ describe("Warcraft Logs gateway", () => {
     });
 
     expect(requested).toEqual(["in-window-report"]);
+  });
+
+  it("reads one zone-rankings request per tier for the character's best parse", async () => {
+    // Break caught: a character-level best assembled from report rankings costs
+    // one request per report and is unbounded with history, so a capped run
+    // could only ever report the best of the reports it happened to reach.
+    const zoneIds: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { zoneID?: number };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        zoneIds.push(body.variables?.zoneID ?? -1);
+        return zoneRankingsResponse([
+          {
+            encounter: { id: 3306, name: "Plexus Sentinel" },
+            rankPercent: 96.2,
+            bestSpec: "Destruction",
+            class: 10,
+            totalKills: 8
+          },
+          {
+            encounter: { id: 3307, name: "Loom'ithar" },
+            rankPercent: 88,
+            bestSpec: "Destruction",
+            class: 10,
+            totalKills: 10
+          }
+        ]);
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(zoneIds).toEqual([1047]);
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(result.tierBests).toEqual([
+      {
+        raidId: "1047",
+        raidName: "Fixture",
+        bossId: "3306",
+        bossName: "Plexus Sentinel",
+        rankingsUrl:
+          "https://www.warcraftlogs.com/character/eu/silvermoon/sentinel#zone=1047&boss=3306&difficulty=5",
+        performance: {
+          spec: {
+            name: "Destruction",
+            iconUrl:
+              "https://wow.zamimg.com/images/wow/icons/medium/spell_shadow_rainoffire.jpg"
+          },
+          damage: { state: "available", percentile: 96.2 },
+          healing: { state: "available", percentile: 96.2 },
+          bossDamage: { state: "available", percentile: 96.2 }
+        }
+      },
+      {
+        raidId: "1047",
+        raidName: "Fixture",
+        bossId: "3307",
+        bossName: "Loom'ithar",
+        rankingsUrl:
+          "https://www.warcraftlogs.com/character/eu/silvermoon/sentinel#zone=1047&boss=3307&difficulty=5",
+        performance: {
+          spec: {
+            name: "Destruction",
+            iconUrl:
+              "https://wow.zamimg.com/images/wow/icons/medium/spell_shadow_rainoffire.jpg"
+          },
+          damage: { state: "available", percentile: 88 },
+          healing: { state: "available", percentile: 88 },
+          bossDamage: { state: "available", percentile: 88 }
+        }
+      }
+    ]);
+  });
+
+  it("leaves a metric unavailable when its zone ranking carries no percentile", async () => {
+    // Break caught: a specialisation that is not ranked under a metric returns
+    // the encounter with a null percentile, which must stay unavailable rather
+    // than being read as a zero parse.
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("CharacterZoneParses")) {
+        return zoneRankingsResponse(
+          [
+            {
+              encounter: { id: 3306, name: "Plexus Sentinel" },
+              rankPercent: 71.5,
+              bestSpec: "Restoration",
+              class: 9
+            }
+          ],
+          ["healing"]
+        );
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+    expect(result.kind).toBe("evidence");
+    if (result.kind !== "evidence") return;
+    expect(result.tierBests).toMatchObject([
+      {
+        bossId: "3306",
+        performance: {
+          damage: { state: "unavailable" },
+          healing: { state: "available", percentile: 71.5 },
+          bossDamage: { state: "unavailable" }
+        }
+      }
+    ]);
+  });
+
+  it("spends at most half the parse budget on zones, newest tier first", async () => {
+    // Break caught: one request per tier is cheap but a full history spans
+    // sixteen of them, and letting them take the whole budget would starve the
+    // per-fight hydration the first-kill row depends on.
+    const zoneIds: number[] = [];
+    const reportCodes: string[] = [];
+    const zones = [
+      { zoneId: 101, killedAt: "2024-01-01T00:00:00.000Z" },
+      { zoneId: 102, killedAt: "2025-01-01T00:00:00.000Z" },
+      { zoneId: 103, killedAt: "2026-01-01T00:00:00.000Z" }
+    ];
+    const reports = zones.map(({ zoneId, killedAt }) => {
+      const report = performanceReport(
+        [26],
+        zoneId !== 103,
+        `report-${zoneId}`,
+        3300 + zoneId,
+        Date.parse(killedAt)
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: { data: { zone: { id: number } }[] };
+            };
+          };
+        };
+      };
+      report.data.characterData.character.recentReports.data[0]!.zone.id =
+        zoneId;
+      return report;
+    });
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { zoneID?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        zoneIds.push(body.variables?.zoneID ?? -1);
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        reportCodes.push(body.variables?.code ?? "?");
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 5
+    });
+
+    expect(zoneIds).toEqual([103, 102]);
+    expect(reportCodes).toEqual(["report-103", "report-102"]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+  });
+
+  it("keeps hydrating fights after a zone-rankings response is malformed", async () => {
+    // Break caught: the two rows answer different questions, so a zone the
+    // character cannot be ranked in must not cost the first-kill row its
+    // exact-fight parses.
+    const reportCodes: string[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        return jsonResponse({
+          data: { characterData: { character: { damage: {} } } }
+        });
+      }
+      if (body.query.includes("ReportFightParses")) {
+        reportCodes.push(body.variables?.code ?? "?");
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(reportCodes).toEqual(["performance-report"]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      tierBests: [],
+      parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
+    });
   });
 
   it("does not re-request a report whose fights are already hydrated", async () => {
@@ -1589,7 +1873,9 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
-    expect(fetch).toHaveBeenCalledTimes(6);
+    // Two report pages, three report-ranking groups, one zone-rankings
+    // request for Nerub-ar Palace and one shared canonical identity lookup.
+    expect(fetch).toHaveBeenCalledTimes(7);
   });
 
   it("emits only participant-attributed boss kills and ignores trash fights", async () => {
@@ -2302,7 +2588,7 @@ describe("Warcraft Logs gateway", () => {
       client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 10 })
     ).resolves.toMatchObject({ kind: "evidence" });
 
-    expect(fetch).toHaveBeenCalledTimes(7);
+    expect(fetch).toHaveBeenCalledTimes(9);
   });
 
   it("refreshes the OAuth token sixty seconds before its reported expiry", async () => {
@@ -2345,10 +2631,10 @@ describe("Warcraft Logs gateway", () => {
         parseRequestCap: 10
       });
 
-      expect(fetch).toHaveBeenCalledTimes(11);
+      expect(fetch).toHaveBeenCalledTimes(14);
       expect(authorizations).toEqual([
-        ...Array.from({ length: 6 }, () => "Bearer token-1"),
-        ...Array.from({ length: 3 }, () => "Bearer token-2")
+        ...Array.from({ length: 8 }, () => "Bearer token-1"),
+        ...Array.from({ length: 4 }, () => "Bearer token-2")
       ]);
     } finally {
       vi.useRealTimers();
@@ -2577,7 +2863,7 @@ describe("Warcraft Logs gateway", () => {
       kills: expect.any(Array),
       limitation: { kind: "limitation", code: "request_cap" }
     });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 
   it("retains collected kills if a later report page is malformed", async () => {

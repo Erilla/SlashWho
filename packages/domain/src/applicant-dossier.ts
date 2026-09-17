@@ -47,6 +47,19 @@ export type DossierKillEvidence = Readonly<{
   reportUrl: string | null;
   performance: DossierKillPerformance;
 }>;
+/**
+ * One character's best Mythic parse for one encounter, read from the whole
+ * raid zone rather than from any stored kill. It answers the best-parse row,
+ * never the first-kill row: it is a claim about the character's history and
+ * links to their rankings rather than to a fight.
+ */
+export type DossierTierBestParse = Readonly<{
+  raidName: string;
+  bossName: string;
+  character: CharacterKey;
+  rankingsUrl: string;
+  performance: DossierKillPerformance;
+}>;
 export type DossierWipeEvidence = Readonly<{
   raidId: string;
   raidName: string;
@@ -74,6 +87,7 @@ export type BuildApplicantDossierInput = Readonly<{
   characters: readonly DossierCharacter[];
   kills: readonly DossierKillEvidence[];
   wipes?: readonly DossierWipeEvidence[];
+  tierBests?: readonly DossierTierBestParse[];
   completeWarcraftLogsCharacters?: readonly CharacterKey[];
   cuttingEdges?: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
@@ -313,9 +327,23 @@ function parseCandidate(
       };
 }
 
+function tierBestCandidate(
+  tierBest: DossierTierBestParse,
+  metric: DossierKillParseMetric
+): ApplicantDossierParseMetric {
+  return metric.state === "available"
+    ? {
+        state: "available",
+        percentile: metric.percentile,
+        reportUrl: tierBest.rankingsUrl
+      }
+    : metric;
+}
+
 function aggregateEventParses(
   kills: readonly DossierKillEvidence[],
-  characters: readonly DossierCharacter[]
+  characters: readonly DossierCharacter[],
+  tierBests: readonly DossierTierBestParse[] = []
 ): readonly ApplicantDossierCharacterParses[] {
   const participants = new Set(
     kills.map((kill) => canonicalCharacterId(kill.character))
@@ -327,27 +355,40 @@ function aggregateEventParses(
         canonicalCharacterId(character.key)
     );
     if (!participants.has(canonicalCharacterId(character.key))) return [];
+    // A tier best is only offered for a character whose kill is displayed
+    // here. Without that gate a boss card would carry a parse for someone who
+    // has no shown evidence on it at all.
+    const characterTierBests = tierBests.filter(
+      (tierBest) =>
+        canonicalCharacterId(tierBest.character) ===
+        canonicalCharacterId(character.key)
+    );
+    const candidates = (
+      select: (performance: DossierKillPerformance) => DossierKillParseMetric
+    ): readonly ApplicantDossierParseMetric[] => [
+      ...characterKills.map((kill) =>
+        parseCandidate(kill, select(kill.performance))
+      ),
+      ...characterTierBests.map((tierBest) =>
+        tierBestCandidate(tierBest, select(tierBest.performance))
+      )
+    ];
+    const spec =
+      selectParseSpec(characterKills) ??
+      characterTierBests
+        .map((tierBest) => tierBest.performance.spec)
+        .find(
+          (value): value is Readonly<{ name: string; iconUrl: string }> =>
+            value != null
+        ) ??
+      null;
     return [
       {
         character: character.displayName,
-        ...(selectParseSpec(characterKills) === null
-          ? {}
-          : { spec: selectParseSpec(characterKills) }),
-        damage: selectParseMetric(
-          characterKills.map((kill) =>
-            parseCandidate(kill, kill.performance.damage)
-          )
-        ),
-        healing: selectParseMetric(
-          characterKills.map((kill) =>
-            parseCandidate(kill, kill.performance.healing)
-          )
-        ),
-        bossDamage: selectParseMetric(
-          characterKills.map((kill) =>
-            parseCandidate(kill, kill.performance.bossDamage)
-          )
-        )
+        ...(spec === null ? {} : { spec }),
+        damage: selectParseMetric(candidates((p) => p.damage)),
+        healing: selectParseMetric(candidates((p) => p.healing)),
+        bossDamage: selectParseMetric(candidates((p) => p.bossDamage))
       }
     ];
   });
@@ -368,12 +409,18 @@ function selectParseSpec(
 
 function aggregateBossParses(
   events: readonly (readonly DossierKillEvidence[])[],
-  characters: readonly DossierCharacter[]
+  characters: readonly DossierCharacter[],
+  tierBests: readonly DossierTierBestParse[]
 ): readonly ApplicantDossierCharacterParses[] {
   // The events are already formed by the displayed-evidence grouping seam.
   // Re-aggregating their supporting rows by canonical key avoids merging
   // distinct characters which happen to share a display name.
-  return aggregateEventParses(events.flat(), characters);
+  //
+  // The tier bests come from the whole zone, so this row is the character's
+  // best rather than the best of what is listed. The displayed events stay in
+  // the running: a tier whose zone rankings the budget never reached would
+  // otherwise lose a value it already holds.
+  return aggregateEventParses(events.flat(), characters, tierBests);
 }
 
 export function buildApplicantDossier(
@@ -443,6 +490,17 @@ export function buildApplicantDossier(
     allKills.push(kill);
   }
   limitations.push(...withheldKillReasons.values());
+  // Keyed by the catalogue's raid and boss, exactly as the kills are, so a
+  // tier best lands on the boss card its zone rankings describe. An encounter
+  // the catalogue cannot place is dropped rather than guessed at: unlike a
+  // kill, a missing best parse hides nothing a reviewer could otherwise see.
+  const tierBestsByBoss = new Map<string, DossierTierBestParse[]>();
+  for (const tierBest of input.tierBests ?? []) {
+    const metadata = catalogueEncounter({ ...tierBest, journalBossId: null });
+    if (metadata === null) continue;
+    const key = [metadata.raidId, metadata.bossId].join("\0");
+    tierBestsByBoss.set(key, [...(tierBestsByBoss.get(key) ?? []), tierBest]);
+  }
   const byBoss = new Map<string, DossierKillEvidence[]>();
   for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");
@@ -543,7 +601,8 @@ export function buildApplicantDossier(
       firstKills: firstKills.map((entry) => entry.firstKill),
       bestParses: aggregateBossParses(
         firstKills.map((entry) => entry.shared),
-        characters
+        characters,
+        tierBestsByBoss.get([selected.raidId, selected.bossId].join("\0")) ?? []
       ),
       isFinalBoss: selected.isFinalBoss,
       wipes: aggregateWipes(wipesForBoss)

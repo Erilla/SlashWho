@@ -20,6 +20,7 @@ export type {
   CallerClass,
   CharacterEvidenceRun,
   CharacterMythicKillInput,
+  CharacterTierBestParseInput,
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicWipeInput,
@@ -48,5 +49,6 @@ export type {
   StoredSnapshotCharacter,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
+  StoredCharacterTierBestParse,
   SuppressionRepository
 } from "./repositories";

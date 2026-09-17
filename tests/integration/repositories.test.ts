@@ -225,6 +225,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [enriched],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -241,6 +242,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T13:05:00.000Z")
     });
 
@@ -252,6 +254,97 @@ describe("PostgreSQL repositories", () => {
       healing: { state: "available", percentile: 82 },
       bossDamage: { state: "available", percentile: 87 }
     });
+  });
+
+  it("carries forward tier bests for zones a later run did not read", async () => {
+    // Break caught: one run reads only the newest few zones, so a publish that
+    // did not reach a zone would blank a best parse it already holds.
+    const manaforge = {
+      raidId: "44",
+      raidName: "Manaforge Omega",
+      bossId: "3129",
+      bossName: "Plexus Sentinel",
+      rankingsUrl:
+        "https://www.warcraftlogs.com/character/eu/silvermoon/ryii#zone=44&boss=3129&difficulty=5",
+      performance: {
+        spec: {
+          name: "Destruction",
+          iconUrl:
+            "https://wow.zamimg.com/images/wow/icons/medium/spell_shadow_rainoffire.jpg"
+        },
+        damage: { state: "available", percentile: 96.2 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "available", percentile: 91 }
+      }
+    } as const;
+    const sporefall = {
+      ...manaforge,
+      raidId: "45",
+      raidName: "Sporefall",
+      bossId: "3300",
+      bossName: "Rootbound Warden",
+      rankingsUrl:
+        "https://www.warcraftlogs.com/character/eu/silvermoon/ryii#zone=45&boss=3300&difficulty=5",
+      performance: {
+        spec: null,
+        damage: { state: "available", percentile: 55 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    } as const;
+
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [manaforge, sporefall],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    // A later run whose budget reached only the newest zone.
+    const second = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (second.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(second.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [
+        {
+          ...manaforge,
+          performance: {
+            ...manaforge.performance,
+            damage: { state: "available", percentile: 98 }
+          }
+        }
+      ],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+
+    const stored = await repositories.evidence.getCompleted(rootKey);
+    expect(
+      stored?.tierBests.map((tierBest) => [
+        tierBest.raidId,
+        tierBest.bossId,
+        tierBest.performance.damage
+      ])
+    ).toEqual([
+      ["44", "3129", { state: "available", percentile: 98 }],
+      ["45", "3300", { state: "available", percentile: 55 }]
+    ]);
   });
 
   it("keeps enriched parses when a later partial run cannot re-enrich them", async () => {
@@ -281,6 +374,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [enriched],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -297,6 +391,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T13:05:00.000Z")
     });
 
@@ -338,6 +433,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [hydrated, bare],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -375,6 +471,7 @@ describe("PostgreSQL repositories", () => {
         })
       ],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -390,6 +487,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill({ fightUrl })],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T13:05:00.000Z")
     });
 
@@ -447,6 +545,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [mythicWipe()],
+      tierBests: [],
       completedAt
     });
 
@@ -500,6 +599,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [],
+      tierBests: [],
       completedAt
     });
     await pool.query(
@@ -538,6 +638,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [],
+      tierBests: [],
       completedAt
     });
     await pool.query(
@@ -580,6 +681,7 @@ describe("PostgreSQL repositories", () => {
           fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=2"
         })
       ],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:00:00.000Z")
     });
 
@@ -611,6 +713,7 @@ describe("PostgreSQL repositories", () => {
       state: "partial",
       limitationCode: "request_cap",
       parseLimitationCode: null,
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z"),
       kills: [
         mythicKill(),
@@ -630,12 +733,13 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 12,
+      evidenceVersion: 13,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
       ],
       wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })],
+      tierBests: [],
       wipeCapable: true
     });
   });
@@ -653,6 +757,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [mythicWipe()],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:00:00.000Z")
     });
     await pool.query(
@@ -679,6 +784,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T13:01:00.000Z")
     });
 
@@ -705,6 +811,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill()],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:00:00.000Z")
     });
     await pool.query(
@@ -758,6 +865,7 @@ describe("PostgreSQL repositories", () => {
         ...input,
         kills: [],
         wipes: [],
+        tierBests: [],
         completedAt: new Date("2026-08-04T12:05:00.000Z")
       });
       await expect(
@@ -792,6 +900,7 @@ describe("PostgreSQL repositories", () => {
           ...input,
           kills: [],
           wipes: [],
+          tierBests: [],
           completedAt: new Date("2026-08-04T12:05:00.000Z")
         })
       ).rejects.toThrow("character_evidence_publication_invalid");
@@ -834,6 +943,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: initialKills,
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -881,6 +991,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: replacementKills,
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:10:00.000Z")
     });
 
@@ -914,6 +1025,7 @@ describe("PostgreSQL repositories", () => {
           })
         ],
         wipes: [],
+        tierBests: [],
         completedAt: new Date("2026-08-04T12:05:00.000Z")
       })
     ).rejects.toThrow(RangeError);
@@ -947,6 +1059,7 @@ describe("PostgreSQL repositories", () => {
         })
       ],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
     const completed = await repositories.evidence.getCompleted(rootKey);
@@ -1017,6 +1130,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [],
       wipes: [],
+      tierBests: [],
       completedAt: new Date()
     });
     const found = await repositories.evidence.find(reservation.run.id);

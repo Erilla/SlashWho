@@ -509,6 +509,60 @@ export const characterMythicKills = pgTable(
   ]
 );
 
+/**
+ * One encounter's best Mythic parse for a character, read from a whole zone in
+ * a single upstream request. It is deliberately not tied to a fight: it is the
+ * character's best anywhere, which is what the dossier's best-parse row claims,
+ * and never a statement about any particular kill.
+ */
+export const characterTierBestParses = pgTable(
+  "character_tier_best_parses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    evidenceRunId: uuid("evidence_run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    raidId: text("raid_id").notNull(),
+    raidName: text("raid_name").notNull(),
+    bossId: text("boss_id").notNull(),
+    bossName: text("boss_name").notNull(),
+    rankingsUrl: text("rankings_url").notNull(),
+    specName: text("spec_name"),
+    specIconUrl: text("spec_icon_url"),
+    damageParseState:
+      characterMythicKillParseState("damage_parse_state").notNull(),
+    damagePercentile: doublePrecision("damage_percentile"),
+    healingParseState: characterMythicKillParseState(
+      "healing_parse_state"
+    ).notNull(),
+    healingPercentile: doublePrecision("healing_percentile"),
+    bossDamageParseState: characterMythicKillParseState(
+      "boss_damage_parse_state"
+    ).notNull(),
+    bossDamagePercentile: doublePrecision("boss_damage_percentile")
+  },
+  (table) => [
+    uniqueIndex("character_tier_best_parses_encounter_idx").on(
+      table.evidenceRunId,
+      table.raidId,
+      table.bossId
+    ),
+    index("character_tier_best_parses_run_idx").on(table.evidenceRunId),
+    check(
+      "character_tier_best_parses_damage_parse_check",
+      sql`(${table.damageParseState} = 'available' AND ${table.damagePercentile} IS NOT NULL AND ${table.damagePercentile} >= 0 AND ${table.damagePercentile} <= 100) OR (${table.damageParseState} IN ('not_applicable', 'unavailable') AND ${table.damagePercentile} IS NULL)`
+    ),
+    check(
+      "character_tier_best_parses_healing_parse_check",
+      sql`(${table.healingParseState} = 'available' AND ${table.healingPercentile} IS NOT NULL AND ${table.healingPercentile} >= 0 AND ${table.healingPercentile} <= 100) OR (${table.healingParseState} IN ('not_applicable', 'unavailable') AND ${table.healingPercentile} IS NULL)`
+    ),
+    check(
+      "character_tier_best_parses_boss_damage_parse_check",
+      sql`(${table.bossDamageParseState} = 'available' AND ${table.bossDamagePercentile} IS NOT NULL AND ${table.bossDamagePercentile} >= 0 AND ${table.bossDamagePercentile} <= 100) OR (${table.bossDamageParseState} IN ('not_applicable', 'unavailable') AND ${table.bossDamagePercentile} IS NULL)`
+    )
+  ]
+);
+
 export const characterMythicWipes = pgTable(
   "character_mythic_wipes",
   {

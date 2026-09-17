@@ -65,6 +65,23 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   historicWorldRank: null;
 }>;
 
+/**
+ * The character's best Mythic parse for one encounter of one raid zone, read
+ * from `zoneRankings` rather than from any single report. It is a claim about
+ * the character's history, never about a particular fight, so it carries a
+ * rankings link instead of a fight link.
+ */
+export type WarcraftLogsTierBestParse = Readonly<{
+  /** The Warcraft Logs zone id, matching the `raidId` on this zone's kills. */
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  /** The character's own Mythic rankings for this encounter. */
+  rankingsUrl: string;
+  performance: WarcraftLogsPerformance;
+}>;
+
 export type WarcraftLogsWipeEvidence = Readonly<{
   raidId: string;
   raidName: string;
@@ -82,6 +99,7 @@ export type WarcraftLogsReportResult =
       kind: "evidence";
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
+      tierBests: readonly WarcraftLogsTierBestParse[];
       limitation?: WarcraftLogsLimitation;
       parseLimitation?: WarcraftLogsLimitation;
     }>

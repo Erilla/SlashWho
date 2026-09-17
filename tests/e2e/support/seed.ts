@@ -109,6 +109,7 @@ export async function seedCharacterEvidence(
       limitationCode: null,
       parseLimitationCode: null,
       completedAt: now,
+      tierBests: [],
       kills:
         options.withSampleKills === false
           ? []

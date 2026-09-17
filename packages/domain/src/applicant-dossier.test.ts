@@ -4,6 +4,7 @@ import {
   buildApplicantDossier,
   type ApplicantDossierBoss,
   type DossierKillEvidence,
+  type DossierTierBestParse,
   type DossierWipeEvidence
 } from "./applicant-dossier";
 import { lookupRaiderIoBoss } from "./raid-catalogue";
@@ -51,6 +52,32 @@ function kill(
       damage: { state: "unavailable" },
       healing: { state: "unavailable" },
       bossDamage: { state: "unavailable" }
+    },
+    ...overrides
+  };
+}
+
+const rankingsUrl =
+  "https://www.warcraftlogs.com/character/eu/silvermoon/ryii#zone=1273&boss=2902&difficulty=5";
+
+function tierBest(
+  character: CharacterKey,
+  overrides: Partial<DossierTierBestParse> = {}
+): DossierTierBestParse {
+  return {
+    raidName: "Nerubar's Palace",
+    bossName: "Queen Ansurek",
+    character,
+    rankingsUrl,
+    performance: {
+      spec: {
+        name: "Destruction",
+        iconUrl:
+          "https://wow.zamimg.com/images/wow/icons/medium/spell_shadow_rainoffire.jpg"
+      },
+      damage: { state: "available", percentile: 96.2 },
+      healing: { state: "unavailable" },
+      bossDamage: { state: "available", percentile: 91 }
     },
     ...overrides
   };
@@ -1303,6 +1330,117 @@ describe("historic tier current-content windows", () => {
     expect(dossier.limitations.map((limitation) => limitation.code)).toEqual([
       "current_content_evidence_withheld"
     ]);
+  });
+
+  it("reports the character's tier best above the best of the displayed kills", () => {
+    // Break caught: a best parse assembled from displayed evidence alone can be
+    // worse than the character's actual best, because the better kill sits in a
+    // report the parse budget never reached or outside the shown window.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          reportUrl: "https://www.warcraftlogs.com/reports/shown#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 80 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      tierBests: [tierBest(root)],
+      limitations: []
+    });
+
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    // The first-kill row still answers for its own fight.
+    expect(boss.firstKill.parses[0]).toMatchObject({
+      damage: {
+        state: "available",
+        percentile: 80,
+        reportUrl: "https://www.warcraftlogs.com/reports/shown#fight=8"
+      }
+    });
+    expect(boss.bestParses).toEqual([
+      {
+        character: "Ryii",
+        spec: {
+          name: "Destruction",
+          iconUrl:
+            "https://wow.zamimg.com/images/wow/icons/medium/spell_shadow_rainoffire.jpg"
+        },
+        damage: {
+          state: "available",
+          percentile: 96.2,
+          reportUrl: rankingsUrl
+        },
+        healing: { state: "unavailable" },
+        bossDamage: {
+          state: "available",
+          percentile: 91,
+          reportUrl: rankingsUrl
+        }
+      }
+    ]);
+  });
+
+  it("keeps a displayed parse that beats the tier best read for it", () => {
+    // Break caught: zone rankings are read per tier and per run, so one that is
+    // stale or partial must never pull a shown value down.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          reportUrl: "https://www.warcraftlogs.com/reports/shown#fight=8",
+          performance: {
+            damage: { state: "available", percentile: 99 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      tierBests: [
+        tierBest(root, {
+          performance: {
+            damage: { state: "available", percentile: 40 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses[0]
+    ).toMatchObject({
+      damage: {
+        state: "available",
+        percentile: 99,
+        reportUrl: "https://www.warcraftlogs.com/reports/shown#fight=8"
+      }
+    });
+  });
+
+  it("offers no tier best to a character with no displayed kill on the boss", () => {
+    // Break caught: zone rankings cover every encounter in the zone, so a
+    // character ranked on a boss they have no shown kill for would otherwise
+    // gain a parse row on evidence the dossier never listed.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, altCharacter],
+      kills: [kill(root)],
+      tierBests: [tierBest(altKey)],
+      limitations: []
+    });
+
+    expect(
+      verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses.map(
+        (parse) => parse.character
+      )
+    ).toEqual(["Ryii"]);
   });
 });
 
