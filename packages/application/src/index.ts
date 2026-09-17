@@ -13,6 +13,7 @@ export type {
   DiscoveryJobHandler,
   DiscoveryJobHandlerOptions,
   DiscoveryLogger,
+  DiscoveryRunNotifier,
   FingerprintAlertNotifier,
   RetryableDiscoveryError
 } from "./discovery-job-handler";

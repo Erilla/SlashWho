@@ -737,6 +737,58 @@ function delivery(attempt = 1, maxAttempts = 5) {
 }
 
 describe("discovery job handler", () => {
+  it("announces every execution of a run, carrying the attempt", async () => {
+    // Break caught: announcing only the first attempt hid a run thrashing on
+    // retries behind what looked like a single quiet start.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const started: unknown[] = [];
+    const handler = handlerFor(repositories, new MutableGateway(), {
+      discoveryRunNotifier: {
+        started: async (value) => {
+          started.push(value);
+        }
+      }
+    });
+
+    await handler.execute(run.id, delivery());
+
+    expect(started).toEqual([
+      {
+        runId: run.id,
+        region: "eu",
+        realm: "silvermoon",
+        name: "root",
+        attempt: 1
+      }
+    ]);
+  });
+
+  it("completes a run whose start announcement fails", async () => {
+    // Break caught: a chat notification is an operational side effect, so a
+    // webhook that throws must never cost the run it was announcing.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const logger = { info: vi.fn() };
+    const handler = handlerFor(repositories, new MutableGateway(), {
+      logger,
+      discoveryRunNotifier: {
+        started: async () => {
+          throw new Error("webhook_unreachable");
+        }
+      }
+    });
+
+    await expect(handler.execute(run.id, delivery())).resolves.toBeUndefined();
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "complete"
+    });
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "discovery_run_announcement_failed",
+      runId: run.id
+    });
+  });
+
   it("defers an eligible run to private FIFO admission without consuming a delivery retry", async () => {
     // Break caught: budget waiting could consume a discovery retry or publish
     // the Raider.IO-only intermediate result before the atomic sweep resumes.

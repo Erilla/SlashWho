@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
 import {
+  createDiscoveryRunNotifier,
   createFingerprintAlertNotifier,
   createFingerprintIntegration,
   createRaiderIoGateway,
@@ -308,6 +309,92 @@ describe("worker runtime", () => {
       event: "upstream_throttle",
       provider: "blizzard",
       retryAfterMs: 30_000
+    });
+  });
+
+  it("announces a discovery run as a message Discord will accept", async () => {
+    // Break caught: posting the raw alert object is rejected by Discord with
+    // 400 "Cannot send an empty message", so every announcement would be lost
+    // to a swallowed failure.
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const notifier = createDiscoveryRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.started({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "Sentinel",
+      attempt: 2
+    });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, init] = fetch.mock.calls[0]! as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe(
+      "https://discord.com/api/webhooks/000000000000000000/token"
+    );
+    const body = JSON.parse(String(init.body)) as { content?: string };
+    expect(body.content).toContain("Sentinel");
+    expect(body.content).toContain("eu/silvermoon");
+    expect(body.content).toContain("attempt 2");
+  });
+
+  it("posts nothing when no discovery webhook is configured", async () => {
+    // Break caught: an unset webhook must cost no request at all, not a call
+    // to an empty URL that throws on every run.
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const notifier = createDiscoveryRunNotifier(
+      { ...config, discoveryWebhookUrl: undefined },
+      { fetch }
+    );
+
+    await notifier.started({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "Sentinel",
+      attempt: 1
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("swallows and logs a rejected discovery announcement", async () => {
+    // Break caught: Discord rate limits a busy webhook, and a 429 that
+    // propagated would fail the discovery run it was only describing.
+    const logger = { info: vi.fn() };
+    const fetch = vi.fn(async () => new Response(null, { status: 429 }));
+    const notifier = createDiscoveryRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { logger, fetch }
+    );
+
+    await expect(
+      notifier.started({
+        runId: "a1b2c3d4-0000-4000-8000-000000000001",
+        region: "eu",
+        realm: "silvermoon",
+        name: "Sentinel",
+        attempt: 1
+      })
+    ).resolves.toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "discovery_announcement_delivery_failed",
+      failure: "http_status",
+      status: 429
     });
   });
 

@@ -91,6 +91,20 @@ it("accepts a local Blizzard endpoint only when explicitly configured", () => {
   ).toBe("http://127.0.0.1:43101");
 });
 
+it("preserves a discovery webhook path and query string", () => {
+  // Break caught: a Discord webhook's path is the whole credential, so any
+  // normalisation that kept only the origin would post to discord.com itself.
+  const webhookUrl =
+    "https://discord.com/api/webhooks/000000000000000000/AbCdEf-token_value";
+
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      DISCOVERY_WEBHOOK_URL: webhookUrl
+    }).discoveryWebhookUrl
+  ).toBe(webhookUrl);
+});
+
 it("preserves a maintainer webhook path and query string", () => {
   // Break caught: URL validation could reduce a provider webhook to its origin,
   // posting alerts to the provider homepage instead of the secret endpoint.

@@ -200,6 +200,27 @@ describe("worker logger", () => {
     expect(lines[0]).not.toContain(marker);
   });
 
+  it("redacts a webhook url, whose path is itself the credential", () => {
+    // Break caught: a webhook URL carries its secret in the path, so logging
+    // one in full hands over the ability to post as us.
+    const marker = "UNIQUE_WEBHOOK_MARKER_4f91ce";
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "worker_config",
+      config: {
+        discoveryWebhookUrl: `https://discord.com/api/webhooks/1/${marker}`,
+        maintainerAlertWebhookUrl: `https://hooks.example.test/${marker}`
+      }
+    });
+
+    expect(lines[0]).toContain("worker_config");
+    expect(lines[0]).not.toContain(marker);
+  });
+
   it("does not redact ordinary telemetry fields that this branch exists to produce", () => {
     // Break caught: widening the matcher to a substring rule could quietly
     // swallow unrelated fields that merely share letters with a credential
