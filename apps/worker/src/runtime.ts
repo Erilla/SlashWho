@@ -6,6 +6,7 @@ import {
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
+  type DiscoveryRunNotifier,
   type FingerprintAlertNotifier
 } from "@slashwho/application";
 import { createBlizzardClient } from "@slashwho/blizzard";
@@ -60,6 +61,10 @@ export type WorkerRuntimeDependencies = {
     config: WorkerConfig,
     logger?: DiscoveryLogger
   ) => FingerprintAlertNotifier;
+  createDiscoveryRunNotifier?: (
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
+  ) => DiscoveryRunNotifier;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
   createEvidenceHandler: typeof createApplicantEvidenceJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
@@ -93,6 +98,50 @@ export function createFingerprintIntegration(
       cadenceMs: config.fingerprintSweepCadenceHours * 60 * 60 * 1_000,
       minimumCommon: config.fingerprintMinimumCommon,
       minimumIdenticalPercent: config.fingerprintMinimumIdenticalPercent
+    }
+  };
+}
+
+/**
+ * Announces each discovery run to a chat webhook. Discord rejects any body
+ * without `content`, `embeds` or `file`, so the run is rendered as a message
+ * rather than posted as the raw record. Delivery is best effort: the channel is
+ * a convenience for whoever is watching, never a dependency of the run.
+ */
+export function createDiscoveryRunNotifier(
+  config: WorkerConfig,
+  options: {
+    logger?: DiscoveryLogger;
+    fetch?: typeof globalThis.fetch;
+    timeoutMs?: number;
+  } = {}
+): DiscoveryRunNotifier {
+  const fetch = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  return {
+    async started(run) {
+      if (!config.discoveryWebhookUrl) return;
+      const content = `🔍 Discovery run started — **${run.name}** (${run.region}/${run.realm}) · attempt ${run.attempt} · run \`${run.runId}\``;
+      try {
+        const response = await fetch(config.discoveryWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+        if (!response.ok) {
+          options.logger?.info({
+            event: "discovery_announcement_delivery_failed",
+            failure: "http_status",
+            status: response.status
+          });
+        }
+      } catch {
+        options.logger?.info({
+          event: "discovery_announcement_delivery_failed",
+          failure: "network_or_timeout"
+        });
+      }
     }
   };
 }
@@ -180,6 +229,8 @@ const defaultDependencies: WorkerRuntimeDependencies = {
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
     createFingerprintAlertNotifier(config, { logger }),
+  createDiscoveryRunNotifier: (config, logger) =>
+    createDiscoveryRunNotifier(config, { logger }),
   createHandler: createDiscoveryJobHandler,
   createEvidenceHandler: createApplicantEvidenceJobHandler,
   sleep: (milliseconds) =>
@@ -230,11 +281,16 @@ export async function createWorkerRuntime(
     );
     const fingerprintAlertNotifier =
       dependencies.createFingerprintAlertNotifier?.(config, logger);
+    const discoveryRunNotifier = dependencies.createDiscoveryRunNotifier?.(
+      config,
+      logger
+    );
     const handler = dependencies.createHandler({
       repositories,
       gateway,
       ...fingerprintIntegration,
       ...(fingerprintAlertNotifier ? { fingerprintAlertNotifier } : {}),
+      ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
       enqueueFingerprintAdmission: (runId) =>
         initializedQueue.enqueueFingerprintAdmission(runId),
       requestCap: config.discoveryRequestCap,

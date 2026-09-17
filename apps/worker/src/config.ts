@@ -15,6 +15,7 @@ export type WorkerConfig = {
   raiderIoBaseUrl: string;
   raiderIoTimeoutMs: number;
   raiderIoAccessKey?: string;
+  discoveryWebhookUrl?: string;
   blizzardClientId: string;
   blizzardClientSecret: string;
   warcraftLogsClientId: string;
@@ -164,6 +165,7 @@ export function loadWorkerConfig(
       "invalid_raiderio_timeout"
     ),
     raiderIoAccessKey: optionalSecret(environment.RAIDER_IO_ACCESS_KEY),
+    discoveryWebhookUrl: optionalSecret(environment.DISCOVERY_WEBHOOK_URL),
     blizzardClientId,
     blizzardClientSecret,
     warcraftLogsClientId,

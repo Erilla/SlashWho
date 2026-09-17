@@ -120,6 +120,23 @@ export type FingerprintAlertNotifier = {
   }): Promise<void> | void;
 };
 
+/**
+ * Delivery seam for announcing that a run has begun. Called once per execution
+ * - a retry and a continuation each announce themselves - so a watcher sees the
+ * work as it is attempted rather than only once it settles. The field set is
+ * the same allowlist `DiscoveryRunRecord` keeps to: run identity, the canonical
+ * public character key, and the attempt.
+ */
+export type DiscoveryRunNotifier = {
+  started(run: {
+    runId: string;
+    region: string;
+    realm: string;
+    name: string;
+    attempt: number;
+  }): Promise<void> | void;
+};
+
 export type DiscoveryJobHandlerOptions = {
   repositories: Repositories;
   gateway: RaiderIoGateway;
@@ -144,6 +161,7 @@ export type DiscoveryJobHandlerOptions = {
   negativeCacheTtlMs?: number;
   logger?: DiscoveryLogger;
   fingerprintAlertNotifier?: FingerprintAlertNotifier;
+  discoveryRunNotifier?: DiscoveryRunNotifier;
   monotonic?: () => number;
 };
 
@@ -312,6 +330,23 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       if (!run) return;
 
       const startedAt = now();
+      // Announcing a run is an operational side effect, so a notifier that
+      // throws is recorded and stepped over rather than costing the run it was
+      // announcing.
+      try {
+        await options.discoveryRunNotifier?.started({
+          runId,
+          region: run.rootKey.region,
+          realm: run.rootKey.realm,
+          name: run.rootKey.name,
+          attempt: context.attempt
+        });
+      } catch {
+        options.logger?.info({
+          event: "discovery_run_announcement_failed",
+          runId
+        });
+      }
       const record: DiscoveryRunRecord = {
         event: "discovery_run",
         runId,

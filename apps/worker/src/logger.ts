@@ -85,7 +85,10 @@ const sensitiveKeySubstrings = [
   "apikey",
   "credential",
   "encryptionkey",
-  "decryptionkey"
+  "decryptionkey",
+  // A webhook URL carries its secret in the path, so the whole value is a
+  // credential however it is named.
+  "webhook"
 ];
 
 function sanitize(value: unknown, visited = new WeakSet<object>()): unknown {

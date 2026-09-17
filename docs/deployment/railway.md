@@ -82,6 +82,10 @@ RAIDER_IO_TIMEOUT_MS=10000
 # allowance. The discovery sweep is the heaviest Raider.IO consumer, so this
 # is the service that benefits most. Omit it to call Raider.IO anonymously.
 RAIDER_IO_ACCESS_KEY=<Raider.IO API key>
+# Optional secret: announces each discovery run to a Discord channel as it
+# starts, once per execution. Worker-only, because runs execute here. The URL
+# is a credential in full. Omit it to announce nothing.
+DISCOVERY_WEBHOOK_URL=<Discord webhook URL>
 DATABASE_STARTUP_ATTEMPTS=5
 DATABASE_STARTUP_RETRY_MS=1000
 WORKER_DRAIN_TIMEOUT_MS=30000
