@@ -471,6 +471,7 @@ describe("PostgreSQL repositories", () => {
         })
       ],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T12:05:00.000Z")
     });
 
@@ -486,6 +487,7 @@ describe("PostgreSQL repositories", () => {
       parseLimitationCode: null,
       kills: [mythicKill({ fightUrl })],
       wipes: [],
+      tierBests: [],
       completedAt: new Date("2026-08-04T13:05:00.000Z")
     });
 
