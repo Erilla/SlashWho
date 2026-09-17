@@ -81,6 +81,8 @@ function fixture(
     evidenceParseLimitationCode?: string | null;
     evidenceCompletedAt?: Date;
     gatheringCharacter?: CharacterKey | null;
+    /** Fresh stored evidence with a refresh collecting over it right now. */
+    refreshingCharacter?: CharacterKey | null;
     onCacheEvent?: (source: string, event: string) => void;
   } = {}
 ) {
@@ -140,6 +142,23 @@ function fixture(
     evidence: {
       reserve: vi.fn().mockImplementation(async ({ key }) => ({
         kind: options.gatheringCharacter === key ? "active" : "fresh",
+        active:
+          options.gatheringCharacter === key ||
+          options.refreshingCharacter === key
+            ? {
+                id: "10000000-0000-4000-8000-000000000013",
+                key,
+                queueJobId: "evidence-job",
+                status: "running",
+                attempt: 1,
+                limitationCode: null,
+                parseLimitationCode: null,
+                errorCode: null,
+                createdAt: new Date("2026-09-11T12:00:00.000Z"),
+                startedAt: new Date("2026-09-11T12:00:00.000Z"),
+                completedAt: null
+              }
+            : null,
         run: {
           id: "10000000-0000-4000-8000-000000000012",
           key,
@@ -1083,6 +1102,28 @@ describe("applicant dossier service", () => {
         characters: [
           { key: root, researchState: "complete" },
           { key: alt, researchState: "gathering" }
+        ]
+      }
+    });
+  });
+
+  it("reports gathering while a refresh re-collects evidence that is still fresh", async () => {
+    // Break caught: the refresh button forces a run past the freshness window,
+    // so the read that started it saw `fresh` and reported no gathering --
+    // leaving the button enabled during exactly the run it queued.
+    const result = await fixture({ refreshingCharacter: alt }).dossiers.read(
+      root
+    );
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: {
+        research: { state: "gathering" },
+        characters: [
+          // The stored evidence is still complete -- a refresh running over it
+          // does not make it incomplete.
+          { key: root, evidenceState: "complete" },
+          { key: alt, evidenceState: "complete" }
         ]
       }
     });
