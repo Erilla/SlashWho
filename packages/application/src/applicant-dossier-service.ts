@@ -552,7 +552,7 @@ async function gatherCuttingEdgeEvidence(
 
 function serializeDossierSubject(
   character: DossierSubject,
-  evidenceState?: DossierEvidenceState,
+  evidence?: { evidenceState: DossierEvidenceState; gathering: boolean },
   excluded = false
 ) {
   return {
@@ -570,13 +570,16 @@ function serializeDossierSubject(
             ? ("fingerprint_derived" as const)
             : ("raiderio_declared" as const),
     ...(excluded ? { excluded: true as const } : {}),
-    ...(evidenceState
+    ...(evidence
       ? {
-          evidenceState,
-          researchState:
-            evidenceState === "complete" || evidenceState === "partial"
-              ? ("complete" as const)
-              : ("gathering" as const)
+          evidenceState: evidence.evidenceState,
+          // Keyed on the run, not on `evidenceState`. A refresh over evidence
+          // that is still fresh leaves the stored state `complete`, so
+          // deriving the spinner from it left the row static through exactly
+          // the collection the page was reporting at the top.
+          researchState: evidence.gathering
+            ? ("gathering" as const)
+            : ("complete" as const)
         }
       : {})
   };
@@ -792,7 +795,7 @@ async function assembleDossier(options: {
       : options.research,
     characters: [
       ...options.subjects.map((character, index) =>
-        serializeDossierSubject(character, evidence[index]?.evidenceState)
+        serializeDossierSubject(character, evidence[index])
       ),
       // Excluded rows sit after the researched ones rather than holding their
       // ranked position, so the list reads top-down as evidence then exclusions.

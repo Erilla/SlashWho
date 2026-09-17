@@ -1121,9 +1121,11 @@ describe("applicant dossier service", () => {
         research: { state: "gathering" },
         characters: [
           // The stored evidence is still complete -- a refresh running over it
-          // does not make it incomplete.
-          { key: root, evidenceState: "complete" },
-          { key: alt, evidenceState: "complete" }
+          // does not make it incomplete -- but the row being re-collected
+          // still has to show it, or the spinner appears against every parse
+          // while Connected Characters sits there looking settled.
+          { key: root, evidenceState: "complete", researchState: "complete" },
+          { key: alt, evidenceState: "complete", researchState: "gathering" }
         ]
       }
     });
