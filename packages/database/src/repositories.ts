@@ -318,21 +318,34 @@ export interface CompletedCharacterEvidence {
   wipeCapable: boolean;
 }
 
+/**
+ * `kind` answers "is the stored evidence usable" and `active` answers "is a
+ * collection running" -- two independent questions. A refresh deliberately
+ * forces a run past the freshness window, so fresh evidence and an in-flight
+ * run coexist; a reader that infers one from the other reports a refresh it
+ * started as no work at all.
+ */
 export type EvidenceReservationResult =
   | {
       kind: "fresh";
       run: CharacterEvidenceRun;
       completed: CompletedCharacterEvidence;
+      /** An in-flight run collecting over this already-fresh evidence. */
+      active: CharacterEvidenceRun | null;
     }
   | {
       kind: "active";
       run: CharacterEvidenceRun;
       completed: CompletedCharacterEvidence | null;
+      /** Always the joined run -- the same value as `run`. */
+      active: CharacterEvidenceRun;
     }
   | {
       kind: "reserved";
       run: CharacterEvidenceRun;
       completed: CompletedCharacterEvidence | null;
+      /** Always the run this call created -- the same value as `run`. */
+      active: CharacterEvidenceRun;
     };
 
 export interface EvidenceRepository {

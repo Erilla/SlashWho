@@ -529,6 +529,74 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toMatchObject({ className: "Mage" });
   });
 
+  it("reports a running collection alongside evidence that is still fresh", async () => {
+    // Break caught: `reserve` answered "fresh" and returned before it ever
+    // looked for a running collection, so the dossier a refresh had just
+    // started reported no gathering at all -- and the refresh button that
+    // started it stayed enabled.
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [mythicWipe()],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:00:00.000Z")
+    });
+
+    // What the refresh button does: a cutoff of `at` leaves nothing fresh.
+    const refresh = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T12:30:00.000Z"),
+      at: new Date("2026-08-04T12:30:00.000Z")
+    });
+    if (refresh.kind !== "reserved") throw new Error("evidence_not_reserved");
+
+    // What a dossier read does, concurrently, with the normal window.
+    const read = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-03T12:30:00.000Z"),
+      at: new Date("2026-08-04T12:30:00.000Z")
+    });
+
+    expect(read.kind).toBe("fresh");
+    expect(read.active?.id).toBe(refresh.run.id);
+    expect(read.completed?.run.id).toBe(first.run.id);
+  });
+
+  it("reports no running collection when fresh evidence is simply at rest", async () => {
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [mythicWipe()],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:00:00.000Z")
+    });
+
+    const read = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-03T12:30:00.000Z"),
+      at: new Date("2026-08-04T12:30:00.000Z")
+    });
+
+    expect(read.kind).toBe("fresh");
+    expect(read.active).toBeNull();
+  });
+
   it("retains the last completed evidence while a stale character refresh is active", async () => {
     // Break caught: a refresh could make previously completed dossier evidence
     // disappear until its replacement scan finishes.

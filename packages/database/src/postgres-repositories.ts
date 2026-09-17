@@ -2610,6 +2610,25 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await client.query("BEGIN");
           await lockCharacterEvidence(client, key);
           const completed = await loadCompletedEvidence(client, key);
+          // Asked before the freshness check, not after it. A refresh forces a
+          // run past the freshness window, so a caller reading fresh evidence
+          // can be looking at a character that is being re-collected right now
+          // -- and it has no other way to find that out.
+          const active = await client.query<EvidenceRunRow>(
+            `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+                    attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                    ${evidenceRunClassNameSql()}
+             FROM character_evidence_runs
+             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+               AND status IN ('queued', 'running', 'retrying')
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1`,
+            [key.region, key.realm, key.name]
+          );
+          const activeRun = active.rows[0]
+            ? mapEvidenceRun(active.rows[0])
+            : null;
           if (
             completed !== null &&
             completed.evidenceVersion !== undefined &&
@@ -2626,28 +2645,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             return {
               kind: "fresh",
               run: completed.run,
-              completed
+              completed,
+              active: activeRun
             } satisfies EvidenceReservationResult;
           }
 
-          const active = await client.query<EvidenceRunRow>(
-            `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                    attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
-                    ${evidenceRunClassNameSql()}
-             FROM character_evidence_runs
-             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-               AND status IN ('queued', 'running', 'retrying')
-             ORDER BY created_at DESC, id DESC
-             LIMIT 1`,
-            [key.region, key.realm, key.name]
-          );
-          if (active.rows[0]) {
+          if (activeRun) {
             await client.query("COMMIT");
             return {
               kind: "active",
-              run: mapEvidenceRun(active.rows[0]),
-              completed
+              run: activeRun,
+              completed,
+              active: activeRun
             } satisfies EvidenceReservationResult;
           }
 
@@ -2667,11 +2676,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               credentials?.wclClientSecretEncrypted ?? null
             ]
           );
+          const reservedRun = mapEvidenceRun(inserted.rows[0]!);
           await client.query("COMMIT");
           return {
             kind: "reserved",
-            run: mapEvidenceRun(inserted.rows[0]!),
-            completed
+            run: reservedRun,
+            completed,
+            active: reservedRun
           } satisfies EvidenceReservationResult;
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);

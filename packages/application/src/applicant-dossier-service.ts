@@ -423,7 +423,12 @@ async function gatherCharacterEvidence(
       completed?.run.status === "complete" &&
       completed.run.limitationCode === null &&
       completed.wipeCapable,
-    gathering: reservation.kind !== "fresh",
+    // Keyed on the run, not on `kind`: a refresh forces a collection past the
+    // freshness window, so the read that should report "Collecting..." is
+    // exactly the one whose stored evidence is still fresh. `evidenceState`
+    // below stays keyed on `kind` -- fresh evidence does not become incomplete
+    // because a refresh is running over it.
+    gathering: reservation.active !== null,
     evidenceState:
       reservation.kind === "fresh"
         ? completed?.run.status === "partial"
