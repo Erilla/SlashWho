@@ -125,11 +125,14 @@ Two constraints from `queueOptions`:
 
 ### The reserve threshold
 
-`EVIDENCE_POINTS_RESERVE`, a worker config value with a default.
+`EVIDENCE_POINTS_RESERVE`, a worker config value, defaulting to **1500**
+points.
 
-**The default is a guess and must be labelled as one.** We do not know what a
-run costs; the only measurement available is that ten runs exceeded 9000 points,
-which bounds the average above 900 but says nothing about the distribution. The
+**1500 is a guess and must be labelled as one in the config comment.** It is
+derived only from the observation that ten runs exceeded 9000 points, so the
+average run costs more than 900; 1500 is that floor plus headroom, chosen so a
+run is refused rather than started and abandoned part-way. That floor says nothing about
+the distribution, only the average. The
 logged deltas are what replace the guess with evidence, and the threshold should
 be revisited within a day of the first deployment rather than left to ossify —
 `EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway (12) and code (24)
