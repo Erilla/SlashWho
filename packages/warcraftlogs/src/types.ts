@@ -122,6 +122,14 @@ export interface WarcraftLogsGateway {
        * spends its requests on what is still missing.
        */
       hydratedFightUrls?: ReadonlySet<string>;
+      /**
+       * When each zone's tier bests were last collected, keyed by raid id. A
+       * zone collected after its newest kill has nothing left to fetch, so it
+       * neither spends a request nor counts towards the zone budget -- without
+       * this a veteran's zone list always exceeds the budget and the run
+       * raises `parse_request_cap` forever, however saturated it is.
+       */
+      collectedTierZones?: ReadonlyMap<string, string>;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

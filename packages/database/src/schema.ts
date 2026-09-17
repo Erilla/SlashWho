@@ -539,7 +539,16 @@ export const characterTierBestParses = pgTable(
     bossDamageParseState: characterMythicKillParseState(
       "boss_damage_parse_state"
     ).notNull(),
-    bossDamagePercentile: doublePrecision("boss_damage_percentile")
+    bossDamagePercentile: doublePrecision("boss_damage_percentile"),
+    /**
+     * When this zone's rankings were actually read, which `publish` preserves
+     * as it carries a row onto a later run. The run's own `completed_at` would
+     * say every carried zone was just collected, so a zone a run never reached
+     * would look current and never be read again.
+     */
+    collectedAt: timestamp("collected_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
   },
   (table) => [
     uniqueIndex("character_tier_best_parses_encounter_idx").on(

@@ -49,6 +49,14 @@ export type ApplicantEvidenceStore = {
    * than redoing the same reports on every run.
    */
   hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
+  /**
+   * When each zone's tier bests were last collected, as `[raidId, completedAt]`
+   * pairs, so a zone with nothing left to fetch neither spends a request nor
+   * counts towards the run's zone budget.
+   */
+  collectedTierZones(
+    key: CharacterKey
+  ): Promise<readonly (readonly [string, string])[]>;
 };
 
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
@@ -61,6 +69,14 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   decryptionKey?: Buffer;
   requestCap: number;
   parseRequestCap: number;
+  /**
+   * How long a run that exhausted its parse budget waits before it is
+   * collectable again. A capped run records that work is outstanding, and
+   * `retry_after_at` is the one signal that makes `reserve` hand it back: with
+   * no retry the run stays fresh for the full 24 hours and the character
+   * settles permanently short of the data it knows it did not fetch.
+   */
+  parseCapRetryMs: number;
   now?: () => Date;
   logger?: { info(value: Record<string, unknown>): void };
   monotonic?: () => number;
@@ -177,6 +193,9 @@ export function createApplicantEvidenceJobHandler(
         const hydratedFightUrls = new Set(
           await options.evidence.hydratedFightUrls(run.key)
         );
+        const collectedTierZones = new Map(
+          await options.evidence.collectedTierZones(run.key)
+        );
         activeContext.signal.throwIfAborted();
         // A light refresh reads one page of reports. The gateway marks a
         // page-capped scan as a request-cap limitation, so the run publishes
@@ -188,6 +207,7 @@ export function createApplicantEvidenceJobHandler(
             parseRequestCap: options.parseRequestCap,
             ...(run.className ? { className: run.className } : {}),
             hydratedFightUrls,
+            collectedTierZones,
             signal: activeContext.signal
           })
         );
@@ -213,16 +233,32 @@ export function createApplicantEvidenceJobHandler(
           return;
         }
 
+        // A cap carries no upstream retry hint -- it is our own budget, not a
+        // 429 -- so the run supplies one. Without it `retry_after_at` stays
+        // null, the run is fresh on the ordinary 24-hour rule, and nothing
+        // ever collects the rest: the same machinery that resumes a
+        // rate-limited run, which the cap simply was not using.
+        const parseCapRetryMs =
+          response.parseLimitation?.code === "parse_request_cap"
+            ? options.parseCapRetryMs
+            : 0;
         const retryAfterMs = Math.max(
           response.limitation?.retryAfterMs ?? 0,
-          response.parseLimitation?.retryAfterMs ?? 0
+          response.parseLimitation?.retryAfterMs ?? 0,
+          parseCapRetryMs
         );
-        record.outcome = response.limitation ? "partial" : "complete";
+        // Honest about the run, not just about its history scan: a run that
+        // spent its whole parse budget did not finish, and reporting it
+        // `complete` was the other half of why the character looked settled.
+        const incomplete = Boolean(
+          response.limitation ?? response.parseLimitation
+        );
+        record.outcome = incomplete ? "partial" : "complete";
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = response.parseLimitation?.code ?? null;
         record.killCount = response.kills.length;
         await evidence.publish(run.id, {
-          state: response.limitation ? "partial" : "complete",
+          state: incomplete ? "partial" : "complete",
           limitationCode: response.limitation?.code ?? null,
           parseLimitationCode: response.parseLimitation?.code ?? null,
           ...(retryAfterMs > 0

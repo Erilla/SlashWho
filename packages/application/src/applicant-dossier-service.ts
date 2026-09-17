@@ -418,9 +418,15 @@ async function gatherCharacterEvidence(
       completed?.tierBests.map((tierBest) =>
         cachedTierBest(tierBest, character.key)
       ) ?? [],
+    // Negative conclusions rest on the history scan, which `limitationCode`
+    // reports. A run whose only shortfall is its parse budget scanned the whole
+    // history and publishes `partial` to say so, so requiring `complete` here
+    // would silently withdraw conclusions the evidence still supports.
     warcraftLogsComplete:
       reservation.kind === "fresh" &&
-      completed?.run.status === "complete" &&
+      (completed?.run.status === "complete" ||
+        (completed?.run.status === "partial" &&
+          completed.run.parseLimitationCode !== null)) &&
       completed.run.limitationCode === null &&
       completed.wipeCapable,
     // Keyed on the run, not on `kind`: a refresh forces a collection past the

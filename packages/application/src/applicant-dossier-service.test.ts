@@ -166,8 +166,11 @@ function fixture(
           status: options.evidenceStatus ?? "complete",
           attempt: 1,
           limitationCode:
-            options.evidenceLimitationCode ??
-            (options.evidenceStatus === "partial" ? "request_cap" : null),
+            "evidenceLimitationCode" in options
+              ? (options.evidenceLimitationCode ?? null)
+              : options.evidenceStatus === "partial"
+                ? "request_cap"
+                : null,
           parseLimitationCode: options.evidenceParseLimitationCode ?? null,
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -182,8 +185,11 @@ function fixture(
             status: options.evidenceStatus ?? "complete",
             attempt: 1,
             limitationCode:
-              options.evidenceLimitationCode ??
-              (options.evidenceStatus === "partial" ? "request_cap" : null),
+              "evidenceLimitationCode" in options
+                ? (options.evidenceLimitationCode ?? null)
+                : options.evidenceStatus === "partial"
+                  ? "request_cap"
+                  : null,
             parseLimitationCode: options.evidenceParseLimitationCode ?? null,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -386,6 +392,24 @@ describe("applicant dossier service", () => {
         code: "parse_request_cap"
       })
     );
+  });
+
+  it("keeps no-log gaps for a run whose only shortfall is its parse budget", async () => {
+    // A capped run now publishes `partial`, because it did not finish. Its
+    // history scan did, though, and that is what a negative conclusion rests
+    // on -- so requiring `complete` here would silently withdraw conclusions
+    // the evidence still supports the moment the cap started being honest.
+    const result = await fixture({
+      includeCachedKills: false,
+      evidenceStatus: "partial",
+      evidenceLimitationCode: null,
+      evidenceParseLimitationCode: "parse_request_cap"
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "no_logs"
+    });
   });
 
   it("withholds initial evidence for a tournament root before discovery finishes", async () => {

@@ -44,6 +44,9 @@ function store(
       published.push({ runId, result });
     },
     async fail() {},
+    async collectedTierZones() {
+      return [];
+    },
     async hydratedFightUrls() {
       return hydrated;
     }
@@ -104,6 +107,7 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -117,6 +121,7 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 8,
       hydratedFightUrls: new Set(),
+      collectedTierZones: new Map(),
       signal: expect.any(AbortSignal)
     });
     expect(evidence.published).toEqual([
@@ -162,6 +167,7 @@ describe("applicant evidence job handler", () => {
       },
       requestCap: 500,
       parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -233,6 +239,7 @@ describe("applicant evidence job handler", () => {
       },
       requestCap: 500,
       parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -246,9 +253,14 @@ describe("applicant evidence job handler", () => {
       {
         runId: run.id,
         result: {
-          state: "complete",
+          // A run that spent its whole parse budget did not finish, and says
+          // so -- and carries the retry that brings it back, because a cap is
+          // our own budget rather than an upstream 429 and has no retry hint
+          // of its own to pass on.
+          state: "partial",
           limitationCode: null,
           parseLimitationCode: "parse_request_cap",
+          retryAfterAt: new Date("2026-09-13T12:31:00.000Z"),
           tierBests: [],
           kills: [
             {
@@ -307,7 +319,8 @@ describe("applicant evidence job handler", () => {
       publish: vi.fn().mockResolvedValue(undefined),
       find: vi.fn(),
       fail: vi.fn(),
-      hydratedFightUrls: vi.fn().mockResolvedValue([])
+      hydratedFightUrls: vi.fn().mockResolvedValue([]),
+      collectedTierZones: vi.fn().mockResolvedValue([])
     };
     const handler = createApplicantEvidenceJobHandler({
       evidence,
@@ -315,7 +328,8 @@ describe("applicant evidence job handler", () => {
       createWarcraftLogsGateway,
       decryptionKey: encryptionKey,
       requestCap: 80,
-      parseRequestCap: 8
+      parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000
     });
 
     await handler.execute("run-1", {
@@ -351,6 +365,7 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -389,6 +404,7 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -421,6 +437,7 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
+      parseCapRetryMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -452,6 +469,9 @@ describe("applicant evidence job handler", () => {
         },
         async publish() {},
         async fail() {},
+        async collectedTierZones() {
+          return [];
+        },
         async hydratedFightUrls() {
           return [];
         },
@@ -471,7 +491,8 @@ describe("applicant evidence job handler", () => {
           })
         },
         requestCap: 500,
-        parseRequestCap: 8
+        parseRequestCap: 8,
+        parseCapRetryMs: 1_800_000
       };
     }
 

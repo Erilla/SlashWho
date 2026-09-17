@@ -390,6 +390,18 @@ export interface EvidenceRepository {
    * fight the dossier shows blank.
    */
   hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
+  /**
+   * When each zone's tier best parses were last collected, as
+   * `[raidId, completedAt]` pairs. A collection run drops a zone collected
+   * since its newest kill before it measures its zone budget, so a saturated
+   * character stops raising `parse_request_cap` and the budget reaches the
+   * deeper tiers the newest ones were displacing.
+   *
+   * Scoped like `hydratedFightUrls`, to the evidence `getCompleted` returns.
+   */
+  collectedTierZones(
+    key: CharacterKey
+  ): Promise<readonly (readonly [string, string])[]>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
   /**
    * Clears any lingering encrypted WCL credential columns from evidence runs
