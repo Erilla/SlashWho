@@ -161,6 +161,7 @@ interface CharacterTierBestParseRow {
   healing_percentile: number | null;
   boss_damage_parse_state: CharacterMythicKillParseMetric["state"];
   boss_damage_percentile: number | null;
+  collected_at: Date;
 }
 
 interface CharacterMythicWipeRow {
@@ -713,6 +714,8 @@ async function loadStoredTierBestParses(
     {
       tierBest: CharacterTierBestParseInput;
       performance: ReturnType<typeof parsePerformanceValues>;
+      /** When this zone was actually read, preserved across carry-forward. */
+      collectedAt: Date;
     }
   >
 > {
@@ -722,7 +725,8 @@ async function loadStoredTierBestParses(
             t.rankings_url, t.spec_name, t.spec_icon_url,
             t.damage_parse_state, t.damage_percentile,
             t.healing_parse_state, t.healing_percentile,
-            t.boss_damage_parse_state, t.boss_damage_percentile
+            t.boss_damage_parse_state, t.boss_damage_percentile,
+            t.collected_at
      FROM character_tier_best_parses t
      JOIN character_evidence_runs r ON r.id = t.evidence_run_id
      WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
@@ -736,7 +740,11 @@ async function loadStoredTierBestParses(
       void id;
       return [
         `${tierBest.raidId}\0${tierBest.bossId}`,
-        { tierBest, performance: parsePerformanceValues(tierBest.performance) }
+        {
+          tierBest,
+          performance: parsePerformanceValues(tierBest.performance),
+          collectedAt: row.collected_at
+        }
       ];
     })
   );
@@ -2845,7 +2853,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               performance:
                 stored === undefined
                   ? performance
-                  : mergePerformanceValues(stored.performance, performance)
+                  : mergePerformanceValues(stored.performance, performance),
+              // This run read the zone, so it is collected now. Rows this run
+              // did not supply keep the time they were read: stamping the
+              // run's own completion on a carried row would make a zone the
+              // budget never reached look current, and it would never be read
+              // again.
+              collectedAt: input.completedAt
             });
           }
           for (const { kill, performance } of kills.values()) {
@@ -2884,15 +2898,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               ]
             );
           }
-          for (const { tierBest, performance } of tierBests.values()) {
+          for (const {
+            tierBest,
+            performance,
+            collectedAt
+          } of tierBests.values()) {
             await client.query(
               `INSERT INTO character_tier_best_parses
                 (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
                  rankings_url, spec_name, spec_icon_url,
                  damage_parse_state, damage_percentile,
                  healing_parse_state, healing_percentile,
-                 boss_damage_parse_state, boss_damage_percentile)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+                 boss_damage_parse_state, boss_damage_percentile, collected_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
               [
                 runId,
                 tierBest.raidId,
@@ -2907,7 +2925,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 performance.healing.state,
                 performance.healing.percentile,
                 performance.bossDamage.state,
-                performance.bossDamage.percentile
+                performance.bossDamage.percentile,
+                collectedAt
               ]
             );
           }
@@ -2995,6 +3014,28 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             .map((kill) => kill.fightUrl)
         );
         return [...hydrated].sort();
+      },
+
+      async collectedTierZones(key) {
+        // Scoped exactly like `loadStoredTierBestParses`, which is the set
+        // `publish` carries forward: a zone counts as collected only while its
+        // rows survive into the next run's evidence. `completed_at` is the
+        // run's, so a kill newer than it reopens the zone for collection.
+        const result = await pool.query<{
+          raid_id: string;
+          collected_at: Date;
+        }>(
+          `SELECT t.raid_id, max(t.collected_at) AS collected_at
+             FROM character_tier_best_parses t
+             JOIN character_evidence_runs r ON r.id = t.evidence_run_id
+            WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
+              AND r.status IN ('complete', 'partial')
+            GROUP BY t.raid_id`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows
+          .map((row) => [row.raid_id, row.collected_at.toISOString()] as const)
+          .sort((a, b) => a[0].localeCompare(b[0]));
       },
 
       async listStatus(keys) {

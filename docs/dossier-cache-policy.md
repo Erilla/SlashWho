@@ -24,7 +24,7 @@ it never stores ranking JSON or API request URLs.
 
 WCL first discovers retained kill evidence within `EVIDENCE_REQUEST_CAP` (500
 pages by default), then reads parses within the separate
-`EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). That budget covers two
+`EVIDENCE_PARSE_REQUEST_CAP` (24 requests by default). That budget covers two
 different reads. A character's best parse for a boss comes from `zoneRankings`,
 which returns every encounter in a raid zone in one request, so it costs one
 request per tier rather than scaling with a character's report history; these
@@ -42,6 +42,13 @@ intact and marks parse metrics `unavailable` with a partial limitation; it does
 not manufacture a zero or silently claim completeness. `not_applicable` is
 distinct and is used only when independent role evidence establishes that a
 metric does not apply.
+
+A run that spends its whole parse budget publishes `partial` and records
+`retry_after_at` at `EVIDENCE_PARSE_CAP_RETRY_MS` (30 minutes by default),
+which is what makes the next read collect it rather than treat it as fresh for
+the full window. A zone already read since its newest kill is dropped before
+the zone budget is measured, so the budget advances into deeper tiers and a
+saturated character stops raising the cap and settles at `complete`.
 
 The provider publishes an hourly point budget, not a fixed cost contract for
 `Report.rankings`. The credentialed test probe measured 8 points for one

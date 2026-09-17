@@ -1331,6 +1331,12 @@ export function createWarcraftLogsClient(
        * reports every time.
        */
       hydratedFightUrls?: ReadonlySet<string>;
+      /**
+       * When each zone's tier bests were last collected, keyed by raid id. A
+       * zone collected since its newest kill is dropped before the zone budget
+       * is measured, so a saturated character stops raising the cap.
+       */
+      collectedTierZones?: ReadonlyMap<string, string>;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1437,10 +1443,20 @@ export function createWarcraftLogsClient(
       (a, b) =>
         b.latestKilledAt.localeCompare(a.latestKilledAt) || a.zoneId - b.zoneId
     );
-    if (orderedZones.length > zoneRequestCap) {
+    // A zone collected since its newest kill has nothing left to fetch, so it
+    // is dropped before the budget is measured, not merely skipped inside it.
+    // Without this the zone list is rebuilt whole on every run, a veteran
+    // always exceeds the budget, and the run raises `parse_request_cap` no
+    // matter how saturated it is -- while the budget re-reads the same newest
+    // zones and never reaches the deeper ones it displaced.
+    const pendingZones = orderedZones.filter((zone) => {
+      const collectedAt = options.collectedTierZones?.get(String(zone.zoneId));
+      return collectedAt === undefined || collectedAt <= zone.latestKilledAt;
+    });
+    if (pendingZones.length > zoneRequestCap) {
       tierParseLimitation = { kind: "limitation", code: "parse_request_cap" };
     }
-    for (const zone of orderedZones.slice(0, zoneRequestCap)) {
+    for (const zone of pendingZones.slice(0, zoneRequestCap)) {
       parseRequests += 1;
       const rankings = await graphql(
         characterZoneParsesQuery,

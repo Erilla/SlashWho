@@ -421,6 +421,9 @@ function createMemoryRepositories(): Repositories {
       async hydratedFightUrls() {
         return [];
       },
+      async collectedTierZones() {
+        return [];
+      },
       async clearStaleCredentials() {
         return 0;
       }

@@ -444,6 +444,69 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("reports when each zone's tier bests were last collected", async () => {
+    // Break caught: the zone list was rebuilt whole every run, so a veteran
+    // always exceeded the zone budget and raised `parse_request_cap` however
+    // saturated it was -- and a cap that never clears cannot carry a retry.
+    const tierBest = (raidId: string, bossId: string) =>
+      ({
+        raidId,
+        raidName: `Raid ${raidId}`,
+        bossId,
+        bossName: `Boss ${bossId}`,
+        rankingsUrl: `https://www.warcraftlogs.com/character/eu/silvermoon/ryii#zone=${raidId}&boss=${bossId}&difficulty=5`,
+        performance: {
+          spec: null,
+          damage: { state: "available", percentile: 60 },
+          healing: { state: "unavailable" },
+          bossDamage: { state: "unavailable" }
+        }
+      }) as const;
+
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [tierBest("44", "3129")],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    // A later run that reached a second zone. The first zone's rows are
+    // carried forward by `publish`, so it stays collected -- at its own,
+    // earlier time, not this run's.
+    const second = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (second.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(second.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [tierBest("45", "3300")],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.collectedTierZones(rootKey)
+    ).resolves.toEqual([
+      // Zone 44 keeps the time it was actually read, not the later run's.
+      ["44", "2026-08-04T12:05:00.000Z"],
+      ["45", "2026-08-04T13:05:00.000Z"]
+    ]);
+  });
+
   it("does not report a fight whose parse only exists on a superseded run", async () => {
     // Break caught: hydration was reported from every run ever, so a fight the
     // newest run stores blank was skipped forever and the dossier stayed empty.

@@ -22,6 +22,7 @@ export type WorkerConfig = {
   warcraftLogsClientSecret: string;
   evidenceRequestCap: number;
   evidenceParseRequestCap: number;
+  evidenceParseCapRetryMs: number;
   blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
@@ -184,6 +185,16 @@ export function loadWorkerConfig(
       environment.EVIDENCE_PARSE_REQUEST_CAP,
       24,
       "invalid_evidence_parse_request_cap"
+    ),
+    // A run that spends its whole parse budget has work outstanding and no
+    // upstream retry hint to carry, so it supplies its own. Half an hour
+    // matches the observed recovery of a rate-limited run, which resumed and
+    // added parses without intervention; it saturates a ten-character dossier
+    // in hours rather than days while the per-run budget still bounds load.
+    evidenceParseCapRetryMs: positiveInteger(
+      environment.EVIDENCE_PARSE_CAP_RETRY_MS,
+      30 * 60_000,
+      "invalid_evidence_parse_cap_retry_ms"
     ),
     blizzardBaseUrl: optionalHttpUrl(
       environment.BLIZZARD_BASE_URL,

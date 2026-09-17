@@ -1228,6 +1228,120 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("reaches a deeper tier and settles once the newest zones are collected", async () => {
+    // Break caught: the zone list was rebuilt whole on every run, so the same
+    // newest zones were re-requested forever, the deeper ones the budget
+    // displaced never landed, and the run raised `parse_request_cap` however
+    // saturated it was -- a cap that can never clear cannot schedule a retry.
+    const zoneIds: number[] = [];
+    const zones = [
+      { zoneId: 101, killedAt: "2024-01-01T00:00:00.000Z" },
+      { zoneId: 102, killedAt: "2025-01-01T00:00:00.000Z" },
+      { zoneId: 103, killedAt: "2026-01-01T00:00:00.000Z" }
+    ];
+    const reports = zones.map(({ zoneId, killedAt }) => {
+      const report = performanceReport(
+        [26],
+        zoneId !== 103,
+        `report-${zoneId}`,
+        3300 + zoneId,
+        Date.parse(killedAt)
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: { data: { zone: { id: number } }[] };
+            };
+          };
+        };
+      };
+      report.data.characterData.character.recentReports.data[0]!.zone.id =
+        zoneId;
+      return report;
+    });
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { zoneID?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        zoneIds.push(body.variables?.zoneID ?? -1);
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 5,
+      // Both newest zones collected after their newest kill; 101 is not.
+      collectedTierZones: new Map([
+        ["103", "2026-06-01T00:00:00.000Z"],
+        ["102", "2026-06-01T00:00:00.000Z"]
+      ])
+    });
+
+    // The deeper tier the newest two were displacing, and nothing re-read.
+    expect(zoneIds).toEqual([101]);
+    // One pending zone fits the budget of two, so the cap is not raised.
+    expect(result).toMatchObject({ kind: "evidence" });
+    expect(result).not.toHaveProperty("parseLimitation");
+  });
+
+  it("reopens a collected zone once a kill lands after its collection", async () => {
+    // A zone's best parse is not immutable the way a fight's is: a new kill in
+    // that tier can beat it, so "collected" has to mean collected since the
+    // newest kill, not collected once.
+    const zoneIds: number[] = [];
+    const report = performanceReport(
+      [26],
+      false,
+      "report-103",
+      3403,
+      Date.parse("2026-01-01T00:00:00.000Z")
+    ) as {
+      data: {
+        characterData: {
+          character: { recentReports: { data: { zone: { id: number } }[] } };
+        };
+      };
+    };
+    report.data.characterData.character.recentReports.data[0]!.zone.id = 103;
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { zoneID?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        zoneIds.push(body.variables?.zoneID ?? -1);
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      if (page++ > 0) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 5,
+      // Collected before the 2026-01-01 kill, so the zone is still pending.
+      collectedTierZones: new Map([["103", "2025-06-01T00:00:00.000Z"]])
+    });
+
+    expect(zoneIds).toEqual([103]);
+  });
+
   it("keeps hydrating fights after a zone-rankings response is malformed", async () => {
     // Break caught: the two rows answer different questions, so a zone the
     // character cannot be ranked in must not cost the first-kill row its
