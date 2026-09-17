@@ -18,16 +18,22 @@ Only catalogue-recognized Cutting Edge IDs and completion dates enter the
 achievement cache. Full achievement responses and discovery fingerprints are
 not cached or persisted. No raw provider response, OAuth token, credential or
 request URL is persisted by these caches. The WCL evidence store holds only
-normalized kills, explicit parse states, percentiles when available, and public
-report/fight links as evidence; it never stores ranking JSON or API request
-URLs.
+normalized kills, explicit parse states, percentiles when available, per-tier
+best parses, and public report/fight and character-rankings links as evidence;
+it never stores ranking JSON or API request URLs.
 
 WCL first discovers retained kill evidence within `EVIDENCE_REQUEST_CAP` (500
-pages by default), then hydrates parses one report at a time within the
-separate `EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). A report is the
-unit of hydration because one ranking request returns every requested fight in
-that report, so a raid night's bosses cost one request rather than one each.
-Ranking payloads are
+pages by default), then reads parses within the separate
+`EVIDENCE_PARSE_REQUEST_CAP` (8 requests by default). That budget covers two
+different reads. A character's best parse for a boss comes from `zoneRankings`,
+which returns every encounter in a raid zone in one request, so it costs one
+request per tier rather than scaling with a character's report history; these
+take at most half the remaining budget, newest tier first, and a tier the
+budget did not reach keeps the best already stored for it. The rest hydrates
+first-kill parses one report at a time, because those must come from the exact
+fight and one ranking request returns every requested fight in that report, so
+a raid night's bosses cost one request rather than one each. Ranking payloads
+are
 filtered to identities matching the requested character before the bounded
 canonical lookup, so unrelated ranked players cannot exhaust attribution
 capacity or invalidate an otherwise usable parse. The cap includes the

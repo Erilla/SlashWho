@@ -31,6 +31,7 @@ describe("database migrations", () => {
       "character_evidence_runs",
       "character_mythic_kills",
       "character_mythic_wipes",
+      "character_tier_best_parses",
       "characters",
       "discovery_runs",
       "fingerprint_sweep_admissions",
@@ -86,10 +87,10 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-4).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 15, tag: "0016_manual_connection_exclusions" },
       { idx: 16, tag: "0017_snapshot_character_guild" },
       { idx: 17, tag: "0018_fingerprint_sweep_cursor" },
-      { idx: 18, tag: "0019_fingerprint_continuation_failures" }
+      { idx: 18, tag: "0019_fingerprint_continuation_failures" },
+      { idx: 19, tag: "0020_character_tier_best_parses" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

@@ -668,13 +668,13 @@ it("keeps the chronological first-kill summary coherent while listing events old
     within(firstKillParses).getByRole("group", { name: "Ryii parses" })
   ).toBeVisible();
   expect(
-    within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
+    within(screen.getByRole("region", { name: "Best parses" })).getByRole(
       "group",
       { name: "Ryalts parses" }
     )
   ).toBeVisible();
   expect(
-    within(screen.getByRole("region", { name: "Best shown parses" })).getByRole(
+    within(screen.getByRole("region", { name: "Best parses" })).getByRole(
       "link",
       { name: "Damage 99 percentile" }
     )
@@ -1214,7 +1214,7 @@ it("shows first-kill and best parse summaries before evidence details are opened
   expect(firstKillParses.closest("details")).toBeNull();
   expect(firstKillParses).toBeVisible();
   const bestParses = screen.getByRole("region", {
-    name: "Best shown parses"
+    name: "Best parses"
   });
   expect(bestParses).toBeVisible();
   expect(

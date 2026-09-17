@@ -7,6 +7,7 @@ import type {
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicKillInput,
+  CharacterTierBestParseInput,
   CompletedCharacterEvidence,
   EvidenceReservationResult,
   CreateSnapshotInput,
@@ -17,6 +18,7 @@ import type {
   SnapshotHistoryPage,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
+  StoredCharacterTierBestParse,
   StoredSnapshot,
   StoredSnapshotCharacter
 } from "./repositories";
@@ -144,6 +146,23 @@ interface CharacterMythicKillRow {
   boss_damage_percentile: number | null;
 }
 
+interface CharacterTierBestParseRow {
+  id: string;
+  raid_id: string;
+  raid_name: string;
+  boss_id: string;
+  boss_name: string;
+  rankings_url: string;
+  spec_name: string | null;
+  spec_icon_url: string | null;
+  damage_parse_state: CharacterMythicKillParseMetric["state"];
+  damage_percentile: number | null;
+  healing_parse_state: CharacterMythicKillParseMetric["state"];
+  healing_percentile: number | null;
+  boss_damage_parse_state: CharacterMythicKillParseMetric["state"];
+  boss_damage_percentile: number | null;
+}
+
 interface CharacterMythicWipeRow {
   id: string;
   raid_id: string;
@@ -163,7 +182,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 12;
+const CURRENT_EVIDENCE_VERSION = 13;
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -478,6 +497,37 @@ function parsePerformanceValues(performance: unknown): {
   };
 }
 
+function mapCharacterTierBestParse(
+  row: CharacterTierBestParseRow
+): StoredCharacterTierBestParse {
+  return {
+    id: row.id,
+    raidId: row.raid_id,
+    raidName: row.raid_name,
+    bossId: row.boss_id,
+    bossName: row.boss_name,
+    rankingsUrl: row.rankings_url,
+    performance: {
+      spec:
+        row.spec_name === null || row.spec_icon_url === null
+          ? null
+          : { name: row.spec_name, iconUrl: row.spec_icon_url },
+      damage: mapParseMetric(row.damage_parse_state, row.damage_percentile),
+      healing: mapParseMetric(row.healing_parse_state, row.healing_percentile),
+      bossDamage: mapParseMetric(
+        row.boss_damage_parse_state,
+        row.boss_damage_percentile
+      )
+    }
+  };
+}
+
+const tierBestParseColumns = `id, raid_id, raid_name, boss_id, boss_name,
+            rankings_url, spec_name, spec_icon_url,
+            damage_parse_state, damage_percentile,
+            healing_parse_state, healing_percentile,
+            boss_damage_parse_state, boss_damage_percentile`;
+
 function mapCharacterMythicWipe(
   row: CharacterMythicWipeRow
 ): StoredCharacterMythicWipe {
@@ -535,11 +585,19 @@ async function loadCompletedEvidence(
      ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
     [run.id]
   );
+  const tierBestsResult = await client.query<CharacterTierBestParseRow>(
+    `SELECT ${tierBestParseColumns}
+     FROM character_tier_best_parses
+     WHERE evidence_run_id = $1
+     ORDER BY raid_id, boss_id`,
+    [run.id]
+  );
   return {
     run: mapEvidenceRun(run),
     evidenceVersion: run.evidence_version,
     kills: killsResult.rows.map(mapCharacterMythicKill),
     wipes: wipesResult.rows.map(mapCharacterMythicWipe),
+    tierBests: tierBestsResult.rows.map(mapCharacterTierBestParse),
     wipeCapable: run.evidence_version >= 2
   };
 }
@@ -636,6 +694,51 @@ async function loadStoredPerformanceByFightUrl(
         )
       })
     ])
+  );
+}
+
+/**
+ * Tier bests already stored for a character, keyed by zone and encounter.
+ *
+ * One run reads only the newest few zones, so every publish — complete or
+ * partial — has to carry the rest forward. Without this a run that reached
+ * only the current tier would blank every earlier tier's best parse.
+ */
+async function loadStoredTierBestParses(
+  client: Queryable,
+  key: CharacterKey
+): Promise<
+  Map<
+    string,
+    {
+      tierBest: CharacterTierBestParseInput;
+      performance: ReturnType<typeof parsePerformanceValues>;
+    }
+  >
+> {
+  const result = await client.query<CharacterTierBestParseRow>(
+    `SELECT DISTINCT ON (t.raid_id, t.boss_id)
+            t.id, t.raid_id, t.raid_name, t.boss_id, t.boss_name,
+            t.rankings_url, t.spec_name, t.spec_icon_url,
+            t.damage_parse_state, t.damage_percentile,
+            t.healing_parse_state, t.healing_percentile,
+            t.boss_damage_parse_state, t.boss_damage_percentile
+     FROM character_tier_best_parses t
+     JOIN character_evidence_runs r ON r.id = t.evidence_run_id
+     WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
+       AND r.status IN ('complete', 'partial')
+     ORDER BY t.raid_id, t.boss_id, r.completed_at DESC NULLS LAST`,
+    [key.region, key.realm, key.name]
+  );
+  return new Map(
+    result.rows.map((row) => {
+      const { id, ...tierBest } = mapCharacterTierBestParse(row);
+      void id;
+      return [
+        `${tierBest.raidId}\0${tierBest.bossId}`,
+        { tierBest, performance: parsePerformanceValues(tierBest.performance) }
+      ];
+    })
   );
 }
 
@@ -2717,6 +2820,23 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
             wipes.set(wipe.fightUrl, wipe);
           }
+          const tierBests = await loadStoredTierBestParses(client, {
+            region: activeRun.region,
+            realm: activeRun.realm_slug,
+            name: activeRun.normalized_name
+          });
+          for (const tierBest of input.tierBests) {
+            const key = `${tierBest.raidId}\0${tierBest.bossId}`;
+            const stored = tierBests.get(key);
+            const performance = parsePerformanceValues(tierBest.performance);
+            tierBests.set(key, {
+              tierBest,
+              performance:
+                stored === undefined
+                  ? performance
+                  : mergePerformanceValues(stored.performance, performance)
+            });
+          }
           for (const { kill, performance } of kills.values()) {
             await client.query(
               `INSERT INTO character_mythic_kills
@@ -2742,6 +2862,33 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
                 kill.historicWorldRank ?? null,
+                performance.spec?.name ?? null,
+                performance.spec?.iconUrl ?? null,
+                performance.damage.state,
+                performance.damage.percentile,
+                performance.healing.state,
+                performance.healing.percentile,
+                performance.bossDamage.state,
+                performance.bossDamage.percentile
+              ]
+            );
+          }
+          for (const { tierBest, performance } of tierBests.values()) {
+            await client.query(
+              `INSERT INTO character_tier_best_parses
+                (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
+                 rankings_url, spec_name, spec_icon_url,
+                 damage_parse_state, damage_percentile,
+                 healing_parse_state, healing_percentile,
+                 boss_damage_parse_state, boss_damage_percentile)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+              [
+                runId,
+                tierBest.raidId,
+                tierBest.raidName,
+                tierBest.bossId,
+                tierBest.bossName,
+                tierBest.rankingsUrl,
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
                 performance.damage.state,

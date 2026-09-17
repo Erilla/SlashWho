@@ -40,9 +40,9 @@ _Avoid_: Character parse, lifetime best, report parse
 The fight parses summarized from the earliest displayed kill event for a boss. It is a summary of that event's supporting reports, not a claim about every historical kill.
 _Avoid_: First-ever parse, initial character parse
 
-**Best shown parse**:
-The highest available fight parse for each displayed character and metric across the kill events currently shown for a boss. It retains the winning exact-fight link and never reaches into unrelated character history.
-_Avoid_: Best parse, all-time best, character-wide best
+**Best parse**:
+The highest Mythic percentile a displayed character holds for a boss and metric, read from the whole raid zone rather than from the kill events shown beneath it. It may therefore come from a kill the dossier withholds, so it links to that character's own rankings rather than to a fight, and it is never written onto a first-kill parse. A character with no displayed kill on a boss gets no row; where zone rankings have not been read, the best of the displayed events stands in.
+_Avoid_: Best shown parse, lifetime best, first-kill parse
 
 **Source label**:
 The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown only on the reviewer surface; the public alt list still shows one undifferentiated list, and no confidence value is retained alongside it.

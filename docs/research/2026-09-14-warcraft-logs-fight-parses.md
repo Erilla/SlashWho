@@ -398,7 +398,15 @@ otherwise verified kill. A supplied numeric `0` remains an available result;
 
 On the reviewer surface, **First kill parses** summarize the earliest displayed
 event, and **Best shown parses** select only among the displayed events for the
-boss. Neither is an all-history best. The exact percentile bands are grey
+boss. Neither is an all-history best.
+
+> Superseded for the best row as of 2026-09-17. See
+> `docs/research/2026-09-17-warcraft-logs-zone-rankings.md`: the best row is now
+> read from `zoneRankings` and _is_ the character's best for that tier. The
+> first-kill row is unchanged and still comes only from that fight's report
+> rankings.
+
+The exact percentile bands are grey
 `#666666` (0–<25), green `#1eff00` (25–<50), blue `#0070ff` (50–<75), purple
 `#a335ee` (75–<95), orange `#ff8000` (95–<99), pink `#e268a8` (99–<100), and
 gold `#e5cc80` (100); colour supplements the metric's text label and link.

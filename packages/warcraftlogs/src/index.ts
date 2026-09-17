@@ -10,5 +10,6 @@ export type {
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
   WarcraftLogsReportResult,
+  WarcraftLogsTierBestParse,
   WarcraftLogsWipeEvidence
 } from "./types";

@@ -67,9 +67,16 @@ is resolved through the canonical `Character(id)` lookup and then matched to a
 unique Player actor; a name-only match is never enough. Available values link
 to the exact supporting fight.
 
-The dossier shows **First kill parses** for the earliest displayed kill event
-and **Best shown parses** across only the displayed events for that boss. These
-are not lifetime or character-wide best parses. An available numeric `0` is a
+The dossier shows **First kill parses** for the earliest displayed kill event,
+and **Best parses** for the character's best on that boss. The two rows answer
+different questions and are fetched differently. A first-kill parse must come
+from that exact fight, so it is read from report rankings. A best parse is a
+claim about the character, so it is read from `zoneRankings` — one request per
+raid zone, covering every encounter in it, rather than one request per report
+of an unbounded history. A best parse may therefore come from a kill outside
+the raid's current-content window, which the dossier does not list; it links to
+the character's own rankings rather than to a fight, and it is never written
+onto a first-kill parse. An available numeric `0` is a
 legitimate provider result. `unavailable` means the value could not safely be
 obtained; `not_applicable` is reserved for independently established role
 inapplicability. Neither state is presented as numeric zero, and a partial

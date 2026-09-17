@@ -273,6 +273,25 @@ export interface StoredCharacterMythicKill extends CharacterMythicKillInput {
   id: string;
 }
 
+/**
+ * A character's best Mythic parse for one encounter of one raid zone. It is a
+ * claim about the character's history rather than about any stored kill, so it
+ * carries a rankings link instead of a fight link and is keyed by encounter
+ * rather than by fight.
+ */
+export interface CharacterTierBestParseInput {
+  raidId: string;
+  raidName: string;
+  bossId: string;
+  bossName: string;
+  rankingsUrl: string;
+  performance: CharacterMythicKillPerformance;
+}
+
+export interface StoredCharacterTierBestParse extends CharacterTierBestParseInput {
+  id: string;
+}
+
 export interface CharacterMythicWipeInput {
   raidId: string;
   raidName: string;
@@ -295,6 +314,7 @@ export interface CompletedCharacterEvidence {
   evidenceVersion?: number;
   kills: readonly StoredCharacterMythicKill[];
   wipes: readonly StoredCharacterMythicWipe[];
+  tierBests: readonly StoredCharacterTierBestParse[];
   wipeCapable: boolean;
 }
 
@@ -337,6 +357,12 @@ export interface EvidenceRepository {
       retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly CharacterMythicWipeInput[];
+      /**
+       * Zones this run actually read. The budget covers only a few tiers per
+       * run, so the ones it did not reach are carried forward from the
+       * character's previous evidence rather than written back blank.
+       */
+      tierBests: readonly CharacterTierBestParseInput[];
       completedAt: Date;
     }
   ): Promise<void>;

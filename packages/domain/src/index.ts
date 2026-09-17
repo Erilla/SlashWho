@@ -25,6 +25,7 @@ export type {
   DossierCuttingEdgeEvidence,
   DossierKillEvidence,
   DossierLimitation,
+  DossierTierBestParse,
   DossierWipeEvidence
 } from "./applicant-dossier";
 export type {
