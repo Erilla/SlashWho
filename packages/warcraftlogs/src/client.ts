@@ -1562,7 +1562,11 @@ export function createWarcraftLogsClient(
       // Reserve one request for the shared canonical identity lookup, so a cap
       // of N spends N-1 requests on rankings and one on identities.
       if (parseRequests + 1 >= options.parseRequestCap) {
-        parseLimitation = { kind: "limitation", code: "parse_request_cap" };
+        // Never over an earlier drift. Every capped run ends here, so letting
+        // the cap win would hide drift behind the one limitation a reviewer
+        // already expects, run after run, and drift is the one that will not
+        // clear itself.
+        parseLimitation ??= { kind: "limitation", code: "parse_request_cap" };
         break;
       }
       parseRequests += 1;
@@ -1642,7 +1646,7 @@ export function createWarcraftLogsClient(
               );
               if (isLimitation(performance)) {
                 parseLimitation = performance;
-                break;
+                continue;
               }
               for (const [fightId, value] of performance) {
                 for (const [fightUrl, kill] of kills) {

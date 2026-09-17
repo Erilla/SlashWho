@@ -1398,6 +1398,45 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("reports drift rather than the cap the continued run went on to reach", async () => {
+    // Break caught: continuing past drift let the request cap overwrite it, and
+    // because every capped run ends that way the drift would never be seen
+    // again - the signal this run exists to keep.
+    const reports = twoKillReports();
+
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        const code = body.variables?.code ?? "early-report";
+        const malformed = performanceRankings(
+          { damage: 40, healing: 41, bossDamage: 42 },
+          { code }
+        ) as {
+          data: {
+            reportData: { report: { damage: { data: { roles?: unknown }[] } } };
+          };
+        };
+        delete malformed.data.reportData.report.damage.data[0]!.roles;
+        return jsonResponse(malformed);
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return canonicalIdentityResponse();
+      }
+      return jsonResponse(reports);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 2 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
+    });
+  });
+
   it("hydrates later report groups when an earlier report ranks nobody", async () => {
     // Break caught: a report whose rankings name no ranked character is an
     // ordinary gap, not drift, and treating it as drift abandoned the parses
