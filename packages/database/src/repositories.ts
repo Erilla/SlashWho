@@ -372,6 +372,9 @@ export interface EvidenceRepository {
    * Fight URLs already carrying at least one available parse metric, so a
    * budget-limited collection run can spend its requests on what is missing
    * instead of redoing the same reports every time.
+   *
+   * Scoped to the evidence `getCompleted` returns, so this can never skip a
+   * fight the dossier shows blank.
    */
   hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;

@@ -84,6 +84,10 @@ function fixture(
     onCacheEvent?: (source: string, event: string) => void;
   } = {}
 ) {
+  // One reading of the clock per fixture. The reservation mock runs once per
+  // read, so reading the clock inside it let two concurrent reads of the same
+  // evidence report completedAt values a millisecond apart.
+  const evidenceCompletedAt = options.evidenceCompletedAt ?? new Date();
   const runsCreate = vi.fn();
   const enqueueCharacterEvidence = vi.fn().mockResolvedValue("evidence-job");
   const markEnqueued = vi.fn().mockResolvedValue(undefined);
@@ -149,7 +153,7 @@ function fixture(
           errorCode: null,
           createdAt: new Date("2026-09-11T12:00:00.000Z"),
           startedAt: new Date("2026-09-11T12:00:00.000Z"),
-          completedAt: options.evidenceCompletedAt ?? new Date()
+          completedAt: evidenceCompletedAt
         },
         completed: {
           run: {
@@ -165,7 +169,7 @@ function fixture(
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
-            completedAt: options.evidenceCompletedAt ?? new Date()
+            completedAt: evidenceCompletedAt
           },
           kills: [
             ...(options.includeCachedKills === false ? [] : cachedKills),
