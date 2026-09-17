@@ -823,9 +823,12 @@ function canonicalRankingCharacterIdsByIdentity(
       requestedIds.push(identity.id);
     }
   }
-  return requestedIds.length === 1
-    ? requestedIds
-    : { kind: "limitation", code: "parse_schema_drift" };
+  // Two ranked characters sharing this key cannot be told apart, so the group
+  // is refused. None is not a contradiction: the character simply holds no
+  // ranking in this report, and the caller leaves those fights unparsed.
+  return requestedIds.length > 1
+    ? { kind: "limitation", code: "parse_schema_drift" }
+    : requestedIds;
 }
 
 function decodeCanonicalIdentityIds(
@@ -1464,6 +1467,10 @@ export function createWarcraftLogsClient(
       );
       if (isLimitation(decoded)) {
         tierParseLimitation = decoded;
+        // Drift describes this one zone's response. Every other zone is a
+        // separate request with its own answer, so the budget goes on reading
+        // them rather than being abandoned over a shape one zone returned.
+        if (decoded.code === "parse_schema_drift") continue;
         break;
       }
       tierBests.push(...decoded);
@@ -1574,6 +1581,10 @@ export function createWarcraftLogsClient(
       const decoded = decodeRankingRows(rankings.value, group, key);
       if (isLimitation(decoded)) {
         parseLimitation = decoded;
+        // One report's rankings being unreadable says nothing about the next
+        // report's, so the remaining budget hydrates the groups it can rather
+        // than stopping the run at the first response the decoder rejects.
+        if (decoded.code === "parse_schema_drift") continue;
         break;
       }
       decodedGroups.push({ group, decoded });
@@ -1617,8 +1628,12 @@ export function createWarcraftLogsClient(
               );
               if (isLimitation(requestedIds)) {
                 parseLimitation = requestedIds;
-                break;
+                continue;
               }
+              // No ranked appearance by this character in this report is an
+              // ordinary gap - an unranked fight, or a report that ranks
+              // nobody - so the group is left unparsed without a limitation.
+              if (requestedIds.length === 0) continue;
               const performance = normalizedPerformance(
                 decoded.rows,
                 requestedIds,
