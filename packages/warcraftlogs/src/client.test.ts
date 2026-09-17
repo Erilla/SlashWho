@@ -281,6 +281,52 @@ function performanceRankings(
   };
 }
 
+function canonicalIdentityResponse(): Response {
+  return jsonResponse({
+    data: {
+      characterData: {
+        character0: {
+          id: 2101,
+          name: "Sentinel",
+          server: { slug: "silvermoon", region: { slug: "eu" } }
+        }
+      }
+    }
+  });
+}
+
+// Two reports of the same boss: the earlier one owns the first kill, so the
+// hydration loop reaches it first and the later report is what a premature
+// abort would cost.
+function twoKillReports(): unknown {
+  const early = performanceReport(
+    [26],
+    false,
+    "early-report",
+    3306,
+    1_728_086_400_000
+  ) as {
+    data: {
+      characterData: { character: { recentReports: { data: unknown[] } } };
+    };
+  };
+  const late = performanceReport(
+    [27],
+    false,
+    "late-report",
+    3306,
+    1_728_172_800_000
+  ) as {
+    data: {
+      characterData: { character: { recentReports: { data: unknown[] } } };
+    };
+  };
+  early.data.characterData.character.recentReports.data.push(
+    late.data.characterData.character.recentReports.data[0]
+  );
+  return early;
+}
+
 function performanceClient(
   rankings: unknown,
   fightIds = [26],
@@ -1216,6 +1262,187 @@ describe("Warcraft Logs gateway", () => {
       tierBests: [],
       parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
     });
+  });
+
+  it("keeps reading later zones after one zone-rankings response is malformed", async () => {
+    // Break caught: an unreadable tier response ended the zone loop, so every
+    // older tier lost its best parses to one zone the decoder could not read.
+    const zoneIds: number[] = [];
+    const zones = [
+      { zoneId: 102, startTime: 1_728_086_400_000 },
+      { zoneId: 103, startTime: 1_728_172_800_000 }
+    ];
+    const reports = zones.map(({ zoneId, startTime }, index) => {
+      const report = performanceReport(
+        [26],
+        index === 0,
+        `report-${zoneId}`,
+        3300 + zoneId,
+        startTime
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: { data: { zone: { id: number } }[] };
+            };
+          };
+        };
+      };
+      report.data.characterData.character.recentReports.data[0]!.zone.id =
+        zoneId;
+      return report;
+    });
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { zoneID?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        const zoneId = body.variables?.zoneID ?? -1;
+        zoneIds.push(zoneId);
+        return zoneId === 103
+          ? jsonResponse({
+              data: { characterData: { character: { damage: {} } } }
+            })
+          : zoneRankingsResponse([
+              {
+                encounter: { id: 3402, name: "Loom'ithar" },
+                rankPercent: 88,
+                bestSpec: "Destruction",
+                class: 10
+              }
+            ]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 2,
+      parseRequestCap: 8
+    });
+
+    expect(zoneIds).toEqual([103, 102]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      tierBests: [
+        {
+          raidId: "102",
+          bossId: "3402",
+          performance: { damage: { state: "available", percentile: 88 } }
+        }
+      ],
+      parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
+    });
+  });
+
+  it("hydrates later report groups after one report's rankings are malformed", async () => {
+    // Break caught: one ranking response the decoder rejected ended hydration
+    // for the whole run, so every remaining report group stayed unparsed
+    // however much of the parse budget was left.
+    const reports = twoKillReports();
+
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        const code = body.variables?.code ?? "early-report";
+        if (code === "early-report") {
+          const malformed = performanceRankings(
+            { damage: 40, healing: 41, bossDamage: 42 },
+            { code }
+          ) as {
+            data: {
+              reportData: {
+                report: { damage: { data: { roles?: unknown }[] } };
+              };
+            };
+          };
+          delete malformed.data.reportData.report.damage.data[0]!.roles;
+          return jsonResponse(malformed);
+        }
+        return jsonResponse(
+          performanceRankings(
+            { damage: 50, healing: 51, bossDamage: 52 },
+            { code, fightId: 27 }
+          )
+        );
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return canonicalIdentityResponse();
+      }
+      return jsonResponse(reports);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 8 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        { fightId: 26, performance: { damage: { state: "unavailable" } } },
+        {
+          fightId: 27,
+          performance: { damage: { state: "available", percentile: 50 } }
+        }
+      ],
+      parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
+    });
+  });
+
+  it("hydrates later report groups when an earlier report ranks nobody", async () => {
+    // Break caught: a report whose rankings name no ranked character is an
+    // ordinary gap, not drift, and treating it as drift abandoned the parses
+    // already paid for in every remaining group.
+    const reports = twoKillReports();
+
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        const code = body.variables?.code ?? "early-report";
+        return code === "early-report"
+          ? emptyRankingsResponse(code)
+          : jsonResponse(
+              performanceRankings(
+                { damage: 50, healing: 51, bossDamage: 52 },
+                { code, fightId: 27 }
+              )
+            );
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return canonicalIdentityResponse();
+      }
+      return jsonResponse(reports);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        { fightId: 26, performance: { damage: { state: "unavailable" } } },
+        {
+          fightId: 27,
+          performance: { damage: { state: "available", percentile: 50 } }
+        }
+      ]
+    });
+    expect(result).not.toHaveProperty("parseLimitation");
   });
 
   it("does not re-request a report whose fights are already hydrated", async () => {
