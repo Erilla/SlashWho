@@ -668,6 +668,13 @@ function mergePerformanceValues(
  * Collection deliberately does not re-fetch a fight it has already hydrated, so
  * every publish — not only a partial one — has to carry those values forward.
  * Without this a complete run writes the skipped fights back blank.
+ *
+ * `id DESC` is not decoration. `loadCompletedEvidence` picks the run a dossier
+ * shows with `completed_at DESC, id DESC`, so this has to break a tie the same
+ * way or a publish can carry forward a copy of a fight the dossier does not
+ * show. A tie in an ORDER BY leaving the winner to PostgreSQL's discretion is
+ * exactly the shape of #331, which cost a day of oscillating coverage before
+ * anyone could attribute it.
  */
 async function loadStoredPerformanceByFightUrl(
   client: Queryable,
@@ -696,7 +703,7 @@ async function loadStoredPerformanceByFightUrl(
      JOIN character_evidence_runs r ON r.id = k.evidence_run_id
      WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
        AND r.status IN ('complete', 'partial')
-     ORDER BY k.fight_url, r.completed_at DESC NULLS LAST`,
+     ORDER BY k.fight_url, r.completed_at DESC NULLS LAST, r.id DESC`,
     [key.region, key.realm, key.name]
   );
   return new Map(
@@ -754,7 +761,7 @@ async function loadStoredTierBestParses(
      JOIN character_evidence_runs r ON r.id = t.evidence_run_id
      WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
        AND r.status IN ('complete', 'partial')
-     ORDER BY t.raid_id, t.boss_id, r.completed_at DESC NULLS LAST`,
+     ORDER BY t.raid_id, t.boss_id, r.completed_at DESC NULLS LAST, r.id DESC`,
     [key.region, key.realm, key.name]
   );
   return new Map(
