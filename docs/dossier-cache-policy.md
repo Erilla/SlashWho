@@ -53,10 +53,13 @@ saturated character stops raising the cap and settles at `complete`.
 A run also checks the Warcraft Logs hourly points allowance before it starts.
 When fewer than `EVIDENCE_POINTS_RESERVE` points (1500 by default) remain, the
 run is claimed, publishes nothing, and reschedules itself for the reported
-reset — clamped to the queue's 1800-second maximum. Five refusals in a row fail
-the run, which is safe: `failed` is in neither the active set nor
-`loadCompletedEvidence`'s `('complete','partial')`, so the character falls back
-to its previous evidence and a later read reserves a fresh run. If the
+reset — clamped to the queue's 1800-second maximum. On the last of its five
+attempts the run refuses without asking for a retry and marks itself `failed`
+with `points_budget_low`. That last step is load-bearing: a run abandoned in
+`running` is counted active by `reserve` with no staleness cutoff and would
+block every later reservation for that character. `failed` is in neither that
+set nor `loadCompletedEvidence`'s `('complete','partial')`, so the character
+falls back to its previous evidence and a later read reserves a fresh run. If the
 allowance itself cannot be read the run proceeds, because a gate that fails
 closed on its own transport errors could stop all collection permanently.
 

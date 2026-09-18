@@ -38,13 +38,16 @@ function store(
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
   }>;
+  failed: Array<{ runId: string; code: string }>;
 } {
   const published: Array<{
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
   }> = [];
+  const failed: Array<{ runId: string; code: string }> = [];
   return {
     published,
+    failed,
     async find(id) {
       return id === activeRun.id ? activeRun : null;
     },
@@ -54,7 +57,9 @@ function store(
     async publish(runId, result) {
       published.push({ runId, result });
     },
-    async fail() {},
+    async fail(runId, code) {
+      failed.push({ runId, code });
+    },
     async collectedTierZones() {
       return [];
     },
@@ -511,7 +516,13 @@ describe("applicant evidence job handler", () => {
       pointsReserve: 1_500
     });
 
-    await expect(handler.execute(run.id)).rejects.toMatchObject({
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toMatchObject({
       retryable: true,
       retryAfterMs: 949_000
     });
@@ -538,10 +549,82 @@ describe("applicant evidence job handler", () => {
       pointsReserve: 1_500
     });
 
-    await expect(handler.execute(run.id)).rejects.toMatchObject({
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toMatchObject({
       retryable: true,
       retryAfterMs: 1_800_000
     });
+  });
+
+  it("fails a run whose refusal exhausts the last attempt", async () => {
+    // Break caught: nothing called the evidence store's fail, so a run that
+    // refused on every attempt stayed `running` once pg-boss gave up. `reserve`
+    // counts ('queued','running','retrying') as active with no staleness
+    // cutoff, so that character could never be collected again.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 17_500.5,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 5,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+
+    expect(evidence.failed).toEqual([
+      { runId: run.id, code: "points_budget_low" }
+    ]);
+    expect(evidence.published).toEqual([]);
+  });
+
+  it("asks for no retry it cannot have on the last attempt", async () => {
+    // Break caught: a retryable error on the final attempt sends the queue to
+    // updateActiveRetryDelay, whose `AND state = 'active'` matches no row once
+    // the job is failing. It throws, replacing the refusal, and the real cause
+    // is lost from the logs.
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs: budgetGateway({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 17_500.5,
+        pointsResetInSeconds: 949
+      }),
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    const error = await handler
+      .execute(run.id, {
+        attempt: 5,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).not.toHaveProperty("retryable");
+    expect(error).not.toHaveProperty("retryAfterMs");
   });
 
   it("collects when the allowance is healthy", async () => {

@@ -157,6 +157,20 @@ function pointsBudgetRefusal(resetInSeconds: number): PointsBudgetRefusal {
   });
 }
 
+/**
+ * The final attempt asks for no retry: there is none left to schedule, and a
+ * retryable error would send the queue to `updateActiveRetryDelay`, whose
+ * `AND state = 'active'` matches no row once the job is failing. That throws,
+ * replacing this refusal and losing the cause from the logs.
+ */
+function terminalPointsBudgetRefusal(): Error & {
+  readonly code: "points_budget_low";
+} {
+  return Object.assign(new Error("evidence_points_budget_low"), {
+    code: "points_budget_low" as const
+  });
+}
+
 function isPointsBudgetRefusal(error: unknown): error is PointsBudgetRefusal {
   return (
     error instanceof Error &&
@@ -262,6 +276,18 @@ export function createApplicantEvidenceJobHandler(
             // again. Publishing instead risks the destructive merge of #250.
             record.outcome = "points_budget_low";
             record.limitationCode = "points_budget_low";
+            if (activeContext.attempt >= activeContext.maxAttempts) {
+              // The queue is about to give up, and a run abandoned in
+              // `running` is never collected again: `reserve` counts
+              // ('queued','running','retrying') as active with no staleness
+              // cutoff, so it would block every later reservation for this
+              // character. `failed` is in neither that set nor
+              // `loadCompletedEvidence`'s ('complete','partial'), so the
+              // character falls back to its previous evidence and a later
+              // read reserves a fresh run.
+              await evidence.fail(run.id, "points_budget_low");
+              throw terminalPointsBudgetRefusal();
+            }
             throw pointsBudgetRefusal(openingBudget.pointsResetInSeconds);
           }
         }
