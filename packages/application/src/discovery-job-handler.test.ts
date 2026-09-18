@@ -424,6 +424,9 @@ function createMemoryRepositories(): Repositories {
       async collectedTierZones() {
         return [];
       },
+      async storedKillTiers() {
+        return [];
+      },
       async terminalTiers() {
         return [];
       },

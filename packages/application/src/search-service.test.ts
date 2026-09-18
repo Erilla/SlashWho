@@ -239,6 +239,9 @@ function policyFixture(
       async collectedTierZones() {
         return [];
       },
+      async storedKillTiers() {
+        return [];
+      },
       async terminalTiers() {
         return [];
       },

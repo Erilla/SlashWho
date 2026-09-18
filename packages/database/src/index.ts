@@ -46,6 +46,7 @@ export type {
   SnapshotHistoryItem,
   SnapshotHistoryPage,
   SnapshotRepository,
+  StoredKillTier,
   StoredSnapshot,
   StoredSnapshotCharacter,
   TerminalTier,

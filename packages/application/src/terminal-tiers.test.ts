@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { terminalTiersFrom } from "./terminal-tiers";
+import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 
 const at = new Date("2026-09-18T12:00:00.000Z");
 const settleMs = 7 * 24 * 60 * 60 * 1000;
@@ -129,5 +129,43 @@ describe("terminalTiersFrom", () => {
         kills: [kill("42", concluded, killedAt)]
       })
     ).toHaveLength(3);
+  });
+});
+
+describe("killScanFloorFrom", () => {
+  const terminalKills = [{ raidId: "42", domain: "kills" as const }];
+
+  it("gives no floor when nothing is terminal for kills", () => {
+    // Nothing to save, and stored kills may come from a run that never
+    // finished, so the scan is left alone.
+    expect(
+      killScanFloorFrom([], [kill("42", concluded, "2024-01-01T00:00:00.000Z")])
+    ).toBeUndefined();
+  });
+
+  it("gives no floor for a character with nothing stored", () => {
+    expect(killScanFloorFrom(terminalKills, [])).toBeUndefined();
+  });
+
+  it("stops at the oldest kill of a tier that is not terminal", () => {
+    // Break caught: a gap below the newest terminal tier means the scan must
+    // still page past it. Taking the newest terminal boundary as the floor
+    // would strand raid 43 forever.
+    expect(
+      killScanFloorFrom(terminalKills, [
+        kill("42", concluded, "2023-01-01T00:00:00.000Z"),
+        kill("43", concluded, "2024-01-01T00:00:00.000Z"),
+        kill("43", concluded, "2024-06-01T00:00:00.000Z")
+      ])
+    ).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("stops at the newest kill once every tier held is terminal", () => {
+    expect(
+      killScanFloorFrom(terminalKills, [
+        kill("42", concluded, "2023-01-01T00:00:00.000Z"),
+        kill("42", concluded, "2024-06-01T00:00:00.000Z")
+      ])
+    ).toBe("2024-06-01T00:00:00.000Z");
   });
 });

@@ -354,6 +354,13 @@ export type EvidenceReservationResult =
  */
 export type EvidenceCollectionDomain = "kills" | "parses" | "tier_bests";
 
+/** Where and when one stored kill happened, without its evidence. */
+export type StoredKillTier = Readonly<{
+  raidId: string;
+  raidName: string;
+  killedAt: string;
+}>;
+
 /** One raid a character is finished collecting one domain of evidence for. */
 export type TerminalTier = Readonly<{
   /** The Warcraft Logs zone id, as carried on the character's stored kills. */
@@ -428,6 +435,14 @@ export interface EvidenceRepository {
    * is how bumping one domain's version re-collects that domain and leaves the
    * rest settled.
    */
+  /**
+   * The raid, name and kill time of every stored kill. This is what turns a
+   * terminal raid id into a date the report scan can stop at: the marks carry
+   * Warcraft Logs zone ids, and only the kills say when that zone was raided.
+   *
+   * Scoped like `hydratedFightUrls`, to the evidence `getCompleted` returns.
+   */
+  storedKillTiers(key: CharacterKey): Promise<readonly StoredKillTier[]>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   /**
    * Records tiers as terminal, stamping each with its domain's current

@@ -1,4 +1,4 @@
-import type { TerminalTier } from "@slashwho/database";
+import type { StoredKillTier, TerminalTier } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,6 +44,7 @@ function store(
   marked: Array<{ raidId: string; domain: string }>;
   settleCutoffs: Date[];
   stored: TerminalTier[];
+  storedKills: StoredKillTier[];
 } {
   const published: Array<{
     runId: string;
@@ -54,6 +55,7 @@ function store(
   const marked: Array<{ raidId: string; domain: string }> = [];
   const settleCutoffs: Date[] = [];
   const stored: TerminalTier[] = [];
+  const storedKills: StoredKillTier[] = [];
   return {
     published,
     failed,
@@ -61,6 +63,10 @@ function store(
     marked,
     settleCutoffs,
     stored,
+    storedKills,
+    async storedKillTiers() {
+      return storedKills;
+    },
     async terminalTiers() {
       return stored;
     },
@@ -377,6 +383,7 @@ describe("applicant evidence job handler", () => {
       recordLimitation: vi.fn(),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([]),
+      storedKillTiers: vi.fn().mockResolvedValue([]),
       terminalTiers: vi.fn().mockResolvedValue([]),
       markTerminalTiers: vi.fn().mockResolvedValue(undefined)
     };
@@ -953,6 +960,9 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
+        async storedKillTiers() {
+          return [];
+        },
         async terminalTiers() {
           return [];
         },
@@ -1291,6 +1301,9 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
+        async storedKillTiers() {
+          return [];
+        },
         async terminalTiers() {
           return [];
         },
@@ -1611,6 +1624,87 @@ describe("applicant evidence job handler", () => {
             tierBests: new Set(["42"])
           }
         })
+      );
+    });
+
+    it("tells the gateway how far back it still needs to page", async () => {
+      const evidence = store();
+      evidence.stored.push({ raidId: "42", domain: "kills" });
+      evidence.storedKills.push(
+        {
+          raidId: "42",
+          raidName: "The Dreamrift",
+          killedAt: "2026-06-01T00:00:00.000Z"
+        },
+        {
+          raidId: "43",
+          raidName: "The Venomous Abyss",
+          killedAt: "2026-09-01T00:00:00.000Z"
+        }
+      );
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 0,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      // Raid 43 is not terminal, so the scan must still reach its oldest kill.
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({
+          killScanFloor: "2026-09-01T00:00:00.000Z"
+        })
+      );
+    });
+
+    it("pages the whole history when no tier is terminal for kills", async () => {
+      const evidence = store();
+      evidence.storedKills.push({
+        raidId: "42",
+        raidName: "The Dreamrift",
+        killedAt: "2026-06-01T00:00:00.000Z"
+      });
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 0,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.not.objectContaining({ killScanFloor: expect.anything() })
       );
     });
 

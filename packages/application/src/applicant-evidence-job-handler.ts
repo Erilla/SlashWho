@@ -2,6 +2,7 @@ import type {
   CharacterMythicKillInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
+  StoredKillTier,
   TerminalTier
 } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
@@ -18,7 +19,7 @@ import { errorFields } from "./error-fields";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
-import { terminalTiersFrom } from "./terminal-tiers";
+import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
@@ -68,6 +69,11 @@ export type ApplicantEvidenceStore = {
    * The tiers this character is finished with, so the run spends no request on
    * them, and the means to record the ones it has just finished with.
    */
+  /**
+   * Where and when this character's stored kills happened, which is what turns
+   * a terminal raid id into a date the report scan can stop at.
+   */
+  storedKillTiers(key: CharacterKey): Promise<readonly StoredKillTier[]>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   markTerminalTiers(
     key: CharacterKey,
@@ -448,6 +454,12 @@ export function createApplicantEvidenceJobHandler(
               .map((tier) => tier.raidId)
           )
         };
+        // How far back the report scan still has to page. Pages below this can
+        // only re-find kills already stored, so the scan stops there.
+        const killScanFloor = killScanFloorFrom(
+          storedTerminal,
+          await options.evidence.storedKillTiers(run.key)
+        );
         activeContext.signal.throwIfAborted();
         // A light refresh reads one page of reports. The gateway marks a
         // page-capped scan as a request-cap limitation, so the run publishes
@@ -461,6 +473,7 @@ export function createApplicantEvidenceJobHandler(
             hydratedFightUrls,
             collectedTierZones,
             terminalRaidIds,
+            ...(killScanFloor ? { killScanFloor } : {}),
             signal: activeContext.signal
           })
         );

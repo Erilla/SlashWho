@@ -85,3 +85,46 @@ export function terminalTiersFrom(
   }
   return marks;
 }
+
+/**
+ * The instant the report scan may stop at, or `undefined` for no early stop.
+ *
+ * Derived from the character's own stored kills rather than from the content
+ * windows, which is both simpler and stricter. A tier only goes terminal for
+ * kills after a run whose history scan raised no limitation, so the stored
+ * kills of such a character are its whole history: the oldest kill in a raid
+ * that is *not* terminal is therefore the oldest thing the scan still has to
+ * reach, and everything below it is already held.
+ *
+ * With nothing terminal there is no saving to take, and stored kills may come
+ * from a run that never finished, so the scan is left alone.
+ */
+export function killScanFloorFrom(
+  terminal: readonly TerminalTier[],
+  kills: readonly TerminalTierKill[]
+): string | undefined {
+  const terminalKillRaids = new Set(
+    terminal
+      .filter((tier) => tier.domain === "kills")
+      .map((tier) => tier.raidId)
+  );
+  if (terminalKillRaids.size === 0 || kills.length === 0) return undefined;
+
+  const outstanding = kills.filter(
+    (kill) => !terminalKillRaids.has(kill.raidId)
+  );
+  // One unsettled tier below the newest terminal one means the scan must still
+  // page past it, so the floor is that tier's oldest kill, not the newest
+  // terminal boundary.
+  return outstanding.length > 0
+    ? outstanding.reduce(
+        (oldest, kill) => (kill.killedAt < oldest ? kill.killedAt : oldest),
+        outstanding[0]!.killedAt
+      )
+    : // Every tier held is terminal, so only a raid night newer than the
+      // newest kill can still be worth a page.
+      kills.reduce(
+        (newest, kill) => (kill.killedAt > newest ? kill.killedAt : newest),
+        kills[0]!.killedAt
+      );
+}

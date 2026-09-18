@@ -3133,6 +3133,17 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           .sort((a, b) => a[0].localeCompare(b[0]));
       },
 
+      async storedKillTiers(key) {
+        // Read through the same loader a dossier does, so the scan can never
+        // stop above a kill the dossier still shows.
+        const completed = await loadCompletedEvidence(pool, key);
+        return (completed?.kills ?? []).map((kill) => ({
+          raidId: kill.raidId,
+          raidName: kill.raidName,
+          killedAt: kill.killedAt
+        }));
+      },
+
       async terminalTiers(key) {
         const result = await pool.query<{
           raid_id: string;
