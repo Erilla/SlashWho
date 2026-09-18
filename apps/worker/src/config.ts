@@ -279,57 +279,62 @@ export function loadWorkerConfig(
     // How much of the Warcraft Logs hourly allowance must remain before a run
     // is allowed to start.
     //
-    // 5000 IS MEASURED, not guessed (#295). It replaces an earlier 1500, which
-    // was inferred from ten runs exceeding 9000 points in total on 2026-09-17
-    // -- an average above 900 and nothing about the spread.
+    // 3500 IS MEASURED, not guessed (#295). Two earlier values sit behind it:
+    // 1500, inferred from ten runs exceeding 9000 points in total on
+    // 2026-09-17 -- an average above 900 and nothing about the spread -- and
+    // 5000, measured but at a parse cap that no longer exists (see below).
     //
-    // The measurement: 22 `pointsSpentByRun` deltas logged between 12:10 and
-    // 15:10 on 2026-09-18, the first window in which they mean anything, since
-    // #296 made runs serial and #293 stopped them failing before they collected
-    // (a before/after delta charges overlapping runs to each other). Nineteen
-    // of the 22 collected something; the other three read a character with
-    // nothing to fetch and cost 2, 22 and 31 points.
+    // The measurement: eight `pointsSpentByRun` deltas logged between 22:15
+    // and 22:56 on 2026-09-18, two full cycles of four characters with no
+    // looping and no failures, at the code-default parse cap of 24.
     //
-    // Across those nineteen: min 862, p25 1392, median 1609, p75 2216,
-    // p90 3627, max 4775. Twelve of them cost more than the old 1500 reserve,
-    // so admission was approving runs that could not finish more often than
-    // not -- the exact failure the reserve exists to prevent. 5000 covers the
-    // measured maximum.
+    //   814  820  1092  1092  1495  1633  2888  2906
     //
-    // The spread is structural rather than noise: spend tracks request volume
-    // at a steady 15-20 points each, and the history scan varies from 32 to 190
-    // requests with how much history a character has. Expect a 5x range between
-    // characters, not a tight cluster around the median.
+    // max 2906, mean 1593, 12741 points across the hour. 3500 covers the
+    // maximum with about 600 points to spare.
     //
-    // Two caveats a later reader should keep. Every collection in the sample
-    // was truncated by `parse_request_cap`, so these are capped costs and an
-    // uncapped run costs at least this much. And a configured value only
-    // reaches the run through `effectiveReserve`, which caps it at a share of
-    // the account's reported allowance -- see MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
-    // in applicant-evidence-job-handler.ts, raised to 0.3 alongside this so
-    // 5000 is not silently clipped to 1800.
+    // The deltas only mean anything because three things had landed: #296 made
+    // runs serial (a before/after delta charges overlapping runs to each
+    // other), #293 stopped them failing before they collected, and #331 stopped
+    // four characters repeating identical work. Samples taken before #331 bound
+    // the cost of a broken run rather than measuring a healthy one, which is
+    // why the earlier 4775 maximum is not in this file any more.
     //
-    // EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway (12) and code
-    // (24) until 2026-09-17 precisely because nothing forced that review, so
-    // this default and the Railway variable were set in the same change.
+    // The spread is structural rather than noise: spend tracks request volume,
+    // and the history scan varies with how much history a character has -- a
+    // 66-page scan is ~1320 points before a single parse. Expect a 3-4x range
+    // between characters, not a tight cluster around the mean.
     //
-    // That was not enough, and the reason is worth reading before trusting the
-    // numbers above. Within an hour of 5000 landing, the parse cap reverted
-    // from 48 to 24 -- correctly, once #314 fixed properly what the 48 had
-    // worked around -- and the whole sample became a measurement of a
-    // configuration that no longer ran. The same failure this paragraph
-    // describes, one level up. The configuration the sample was taken under is
-    // therefore also asserted, in apps/worker/src/evidence-run-budget.test.ts,
-    // so the next such change fails CI instead of quietly expiring a constant
-    // in another file. #295 stays open for a clean sample post-#331: the runs
-    // above overlapped the repeated-work loop, so they bound a broken run
-    // rather than measuring a healthy one, and post-revert costs top out
-    // nearer 2900.
+    // Why lower rather than leave the margin. The reserve is the binding
+    // constraint on run rate, and the arithmetic is exact: 18000 - 5000 = 13000
+    // usable, over a 1593 mean, is 8.2 runs an hour, and eight is what was
+    // observed. At 3500 it is 14500 / 1593 = 9.1. Holding 5000 reserves enough
+    // for a run that cannot happen, at a cost of roughly three runs a window.
+    //
+    // A configured value only reaches the run through `effectiveReserve`, which
+    // caps it at MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE of the account's reported
+    // allowance -- see applicant-evidence-job-handler.ts. That share stays at
+    // 0.3: on the worker's 18000 the ceiling is 5400, so 3500 applies in full,
+    // and on a visitor's 3600 the ceiling is 1080, which already bound below
+    // both the old value and this one, so visitor behaviour is unchanged.
+    //
+    // Two values before this one went stale unnoticed, and the shape was the
+    // same both times. EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway
+    // (12) and code (24) until 2026-09-17 because nothing forced the review; a
+    // Railway copy of this variable was deleted on 2026-09-18 for the same
+    // reason. Then, within an hour of 5000 landing, the parse cap reverted from
+    // 48 to 24 -- correctly, once #314 fixed properly what the 48 had worked
+    // around -- and the sample behind 5000 became a measurement of a
+    // deployment that no longer ran. Nothing failed. The configuration this
+    // sample was taken under is therefore asserted in
+    // apps/worker/src/evidence-run-budget.test.ts, which expires the
+    // measurement when the parse cap or the effective scan depth moves. If it
+    // fails, re-measure: do not edit the recorded sample to match.
     // 0 switches the gate off, which is deliberate: an operator who finds it
     // refusing too much needs a lever that is not a code change and a redeploy.
     evidencePointsReserve: integerInRange(
       environment.EVIDENCE_POINTS_RESERVE,
-      5_000,
+      3_500,
       0,
       Number.MAX_SAFE_INTEGER,
       "invalid_evidence_points_reserve"

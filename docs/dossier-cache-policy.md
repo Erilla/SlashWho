@@ -329,7 +329,7 @@ case takes several windows by nature — the run publishes what it has, sets a
 retry deadline, and the resume sweep carries it on.
 
 A run also checks the Warcraft Logs hourly points allowance before it starts.
-When fewer than `EVIDENCE_POINTS_RESERVE` points (5000 by default, capped at
+When fewer than `EVIDENCE_POINTS_RESERVE` points (3500 by default, capped at
 30% of whatever allowance the account in use reports, so a visitor's smaller
 budget is not fenced off by a threshold sized for the worker's; `0` switches
 the gate off) remain, the
