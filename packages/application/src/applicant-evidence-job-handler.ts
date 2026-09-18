@@ -8,6 +8,7 @@ import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
   WarcraftLogsLimitationCode,
+  WarcraftLogsRateLimit,
   WarcraftLogsWipeEvidence
 } from "@slashwho/warcraftlogs";
 
@@ -61,11 +62,14 @@ export type ApplicantEvidenceStore = {
 
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   evidence: ApplicantEvidenceStore;
-  warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  warcraftLogs: Pick<
+    WarcraftLogsGateway,
+    "getFirstKillReports" | "getRateLimit"
+  >;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
-  }) => Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">;
   decryptionKey?: Buffer;
   requestCap: number;
   parseRequestCap: number;
@@ -77,6 +81,12 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
    * settles permanently short of the data it knows it did not fetch.
    */
   parseCapRetryMs: number;
+  /**
+   * How many Warcraft Logs points must remain unspent this hour before a run
+   * may start. The gateway reports the allowance; this is the policy applied
+   * to it.
+   */
+  pointsReserve: number;
   now?: () => Date;
   logger?: { info(value: Record<string, unknown>): void };
   monotonic?: () => number;
@@ -120,6 +130,44 @@ function toCharacterMythicKillInput(
   };
 }
 
+// The queue's own ceiling. `requestedRetryDelaySeconds` rejects anything above
+// `retryDelayMax` and the job then falls back to `retryDelay: 1` with backoff,
+// retrying almost immediately into another refusal. `pointsResetIn` reaches
+// 3600, so a long reset costs one extra attempt; by the second refusal the
+// reset is necessarily within this window.
+const MAXIMUM_REFUSAL_RETRY_SECONDS = 1_800;
+
+type PointsBudgetRefusal = Error & {
+  readonly retryable: true;
+  readonly retryAfterMs: number;
+  readonly code: "points_budget_low";
+};
+
+function pointsBudgetRefusal(resetInSeconds: number): PointsBudgetRefusal {
+  // Whole seconds, at least 1 and at most 1800: outside that range
+  // `requestedRetryDelaySeconds` returns null and the delay is discarded.
+  const delaySeconds = Math.min(
+    Math.max(Math.ceil(resetInSeconds), 1),
+    MAXIMUM_REFUSAL_RETRY_SECONDS
+  );
+  return Object.assign(new Error("evidence_points_budget_low"), {
+    retryable: true as const,
+    retryAfterMs: delaySeconds * 1_000,
+    code: "points_budget_low" as const
+  });
+}
+
+function isPointsBudgetRefusal(error: unknown): error is PointsBudgetRefusal {
+  return (
+    error instanceof Error &&
+    (error as Partial<PointsBudgetRefusal>).code === "points_budget_low"
+  );
+}
+
+function remainingPoints(budget: WarcraftLogsRateLimit): number {
+  return budget.limitPerHour - budget.pointsSpentThisHour;
+}
+
 /**
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
@@ -158,6 +206,10 @@ export function createApplicantEvidenceJobHandler(
         parseLimitationCode: null,
         killCount: 0,
         requestCapUsed: options.requestCap,
+        pointsLimitPerHour: null,
+        pointsRemainingBefore: null,
+        pointsSpentByRun: null,
+        pointsRemainingAfter: null,
         durationMs: 0
       };
 
@@ -189,6 +241,31 @@ export function createApplicantEvidenceJobHandler(
               })
             : options.warcraftLogs;
 
+        // Read from `gateway`, not `options.warcraftLogs`: a run carrying a
+        // visitor's own credentials spends *their* allowance, and the worker's
+        // shared allowance says nothing about it.
+        //
+        // A limitation here does not refuse the run. We are no worse off than
+        // before this gate existed, and a gate that fails closed on its own
+        // transport errors could stop all collection permanently.
+        const budgetBefore = await gateway.getRateLimit(activeContext.signal);
+        const openingBudget =
+          budgetBefore.kind === "rate_limit" ? budgetBefore : null;
+        if (openingBudget) {
+          record.pointsLimitPerHour = openingBudget.limitPerHour;
+          record.pointsRemainingBefore = remainingPoints(openingBudget);
+          if (remainingPoints(openingBudget) < options.pointsReserve) {
+            // The run stays claimed and nothing is published. Leaving it
+            // unclaimed instead would be a bug: `reserve` counts
+            // ('queued','running','retrying') as active, so the character
+            // would join a run that is never processed and never collect
+            // again. Publishing instead risks the destructive merge of #250.
+            record.outcome = "points_budget_low";
+            record.limitationCode = "points_budget_low";
+            throw pointsBudgetRefusal(openingBudget.pointsResetInSeconds);
+          }
+        }
+
         activeContext.signal.throwIfAborted();
         const hydratedFightUrls = new Set(
           await options.evidence.hydratedFightUrls(run.key)
@@ -212,6 +289,20 @@ export function createApplicantEvidenceJobHandler(
           })
         );
         activeContext.signal.throwIfAborted();
+
+        // What the run actually cost. This is the measurement that replaces the
+        // guessed reserve with evidence, so it is sampled even when the run was
+        // limited. A negative `pointsSpentByRun` means the hourly window reset
+        // mid-run; it is logged as observed rather than clamped away.
+        const budgetAfter = await gateway.getRateLimit(activeContext.signal);
+        if (budgetAfter.kind === "rate_limit") {
+          record.pointsRemainingAfter = remainingPoints(budgetAfter);
+          if (openingBudget) {
+            record.pointsSpentByRun =
+              budgetAfter.pointsSpentThisHour -
+              openingBudget.pointsSpentThisHour;
+          }
+        }
 
         if (response.kind === "limitation") {
           record.outcome = "limitation";
@@ -272,7 +363,9 @@ export function createApplicantEvidenceJobHandler(
       } catch (error) {
         record.outcome = activeContext.signal.aborted
           ? "cancelled"
-          : "unexpected_error";
+          : isPointsBudgetRefusal(error)
+            ? "points_budget_low"
+            : "unexpected_error";
         throw error;
       } finally {
         if (options.logger) {
