@@ -187,6 +187,44 @@ describe("terminalTiersFrom", () => {
       })
     ).toHaveLength(3);
   });
+
+  // Break caught: the four Warlords-and-earlier raids have no current-content
+  // window, so they reported `unknown` and could never be marked terminal. A
+  // veteran holding one kill in one of them therefore kept it permanently
+  // outstanding, which pinned the floor to the bottom of their history and
+  // made the scan re-read all of it every run (#326).
+  it("marks a tier Raider.IO never served, so a veteran's floor can lift", () => {
+    expect(
+      input({
+        kills: [
+          kill("669", "Hellfire Citadel", "2016-01-01T00:00:00.000Z"),
+          kill("42", concluded, "2026-06-01T00:00:00.000Z")
+        ]
+      })
+    ).toEqual(
+      expect.arrayContaining([
+        { raidId: "669", domain: "kills" },
+        { raidId: "42", domain: "kills" }
+      ])
+    );
+  });
+
+  // Break caught: the four Warlords-and-earlier raids had no current-content
+  // window, so they read as `unknown` and could never be marked terminal. A
+  // veteran holding one kill in one of them kept it permanently outstanding,
+  // which pinned the floor to the bottom of their history and made the report
+  // scan re-read all of it on every run (#326).
+  it("marks a tier that predates the schedule source", () => {
+    expect(
+      input({
+        kills: [kill("669", "Hellfire Citadel", "2016-01-01T00:00:00.000Z")]
+      })
+    ).toEqual([
+      { raidId: "669", domain: "kills" },
+      { raidId: "669", domain: "parses" },
+      { raidId: "669", domain: "tier_bests" }
+    ]);
+  });
 });
 
 describe("killScanFloorFrom", () => {
@@ -202,6 +240,44 @@ describe("killScanFloorFrom", () => {
         []
       )
     ).toBeUndefined();
+  });
+
+  it("lifts off a tier Raider.IO never served once it is terminal", () => {
+    // The other half of the same break: with the ancient raid markable, the
+    // veteran has nothing outstanding, so the floor rises to the newest thing
+    // held instead of sitting on a 2016 kill (#326).
+    expect(
+      killScanFloorFrom(
+        [
+          { raidId: "669", domain: "kills" },
+          { raidId: "42", domain: "kills" }
+        ],
+        [
+          kill("669", "Hellfire Citadel", "2016-01-01T00:00:00.000Z"),
+          kill("42", concluded, "2026-06-01T00:00:00.000Z")
+        ],
+        []
+      )
+    ).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("lifts off a tier that predates the schedule source", () => {
+    // The other half of the same break: with the ancient raid markable, the
+    // veteran has nothing outstanding, so the floor rises to the newest thing
+    // held instead of sitting on a 2016 kill (#326).
+    expect(
+      killScanFloorFrom(
+        [
+          { raidId: "669", domain: "kills" },
+          { raidId: "42", domain: "kills" }
+        ],
+        [
+          kill("669", "Hellfire Citadel", "2016-01-01T00:00:00.000Z"),
+          kill("42", concluded, "2026-06-01T00:00:00.000Z")
+        ],
+        []
+      )
+    ).toBe("2026-06-01T00:00:00.000Z");
   });
 
   it("gives no floor for a character with nothing stored", () => {
