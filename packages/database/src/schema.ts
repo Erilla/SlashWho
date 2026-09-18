@@ -6,6 +6,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -461,6 +462,29 @@ export const characterEvidenceRuns = pgTable(
       sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
     )
   ]
+);
+
+/**
+ * One run's collected evidence, staged between a finished Warcraft Logs scan
+ * and a successful publication.
+ *
+ * A retry that already holds a stage republishes it instead of re-collecting,
+ * which is what stops a transient publication failure from costing a second
+ * full collection (#292). It is deleted in the same transaction as the
+ * publication it feeds, so a row here always means work that has been paid for
+ * upstream and not yet stored.
+ */
+export const characterEvidenceCollections = pgTable(
+  "character_evidence_collections",
+  {
+    runId: uuid("run_id")
+      .primaryKey()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    payload: jsonb("payload").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  }
 );
 
 export const characterMythicKills = pgTable(

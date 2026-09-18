@@ -2,6 +2,7 @@ import type {
   CharacterMythicKillInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
+  StagedEvidenceCollection,
   StoredKillTier,
   TerminalTier
 } from "@slashwho/database";
@@ -16,6 +17,10 @@ import type {
 
 import { decryptCredential } from "./credential-encryption";
 import { errorFields } from "./error-fields";
+import {
+  classifyEvidenceFailure,
+  evidenceRetryDecision
+} from "./evidence-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
@@ -31,6 +36,17 @@ export type ApplicantEvidenceRun = Readonly<{
   className?: string | null;
 }>;
 
+/**
+ * What a run may name as its shortfall.
+ *
+ * Wider than `WarcraftLogsLimitationCode` because "our own code threw" is not
+ * a Warcraft Logs fact, and the Warcraft Logs package should keep describing
+ * only Warcraft Logs. A run whose attempt ended in a fault it cannot expect to
+ * survive a retry publishes what it has under `collection_failed` (#292).
+ */
+export type EvidenceLimitationCode =
+  WarcraftLogsLimitationCode | "collection_failed";
+
 export type ApplicantEvidenceStore = {
   find(runId: string): Promise<ApplicantEvidenceRun | null>;
   claim(runId: string, attempt: number): Promise<ApplicantEvidenceRun | null>;
@@ -38,8 +54,8 @@ export type ApplicantEvidenceStore = {
     runId: string,
     result: Readonly<{
       state: "complete" | "partial";
-      limitationCode: WarcraftLogsLimitationCode | null;
-      parseLimitationCode: WarcraftLogsLimitationCode | null;
+      limitationCode: EvidenceLimitationCode | null;
+      parseLimitationCode: EvidenceLimitationCode | null;
       retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
@@ -47,15 +63,22 @@ export type ApplicantEvidenceStore = {
       completedAt: Date;
     }>
   ): Promise<void>;
-  fail(runId: string, code: WarcraftLogsLimitationCode): Promise<void>;
+  fail(runId: string, code: EvidenceLimitationCode): Promise<void>;
   /**
    * Records why a still-active run collected nothing. A refusal publishes
    * nothing, so this is the only way the reason reaches a reader.
    */
-  recordLimitation(
+  recordLimitation(runId: string, code: EvidenceLimitationCode): Promise<void>;
+  /**
+   * Holds a finished collection between the scan that paid for it and the
+   * publication that stores it, so a retry republishes rather than re-collects.
+   */
+  stageCollection(
     runId: string,
-    code: WarcraftLogsLimitationCode
+    payload: StagedEvidenceCollection
   ): Promise<void>;
+  /** The stage this run already holds, if a previous attempt left one. */
+  stagedCollection(runId: string): Promise<StagedEvidenceCollection | null>;
   /**
    * Fight URLs whose parses are already stored for this character, so a
    * budget-limited run spends its requests on what is still missing rather
@@ -120,6 +143,9 @@ export type EvidenceRunNotifier = {
     limitationCode: string | null;
     parseLimitationCode: string | null;
     pointsSpent: number | null;
+    /** Whether this attempt earned another one, and why. */
+    retryDecision?: string;
+    retryReason?: string | null;
   }): Promise<void> | void;
 };
 
@@ -161,6 +187,20 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
    * eventually replace it.
    */
   killSettleMs: number;
+  /**
+   * Points above which a failed attempt is not retried, whatever kind of fault
+   * it was. A retry that repeats a 2,500-point collection is not comparable to
+   * one that repeats a cheap request, and #292 paid for five of the former.
+   * 0 switches the veto off.
+   */
+  retryCostCeiling: number;
+  /**
+   * How long a run that stopped on a fault waits before a reader may reserve
+   * another. `failed` is invisible to `reserve` -- neither active nor
+   * completed -- so a run that stops without this is re-reserved by the very
+   * next page read, and a retry storm becomes a reservation storm.
+   */
+  failureCooldownMs: number;
   now?: () => Date;
   logger?: { info(value: Record<string, unknown>): void };
   evidenceRunNotifier?: EvidenceRunNotifier;
@@ -278,6 +318,48 @@ function effectiveReserve(
   );
 }
 
+type EvidencePublication = Parameters<ApplicantEvidenceStore["publish"]>[1];
+
+/**
+ * The stage crosses a JSON boundary, so its two timestamps travel as ISO
+ * strings and everything else is the publication verbatim. Nothing derived
+ * from the run's credentials is in either direction.
+ */
+function toStagedCollection(
+  publication: EvidencePublication
+): StagedEvidenceCollection {
+  return {
+    state: publication.state,
+    limitationCode: publication.limitationCode,
+    parseLimitationCode: publication.parseLimitationCode,
+    retryAfterAt: publication.retryAfterAt
+      ? publication.retryAfterAt.toISOString()
+      : null,
+    kills: publication.kills,
+    wipes: publication.wipes,
+    tierBests: publication.tierBests,
+    completedAt: publication.completedAt.toISOString()
+  };
+}
+
+function fromStagedCollection(
+  staged: StagedEvidenceCollection
+): EvidencePublication {
+  return {
+    state: staged.state,
+    limitationCode: staged.limitationCode as EvidenceLimitationCode | null,
+    parseLimitationCode:
+      staged.parseLimitationCode as EvidenceLimitationCode | null,
+    ...(staged.retryAfterAt
+      ? { retryAfterAt: new Date(staged.retryAfterAt) }
+      : {}),
+    kills: staged.kills,
+    wipes: staged.wipes,
+    tierBests: staged.tierBests,
+    completedAt: new Date(staged.completedAt)
+  };
+}
+
 /**
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
@@ -325,11 +407,24 @@ export function createApplicantEvidenceJobHandler(
         // outcome, and filled from whatever is caught below.
         errorName: null,
         errorCode: null,
+        // Whether this attempt earned another one, and why. A closed
+        // enumeration authored in source, like every other field here.
+        retryDecision: null,
+        retryReason: null,
+        // How a stopped attempt left the run: published as partial, or failed
+        // because the publication was itself what broke. `outcome` keeps
+        // naming the fault, so neither answer displaces the other.
+        stopDisposition: null,
         durationMs: 0
       };
       // Set once the run is claimed, and the sole gate on announcing: a run
       // this execution never owned is neither started nor finished.
       let announced: CharacterKey | undefined;
+      // The catch needs all three: which run this attempt owns, whether it got
+      // as far as spending the allowance, and how to find out what it spent.
+      let claimedRunId: string | undefined;
+      let collectionBegan = false;
+      let sampleSpend: (() => Promise<void>) | undefined;
 
       try {
         const run = await evidence.claim(job.runId, activeContext.attempt);
@@ -341,6 +436,7 @@ export function createApplicantEvidenceJobHandler(
         // announcements however many workers race for it, and is the first
         // point at which there is a character to name.
         announced = run.key;
+        claimedRunId = run.id;
         try {
           await options.evidenceRunNotifier?.started({
             runId: job.runId,
@@ -355,6 +451,21 @@ export function createApplicantEvidenceJobHandler(
             runId: job.runId,
             phase: "started"
           });
+        }
+
+        // A previous attempt already paid for this collection upstream and
+        // failed on the way to storage. Republishing it is the whole point of
+        // the stage, so it happens before the admission gate: it spends
+        // nothing, and refusing it for a low allowance would throw away work
+        // already bought.
+        const staged = await evidence.stagedCollection(run.id);
+        if (staged) {
+          record.outcome = "republished";
+          record.limitationCode = staged.limitationCode;
+          record.parseLimitationCode = staged.parseLimitationCode;
+          record.killCount = staged.kills.length;
+          await evidence.publish(run.id, fromStagedCollection(staged));
+          return;
         }
 
         // The run's own Warcraft Logs credentials when the enqueuing visitor
@@ -426,6 +537,40 @@ export function createApplicantEvidenceJobHandler(
           }
         }
 
+        // Storage happens in two steps on purpose: the stage records that the
+        // scan has been paid for, so a publication that fails transiently is
+        // retried from the stage rather than from Warcraft Logs. `publish`
+        // deletes it in its own transaction.
+        const stageAndPublish = async (publication: EvidencePublication) => {
+          await evidence.stageCollection(
+            run.id,
+            toStagedCollection(publication)
+          );
+          await evidence.publish(run.id, publication);
+        };
+
+        // Sampled by the success path and by the catch alike: what a failed
+        // attempt cost is exactly what decides whether another one is
+        // affordable (#292). Never at the cost of the collection it measures --
+        // a failure to measure leaves the record null, which is what happened.
+        sampleSpend = async () => {
+          try {
+            const budgetAfter = await gateway.getRateLimit(
+              activeContext.signal
+            );
+            if (budgetAfter.kind === "rate_limit") {
+              record.pointsRemainingAfter = remainingPoints(budgetAfter);
+              if (openingBudget) {
+                record.pointsSpentByRun =
+                  budgetAfter.pointsSpentThisHour -
+                  openingBudget.pointsSpentThisHour;
+              }
+            }
+          } catch {
+            // Left as null on the record: unmeasured, which is what happened.
+          }
+        };
+
         activeContext.signal.throwIfAborted();
         // A fight whose rankings have not settled is re-read rather than left
         // frozen at whatever it showed on the night.
@@ -465,6 +610,7 @@ export function createApplicantEvidenceJobHandler(
         // page-capped scan as a request-cap limitation, so the run publishes
         // as partial and the kills it did not revisit are preserved.
         const requestCap = job.mode === "light" ? 1 : options.requestCap;
+        collectionBegan = true;
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap,
@@ -488,19 +634,7 @@ export function createApplicantEvidenceJobHandler(
         // gateway rethrows the abort reason -- a graceful shutdown landing in
         // this window would otherwise discard a run that has already spent its
         // whole request and parse budget.
-        try {
-          const budgetAfter = await gateway.getRateLimit(activeContext.signal);
-          if (budgetAfter.kind === "rate_limit") {
-            record.pointsRemainingAfter = remainingPoints(budgetAfter);
-            if (openingBudget) {
-              record.pointsSpentByRun =
-                budgetAfter.pointsSpentThisHour -
-                openingBudget.pointsSpentThisHour;
-            }
-          }
-        } catch {
-          // Left as null on the record: unmeasured, which is what happened.
-        }
+        await sampleSpend();
 
         if (response.kind === "limitation") {
           record.outcome = "limitation";
@@ -509,7 +643,7 @@ export function createApplicantEvidenceJobHandler(
             response.retryAfterMs === undefined
               ? undefined
               : new Date(now().getTime() + response.retryAfterMs);
-          await evidence.publish(run.id, {
+          await stageAndPublish({
             state: "partial",
             limitationCode: response.code,
             parseLimitationCode: null,
@@ -546,7 +680,7 @@ export function createApplicantEvidenceJobHandler(
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = response.parseLimitation?.code ?? null;
         record.killCount = response.kills.length;
-        await evidence.publish(run.id, {
+        await stageAndPublish({
           state: incomplete ? "partial" : "complete",
           limitationCode: response.limitation?.code ?? null,
           parseLimitationCode: response.parseLimitation?.code ?? null,
@@ -574,7 +708,8 @@ export function createApplicantEvidenceJobHandler(
           await evidence.markTerminalTiers(run.key, marks, now());
         }
       } catch (error) {
-        record.outcome = activeContext.signal.aborted
+        const aborted = activeContext.signal.aborted;
+        record.outcome = aborted
           ? "cancelled"
           : isPointsBudgetRefusal(error)
             ? "points_budget_low"
@@ -584,7 +719,61 @@ export function createApplicantEvidenceJobHandler(
         // to get there. Bounded to an error class and a code-authored
         // identifier -- see `errorFields` -- so no message text reaches a log.
         Object.assign(record, errorFields(error));
-        throw error;
+
+        // What this attempt cost is half the decision, so measure it before
+        // deciding -- unless the run was cancelled, where the abort would only
+        // reject this call too.
+        if (
+          !aborted &&
+          collectionBegan &&
+          record.pointsSpentByRun === null &&
+          sampleSpend
+        ) {
+          await sampleSpend();
+        }
+
+        const decision = evidenceRetryDecision({
+          classification: classifyEvidenceFailure(error, { aborted }),
+          attempt: activeContext.attempt,
+          maxAttempts: activeContext.maxAttempts,
+          pointsSpent: record.pointsSpentByRun as number | null,
+          collectionBegan,
+          costCeiling: options.retryCostCeiling
+        });
+        record.retryDecision = decision.action;
+        record.retryReason = decision.reason;
+
+        // Rethrowing is what schedules the retry. A run this attempt never
+        // claimed has nothing to publish onto either way.
+        if (decision.action === "retry" || claimedRunId === undefined) {
+          throw error;
+        }
+
+        // Stopping means publishing what there is rather than abandoning the
+        // run: `publish` carries a partial's previous kills, wipes and parses
+        // forward, so this can only add. `retryAfterAt` is what keeps the next
+        // page read from reserving straight over the top of it.
+        const stopped: EvidencePublication = {
+          state: "partial",
+          limitationCode: "collection_failed",
+          parseLimitationCode: null,
+          retryAfterAt: new Date(now().getTime() + options.failureCooldownMs),
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          completedAt: now()
+        };
+        try {
+          await evidence.publish(claimedRunId, stopped);
+          record.stopDisposition = "published";
+        } catch {
+          // Publication is itself what is broken -- #290's case, where the
+          // guard threw before any query. The run still has to leave the
+          // active set, or `reserve` counts it forever and the character never
+          // collects again.
+          record.stopDisposition = "failed";
+          await evidence.fail(claimedRunId, "collection_failed");
+        }
       } finally {
         if (options.logger) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
@@ -603,7 +792,11 @@ export function createApplicantEvidenceJobHandler(
               outcome: record.outcome as string,
               limitationCode: record.limitationCode as string | null,
               parseLimitationCode: record.parseLimitationCode as string | null,
-              pointsSpent: record.pointsSpentByRun as number | null
+              pointsSpent: record.pointsSpentByRun as number | null,
+              ...(record.retryDecision
+                ? { retryDecision: record.retryDecision as string }
+                : {}),
+              retryReason: record.retryReason as string | null
             });
           } catch {
             options.logger?.info({

@@ -1,4 +1,8 @@
-import type { StoredKillTier, TerminalTier } from "@slashwho/database";
+import type {
+  StagedEvidenceCollection,
+  StoredKillTier,
+  TerminalTier
+} from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -45,6 +49,7 @@ function store(
   settleCutoffs: Date[];
   stored: TerminalTier[];
   storedKills: StoredKillTier[];
+  staged: Map<string, StagedEvidenceCollection>;
 } {
   const published: Array<{
     runId: string;
@@ -56,6 +61,7 @@ function store(
   const settleCutoffs: Date[] = [];
   const stored: TerminalTier[] = [];
   const storedKills: StoredKillTier[] = [];
+  const staged = new Map<string, StagedEvidenceCollection>();
   return {
     published,
     failed,
@@ -73,6 +79,7 @@ function store(
     async markTerminalTiers(_key, tiers) {
       marked.push(...tiers);
     },
+    staged,
     async find(id) {
       return id === activeRun.id ? activeRun : null;
     },
@@ -87,6 +94,12 @@ function store(
     },
     async recordLimitation(runId, code) {
       noted.push({ runId, code });
+    },
+    async stageCollection(runId, payload) {
+      staged.set(runId, payload);
+    },
+    async stagedCollection(runId) {
+      return staged.get(runId) ?? null;
     },
     async collectedTierZones() {
       return [];
@@ -156,6 +169,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -224,6 +239,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -300,6 +317,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -381,6 +400,8 @@ describe("applicant evidence job handler", () => {
       find: vi.fn(),
       fail: vi.fn(),
       recordLimitation: vi.fn(),
+      stageCollection: vi.fn().mockResolvedValue(undefined),
+      stagedCollection: vi.fn().mockResolvedValue(null),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([]),
       storedKillTiers: vi.fn().mockResolvedValue([]),
@@ -396,7 +417,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await handler.execute("run-1", {
@@ -436,6 +459,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -478,6 +503,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -514,6 +541,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -565,7 +594,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await expect(
@@ -599,7 +630,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await expect(
@@ -631,7 +664,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await expect(
@@ -666,7 +701,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await expect(
@@ -700,7 +737,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     const error = await handler
@@ -732,7 +771,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await handler.execute(run.id);
@@ -760,7 +801,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await handler.execute(run.id);
@@ -786,7 +829,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await expect(
@@ -818,7 +863,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 0,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await handler.execute(run.id);
@@ -861,7 +908,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await handler.execute(run.id);
@@ -884,7 +933,9 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
     });
 
     await handler.execute(run.id);
@@ -931,6 +982,8 @@ describe("applicant evidence job handler", () => {
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
       logger: { info: (value) => infos.push(value) }
     });
 
@@ -943,6 +996,204 @@ describe("applicant evidence job handler", () => {
       pointsRemainingAfter: 16_049.25
     });
   });
+  describe("retry policy", () => {
+    // #292: one run, five attempts, the same throw each time, ~8,600 Warcraft
+    // Logs points spent and nothing published. These are the tests that keep
+    // an attempt from being repeated at full price.
+    const context = {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    };
+
+    function scanningGateway(
+      spentBefore = 0,
+      spentAfter = 0,
+      getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: []
+      }))
+    ) {
+      let calls = 0;
+      return {
+        getFirstKillReports,
+        getRateLimit: vi.fn(async () => ({
+          kind: "rate_limit" as const,
+          limitPerHour: 18_000,
+          pointsSpentThisHour: calls++ === 0 ? spentBefore : spentAfter,
+          pointsResetInSeconds: 949
+        }))
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      > & { getFirstKillReports: ReturnType<typeof vi.fn> };
+    }
+
+    it("publishes a partial under a cooldown instead of repeating a failed collection", async () => {
+      // Break caught: `failed` is invisible to `reserve` -- neither active nor
+      // completed -- so a run that stops without a cooldown is re-reserved by
+      // the very next page read and the retry storm becomes a reservation one.
+      const evidence = store();
+      let published = 0;
+      const publishing = evidence.publish.bind(evidence);
+      evidence.publish = async (runId, result) => {
+        if (published++ === 0) throw new RangeError("collection_broke");
+        await publishing(runId, result);
+      };
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(),
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        now: () => new Date("2026-09-18T09:43:26.000Z")
+      });
+
+      await expect(handler.execute(run.id, context)).resolves.toBeUndefined();
+
+      expect(evidence.failed).toEqual([]);
+      const stop = evidence.published.at(-1);
+      expect(stop?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "collection_failed",
+        retryAfterAt: new Date("2026-09-18T10:13:26.000Z")
+      });
+    });
+
+    it("does not retry an attempt that already spent the points", async () => {
+      // Break caught: a retry that repeats a 2,500-point collection is not
+      // comparable to one that repeats a cheap request. All five attempts in
+      // #292 re-fetched the same 135 kills before failing the same way.
+      const evidence = store();
+      evidence.publish = async () => {
+        // Not a code-authored identifier, so classification alone would give
+        // this one more attempt. Cost is what refuses it.
+        throw new Error("the database went away");
+      };
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(0, 2_523.24),
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(handler.execute(run.id, context)).resolves.toBeUndefined();
+
+      expect(records[0]).toMatchObject({
+        retryDecision: "stop",
+        retryReason: "cost_veto",
+        pointsSpentByRun: 2_523.24
+      });
+    });
+
+    it("retries a cheap failure rather than stopping the run", async () => {
+      // Break caught: stopping on every fault would trade a retry storm for a
+      // character that gives up on its first transient blip.
+      const evidence = store();
+      const failure = Object.assign(new Error("connection terminated"), {
+        code: "57P01"
+      });
+      evidence.publish = async () => {
+        throw failure;
+      };
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(0, 12),
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
+      });
+
+      await expect(handler.execute(run.id, context)).rejects.toBe(failure);
+    });
+
+    it("republishes a staged collection without asking Warcraft Logs again", async () => {
+      // Break caught: the whole point of the stage. A publication that failed
+      // transiently must not cost a second full collection.
+      const evidence = store();
+      evidence.staged.set(run.id, {
+        state: "partial",
+        limitationCode: null,
+        parseLimitationCode: "parse_request_cap",
+        retryAfterAt: "2026-09-18T10:13:26.000Z",
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: "2026-09-18T09:43:26.000Z"
+      });
+      const warcraftLogs = scanningGateway();
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
+      });
+
+      await expect(handler.execute(run.id, context)).resolves.toBeUndefined();
+
+      expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+      expect(evidence.published).toEqual([
+        {
+          runId: run.id,
+          result: expect.objectContaining({
+            state: "partial",
+            parseLimitationCode: "parse_request_cap",
+            retryAfterAt: new Date("2026-09-18T10:13:26.000Z"),
+            completedAt: new Date("2026-09-18T09:43:26.000Z")
+          })
+        }
+      ]);
+    });
+
+    it("stages a finished scan before publishing it", async () => {
+      // Break caught: staging after the publication would leave exactly the
+      // window this is for -- a scan paid for and a publication that failed --
+      // with nothing to resume from.
+      const evidence = store();
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(),
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        now: () => new Date("2026-09-18T09:43:26.000Z")
+      });
+
+      await handler.execute(run.id, context);
+
+      expect(evidence.staged.get(run.id)).toMatchObject({
+        state: "complete",
+        completedAt: "2026-09-18T09:43:26.000Z"
+      });
+    });
+  });
+
   describe("evidence_job record", () => {
     // Fixtures local to this describe block: the brief's tests exercise
     // runIds ("run-1".."run-4") that the module-level `run`/`store()` fixture
@@ -967,6 +1218,10 @@ describe("applicant evidence job handler", () => {
           return [];
         },
         async markTerminalTiers() {},
+        async stageCollection() {},
+        async stagedCollection() {
+          return null;
+        },
         async collectedTierZones() {
           return [];
         },
@@ -994,7 +1249,9 @@ describe("applicant evidence job handler", () => {
         parseRequestCap: 8,
         parseCapRetryMs: 1_800_000,
         pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
       };
     }
 
@@ -1141,10 +1398,11 @@ describe("applicant evidence job handler", () => {
       expect(records[0]).toMatchObject({ outcome: "cancelled" });
     });
 
-    it("records an unexpected_error outcome exactly once and rethrows it unchanged", async () => {
+    it("records an unexpected_error outcome exactly once and stops rather than rethrowing", async () => {
       // Break caught: a failure while publishing could be recorded with the
-      // wrong outcome, emitted more than once, or have the original error
-      // swallowed or replaced, which would stop pg-boss from retrying it.
+      // wrong outcome or emitted more than once. Rethrowing is what schedules
+      // a retry, and `publish_failed` is a code-authored identifier -- a fault
+      // that recurs -- so this attempt stops instead (#292).
       const records: Array<Record<string, unknown>> = [];
       const failure = new Error("publish_failed");
       const handler = createApplicantEvidenceJobHandler({
@@ -1157,10 +1415,25 @@ describe("applicant evidence job handler", () => {
         logger: { info: (record) => records.push(record) }
       });
 
-      await expect(handler.execute("run-7")).rejects.toBe(failure);
+      // A real queue context, so the stop is the classification's doing and
+      // not merely the last attempt running out.
+      await expect(
+        handler.execute("run-7", {
+          attempt: 1,
+          maxAttempts: 5,
+          signal: new AbortController().signal
+        })
+      ).resolves.toBeUndefined();
 
       expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({ outcome: "unexpected_error" });
+      expect(records[0]).toMatchObject({
+        outcome: "unexpected_error",
+        retryDecision: "stop",
+        retryReason: "deterministic",
+        // The publication is what threw, so the stop path's own publication
+        // throws too and the run leaves the active set the only way left.
+        stopDisposition: "failed"
+      });
     });
 
     it("names the cause of an unexpected error on the record", async () => {
@@ -1179,9 +1452,7 @@ describe("applicant evidence job handler", () => {
         logger: { info: (record) => records.push(record) }
       });
 
-      await expect(handler.execute("run-7a")).rejects.toThrow(
-        "character_evidence_publication_invalid"
-      );
+      await expect(handler.execute("run-7a")).resolves.toBeUndefined();
 
       expect(records[0]).toMatchObject({
         outcome: "unexpected_error",
@@ -1208,7 +1479,7 @@ describe("applicant evidence job handler", () => {
         logger: { info: (record) => records.push(record) }
       });
 
-      await expect(handler.execute("run-7b")).rejects.toThrow();
+      await expect(handler.execute("run-7b")).resolves.toBeUndefined();
 
       expect(records[0]).toMatchObject({
         outcome: "unexpected_error",
@@ -1236,7 +1507,7 @@ describe("applicant evidence job handler", () => {
         logger: { info: (record) => records.push(record) }
       });
 
-      await expect(handler.execute("run-7c")).rejects.toThrow();
+      await expect(handler.execute("run-7c")).resolves.toBeUndefined();
 
       expect(records[0]).toMatchObject({
         outcome: "unexpected_error",
@@ -1308,6 +1579,10 @@ describe("applicant evidence job handler", () => {
           return [];
         },
         async markTerminalTiers() {},
+        async stageCollection() {},
+        async stagedCollection() {
+          return null;
+        },
         async collectedTierZones() {
           return [];
         },
@@ -1335,7 +1610,9 @@ describe("applicant evidence job handler", () => {
         parseRequestCap: 8,
         parseCapRetryMs: 1_800_000,
         pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
       };
     }
 
@@ -1538,6 +1815,8 @@ describe("applicant evidence job handler", () => {
         parseRequestCap: 24,
         parseCapRetryMs: 1_800_000,
         pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         now: () => new Date("2026-09-18T12:00:00.000Z")
       });
@@ -1610,6 +1889,8 @@ describe("applicant evidence job handler", () => {
         parseRequestCap: 24,
         parseCapRetryMs: 1_800_000,
         pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
         killSettleMs: 7 * 24 * 60 * 60 * 1000
       });
 
@@ -1659,6 +1940,8 @@ describe("applicant evidence job handler", () => {
         parseRequestCap: 24,
         parseCapRetryMs: 1_800_000,
         pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
         killSettleMs: 7 * 24 * 60 * 60 * 1000
       });
 
@@ -1697,6 +1980,8 @@ describe("applicant evidence job handler", () => {
         parseRequestCap: 24,
         parseCapRetryMs: 1_800_000,
         pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
         killSettleMs: 7 * 24 * 60 * 60 * 1000
       });
 

@@ -62,28 +62,31 @@ evidenceRetryDecision({
 
 Table-driven and pure, so the whole policy is testable without a queue, a
 gateway or a database. `RetryReason` is a closed union authored in source:
-`deterministic`, `cost_veto`, `unclassified_exhausted`, `retryable`,
-`cancelled`.
+`deterministic`, `cost_veto`, `attempts_exhausted`, `unclassified_exhausted`,
+`retryable`, `cancelled`.
 
 ## Classification
 
 The gateway barely throws. `packages/warcraftlogs/src/client.ts` turns
-transport faults, 429s and schema drift into *returned* limitations
+transport faults, 429s and schema drift into _returned_ limitations
 (`unavailable`, `rate_limited`, `schema_drift`) which the handler already
 publishes as a partial. That keeps the table short.
 
-| Source | Classification | Why |
-|---|---|---|
-| Points-budget refusal (`points_budget_low`) | Retryable, unchanged | Deliberate, carries its own delay, spends nothing -- the refusal precedes collection. Its terminal-attempt handling is untouched. |
-| Abort / shutdown (`signal.aborted`) | Retryable | A graceful deploy is the definition of transient. |
-| Database transport failure (connection lost, timeout) | Retryable | Genuinely transient, cheap to establish. |
-| Database constraint violation (SQLSTATE `23xxx`) | Deterministic | The same rows violate the same constraint. This is #290's class. |
-| `RangeError`, `TypeError`, our own guard throws (a snake_case `errorCode`) | Deterministic | A programming error or a violated invariant: identical input, identical throw. |
-| Anything else | One retry, then stop | A second identical failure is evidence of determinism; the first is not. |
+| Source                                                                     | Classification       | Why                                                                                                                               |
+| -------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Points-budget refusal (`points_budget_low`)                                | Retryable, unchanged | Deliberate, carries its own delay, spends nothing -- the refusal precedes collection. Its terminal-attempt handling is untouched. |
+| Abort / shutdown (`signal.aborted`)                                        | Retryable            | A graceful deploy is the definition of transient.                                                                                 |
+| Database transport failure (connection lost, timeout)                      | Retryable            | Genuinely transient, cheap to establish.                                                                                          |
+| Database constraint violation (SQLSTATE `23xxx`)                           | Deterministic        | The same rows violate the same constraint. This is #290's class.                                                                  |
+| `RangeError`, `TypeError`, our own guard throws (a snake_case `errorCode`) | Deterministic        | A programming error or a violated invariant: identical input, identical throw.                                                    |
+| Anything else                                                              | One retry, then stop | A second identical failure is evidence of determinism; the first is not.                                                          |
 
-The classifier reads exactly what `errorFields` already extracts --
-`errorName` and `errorCode` -- so no new error plumbing is needed, and a human
-reading the log record can see why there was no second attempt.
+The classifier reads the raw error rather than the redacted pair `errorFields`
+records: an errno like `ECONNRESET` is deliberately not a loggable code, and
+classification happens in process, where that constraint does not apply.
+Nothing it reads reaches a log record. The record still carries `errorName` and
+`errorCode` beside the decision, so a human can see why there was no second
+attempt.
 
 A unique-violation from two workers racing is arguably transient rather than
 deterministic. It is treated as deterministic anyway: #296 made evidence
@@ -94,7 +97,7 @@ collection serial, so the race it would describe is closed at the source.
 `pointsSpentByRun` is currently sampled only on the happy path, after a
 successful scan and before publication. The second `getRateLimit` call moves
 into a helper used by both the success path and the catch block, wrapped so
-that a failure to *measure* never replaces the error being handled --
+that a failure to _measure_ never replaces the error being handled --
 `record.pointsSpentByRun` stays null, which is what happened: unmeasured.
 
 - An attempt that spent more than `EVIDENCE_RETRY_COST_CEILING` points is not
@@ -172,7 +175,7 @@ Three places change:
    `recordLimitation` and `fail`.
 2. The `dossierLimitationSchema` enum in `packages/contracts/src/dossier.ts`.
 3. A `case` in `limitationMessage` in `applicant-dossier-service.ts`. Without
-   it the code falls through to the `default`, which claims a *parse*
+   it the code falls through to the `default`, which claims a _parse_
    shortfall and would be wrong.
 
 No migration: `limitation_code` is `text`, and the
@@ -213,8 +216,10 @@ dimension is needed.
 The `evidence_job` record gains two fields:
 
 - `retryDecision`: `retry` | `stop`
-- `retryReason`: `deterministic` | `cost_veto` | `unclassified_exhausted` |
-  `retryable` | `cancelled`
+- `retryReason`: `deterministic` | `cost_veto` | `attempts_exhausted` |
+  `unclassified_exhausted` | `retryable` | `cancelled`
+- `stopDisposition`: `published` | `failed`, for how a stopped attempt left the
+  run. `outcome` keeps naming the fault, so neither answer displaces the other.
 
 Both are closed enumerations authored in source, so they carry no unbounded
 text and the `errorFields` constraint -- no names, realms, URLs or payloads in

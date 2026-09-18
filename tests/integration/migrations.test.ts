@@ -28,6 +28,7 @@ describe("database migrations", () => {
     `);
 
     expect(result.rows.map(({ name }) => name)).toEqual([
+      "character_evidence_collections",
       "character_evidence_runs",
       "character_mythic_kills",
       "character_mythic_wipes",
@@ -86,12 +87,13 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-4).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-5).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 19, tag: "0020_character_tier_best_parses" },
       { idx: 20, tag: "0021_tier_best_collected_at" },
       { idx: 21, tag: "0022_partial_parse_limitation" },
-      { idx: 22, tag: "0023_concluded_tier_retention" }
+      { idx: 22, tag: "0023_concluded_tier_retention" },
+      { idx: 23, tag: "0024_evidence_collection_stage" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

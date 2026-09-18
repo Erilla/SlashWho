@@ -406,6 +406,15 @@ function createMemoryRepositories(): Repositories {
       async markEnqueued() {
         throw new Error("not used");
       },
+      async stageCollection() {
+        throw new Error("not used");
+      },
+      async stagedCollection() {
+        return null;
+      },
+      async clearSettledCollectionStages() {
+        return 0;
+      },
       async publish() {
         throw new Error("not used");
       },

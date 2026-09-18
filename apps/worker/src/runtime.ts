@@ -421,6 +421,8 @@ export async function createWorkerRuntime(
       parseCapRetryMs: config.evidenceParseCapRetryMs,
       pointsReserve: config.evidencePointsReserve,
       killSettleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
+      retryCostCeiling: config.evidenceRetryCostCeiling,
+      failureCooldownMs: config.evidenceFailureCooldownMs,
       ...(evidenceRunNotifier ? { evidenceRunNotifier } : {}),
       ...(logger ? { logger } : {})
     });
@@ -500,7 +502,16 @@ export async function createWorkerRuntime(
       // On the injected logger rather than console.info: this record now passes
       // through the worker's redaction like every other one. It carries a count
       // only — never a credential, a run id or a character key.
-      logger?.info({ event: "evidence_cache_cleanup", removedEvidenceRuns });
+      // A stage belongs to an attempt in flight. One whose run has settled is
+      // work nothing will ever republish, so it is dropped rather than left to
+      // hold a copy of the evidence indefinitely.
+      const removedCollectionStages =
+        await repositories.evidence.clearSettledCollectionStages();
+      logger?.info({
+        event: "evidence_cache_cleanup",
+        removedEvidenceRuns,
+        removedCollectionStages
+      });
       await recoverPendingSearches(repositories, initializedQueue);
     });
     await initializedQueue.work(async (payload, context) => {

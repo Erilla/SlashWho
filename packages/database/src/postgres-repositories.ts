@@ -17,6 +17,7 @@ import type {
   Repositories,
   SnapshotHistoryItem,
   SnapshotHistoryPage,
+  StagedEvidenceCollection,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
   StoredCharacterTierBestParse,
@@ -3058,6 +3059,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           if (publication.rowCount !== 1) {
             throw new Error("character_evidence_run_not_active");
           }
+          // In the publication's own transaction: a stage that outlived the
+          // publication it fed would be republished by a later attempt over
+          // evidence already stored.
+          await client.query(
+            `DELETE FROM character_evidence_collections WHERE run_id = $1`,
+            [runId]
+          );
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -3065,6 +3073,42 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         } finally {
           client.release();
         }
+      },
+
+      async stageCollection(runId, payload) {
+        const result = await pool.query(
+          `INSERT INTO character_evidence_collections (run_id, payload)
+           SELECT $1, $2::jsonb
+           FROM character_evidence_runs
+           WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
+           ON CONFLICT (run_id)
+           DO UPDATE SET payload = EXCLUDED.payload, created_at = now()`,
+          [runId, JSON.stringify(payload)]
+        );
+        // Selecting from the run rather than inserting blind keeps a stage
+        // from outliving the run it belongs to: a run this worker no longer
+        // owns has nothing to republish.
+        if (result.rowCount !== 1) {
+          throw new Error("character_evidence_run_not_active");
+        }
+      },
+
+      async stagedCollection(runId) {
+        const result = await pool.query<{ payload: StagedEvidenceCollection }>(
+          `SELECT payload FROM character_evidence_collections WHERE run_id = $1`,
+          [runId]
+        );
+        return result.rows[0]?.payload ?? null;
+      },
+
+      async clearSettledCollectionStages() {
+        const result = await pool.query(
+          `DELETE FROM character_evidence_collections AS stage
+           USING character_evidence_runs AS run
+           WHERE run.id = stage.run_id
+             AND run.status NOT IN ('queued', 'running', 'retrying')`
+        );
+        return result.rowCount ?? 0;
       },
 
       async fail(id, code) {
