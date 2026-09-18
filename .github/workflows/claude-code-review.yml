@@ -1,9 +1,15 @@
 name: claude-code-review
 
-# The review costs the same on every run regardless of diff size: the plugin
-# fans out to a fixed fleet of agents, two of them Opus, plus one Opus
-# subagent per candidate finding. Cost is therefore controlled by running it
-# less often, not by making each run smaller.
+# Runs `.claude/skills/pr-review`, a single-pass reviewer, rather than the
+# upstream code-review plugin. The plugin fanned out to four agents plus one
+# Opus validator per candidate finding, which cost about $1 per pull request
+# and scaled with the size of the diff and the number of suspicions raised.
+# This reads the diff once, on Sonnet, and spends more only when it actually
+# has a finding to check.
+#
+# The trade-off is precision: the plugin's extra agents existed to filter false
+# positives. Findings here are advisory and gate nothing, so a noisier review
+# is a cheaper mistake than a bill that scales with the diff.
 on:
   pull_request:
     # Deliberately no `synchronize`: reviewing every push multiplied the cost
@@ -30,32 +36,31 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     # Secrets are withheld from fork pull requests, so the review would fail rather than run.
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # The skill is read from the checkout, so it has to be on disk before the
+      # action runs. The action then restores `.claude` from the default branch,
+      # since a pull request's own head is untrusted — so an edit to the skill
+      # takes effect only once it is merged, exactly like the workflow itself.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
-          plugins: "code-review@claude-code-plugins"
-          prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          # --model sets the orchestrating session only. The plugin names its
-          # own subagent models in its prompt, so the Opus review and
-          # validation agents are unaffected. --max-turns is a runaway
-          # backstop, not a cost dial: setting it low buys a truncated review
-          # at full price.
+          prompt: "/pr-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          # --allowedTools must repeat what the skill declares in its own
+          # frontmatter: naming a subset here replaces that list rather than
+          # adding to it, which previously left the reviewer unable to run the
+          # `gh` commands it reads and posts with — a full review ran, denied
+          # three tool calls, and posted nothing.
           #
-          # --allowedTools repeats the plugin's own `allowed-tools` frontmatter
-          # rather than naming only the MCP tool. Naming one tool appeared to
-          # replace that list instead of adding to it, leaving the plugin
-          # unable to run the `gh` commands it reads and posts with: a full
-          # review ran, denied three tool calls, and posted nothing. This grants
-          # nothing the plugin does not already declare.
+          # --max-turns is a runaway backstop, not a cost dial: setting it low
+          # buys a truncated review at full price. A single-pass review needs
+          # far fewer turns than the plugin's fan-out did.
           claude_args: >-
             --model claude-sonnet-5
-            --max-turns 50
-            --allowedTools "Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),mcp__github_inline_comment__create_inline_comment"
+            --max-turns 20
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read,Grep,Glob"
