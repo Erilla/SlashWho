@@ -99,3 +99,53 @@ it("never hands a run a cap above the configured ceiling", () => {
 
   expect(enormous.scanPages).toBe(config.evidenceRequestCap);
 });
+
+// The sample EVIDENCE_POINTS_RESERVE was derived from, and -- the part that
+// matters -- the configuration that sample was taken under. #295 set the
+// reserve from measured run costs and was reopened within the hour, because
+// EVIDENCE_PARSE_REQUEST_CAP then reverted from 48 to 24 and every measurement
+// behind the number described a deployment that no longer existed. Nothing
+// failed. That is the same shape as the divergence #295 was itself filed
+// about, one level up: a value set once, with nothing forcing the second look.
+//
+// So the provenance is recorded here rather than only in the derivation
+// comment on `evidencePointsReserve`, and the test below fails when the
+// configuration moves out from under it. It deliberately does not model run
+// cost: `worstCaseAtMeasuredCost` is a ceiling no run reaches (300 pages of
+// scan nobody has), and the parse cap moves it by 5% while moving observed
+// cost by nearly half. Only a measurement can settle the reserve, so what CI
+// can usefully do is notice when the last one expired.
+const RESERVE_SAMPLE = {
+  takenOn: "2026-09-18",
+  // What the runs in the sample were configured with. Either of these moving
+  // invalidates the measurement.
+  parseRequestCap: 24,
+  scanPages: 300,
+  // Provisional, and an upper bound rather than a measurement: the runs behind
+  // it overlapped the repeated-work loop #331 fixed, so they are the cost of a
+  // broken run, not a healthy one. #295 stays open for a clean post-#331
+  // sample, and costs falling -- and ceasing to be stable per character -- is
+  // itself how you will know the loop is gone.
+  observedMaximumRunPoints: 2_900
+} as const;
+
+it("expires the reserve's measurement when its configuration changes", () => {
+  // Break caught: EVIDENCE_PARSE_REQUEST_CAP moving, as it did on 2026-09-18,
+  // which silently invalidated the sample 5000 was derived from. If this
+  // fails, do not edit RESERVE_SAMPLE to match -- take a fresh sample of
+  // `pointsSpentByRun` under the new configuration, then update both this and
+  // the derivation comment in config.ts.
+  expect(config.evidenceParseRequestCap).toBe(RESERVE_SAMPLE.parseRequestCap);
+  expect(budgetFor(WORKER_ALLOWANCE, "own").scanPages).toBe(
+    RESERVE_SAMPLE.scanPages
+  );
+});
+
+it("keeps the reserve covering the costliest run yet measured", () => {
+  // The reserve's whole job: a run admitted with this much left must be able
+  // to finish. Below the observed maximum it admits runs that cannot, which is
+  // what the old 1500 did on twelve of nineteen sampled runs.
+  expect(config.evidencePointsReserve).toBeGreaterThanOrEqual(
+    RESERVE_SAMPLE.observedMaximumRunPoints
+  );
+});
