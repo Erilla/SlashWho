@@ -32,6 +32,7 @@ const config: WorkerConfig = {
   healthHost: "127.0.0.1",
   port: 3001,
   workerDrainTimeoutMs: 12_345,
+  workerAbortGraceMs: 5_000,
   databaseStartupAttempts: 3,
   databaseStartupRetryMs: 10,
   discoveryRequestCap: 12,
@@ -1322,7 +1323,8 @@ describe("worker runtime", () => {
     });
     expect(stop).toHaveBeenCalledWith({
       graceful: true,
-      timeoutMs: 12_345
+      timeoutMs: 12_345,
+      abortGraceMs: 5_000
     });
     expect(fakes.ended).toBe(false);
     releaseDrain();

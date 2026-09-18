@@ -10,6 +10,7 @@ const config: WorkerConfig = {
   healthHost: "127.0.0.1",
   port: 0,
   workerDrainTimeoutMs: 1_000,
+  workerAbortGraceMs: 200,
   databaseStartupAttempts: 1,
   databaseStartupRetryMs: 1,
   discoveryRequestCap: 12,

@@ -578,6 +578,49 @@ describe("durable discovery queue", () => {
     ).resolves.toBeNull();
   });
 
+  it("aborts claimed work early instead of at the end of the drain budget", async () => {
+    // Break caught: #306. The abort only ever landed as the drain budget
+    // expired, by which time the platform's own kill was due, so the handler's
+    // release path never ran on a deploy. The grace is what it may spend
+    // waiting; everything after it belongs to the release.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    let claim!: () => void;
+    const claimed = new Promise<void>((resolve) => {
+      claim = resolve;
+    });
+    let stopRequestedAt = 0;
+    let abortedAfterMs: number | null = null;
+    await queue.work(
+      async (_payload, context) =>
+        new Promise<void>((resolve) => {
+          claim();
+          context.signal.addEventListener(
+            "abort",
+            () => {
+              abortedAfterMs = Date.now() - stopRequestedAt;
+              resolve();
+            },
+            { once: true }
+          );
+        })
+    );
+    await queue.enqueue({
+      runId: "00000000-0000-4000-8000-000000000030",
+      key
+    });
+    await claimed;
+
+    stopRequestedAt = Date.now();
+    await queue.stop({ graceful: true, timeoutMs: 8_000, abortGraceMs: 100 });
+
+    expect(abortedAfterMs).not.toBeNull();
+    // pg-boss floors its own stop timeout at a second, so the grace cannot be
+    // shorter than that. The budget it must not consume is the other 7.
+    expect(abortedAfterMs!).toBeLessThan(4_000);
+  });
+
   it("fails within a second bounded window when aborted work does not settle", async () => {
     // Break caught: a non-cooperative handler could make shutdown wait forever.
     const queue = createDiscoveryQueue({ connectionString });

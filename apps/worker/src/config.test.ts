@@ -229,3 +229,18 @@ it("leaves the Raider.IO access key undefined when it is absent or blank", () =>
       .raiderIoAccessKey
   ).toBeUndefined();
 });
+
+it("reserves part of the drain budget for aborting work that cannot finish", () => {
+  // Break caught: #306. Spending the whole budget waiting for evidence runs
+  // that take minutes meant the handler's release path never ran on a deploy.
+  // A grace of 0 is a valid setting -- abort at once -- so it must load.
+  expect(loadWorkerConfig(environment)).toMatchObject({
+    workerAbortGraceMs: 5_000
+  });
+  expect(
+    loadWorkerConfig({ ...environment, WORKER_ABORT_GRACE_MS: "0" })
+  ).toMatchObject({ workerAbortGraceMs: 0 });
+  expect(() =>
+    loadWorkerConfig({ ...environment, WORKER_ABORT_GRACE_MS: "-1" })
+  ).toThrow("invalid_worker_abort_grace");
+});
