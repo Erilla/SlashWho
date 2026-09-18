@@ -73,21 +73,59 @@ command fails, and piping it into another command hides that failure.
 
 ## 4. Implement
 
-Work test-first. Run the relevant gates before claiming anything works:
+Work test-first. While implementing, run the narrow gates that cover what you
+are changing:
 
 ```bash
 corepack pnpm lint
 corepack pnpm typecheck
 corepack pnpm test:unit
-corepack pnpm test:integration
 ```
 
-Integration and browser tests need Docker running.
+These keep the loop fast; they are not the gate that lets you open a pull
+request. That is step 5.
 
 Commit with conventional prefixes, one coherent change per commit. Keep the
 branch short-lived.
 
-## 5. Open the pull request
+## 5. Finish before opening the pull request
+
+Implementation is not finished when the code works; it is finished when the
+full gate passes and the branch is up to date with the trunk. Do both, in this
+order, before a pull request exists.
+
+### Run the whole gate, and see it pass
+
+```bash
+corepack pnpm format:check
+corepack pnpm lint
+corepack pnpm typecheck
+corepack pnpm test:unit
+corepack pnpm test:integration
+corepack pnpm build
+corepack pnpm test:e2e
+```
+
+Every one of these must pass. Read the output rather than assuming it: a
+skipped suite is not a passing suite, and `test:integration` and `test:e2e`
+silently need Docker running. Never open a pull request on the strength of the
+subset of tests you happened to run while implementing.
+
+### Merge `origin/main` back in
+
+The trunk has moved since the branch was cut. Surface the conflicts here, in
+your own worktree, rather than discovering them in the pull request:
+
+```bash
+git fetch origin
+git merge origin/main
+```
+
+Resolve any conflicts, then **run the gate again** — a clean textual merge
+still breaks code, and a merge is exactly the moment a passing run stops
+being evidence.
+
+## 6. Open the pull request
 
 ```bash
 gh pr create --base main --title "<conventional title>" --body "..."
@@ -98,10 +136,30 @@ Auto-merge still gates on CI here even though the branch-protection API reports
 `main` as unprotected, so `--auto` is safe to set as soon as the pull request
 opens.
 
-Resolve review conversations, let the checks pass, and validate the resulting
-`main` deployment in staging.
+## 7. Watch the pull request until it merges
 
-## 6. Clean up
+Setting auto-merge is not the end of the job. The work is yours until the pull
+request is actually merged, so stay with it:
+
+```bash
+gh pr checks --watch
+gh pr view --comments
+```
+
+Fix anything that stands between the pull request and its merge:
+
+- **Failing checks** — fix the cause on the branch and push; do not re-run CI
+  hoping for a different result.
+- **Review comments**, from humans or bots — address each one, and reply saying
+  what changed. Push back with reasoning where a comment is wrong rather than
+  implementing it uncritically.
+- **Merge conflicts appearing after opening** — the trunk moved again. Merge
+  `origin/main` in once more and re-run the gate.
+
+Auto-merge takes over once the checks are green and the conversations are
+resolved. Then validate the resulting `main` deployment in staging.
+
+## 8. Clean up
 
 Once the pull request is merged, remove the worktree in the same session that
 finished the work. Stale worktrees accumulate quickly and make it impossible to
@@ -117,9 +175,12 @@ Run `git worktree list` from the shared checkout to audit what is still open.
 
 ## Hazards
 
-| Symptom                                       | Cause                                            |
-| --------------------------------------------- | ------------------------------------------------ |
-| Conflicts against code you never touched      | Branched from a stale local `main`               |
-| Directory name does not match its branch      | A worktree was reused for a second piece of work |
-| `pnpm: command not found`, or a silent no-op  | Missing the `corepack` prefix                    |
-| Tests pass locally but CI fails on migrations | Docker not running, so integration tests skipped |
+| Symptom                                       | Cause                                                      |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| Conflicts against code you never touched      | Branched from a stale local `main`                         |
+| Directory name does not match its branch      | A worktree was reused for a second piece of work           |
+| `pnpm: command not found`, or a silent no-op  | Missing the `corepack` prefix                              |
+| Tests pass locally but CI fails on migrations | Docker not running, so integration tests skipped           |
+| CI fails on a suite you never ran             | Opened the pull request on a subset of the gate            |
+| Conflicts surface in the pull request         | `origin/main` was not merged in before opening             |
+| Pull request sits open and unmerged           | Auto-merge set, then nobody watched the checks or comments |
