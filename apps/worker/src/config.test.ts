@@ -112,7 +112,7 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
     warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
     evidenceRequestCap: 500,
     evidenceParseRequestCap: 24,
-    evidencePointsReserve: 1500,
+    evidencePointsReserve: 5000,
     evidenceKillSettleDays: 7,
     evidenceRetryCostCeiling: 250,
     evidenceFailureCooldownMs: 1_800_000
