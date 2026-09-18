@@ -337,13 +337,10 @@ function remainingPoints(budget: WarcraftLogsRateLimit): number {
  */
 const MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE = 0.3;
 
-function effectiveReserve(
-  budget: WarcraftLogsRateLimit,
-  configured: number
-): number {
+function effectiveReserve(limitPerHour: number, configured: number): number {
   return Math.min(
     configured,
-    budget.limitPerHour * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
+    limitPerHour * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
   );
 }
 
@@ -454,7 +451,7 @@ const MAXIMUM_SCAN_SHARE_OF_VISITOR_ALLOWANCE = 0.15;
 const HISTORY_SCAN_POINTS_PER_REQUEST = 30;
 
 function effectiveRequestCap(
-  budget: WarcraftLogsRateLimit,
+  limitPerHour: number,
   configured: number,
   credentials: "own" | "visitor"
 ): number {
@@ -466,9 +463,7 @@ function effectiveRequestCap(
     1,
     Math.min(
       configured,
-      Math.floor(
-        (budget.limitPerHour * share) / HISTORY_SCAN_POINTS_PER_REQUEST
-      )
+      Math.floor((limitPerHour * share) / HISTORY_SCAN_POINTS_PER_REQUEST)
     )
   );
 }
@@ -512,6 +507,16 @@ export type EvidenceRunBudget = Readonly<{
  * the scan share, the reserve share and the flat parse term can be evaluated
  * rather than recited.
  *
+ * On the handler's own path, not beside it: the scan cap a production run gets
+ * comes from here. That is deliberate -- a model kept only for a test drifts
+ * from the thing it models, which is the failure being guarded against -- but
+ * it means a bug here is a production bug, so it takes the same parameters the
+ * calculation actually uses and fabricates nothing. An earlier version built a
+ * synthetic `WarcraftLogsRateLimit` to pass along, with `pointsSpentThisHour`
+ * and `pointsResetInSeconds` invented as zero. Harmless while both helpers read
+ * only `limitPerHour`, and a trap the moment either starts reading a field that
+ * was never real.
+ *
  * This exists because the arithmetic in MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE
  * went stale within a day of being written: it named a parse cap of 48 that
  * Railway stopped overriding, and nothing failed. A comment can only ask a
@@ -528,18 +533,15 @@ export function evidenceRunBudget(
     pointsReserve: number;
   }>
 ): EvidenceRunBudget {
-  const budget: WarcraftLogsRateLimit = {
-    kind: "rate_limit",
-    limitPerHour: input.limitPerHour,
-    pointsSpentThisHour: 0,
-    pointsResetInSeconds: 0
-  };
   const scanPages = effectiveRequestCap(
-    budget,
+    input.limitPerHour,
     input.requestCap,
     input.credentials
   );
-  const reservedPoints = effectiveReserve(budget, input.pointsReserve);
+  const reservedPoints = effectiveReserve(
+    input.limitPerHour,
+    input.pointsReserve
+  );
   const parsePoints = input.parseRequestCap * FIGHT_PARSE_POINTS_PER_REQUEST;
   const worstCaseAtAssumedCost =
     scanPages * HISTORY_SCAN_POINTS_PER_REQUEST + parsePoints;
@@ -752,7 +754,10 @@ export function createApplicantEvidenceJobHandler(
           if (
             options.pointsReserve > 0 &&
             remainingPoints(openingBudget) <
-              effectiveReserve(openingBudget, options.pointsReserve)
+              effectiveReserve(
+                openingBudget.limitPerHour,
+                options.pointsReserve
+              )
           ) {
             // The run stays claimed and nothing is published. Leaving it
             // unclaimed instead would be a bug: `reserve` counts
