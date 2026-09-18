@@ -89,9 +89,7 @@ export interface DiscoveryQueue {
    * still active behind one of these is a run nothing is working on, which is
    * the only way to tell a killed worker's run from one that is simply slow.
    */
-  settledEvidenceJobIds(
-    jobIds: readonly string[]
-  ): Promise<readonly string[]>;
+  settledEvidenceJobIds(jobIds: readonly string[]): Promise<readonly string[]>;
   stop(options: {
     graceful: boolean;
     timeoutMs: number;

@@ -23,9 +23,7 @@ export type AbandonedEvidenceQueue = {
    * The subset of `jobIds` whose evidence job can no longer run: settled,
    * cancelled, failed, or archived out of the job table entirely.
    */
-  settledEvidenceJobIds(
-    jobIds: readonly string[]
-  ): Promise<readonly string[]>;
+  settledEvidenceJobIds(jobIds: readonly string[]): Promise<readonly string[]>;
 };
 
 export type RecoverAbandonedEvidenceRunsOptions = Readonly<{

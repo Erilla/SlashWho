@@ -1984,7 +1984,10 @@ describe("PostgreSQL repositories", () => {
     it("lists a reserved run that has not been enqueued yet, with no job id", async () => {
       // The run recovery must never ask the queue about: `reserve` inserts the
       // row before `enqueue` returns an id.
-      const runId = await reserveRun(rootKey, new Date("2026-09-18T13:25:00.000Z"));
+      const runId = await reserveRun(
+        rootKey,
+        new Date("2026-09-18T13:25:00.000Z")
+      );
 
       const active = await repositories.evidence.listActive(25);
 
@@ -1994,7 +1997,10 @@ describe("PostgreSQL repositories", () => {
     });
 
     it("omits a run that has already settled", async () => {
-      const runId = await reserveRun(rootKey, new Date("2026-09-18T13:25:00.000Z"));
+      const runId = await reserveRun(
+        rootKey,
+        new Date("2026-09-18T13:25:00.000Z")
+      );
       await repositories.evidence.fail(runId, "collection_failed");
 
       await expect(repositories.evidence.listActive(25)).resolves.toEqual([]);
@@ -2009,9 +2015,7 @@ describe("PostgreSQL repositories", () => {
 
       const limited = await repositories.evidence.listActive(1);
 
-      expect(limited).toEqual([
-        expect.objectContaining({ runId: rootRunId })
-      ]);
+      expect(limited).toEqual([expect.objectContaining({ runId: rootRunId })]);
     });
 
     it("releases an abandoned run so the character can be collected again", async () => {

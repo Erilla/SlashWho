@@ -134,7 +134,7 @@ each of those redeliveries genuinely re-claims and re-collects the run. With
 Until then the run is not abandoned at all, and releasing it would buy a
 duplicate Warcraft Logs collection. The queue arm therefore fires once the
 chain is spent, which is the first moment the run is provably dead. What the
-five-minute cadence buys is that recovery happens promptly *after* that point
+five-minute cadence buys is that recovery happens promptly _after_ that point
 rather than up to an hour later.
 
 Eight hours for the far backstop follows from the same arithmetic. `started_at` is
@@ -156,7 +156,7 @@ status `queued`, so a worker that claims the job before the enqueuing process
 records its id leaves a genuinely running run with no job id for its whole
 life. `claim` stamps `started_at`, so that run is excluded from the orphan
 arm and keeps the eight-hour backstop. The claim guard alone would not save
-it: that guard refuses the *next* claim, while the attempt already collecting
+it: that guard refuses the _next_ claim, while the attempt already collecting
 would carry on and discard its entire scan at `publish`.
 
 Released runs become `failed` with the code `abandoned`, which is in neither
@@ -169,7 +169,7 @@ after `stageCollection` but before `publish` holds a scan already paid for
 upstream; the stage belongs to an attempt nothing will republish, so the
 hourly cleanup removes it and the replacement run pays for that scan again.
 Republishing the stage instead would be strictly cheaper and is not done here
-— it is a change to what recovery *is*, from releasing a dead run to
+— it is a change to what recovery _is_, from releasing a dead run to
 completing one.
 
 Recovery unblocks a character; it does not by itself put one back in
