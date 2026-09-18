@@ -152,7 +152,7 @@ describe("character evidence queue", () => {
     );
     expect(queueFakes.work).toHaveBeenCalledWith(
       collectCharacterEvidenceQueueName,
-      expect.objectContaining({ localConcurrency: 3 }),
+      expect.objectContaining({ localConcurrency: 1 }),
       expect.any(Function)
     );
     expect(queueFakes.send).toHaveBeenCalledWith(
@@ -161,6 +161,28 @@ describe("character evidence queue", () => {
       { singletonKey: runId }
     );
     expect(delivered).toEqual([{ runId, attempt: 1 }]);
+  });
+
+  it("collects evidence one run at a time", async () => {
+    // Break caught: #291. Three runs started within a second of each other on
+    // 2026-09-18, each sampled a near-full allowance before any of them had
+    // spent anything, and all three were admitted. The #283 admission check
+    // reads the budget then acts on it, which only holds while runs are
+    // serial. It also makes `pointsSpentByRun` attributable: overlapping runs
+    // put each other's spend in every delta, which is how twelve deltas summed
+    // to 33,000 against an 18,000 allowance.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+
+    await queue.start();
+    await queue.workCharacterEvidence(async () => {});
+
+    expect(queueFakes.work).toHaveBeenCalledWith(
+      collectCharacterEvidenceQueueName,
+      expect.objectContaining({ localConcurrency: 1 }),
+      expect.any(Function)
+    );
   });
 });
 
