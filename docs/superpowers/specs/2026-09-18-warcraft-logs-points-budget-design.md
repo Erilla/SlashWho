@@ -233,6 +233,82 @@ setting reaches that case — the parse cap does, and it is applied flat
 regardless of whose credentials are in play. Tracked in #320; the mechanism
 `effectiveReserve` already uses is the one that is missing from the other knob.
 
+### The scan cap (#320)
+
+The reserve decides whether a run starts. `EVIDENCE_REQUEST_CAP` decides what a
+started run costs, and until #320 it was a flat page count applied to whichever
+account the run carried — the gap `effectiveReserve` already closed for the
+reserve, left open on the other knob.
+
+**The scan is what a run spends on.** Measured 2026-09-18: 58–89% of a run's
+points, and all of the variance, since fight parses sit at a near-constant
+33–43 requests against their own cap while the scan ranges from 32 to 190
+pages. Per-page cost was solved directly by a matched pair the same evening —
+two runs with identical zone and fight counts, 134 pages against 66, 2894
+points against 1531 — giving about 20 points a page with no model assumed.
+
+**The divisor is above the measurement on purpose.** The cap is
+`share × limit / s`, so a run spends `share × limit × (actual / assumed)`.
+Dividing by the measured value, or worse by a lower bound, makes the share a
+floor rather than a ceiling: any page dearer than the estimate spends _more_
+than the intended share. 30 is used against a measured ~20, and a third run
+that evening does not fit a constant-cost model at all — it implies a negative
+fight cost — so per-request costs are not uniform across characters and the
+divisor carries headroom for that.
+
+**The share differs by whose credentials the run carries**, keyed off
+`run.wclClientIdEncrypted` and not off how large the allowance is: a small
+allowance only correlates with a visitor, the worker's own tier moved 9000 →
+18000 inside a day, and a visitor may hold a large account.
+
+| credentials      | share | at their allowance | pages |
+| ---------------- | ----- | ------------------ | ----- |
+| the worker's own | 0.5   | 18000              | 300   |
+| a visitor's      | 0.15  | 3600               | 18    |
+
+The smaller visitor share is a product decision, not a tuning constant.
+Spending the worker's whole quota is a throughput choice we are entitled to
+make; spending a visitor's, repeatedly across windows until their character
+converges, is spending someone else's resource, and they supplied those
+credentials to see one dossier. Their dossier converges more slowly on purpose.
+
+**A backstop, not a guarantee.** This is the part to keep hold of, because the
+scan share and `MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE` are the two halves of a
+run's budget and they previously combined only in a reader's head. Admission
+guarantees a run starts with at least `effectiveReserve` left; a run may then
+spend `cap × pointsPerPage` plus a flat parse term (48 requests at ~13 points,
+about 634, which does not scale with the allowance at all):
+
+|               | admission guarantees | cap | worst run @20 | @30  |
+| ------------- | -------------------- | --- | ------------- | ---- |
+| worker, 18000 | ≥ 5000               | 300 | 6634          | 9634 |
+| visitor, 3600 | ≥ 1080               | 18  | 994           | 1174 |
+
+The worker's does not close, by a wide margin. The visitor's nearly does and
+tips over only if a page costs nearer 30 than the measured 20 — a consequence
+of the modest share rather than a design goal, and not to be read as a
+guarantee, since the flat parse term eats the margin directly if the parse cap
+rises.
+
+Closing the worker's would mean a 145-page cap, below the deepest scan already
+observed (190), truncating collections that currently finish. And the reason is
+not arithmetic that can be rebalanced: **a deep character's history costs more
+to scan than a visitor's entire hourly allowance** — 190 pages at ~20 is ~3800
+points before a single parse, against 3600 — so that case takes several windows
+at any cap. An overrun already publishes partial, sets a retry deadline and
+resumes, paying a deferral rather than losing the work. Bounding one run's
+share is this cap's job; completing the run is not.
+
+The arithmetic above is repeated in one comment on `MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE`,
+naming both constants, and is the only place the two shares are checked against
+each other. If either moves, redo it.
+
+**`requestCapUsed` in the job record is the effective cap**, not the configured
+one. It reported 500 on every record for a day while the real cap was something
+else; a measurement whose record names a number that was not applied is the
+same trap as `EVIDENCE_PARSE_REQUEST_CAP`'s comment reasoning about 24 while
+Railway ran 48.
+
 ### Limitation code
 
 A new code, `points_budget_low`, distinct from `rate_limited`. "We declined to

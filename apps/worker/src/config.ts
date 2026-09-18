@@ -191,6 +191,19 @@ export function loadWorkerConfig(
     blizzardClientSecret,
     warcraftLogsClientId,
     warcraftLogsClientSecret,
+    // Pages of report history one run may scan. A ceiling, not the value a
+    // run gets: `effectiveRequestCap` scales it to the allowance the run's own
+    // credentials report and to whose credentials those are, so 500 is only
+    // ever reached by an account large enough to afford it. At the worker's
+    // 18000 the effective cap is 300; on a visitor's 3600 it is 18. See
+    // MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE in
+    // packages/application/src/applicant-evidence-job-handler.ts, which holds
+    // the derivation and the arithmetic against EVIDENCE_POINTS_RESERVE.
+    //
+    // The scan buys most of a run's points -- 58-89% of spend, and all of the
+    // variance -- so this is the knob that decides what a started run costs,
+    // the way the reserve decides whether it starts. `requestCapUsed` in the
+    // job record is the effective cap, not this number.
     evidenceRequestCap: positiveInteger(
       environment.EVIDENCE_REQUEST_CAP,
       500,

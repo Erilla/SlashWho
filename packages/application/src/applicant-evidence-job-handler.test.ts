@@ -20,8 +20,8 @@ const run = {
   key,
   status: "queued" as const,
   createdAt: new Date("2026-09-13T12:00:00.000Z"),
-  wclClientIdEncrypted: null,
-  wclClientSecretEncrypted: null,
+  wclClientIdEncrypted: null as string | null,
+  wclClientSecretEncrypted: null as string | null,
   className: null as string | null
 };
 
@@ -119,6 +119,11 @@ describe("applicant evidence job handler", () => {
   it("publishes the complete high-volume scan using the worker request cap", async () => {
     // Break caught: evidence collection could retain the short web timeout cap
     // and never reach current-tier reports for a prolific character.
+    //
+    // The expected cap is 300, not the configured 500, since #320 scales the
+    // scan to the reported allowance -- 18000 here. The point this test makes
+    // is unchanged: 300 is still far past the web path's 80, and past the
+    // deepest scan yet observed at 190.
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
@@ -186,7 +191,7 @@ describe("applicant evidence job handler", () => {
     });
 
     expect(getFirstKillReports).toHaveBeenCalledWith(key, {
-      requestCap: 500,
+      requestCap: 300,
       parseRequestCap: 8,
       hydratedFightUrls: new Set(),
       collectedTierZones: new Map(),
@@ -983,6 +988,195 @@ describe("applicant evidence job handler", () => {
       })
     ).rejects.toThrow("evidence_points_budget_low");
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("spends only a modest slice of a visitor's own allowance", async () => {
+    // A visitor's allowance is theirs, not ours. They supplied credentials to
+    // see one dossier, not to have their Warcraft Logs quota drained to the
+    // reserve floor every hour until the character converges. Consuming the
+    // worker's quota is a throughput choice; consuming theirs is spending
+    // someone else's resource, so the share is smaller and convergence is
+    // slower on purpose: 3600 * 0.15 / 30 is 18 pages, against the 60 the same
+    // allowance would get on our own credentials.
+    //
+    // Keyed off whose credentials the run carries, not off how big the
+    // allowance is. A small allowance only correlates with a visitor -- the
+    // worker's own tier moved 9000 to 18000 inside a day, and a visitor may
+    // hold a large account.
+    const perRunGateway = {
+      getRateLimit: vi.fn(async () => ({
+        kind: "rate_limit" as const,
+        limitPerHour: 3_600,
+        pointsSpentThisHour: 0,
+        pointsResetInSeconds: 949
+      })),
+      getFirstKillReports: vi.fn(async () => ({
+        kind: "evidence" as const,
+        troubledRaidIds: { parses: [], tierBests: [] },
+        kills: [],
+        wipes: [],
+        tierBests: []
+      }))
+    };
+    const evidence = store({
+      ...run,
+      wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
+      wclClientSecretEncrypted: encryptCredential("user-secret", encryptionKey)
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports: vi.fn() },
+      createWarcraftLogsGateway: () =>
+        perRunGateway as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+      decryptionKey: encryptionKey,
+      requestCap: 500,
+      parseRequestCap: 48,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 5_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
+    });
+
+    await handler.execute(run.id);
+
+    expect(perRunGateway.getFirstKillReports).toHaveBeenCalledWith(
+      run.key,
+      expect.objectContaining({ requestCap: 18 })
+    );
+  });
+
+  it("scales the history scan down to a smaller account's allowance", async () => {
+    // Break caught: the request cap is a flat page count applied to whichever
+    // account the run carries. The history scan buys most of a run's points --
+    // a matched pair on 2026-09-18 solved it at about 20 a page -- so a flat
+    // 500 lets one run plan a scan several times a visitor's whole 3600
+    // allowance. 3600 * 0.5 / 30 is 60 pages.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 0,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 48,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 5_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledWith(
+      run.key,
+      expect.objectContaining({ requestCap: 60 })
+    );
+  });
+
+  it("logs the cap the run was actually given, not the configured one", async () => {
+    // Break caught: `requestCapUsed` reported the configured 500 on every
+    // record all day while the effective cap was something else. A measurement
+    // is worth nothing if the record names a number that was not applied --
+    // the same trap as EVIDENCE_PARSE_REQUEST_CAP's comment reasoning about 24
+    // while Railway ran 48.
+    const records: unknown[] = [];
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 0,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 48,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 5_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      logger: { info: (record) => records.push(record) }
+    });
+
+    await handler.execute(run.id);
+
+    expect(records.at(-1)).toMatchObject({ requestCapUsed: 60 });
+  });
+
+  it("leaves the worker's own allowance a scan deeper than any yet seen", async () => {
+    // Break caught: a share tight enough to guarantee a run fits its allowance
+    // would cap the worker at 145 pages, below the 190-page scan already
+    // observed, and truncate collections that currently finish. This cap is a
+    // backstop on one run's share of a small allowance, not a promise that the
+    // run finishes; 18000 * 0.5 / 30 is 300.
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 0,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 48,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 5_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledWith(
+      run.key,
+      expect.objectContaining({ requestCap: 300 })
+    );
+  });
+
+  it("falls back to the configured cap when the allowance cannot be read", async () => {
+    // Break caught: the budget read is allowed to fail without refusing the
+    // run -- a gate that fails closed on its own transport errors could stop
+    // all collection permanently. Scaling must inherit that, not scale off a
+    // limit it never read.
+    const warcraftLogs = budgetGateway({
+      kind: "limitation",
+      code: "unavailable"
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 48,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 5_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledWith(
+      run.key,
+      expect.objectContaining({ requestCap: 500 })
+    );
   });
 
   it("scales the reserve down to a smaller account's allowance", async () => {
