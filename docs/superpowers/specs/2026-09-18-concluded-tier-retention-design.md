@@ -63,6 +63,10 @@ actually cares about.
 | WCL tier bests, current tier                  | re-query                                                    | a new kill reopens the zone (#280)                  |
 | Profile, guild roster, claimed characters     | always re-query                                             | names, realms, guilds and rosters change            |
 
+Terminal is additionally gated on the kill having settled — see "A kill must
+settle before it goes terminal". A kill in a concluded tier satisfies that by
+age; a kill in the current tier becomes terminal once it does.
+
 ## What "concluded" means
 
 `packages/domain/src/raid-current-content-windows.generated.json` already holds
@@ -78,24 +82,67 @@ behaviour, and the limitation stays visible.
 
 ## The correction path
 
-**Decision, made in the absence of a stated preference, and the part of this
-design most worth overriding:** terminal records carry a **per-domain collection
-version**, not the single global `CURRENT_EVIDENCE_VERSION`.
-
 Without an escape hatch, indefinite storage freezes every bug permanently. Every
 parse fix of the last week — spec icons, the numeric class id, drift handling
 (#272), zone settling (#280) — reached existing dossiers only by re-collecting.
 Under a naive "never re-query", `ryii` would sit at 125/175 forever, because the
 data those fixes repair is exactly the data we would stop fetching.
 
-`CURRENT_EVIDENCE_VERSION` is too blunt for this. It invalidates everything, so a
-fix to parse decoding would re-collect kills, wipes, rankings and achievements
-too. That is affordable when nothing is terminal and ruinous when the whole point
-is to stop re-querying.
+There are two escape hatches, and they answer different needs.
 
-So: separate versions per domain (kills, parses, tier bests, rankings,
-achievements). A fix bumps only the domain it touches. A run re-collects terminal
-records below that domain's version once, and they are terminal again afterwards.
+### A full refresh, triggered deliberately
+
+**Required.** An operator must be able to say "forget what you know about this
+character and collect it again", ignoring every terminal mark. This is the
+mechanism for applying a collection fix to history, and for recovering from a
+wrong terminal mark discovered later.
+
+Three properties matter:
+
+**It is a flag, not an action.** A full refresh cannot complete in one run. One
+character on this dossier spans 353 reports, and the points budget (#283) bounds
+what any single run may spend. So a refresh marks the character's terminal
+records as needing re-collection and lets the existing run, retry and budget
+machinery drain that backlog across as many runs as it takes. A design that
+tries to do the work synchronously will exhaust the allowance and abandon the
+character part-way, which is precisely the failure of 2026-09-17.
+
+**It extends the existing refresh, rather than adding a parallel path.**
+`refreshMode` already returns `full | light`, the route and the dossier control
+already exist, and `refreshCharacter` already forces a run by passing `at` as the
+freshness cutoff. A third mode — `rebuild` — reuses all of it. Unlike the other
+two, it is chosen by the caller rather than derived from a cooldown.
+
+**It needs a gate, and does not have one today.** The refresh endpoint is
+unauthenticated. A `full` press costs one run; a `rebuild` press costs an entire
+character's history, so an unauthenticated rebuild is a way for anyone to burn
+the whole Warcraft Logs allowance repeatedly. Authenticating or otherwise
+restricting this endpoint is a prerequisite of shipping `rebuild`, not a
+follow-up.
+
+Scope is per character. A dossier-wide rebuild is every connected character's
+history at once — worth having eventually, but it multiplies the cost by ten on
+a dossier like this one, so it should follow the per-character version rather
+than ship with it.
+
+### Per-domain collection versions
+
+**Proposed, not required. The part of this design most worth overriding.**
+
+A full refresh is manual and total. It needs someone to remember, and it
+re-collects kills, rankings and achievements to fix a parse bug. Per-domain
+versions (kills, parses, tier bests, rankings, achievements) let a fix bump only
+the domain it touches, so terminal records below that version re-collect once,
+automatically, and are terminal again afterwards.
+
+`CURRENT_EVIDENCE_VERSION` cannot serve this: it invalidates everything, which is
+affordable when nothing is terminal and ruinous when the whole point is to stop
+re-querying.
+
+If only one of the two is built, build the full refresh. It is the mechanism that
+is genuinely required; per-domain versions are an optimisation that trades a new
+invariant — every future collection fix has to bump the right domain — for not
+having to remember.
 
 ## Relative values
 
@@ -115,7 +162,36 @@ movement — is exactly the cost this design exists to remove.
 
 Similarly, a Warcraft Logs report can be deleted or made private. Stored evidence
 is kept: we recorded what was public when we saw it, and an applicant dossier is
-better served by that than by evidence silently vanishing.
+better served by that than by evidence silently vanishing. Confirmed as intended.
+
+### A kill must settle before it goes terminal
+
+Rankings are understood to settle a few days after a kill. A kill younger than
+`EVIDENCE_KILL_SETTLE_DAYS` — **default 7, and explicitly unverified** — is never
+terminal, whatever tier it belongs to.
+
+This matters less for concluded tiers, whose kills are months old by definition,
+and a great deal for the current tier: without it the whole current tier is
+re-queried on every run forever; with it, only the last week of it is. That is
+the expensive part of the workload, so this rule carries most of the saving.
+
+**The 7 is a guess, like `EVIDENCE_POINTS_RESERVE`.** The settling period was not
+confirmed against Warcraft Logs, and the risk of setting it too low is a
+permanently frozen wrong percentile.
+
+Two attempts to measure it retrospectively failed, and the reason is worth
+recording so it is not retried: comparing the committed `/demo` snapshot against
+the live dossier mixes three effects that cannot be separated — genuine upstream
+drift, a precision change (stored percentiles were full floats, the API now
+returns integers), and corrections from this week's parse fixes, since the
+snapshot predates the shared-name attribution fix and therefore contains values
+that were simply wrong.
+
+So make it measurable going forward instead: **store the observation time
+alongside each percentile.** Today a metric records its value with no record of
+when it was seen — only the owning run's `completed_at`. One column turns drift
+into a query against our own data, at no upstream cost, and is what should
+replace the guessed 7.
 
 ## New connected characters
 
@@ -153,6 +229,12 @@ budget stops being consumed by history. That reframes several open issues:
 ## Testing
 
 - A concluded tier is not re-queried on a second run; a current tier is.
+- A kill younger than the settle threshold is re-queried even in a concluded
+  tier; the same kill is terminal once older than it.
+- A `rebuild` re-collects a character whose tiers are all terminal, and does so
+  across several runs rather than one, leaving the remainder queued when the
+  points budget refuses a run.
+- A `rebuild` does not discard stored evidence before its replacement arrives.
 - A raid with no window entry is re-queried and still reports
   `current_content_window_unknown`.
 - A domain version bump re-collects only that domain's terminal records.
