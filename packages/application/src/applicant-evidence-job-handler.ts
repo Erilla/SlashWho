@@ -1,7 +1,8 @@
 import type {
   CharacterMythicKillInput,
   CharacterTierBestParseInput,
-  DiscoveryWorkContext
+  DiscoveryWorkContext,
+  TerminalTier
 } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 import type {
@@ -17,6 +18,7 @@ import { errorFields } from "./error-fields";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+import { terminalTiersFrom } from "./terminal-tiers";
 
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
@@ -58,7 +60,20 @@ export type ApplicantEvidenceStore = {
    * budget-limited run spends its requests on what is still missing rather
    * than redoing the same reports on every run.
    */
-  hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
+  hydratedFightUrls(
+    key: CharacterKey,
+    settledBefore: Date
+  ): Promise<readonly string[]>;
+  /**
+   * The tiers this character is finished with, so the run spends no request on
+   * them, and the means to record the ones it has just finished with.
+   */
+  terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
+  markTerminalTiers(
+    key: CharacterKey,
+    tiers: readonly TerminalTier[],
+    at: Date
+  ): Promise<void>;
   /**
    * When each zone's tier bests were last collected, as `[raidId, completedAt]`
    * pairs, so a zone with nothing left to fetch neither spends a request nor
@@ -129,6 +144,17 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
    * to it.
    */
   pointsReserve: number;
+  /**
+   * How long after a kill its rankings are taken to have settled. A kill
+   * younger than this is re-read rather than frozen, and its tier cannot go
+   * terminal.
+   *
+   * The default of seven days is a guess, like `EVIDENCE_POINTS_RESERVE`. Two
+   * attempts to measure the settling period retrospectively failed, so the
+   * observation times now stored alongside each percentile are what should
+   * eventually replace it.
+   */
+  killSettleMs: number;
   now?: () => Date;
   logger?: { info(value: Record<string, unknown>): void };
   evidenceRunNotifier?: EvidenceRunNotifier;
@@ -283,6 +309,7 @@ export function createApplicantEvidenceJobHandler(
         limitationCode: null,
         parseLimitationCode: null,
         killCount: 0,
+        terminalTierCount: 0,
         requestCapUsed: options.requestCap,
         pointsLimitPerHour: null,
         pointsRemainingBefore: null,
@@ -394,12 +421,33 @@ export function createApplicantEvidenceJobHandler(
         }
 
         activeContext.signal.throwIfAborted();
+        // A fight whose rankings have not settled is re-read rather than left
+        // frozen at whatever it showed on the night.
+        const settledBefore = new Date(now().getTime() - options.killSettleMs);
         const hydratedFightUrls = new Set(
-          await options.evidence.hydratedFightUrls(run.key)
+          await options.evidence.hydratedFightUrls(run.key, settledBefore)
         );
         const collectedTierZones = new Map(
           await options.evidence.collectedTierZones(run.key)
         );
+        const storedTerminal = await options.evidence.terminalTiers(run.key);
+        const terminalRaidIds = {
+          kills: new Set(
+            storedTerminal
+              .filter((tier) => tier.domain === "kills")
+              .map((tier) => tier.raidId)
+          ),
+          parses: new Set(
+            storedTerminal
+              .filter((tier) => tier.domain === "parses")
+              .map((tier) => tier.raidId)
+          ),
+          tierBests: new Set(
+            storedTerminal
+              .filter((tier) => tier.domain === "tier_bests")
+              .map((tier) => tier.raidId)
+          )
+        };
         activeContext.signal.throwIfAborted();
         // A light refresh reads one page of reports. The gateway marks a
         // page-capped scan as a request-cap limitation, so the run publishes
@@ -412,6 +460,7 @@ export function createApplicantEvidenceJobHandler(
             ...(run.className ? { className: run.className } : {}),
             hydratedFightUrls,
             collectedTierZones,
+            terminalRaidIds,
             signal: activeContext.signal
           })
         );
@@ -496,6 +545,21 @@ export function createApplicantEvidenceJobHandler(
           tierBests: response.tierBests,
           completedAt: now()
         });
+
+        // Marked only after publication succeeded. A mark that outlived a
+        // failed publish would stop the tier being collected while nothing
+        // was stored for it.
+        const marks = terminalTiersFrom({
+          at: now(),
+          settleMs: options.killSettleMs,
+          kills: response.kills,
+          scanLimitation: response.limitation?.code ?? null,
+          troubledRaidIds: response.troubledRaidIds
+        });
+        record.terminalTierCount = marks.length;
+        if (marks.length > 0) {
+          await evidence.markTerminalTiers(run.key, marks, now());
+        }
       } catch (error) {
         record.outcome = activeContext.signal.aborted
           ? "cancelled"

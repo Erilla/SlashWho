@@ -24,6 +24,7 @@ export type WorkerConfig = {
   evidenceParseRequestCap: number;
   evidenceParseCapRetryMs: number;
   evidencePointsReserve: number;
+  evidenceKillSettleDays: number;
   blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
@@ -218,6 +219,24 @@ export function loadWorkerConfig(
       0,
       Number.MAX_SAFE_INTEGER,
       "invalid_evidence_points_reserve"
+    ),
+    // Rankings are understood to settle a few days after a kill. A kill
+    // younger than this is re-read rather than frozen, and its tier cannot go
+    // terminal.
+    //
+    // Seven days is a guess and explicitly unverified. Two attempts to measure
+    // it retrospectively failed, because comparing the committed snapshot
+    // against live mixes genuine drift, a float-to-integer precision change,
+    // and corrections from parse fixes the snapshot predates. The observation
+    // times now stored alongside each percentile are what should replace it.
+    // Setting it too low freezes a wrong percentile permanently -- 0 disables
+    // the wait entirely and should only be used deliberately.
+    evidenceKillSettleDays: integerInRange(
+      environment.EVIDENCE_KILL_SETTLE_DAYS,
+      7,
+      0,
+      365,
+      "invalid_evidence_kill_settle_days"
     ),
     blizzardBaseUrl: optionalHttpUrl(
       environment.BLIZZARD_BASE_URL,

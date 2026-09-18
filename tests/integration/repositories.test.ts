@@ -438,7 +438,10 @@ describe("PostgreSQL repositories", () => {
     });
 
     await expect(
-      repositories.evidence.hydratedFightUrls(rootKey)
+      repositories.evidence.hydratedFightUrls(
+        rootKey,
+        new Date("2026-09-18T00:00:00.000Z")
+      )
     ).resolves.toEqual([
       "https://www.warcraftlogs.com/reports/example#fight=hydrated"
     ]);
@@ -565,7 +568,10 @@ describe("PostgreSQL repositories", () => {
     );
 
     const stored = await repositories.evidence.getCompleted(rootKey);
-    const hydrated = await repositories.evidence.hydratedFightUrls(rootKey);
+    const hydrated = await repositories.evidence.hydratedFightUrls(
+      rootKey,
+      new Date("2026-09-18T00:00:00.000Z")
+    );
     expect(stored?.kills[0]?.performance.damage).toEqual({
       state: "unavailable"
     });

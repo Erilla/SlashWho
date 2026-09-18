@@ -80,13 +80,25 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
   expect(() =>
     loadWorkerConfig({ ...environment, EVIDENCE_POINTS_RESERVE: "-1" })
   ).toThrow("invalid_evidence_points_reserve");
+  // The settle period is another admitted guess, so 0 switches the wait off
+  // without a redeploy. A negative one is nonsense rather than a lever.
+  expect(
+    loadWorkerConfig({ ...environment, EVIDENCE_KILL_SETTLE_DAYS: "0" })
+  ).toMatchObject({ evidenceKillSettleDays: 0 });
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_KILL_SETTLE_DAYS: "-1" })
+  ).toThrow("invalid_evidence_kill_settle_days");
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_KILL_SETTLE_DAYS: "1.5" })
+  ).toThrow("invalid_evidence_kill_settle_days");
 
   expect(loadWorkerConfig(environment)).toMatchObject({
     warcraftLogsClientId: environment.WARCRAFT_LOGS_CLIENT_ID,
     warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
     evidenceRequestCap: 500,
     evidenceParseRequestCap: 24,
-    evidencePointsReserve: 1500
+    evidencePointsReserve: 1500,
+    evidenceKillSettleDays: 7
   });
 });
 

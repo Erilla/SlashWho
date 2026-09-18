@@ -3086,7 +3086,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return loadCompletedEvidence(pool, key);
       },
 
-      async hydratedFightUrls(key) {
+      async hydratedFightUrls(key, settledBefore) {
+        const settledBeforeIso = settledBefore.toISOString();
         // Read through the same loader a dossier does, rather than restating
         // its scope in SQL. An earlier restatement matched every run ever, so
         // a parse surviving only on a superseded run suppressed collection of
@@ -3096,9 +3097,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           (completed?.kills ?? [])
             .filter(
               (kill) =>
-                kill.performance.damage.state === "available" ||
-                kill.performance.healing.state === "available" ||
-                kill.performance.bossDamage.state === "available"
+                // A kill whose rankings have not settled is re-read rather
+                // than left frozen at whatever it showed on the night. Its
+                // percentile is still moving, so skipping it would freeze a
+                // value we have reason to believe is wrong.
+                kill.killedAt < settledBeforeIso &&
+                (kill.performance.damage.state === "available" ||
+                  kill.performance.healing.state === "available" ||
+                  kill.performance.bossDamage.state === "available")
             )
             .map((kill) => kill.fightUrl)
         );

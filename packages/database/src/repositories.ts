@@ -399,10 +399,17 @@ export interface EvidenceRepository {
    * budget-limited collection run can spend its requests on what is missing
    * instead of redoing the same reports every time.
    *
+   * A fight killed at or after `settledBefore` is excluded however well
+   * hydrated it is: its rankings are still moving, so treating it as done
+   * would freeze a percentile we have reason to believe is not final yet.
+   *
    * Scoped to the evidence `getCompleted` returns, so this can never skip a
    * fight the dossier shows blank.
    */
-  hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
+  hydratedFightUrls(
+    key: CharacterKey,
+    settledBefore: Date
+  ): Promise<readonly string[]>;
   /**
    * When each zone's tier best parses were last collected, as
    * `[raidId, completedAt]` pairs. A collection run drops a zone collected
