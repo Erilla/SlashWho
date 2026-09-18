@@ -281,6 +281,35 @@ function performanceRankings(
   };
 }
 
+// Rewrites the identity every ranking row carries, standing in for an upstream
+// change to how Report.rankings names a character.
+function driftedRankingIdentity(
+  rankings: unknown,
+  identity: Readonly<Record<string, unknown>>
+): unknown {
+  const report = (
+    rankings as {
+      data: {
+        reportData: {
+          report: Record<string, { data: Array<Record<string, unknown>> }>;
+        };
+      };
+    }
+  ).data.reportData.report;
+  for (const metric of ["damage", "healing", "bossDamage"] as const) {
+    for (const row of report[metric]!.data) {
+      const roles = row.roles as {
+        dps: { characters: Array<Record<string, unknown>> };
+      };
+      roles.dps.characters = roles.dps.characters.map((character) => ({
+        ...character,
+        ...identity
+      }));
+    }
+  }
+  return rankings;
+}
+
 function canonicalIdentityResponse(): Response {
   return jsonResponse({
     data: {
@@ -2033,6 +2062,91 @@ describe("Warcraft Logs gateway", () => {
           performance: { damage: { state: "available", percentile: 50 } }
         }
       ]
+    });
+    expect(result).not.toHaveProperty("parseLimitation");
+  });
+  it("reports drift when a ranked report matches none of its identities to a present character", async () => {
+    // Break caught: an upstream change to how ranking rows carry identity -
+    // here a region suffix on `server.name` - matches nobody in any report, so
+    // every fight stayed unavailable and the run emitted no limitation at all.
+    // A report that ranked somebody while this character was among its actors
+    // is not an ordinary gap (#273).
+    const reports = twoKillReports();
+
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        const code = body.variables?.code ?? "early-report";
+        return code === "early-report"
+          ? jsonResponse(
+              driftedRankingIdentity(
+                performanceRankings(
+                  { damage: 50, healing: 51, bossDamage: 52 },
+                  { code }
+                ),
+                { server: { name: "silvermoon-eu", region: "eu" } }
+              )
+            )
+          : jsonResponse(
+              performanceRankings(
+                { damage: 50, healing: 51, bossDamage: 52 },
+                { code, fightId: 27 }
+              )
+            );
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return canonicalIdentityResponse();
+      }
+      return jsonResponse(reports);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        { fightId: 26, performance: { damage: { state: "unavailable" } } },
+        {
+          fightId: 27,
+          performance: { damage: { state: "available", percentile: 50 } }
+        }
+      ],
+      parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
+    });
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.troubledRaidIds).toEqual({ parses: ["1047"], tierBests: [] });
+  });
+
+  it("treats a ranked report without the character among its actors as an ordinary gap", async () => {
+    // An anonymised character is named by neither the rankings nor the actors,
+    // which is the ordinary gap the drift check must not claim as its own.
+    const rankings = driftedRankingIdentity(
+      performanceRankings({ damage: 50, healing: 51, bossDamage: 52 }),
+      { name: "Bystander" }
+    ) as { data: { reportData: { report: { masterData: unknown } } } };
+    rankings.data.reportData.report.masterData = {
+      actors: [
+        { id: 1002, name: "Bystander", server: "Silvermoon", type: "Player" }
+      ]
+    };
+
+    const { client } = performanceClient(rankings);
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [{ performance: { damage: { state: "unavailable" } } }]
     });
     expect(result).not.toHaveProperty("parseLimitation");
   });
