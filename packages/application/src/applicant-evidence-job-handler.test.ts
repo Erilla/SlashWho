@@ -945,16 +945,17 @@ describe("applicant evidence job handler", () => {
     expect(evidence.published).toHaveLength(1);
   });
 
-  it("scales the reserve down to a smaller account's allowance", async () => {
-    // Break caught: the reserve is an absolute count applied to whichever
-    // account the run carries. A visitor's default allowance is 3600 against
-    // the worker's 18000, so a flat 1500 fences off 42% of their budget and
-    // refuses runs the account could comfortably afford.
+  it("lets the worker's own allowance carry the whole measured reserve", async () => {
+    // Break caught: the share cap, not the configured value, was deciding the
+    // threshold. At 0.1 of the worker's 18000 it clipped anything above 1800,
+    // so the 5000 measured in #295 would have gone silently inert and 4500
+    // remaining -- less than the 4775 an expensive collection costs -- would
+    // have been admitted to start a run it could not finish.
     const evidence = store();
     const warcraftLogs = budgetGateway({
       kind: "rate_limit",
-      limitPerHour: 3_600,
-      pointsSpentThisHour: 2_600,
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 13_500,
       pointsResetInSeconds: 949
     });
     const handler = createApplicantEvidenceJobHandler({
@@ -964,7 +965,44 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       capRetryMs: 1_800_000,
       transientRetryMs: 900_000,
-      pointsReserve: 1_500,
+      pointsReserve: 5_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("scales the reserve down to a smaller account's allowance", async () => {
+    // Break caught: the reserve is an absolute count applied to whichever
+    // account the run carries. A visitor's default allowance is 3600 against
+    // the worker's 18000, so the flat 5000 measured in #295 fences off a
+    // visitor's entire budget and refuses every run the account could make.
+    // 2100 remaining is above the 1080 this account's reserve scales to, and
+    // above the 862 that measurement puts at the floor of a real collection.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 1_500,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 5_000,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
       failureCooldownMs: 1_800_000

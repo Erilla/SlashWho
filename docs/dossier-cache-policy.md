@@ -303,8 +303,8 @@ demand; keeping the mode unreachable is a better answer than gating a public
 endpoint. A rebuild is operator-only and run with credentials.
 
 A run also checks the Warcraft Logs hourly points allowance before it starts.
-When fewer than `EVIDENCE_POINTS_RESERVE` points (1500 by default, capped at a
-tenth of whatever allowance the account in use reports, so a visitor's smaller
+When fewer than `EVIDENCE_POINTS_RESERVE` points (5000 by default, capped at
+30% of whatever allowance the account in use reports, so a visitor's smaller
 budget is not fenced off by a threshold sized for the worker's; `0` switches
 the gate off) remain, the
 run is claimed, publishes nothing, and reschedules itself for the reported

@@ -699,6 +699,23 @@ function rankingIdentity(
   return { id, name, realm, region };
 }
 
+function actorsIncludeKey(
+  actors: readonly unknown[],
+  requestedKey: CharacterKey
+): boolean {
+  return actors.some((actorValue) => {
+    const actor = record(actorValue);
+    return (
+      actor?.type === "Player" &&
+      typeof actor.name === "string" &&
+      typeof actor.server === "string" &&
+      normalizedIdentity(actor.name) ===
+        normalizedIdentity(requestedKey.name) &&
+      normalizedRealm(actor.server) === normalizedRealm(requestedKey.realm)
+    );
+  });
+}
+
 function decodeRankingRows(
   value: unknown,
   scope: RankingScope,
@@ -811,6 +828,19 @@ function decodeRankingRows(
         normalizedIdentity(requestedKey.region)
   );
   if (requestedIdentities.length > MAX_RANKING_IDENTITIES) {
+    return { kind: "limitation", code: "parse_schema_drift" };
+  }
+  // Matching nobody is ordinary when nobody was ranked, or when this character
+  // was not in the report at all. It is not ordinary when the report ranked
+  // somebody for a fight this character was in: both sides of the match were in
+  // hand and the decoder still could not connect them, which is what a change
+  // to how ranking rows carry identity looks like. Left silent, that reads
+  // exactly like a character who has no parses.
+  if (
+    requestedIdentities.length === 0 &&
+    identities.size > 0 &&
+    actorsIncludeKey(actors, requestedKey)
+  ) {
     return { kind: "limitation", code: "parse_schema_drift" };
   }
   const requestedIds = new Set(

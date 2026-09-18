@@ -48,7 +48,14 @@ jobs:
           # validation agents are unaffected. --max-turns is a runaway
           # backstop, not a cost dial: setting it low buys a truncated review
           # at full price.
+          #
+          # --allowedTools repeats the plugin's own `allowed-tools` frontmatter
+          # rather than naming only the MCP tool. Naming one tool appeared to
+          # replace that list instead of adding to it, leaving the plugin
+          # unable to run the `gh` commands it reads and posts with: a full
+          # review ran, denied three tool calls, and posted nothing. This grants
+          # nothing the plugin does not already declare.
           claude_args: >-
             --model claude-sonnet-5
             --max-turns 50
-            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),mcp__github_inline_comment__create_inline_comment"

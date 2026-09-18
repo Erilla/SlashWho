@@ -321,13 +321,21 @@ function remainingPoints(budget: WarcraftLogsRateLimit): number {
 /**
  * The configured reserve is sized for the worker's own allowance, but a run may
  * carry a visitor's credentials, and their account's limit is its own -- 3600
- * by default against the worker's 18000. Applied flat, a 1500 reserve fences
- * off 42% of a visitor's budget and refuses runs their account could afford.
+ * by default against the worker's 18000. Applied flat, a 5000 reserve fences
+ * off a visitor's entire budget and refuses every run they could make.
  * Capping it at a share of the *reported* allowance keeps the intent -- leave
  * room for roughly one more run -- at any account size, and can only lower the
  * configured value, never raise it.
+ *
+ * The share is 0.3 because 0.1 was quietly deciding the reserve. At the
+ * worker's 18000 it clipped any configured value to 1800, and #295 measured a
+ * real collection at 862 to 4775 points (median 1609): a 1800 ceiling cannot
+ * express "leave room for one more run" when one more run costs up to 4775.
+ * 0.3 of 18000 is 5400, so the measured 5000 default now reaches the gate
+ * intact, and a visitor's 3600 account keeps a 1080 reserve -- which the same
+ * measurement says is about the least a collection can cost.
  */
-const MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE = 0.1;
+const MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE = 0.3;
 
 function effectiveReserve(
   budget: WarcraftLogsRateLimit,
