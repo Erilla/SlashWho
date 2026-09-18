@@ -313,7 +313,15 @@ whether it starts.
 The smaller visitor share is a deliberate product choice, not a tuning
 artefact: a visitor supplied credentials to see one dossier, and spending their
 whole hourly quota every window until the character converges is spending
-someone else's resource. Their dossier converges more slowly as a result.
+someone else's resource.
+
+For a character whose history fits inside the cap, the effect is simply a
+smaller scan. Above it, a visitor's dossier does not converge at all: a
+truncated scan settles no tier, so the scan floor never advances and the next
+run re-reads the same pages. That is a limitation of how a truncated scan is
+treated rather than of this cap — see #334 — and it is still an improvement on
+the flat cap it replaces, which exhausted a visitor's allowance mid-scan
+instead.
 
 Neither bound promises a run finishes. A character with deep history costs more
 points to scan than a visitor's entire hourly allowance, at any cap, so that
