@@ -20,7 +20,7 @@ function input(overrides: Partial<Parameters<typeof terminalTiersFrom>[0]>) {
     settleMs,
     kills: [],
     scanLimitation: null,
-    troubledRaidIds: [],
+    troubledRaidIds: { parses: [], tierBests: [] },
     ...overrides
   });
 }
@@ -66,16 +66,69 @@ describe("terminalTiersFrom", () => {
     ).toEqual([]);
   });
 
-  it("withholds every mark for a raid a limitation was attributed to", () => {
+  // Break caught: a veteran exhausts the parse budget on every run, so every
+  // raid came back troubled and nothing ever settled for kills -- which is the
+  // only domain the scan floor reads. The full history was re-scanned forever.
+  it("keeps the kills mark for a raid troubled only for parses", () => {
+    expect(
+      input({
+        kills: [kill("42", concluded, "2026-06-01T00:00:00.000Z")],
+        troubledRaidIds: { parses: ["42"], tierBests: [] }
+      })
+    ).toEqual([
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "tier_bests" }
+    ]);
+  });
+
+  it("withholds tier bests alone for a raid troubled only for tier bests", () => {
+    expect(
+      input({
+        kills: [kill("42", concluded, "2026-06-01T00:00:00.000Z")],
+        troubledRaidIds: { parses: [], tierBests: ["42"] }
+      })
+    ).toEqual([
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "parses" }
+    ]);
+  });
+
+  // Kills come from the history scan alone, and nothing in the scan writes to
+  // either trouble set, so parse-domain trouble says nothing about whether the
+  // raid's kills are complete.
+  it("keeps the kills mark for a raid troubled in both parse domains", () => {
+    expect(
+      input({
+        kills: [kill("42", concluded, "2026-06-01T00:00:00.000Z")],
+        troubledRaidIds: { parses: ["42"], tierBests: ["42"] }
+      })
+    ).toEqual([{ raidId: "42", domain: "kills" }]);
+  });
+
+  // Break caught: the kills mark now rests on the scan limitation alone, so a
+  // truncated or drifted scan must still settle nothing in any domain,
+  // whatever the trouble sets say.
+  it("marks nothing on a scan limitation even with no raid troubled", () => {
+    expect(
+      input({
+        kills: [kill("42", concluded, "2026-06-01T00:00:00.000Z")],
+        scanLimitation: "request_cap",
+        troubledRaidIds: { parses: [], tierBests: [] }
+      })
+    ).toEqual([]);
+  });
+
+  it("leaves an untroubled raid fully marked beside a troubled one", () => {
     expect(
       input({
         kills: [
           kill("42", concluded, "2026-06-01T00:00:00.000Z"),
           kill("43", concluded, "2026-06-01T00:00:00.000Z")
         ],
-        troubledRaidIds: ["42"]
+        troubledRaidIds: { parses: ["42"], tierBests: ["42"] }
       })
     ).toEqual([
+      { raidId: "42", domain: "kills" },
       { raidId: "43", domain: "kills" },
       { raidId: "43", domain: "parses" },
       { raidId: "43", domain: "tier_bests" }

@@ -1647,7 +1647,10 @@ describe("Warcraft Logs gateway", () => {
 
     expect(result).toMatchObject({ kind: "evidence" });
     if (result.kind !== "evidence") throw new Error("expected evidence");
-    expect(result.troubledRaidIds).toEqual(["103"]);
+    expect(result.troubledRaidIds).toEqual({
+      parses: [],
+      tierBests: ["103"]
+    });
   });
 
   it("reports no troubled raids when every zone reads cleanly", async () => {
@@ -1671,7 +1674,103 @@ describe("Warcraft Logs gateway", () => {
       parseRequestCap: 9
     });
 
-    expect(result).toMatchObject({ kind: "evidence", troubledRaidIds: [] });
+    expect(result).toMatchObject({
+      kind: "evidence",
+      troubledRaidIds: { parses: [], tierBests: [] }
+    });
+  });
+
+  it("attributes a fight-parse failure to the parses domain alone", async () => {
+    // Break caught: hydration trouble was blocking the kills mark, so a veteran
+    // whose parse budget runs out every run never settled anything and
+    // re-scanned their whole history forever (#304).
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("CharacterZoneParses")) {
+          return emptyZoneRankingsResponse();
+        }
+        if (body.query.includes("ReportFightParses")) {
+          return new Response("", { status: 503 });
+        }
+        return jsonResponse(performanceReport([26]));
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker"
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 9
+    });
+
+    expect(result).toMatchObject({ kind: "evidence" });
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.troubledRaidIds).toEqual({
+      parses: ["1047"],
+      tierBests: []
+    });
+  });
+
+  it("attributes zones beyond the zone budget to the tier bests domain", async () => {
+    // The zone budget is the routine shortfall on a veteran, so it must land in
+    // the domain it actually describes rather than blocking every domain.
+    const zoneIds = [1041, 1042, 1043, 1044, 1045, 1046, 1047];
+    const reports = zoneIds.map((zoneId, index) => {
+      const report = performanceReport(
+        [26 + index],
+        index < zoneIds.length - 1,
+        `report-${zoneId}`,
+        3306 + index,
+        1_728_086_400_000 - index * 86_400_000
+      ) as {
+        data: {
+          characterData: {
+            character: { recentReports: { data: { zone: { id: number } }[] } };
+          };
+        };
+      };
+      report.data.characterData.character.recentReports.data[0]!.zone.id =
+        zoneId;
+      return report;
+    });
+    let page = 0;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = reports[page++];
+      if (!report) throw new Error("unexpected_report_page");
+      return jsonResponse(report);
+    });
+
+    // floor((5 - 1) / 2) = 2 zones affordable, so five of the seven are missed.
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 7,
+      parseRequestCap: 5
+    });
+
+    expect(result).toMatchObject({ kind: "evidence" });
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    // The two newest zones are affordable and read cleanly; the five older
+    // ones are never reached, and that shortfall is tier-bests trouble.
+    expect(result.troubledRaidIds.tierBests).not.toContain("1041");
+    expect(result.troubledRaidIds.tierBests).not.toContain("1042");
+    expect(result.troubledRaidIds.tierBests).toEqual(
+      expect.arrayContaining(["1043", "1044", "1045", "1046", "1047"])
+    );
   });
 
   it("reopens a collected zone once a kill lands after its collection", async () => {

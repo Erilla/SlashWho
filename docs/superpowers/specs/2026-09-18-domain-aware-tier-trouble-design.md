@@ -163,9 +163,17 @@ counters from #303 remain the way to confirm the effect after it ships.
 **`killCount` will fall for veterans once this ships, and that is the fix
 working.** The floor means the scan returns fewer kills per run, so the number
 on an `evidence_job` record drops — it measures what one run re-read, not what
-the character has. What makes that safe is that `publish` carries stored kills
-forward rather than replacing them with the run's own. Worth knowing before
-someone reads the drop as evidence loss at a glance.
+the character has. Worth knowing before someone reads the drop as evidence loss
+at a glance.
+
+What makes it safe is that `publish` carries stored kills forward, and it is
+keyed on precisely the marks this change creates. A partial publish carries
+everything forward. A complete publish carries forward the kills and wipes of
+terminal kill raids, and drops the rest — "a kill a complete run stopped finding
+stops being claimed". So a raid below the floor keeps its kills exactly because
+it is terminal for kills, which is the same condition that let the scan stop
+above it. The two rules are the same rule seen from either end; changing one
+without the other would lose evidence.
 
 ## Risks
 
