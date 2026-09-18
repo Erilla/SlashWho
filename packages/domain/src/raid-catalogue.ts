@@ -389,6 +389,27 @@ export function currentContentEligibilityByRaidId(
         (window.endsAt === null || at < Date.parse(window.endsAt));
 }
 
+/**
+ * How many of the given kill timestamps fall inside the raid's current-content
+ * window, for callers summarising a character's tier activity.
+ */
+export function currentContentKillCount(
+  killedAtValues: readonly string[],
+  raidId: string
+): number {
+  const window = lookupRaidCurrentContentWindow(raidId);
+  if (!window) return killedAtValues.length;
+  const startsAt = Date.parse(window.startsAt);
+  const endsAt =
+    window.endsAt === null
+      ? Number.POSITIVE_INFINITY
+      : Date.parse(window.endsAt);
+  return killedAtValues.filter((killedAt) => {
+    const at = Date.parse(killedAt);
+    return !Number.isNaN(at) && at >= startsAt && at <= endsAt;
+  }).length;
+}
+
 export function lookupRaiderIoBoss(
   raidName: string,
   bossName: string
