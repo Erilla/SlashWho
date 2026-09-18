@@ -2817,30 +2817,83 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             throw new Error("character_evidence_run_not_active");
           }
           const activeRun = active.rows[0]!;
+          const activeKey = {
+            region: activeRun.region,
+            realm: activeRun.realm_slug,
+            name: activeRun.normalized_name
+          };
+          // Raids this character is finished with. Collection no longer pages
+          // into them, so for these raids "the run did not find it" no longer
+          // means "it is gone" -- it means we deliberately did not look.
+          const terminalKillRaidIds = new Set(
+            (
+              await client.query<{ raid_id: string }>(
+                `SELECT raid_id
+                   FROM character_terminal_tiers
+                  WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                    AND domain = 'kills'
+                    AND collection_version >= $4::integer`,
+                [
+                  activeKey.region,
+                  activeKey.realm,
+                  activeKey.name,
+                  CURRENT_COLLECTION_VERSIONS.kills
+                ]
+              )
+            ).rows.map((row) => row.raid_id)
+          );
+          const stored = await loadPositiveEvidenceForPartial(
+            client,
+            activeKey
+          );
+          // A partial publish carries everything forward, as it always has. A
+          // complete one carries forward the terminal raids only: every other
+          // raid keeps the existing contract, where a kill a complete run
+          // stopped finding stops being claimed.
           const previous =
             input.state === "partial"
-              ? await loadPositiveEvidenceForPartial(client, {
-                  region: activeRun.region,
-                  realm: activeRun.realm_slug,
-                  name: activeRun.normalized_name
-                })
-              : null;
+              ? stored
+              : {
+                  kills: stored.kills.filter((kill) =>
+                    terminalKillRaidIds.has(kill.raidId)
+                  ),
+                  wipes: stored.wipes.filter((wipe) =>
+                    terminalKillRaidIds.has(wipe.raidId)
+                  )
+                };
           // A complete publish must not resurrect kills the run no longer
           // found, but it must still carry forward parses for kills it did,
           // because collection skips fights it has already hydrated.
           const storedPerformance = await loadStoredPerformanceByFightUrl(
             client,
-            {
-              region: activeRun.region,
-              realm: activeRun.realm_slug,
-              name: activeRun.normalized_name
-            }
+            activeKey
+          );
+          // When each fight's parses were actually read, so a fight this run
+          // skipped keeps the time it was observed rather than being restamped
+          // with this run's completion. A restamp would say every untouched
+          // percentile was just re-checked, and make drift unmeasurable.
+          const storedCollectedAt = new Map(
+            (
+              await client.query<{ fight_url: string; collected_at: Date }>(
+                `SELECT k.fight_url, max(k.collected_at) AS collected_at
+                   FROM character_mythic_kills k
+                   JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+                  WHERE r.region = $1 AND r.realm_slug = $2
+                    AND r.normalized_name = $3
+                    AND r.status IN ('complete', 'partial')
+                  GROUP BY k.fight_url`,
+                [activeKey.region, activeKey.realm, activeKey.name]
+              )
+            ).rows.map((row) => [row.fight_url, row.collected_at] as const)
+          );
+          const incomingFightUrls = new Set(
+            input.kills.map((kill) => kill.fightUrl)
           );
           const kills = new Map<string, (typeof incomingKills)[number]>(
-            previous?.kills.map((kill) => [
+            previous.kills.map((kill) => [
               kill.fightUrl,
               { kill, performance: parsePerformanceValues(kill.performance) }
-            ]) ?? []
+            ])
           );
           for (const kill of incomingKills) {
             const stored =
@@ -2865,7 +2918,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             );
           }
           const wipes = new Map<string, (typeof input.wipes)[number]>();
-          for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
+          for (const wipe of [...previous.wipes, ...input.wipes]) {
             wipes.set(wipe.fightUrl, wipe);
           }
           const tierBests = await loadStoredTierBestParses(client, {
@@ -2898,8 +2951,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                  boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
                  report_url, fight_url, guild_name, guild_realm, historic_world_rank,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
-                 healing_percentile, boss_damage_parse_state, boss_damage_percentile)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+                 healing_percentile, boss_damage_parse_state, boss_damage_percentile,
+                 collected_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
               [
                 runId,
                 kill.fightUrl,
@@ -2923,7 +2977,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 performance.healing.state,
                 performance.healing.percentile,
                 performance.bossDamage.state,
-                performance.bossDamage.percentile
+                performance.bossDamage.percentile,
+                // This run observed the fight only if it came back with it. A
+                // fight carried forward keeps the time it was actually read,
+                // so a percentile's age stays honest.
+                incomingFightUrls.has(kill.fightUrl)
+                  ? input.completedAt
+                  : (storedCollectedAt.get(kill.fightUrl) ?? input.completedAt)
               ]
             );
           }

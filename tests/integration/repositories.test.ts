@@ -875,6 +875,196 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("carries terminal-tier kills and wipes through a complete publish", async () => {
+    // Break caught: once collection stops paging into a concluded tier, that
+    // tier's kills are "not found" on every later run, and a complete publish
+    // would erase a character's whole history the first time it settled.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "terminalcarry"
+    } as const;
+    const first = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-18T00:00:00.000Z"),
+      at: new Date("2026-09-18T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: new Date("2026-09-18T00:00:00.000Z"),
+      kills: [
+        mythicKill({
+          raidId: "42",
+          fightUrl: "https://www.warcraftlogs.com/reports/settled#fight=1"
+        }),
+        mythicKill({
+          raidId: "99",
+          bossId: "555",
+          fightUrl: "https://www.warcraftlogs.com/reports/current#fight=1"
+        })
+      ],
+      wipes: [
+        mythicWipe({
+          raidId: "42",
+          fightUrl: "https://www.warcraftlogs.com/reports/settled#fight=2"
+        })
+      ]
+    });
+
+    await repositories.evidence.markTerminalTiers(
+      key,
+      [{ raidId: "42", domain: "kills" }],
+      new Date("2026-09-18T00:05:00.000Z")
+    );
+
+    // The second run never re-reads raid 42 -- that is what the mark is for --
+    // so it reports only raid 99. Raid 42 must survive anyway.
+    const second = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
+      at: new Date("2026-09-19T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(second.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: new Date("2026-09-19T00:00:00.000Z"),
+      kills: [
+        mythicKill({
+          raidId: "99",
+          bossId: "555",
+          fightUrl: "https://www.warcraftlogs.com/reports/current#fight=1"
+        })
+      ],
+      wipes: []
+    });
+
+    const completed = await repositories.evidence.getCompleted(key);
+    expect(completed?.kills.map((kill) => kill.fightUrl).sort()).toEqual([
+      "https://www.warcraftlogs.com/reports/current#fight=1",
+      "https://www.warcraftlogs.com/reports/settled#fight=1"
+    ]);
+    expect(completed?.wipes.map((wipe) => wipe.fightUrl)).toEqual([
+      "https://www.warcraftlogs.com/reports/settled#fight=2"
+    ]);
+  });
+
+  it("still drops a non-terminal tier's kills a complete run no longer finds", async () => {
+    // The existing contract the carry-forward must not swallow: a report made
+    // private in a tier still being collected stops being claimed.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "nonterminaldrop"
+    } as const;
+    const first = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-18T00:00:00.000Z"),
+      at: new Date("2026-09-18T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: new Date("2026-09-18T00:00:00.000Z"),
+      kills: [mythicKill({ raidId: "99" })],
+      wipes: []
+    });
+
+    const second = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
+      at: new Date("2026-09-19T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(second.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: new Date("2026-09-19T00:00:00.000Z"),
+      kills: [],
+      wipes: []
+    });
+
+    await expect(
+      repositories.evidence
+        .getCompleted(key)
+        .then((completed) => completed?.kills)
+    ).resolves.toEqual([]);
+  });
+
+  it("keeps a carried kill's observation time rather than restamping it", async () => {
+    // A restamp would say every untouched fight was just re-read, which
+    // destroys the drift measurement the column exists for.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "observedat"
+    } as const;
+    const firstAt = new Date("2026-09-18T12:00:00.000Z");
+    const secondAt = new Date("2026-09-19T12:00:00.000Z");
+    const reserved = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: firstAt,
+      at: firstAt
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: firstAt,
+      kills: [
+        mythicKill({
+          raidId: "42",
+          performance: {
+            damage: { state: "available", percentile: 95 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        })
+      ],
+      wipes: []
+    });
+
+    await repositories.evidence.markTerminalTiers(
+      key,
+      [{ raidId: "42", domain: "kills" }],
+      firstAt
+    );
+
+    const next = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: secondAt,
+      at: secondAt
+    });
+    await repositories.evidence.publish(next.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: secondAt,
+      kills: [],
+      wipes: []
+    });
+
+    const stored = await pool.query<{ collected_at: Date }>(
+      `SELECT k.collected_at
+         FROM character_mythic_kills k
+         JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+        WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
+        ORDER BY r.completed_at DESC
+        LIMIT 1`,
+      [key.region, key.realm, key.name]
+    );
+    expect(stored.rows[0]?.collected_at).toEqual(firstAt);
+  });
+
   it("stores terminal tiers per character and returns them until cleared", async () => {
     const key = {
       region: "eu",
