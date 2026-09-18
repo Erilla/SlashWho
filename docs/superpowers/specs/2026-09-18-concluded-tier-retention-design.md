@@ -107,18 +107,26 @@ machinery drain that backlog across as many runs as it takes. A design that
 tries to do the work synchronously will exhaust the allowance and abandon the
 character part-way, which is precisely the failure of 2026-09-17.
 
-**It extends the existing refresh, rather than adding a parallel path.**
-`refreshMode` already returns `full | light`, the route and the dossier control
-already exist, and `refreshCharacter` already forces a run by passing `at` as the
-freshness cutoff. A third mode — `rebuild` — reuses all of it. Unlike the other
-two, it is chosen by the caller rather than derived from a cooldown.
+**The dossier refresh button must never trigger it.** This is a hard
+requirement, not a preference. The control on the character page keeps its
+existing behaviour exactly: `full` outside the cooldown, `light` inside it,
+costing one run either way. A reader pressing Refresh is asking for current
+information, not for a character's entire history to be re-collected.
 
-**It needs a gate, and does not have one today.** The refresh endpoint is
-unauthenticated. A `full` press costs one run; a `rebuild` press costs an entire
-character's history, so an unauthenticated rebuild is a way for anyone to burn
-the whole Warcraft Logs allowance repeatedly. Authenticating or otherwise
-restricting this endpoint is a prerequisite of shipping `rebuild`, not a
-follow-up.
+Keeping `rebuild` off that route also removes the need to authenticate it.
+`/api/dossiers/.../refresh` is unauthenticated today, which is tolerable at one
+run per press and would not be if a press could re-collect 353 reports — anyone
+could burn the whole Warcraft Logs allowance on demand. The mode simply never
+being reachable from there is a better answer than adding a gate to a public
+endpoint.
+
+**It reuses the collection path, not the public one.** `refreshCharacter`
+already forces a run by passing `at` as the freshness cutoff, and that internal
+seam is worth sharing. What `rebuild` adds is clearing the terminal marks first.
+It belongs behind an operator-only trigger — a script alongside the existing ones
+in `scripts/`, run with credentials — rather than an HTTP route reachable by a
+visitor. If it ever does need a route, that route is authenticated from the
+start.
 
 Scope is per character. A dossier-wide rebuild is every connected character's
 history at once — worth having eventually, but it multiplies the cost by ten on
@@ -235,6 +243,8 @@ budget stops being consumed by history. That reframes several open issues:
   across several runs rather than one, leaving the remainder queued when the
   points budget refuses a run.
 - A `rebuild` does not discard stored evidence before its replacement arrives.
+- The dossier refresh route never produces a rebuild, whatever it is sent. A
+  press outside the cooldown is still `full`, and inside it still `light`.
 - A raid with no window entry is re-queried and still reports
   `current_content_window_unknown`.
 - A domain version bump re-collects only that domain's terminal records.
