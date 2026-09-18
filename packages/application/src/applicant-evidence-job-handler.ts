@@ -366,20 +366,21 @@ function effectiveReserve(
  * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE are the two halves of a run's budget and
  * they used to combine only in a reader's head. Admission guarantees a run
  * starts with at least `effectiveReserve` points left. A run may then spend
- * `cap * pointsPerPage` on the scan plus a flat parse term (48 requests at
- * ~13 points, about 630, which does not scale with the allowance at all).
- * Against the values here:
+ * `cap * pointsPerPage` on the scan plus a flat parse term -- the parse cap in
+ * requests at ~13 points each, which does not scale with the allowance at all.
+ * At EVIDENCE_PARSE_REQUEST_CAP's default of 24 that term is ~317:
  *
  *   worker, 18000:  admission guarantees >=5000; cap 300 pages
- *                   worst run 300*20 + 634 = 6634, and 9634 at 30 a page
+ *                   worst run 300*20 + 317 = 6317, and 9317 at 30 a page
  *   visitor, 3600:  admission guarantees >=1080; cap  18 pages
- *                   worst run  18*20 + 634 =  994, and 1174 at 30 a page
+ *                   worst run  18*20 + 317 =  677, and  857 at 30 a page
  *
- * The worker's does not close, by a wide margin. The visitor's nearly does --
- * 994 against 1080 -- and tips over only if a page costs nearer 30 than the
- * measured 20. That is a consequence of the modest visitor share, not a design
- * goal, and it must not be read as a guarantee: the parse term is flat, so any
- * rise in the parse cap eats the margin directly.
+ * The worker's does not close, by a wide margin. The visitor's does, at both
+ * page costs -- but read that as an accident of the current numbers rather
+ * than a property anything maintains. The parse term is flat, so it eats the
+ * margin directly: at a parse cap of 48, which Railway ran as an override
+ * until 2026-09-18, the visitor's worst run is 1174 against the same 1080 and
+ * stops closing.
  *
  * Making the worker's close would mean 145 pages, below the deepest scan
  * already observed (190), truncating collections that currently finish. And
@@ -404,9 +405,24 @@ const MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE = 0.5;
  * visitor's, repeatedly across windows until their character converges, is
  * spending someone else's resource -- and they supplied those credentials to
  * see one dossier, not to have their Warcraft Logs quota drained every hour.
- * So the slice is modest and convergence on a visitor's credentials is slower
- * on purpose: 18 pages a run against a 3600 allowance, where our own would
- * take 60.
+ * So the slice is modest: 18 pages a run against a 3600 allowance, where our
+ * own would take 60.
+ *
+ * THIS DOES NOT MERELY SLOW A VISITOR'S DOSSIER DOWN. Above the cap it does
+ * not converge at all. A truncated scan raises a `request_cap` scan
+ * limitation; `terminalTiersFrom` settles nothing when a scan limitation is
+ * present; with nothing terminal `killScanFloorFrom` returns undefined; and
+ * with no floor the next run starts at the newest report again and pages back
+ * over the same 18 pages. At 10 reports a page that is the same 180 reports
+ * forever, for any character with more than that.
+ *
+ * It is still an improvement on what it replaces -- a flat 500-page cap
+ * exhausted a visitor's allowance around page 180 and was rate limited
+ * mid-scan, so this trades failing expensively for failing cheaply -- but it
+ * is not convergence, and the fix is not here. It is to narrow "a truncated
+ * scan settles nothing" to "settles nothing below its stopping point": paging
+ * is newest-first, so a raid whose kills all sit above the truncation point
+ * was completely seen and is safe to mark. Tracked in #334.
  *
  * Keyed off whose credentials the run carries, never off how large the
  * allowance is. A small allowance only correlates with a visitor: the worker's

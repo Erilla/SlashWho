@@ -995,9 +995,11 @@ describe("applicant evidence job handler", () => {
     // see one dossier, not to have their Warcraft Logs quota drained to the
     // reserve floor every hour until the character converges. Consuming the
     // worker's quota is a throughput choice; consuming theirs is spending
-    // someone else's resource, so the share is smaller and convergence is
-    // slower on purpose: 3600 * 0.15 / 30 is 18 pages, against the 60 the same
-    // allowance would get on our own credentials.
+    // someone else's resource, so the share is smaller on purpose: 3600 * 0.15
+    // / 30 is 18 pages, against the 60 the same allowance would get on our own
+    // credentials. Above the cap this does not converge -- a truncated scan
+    // settles nothing, so the floor never advances and the next run re-reads
+    // the same pages -- which is #334, not a property of this cap.
     //
     // Keyed off whose credentials the run carries, not off how big the
     // allowance is. A small allowance only correlates with a visitor -- the

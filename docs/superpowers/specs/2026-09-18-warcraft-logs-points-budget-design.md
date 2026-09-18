@@ -270,25 +270,38 @@ The smaller visitor share is a product decision, not a tuning constant.
 Spending the worker's whole quota is a throughput choice we are entitled to
 make; spending a visitor's, repeatedly across windows until their character
 converges, is spending someone else's resource, and they supplied those
-credentials to see one dossier. Their dossier converges more slowly on purpose.
+credentials to see one dossier.
+
+**This does not merely slow a visitor's dossier down — above the cap it does
+not converge.** A truncated scan raises a `request_cap` scan limitation;
+`terminalTiersFrom` settles nothing while one is present; with nothing terminal
+`killScanFloorFrom` returns undefined; with no floor the next run starts at the
+newest report again and pages back over the same 18 pages, which at 10 reports
+a page is the same 180 reports forever. It is still better than the flat cap it
+replaces, which exhausted a visitor's allowance around page 180 and was rate
+limited mid-scan — failing cheaply rather than expensively — but it is not
+convergence. The fix is #334: narrow "a truncated scan settles nothing" to
+"settles nothing below its stopping point", since paging is newest-first and a
+raid whose kills all sit above the truncation point was completely seen.
 
 **A backstop, not a guarantee.** This is the part to keep hold of, because the
 scan share and `MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE` are the two halves of a
 run's budget and they previously combined only in a reader's head. Admission
 guarantees a run starts with at least `effectiveReserve` left; a run may then
-spend `cap × pointsPerPage` plus a flat parse term (48 requests at ~13 points,
-about 634, which does not scale with the allowance at all):
+spend `cap × pointsPerPage` plus a flat parse term — the parse cap in requests
+at ~13 points each, which does not scale with the allowance at all. At
+`EVIDENCE_PARSE_REQUEST_CAP`'s default of 24 that term is ~317:
 
 |               | admission guarantees | cap | worst run @20 | @30  |
 | ------------- | -------------------- | --- | ------------- | ---- |
-| worker, 18000 | ≥ 5000               | 300 | 6634          | 9634 |
-| visitor, 3600 | ≥ 1080               | 18  | 994           | 1174 |
+| worker, 18000 | ≥ 5000               | 300 | 6317          | 9317 |
+| visitor, 3600 | ≥ 1080               | 18  | 677           | 857  |
 
-The worker's does not close, by a wide margin. The visitor's nearly does and
-tips over only if a page costs nearer 30 than the measured 20 — a consequence
-of the modest share rather than a design goal, and not to be read as a
-guarantee, since the flat parse term eats the margin directly if the parse cap
-rises.
+The worker's does not close, by a wide margin. The visitor's does, at both page
+costs — but that is an accident of the current numbers, not a property anything
+maintains. The parse term is flat, so it eats the margin directly: at a parse
+cap of 48, which Railway ran as an override until 2026-09-18, the visitor's
+worst run is 1174 against the same 1080 and stops closing.
 
 Closing the worker's would mean a 145-page cap, below the deepest scan already
 observed (190), truncating collections that currently finish. And the reason is
