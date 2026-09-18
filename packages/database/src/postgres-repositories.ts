@@ -3374,6 +3374,49 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [cutoffs.settled, cutoffs.active]
         );
         return result.rowCount ?? 0;
+      },
+
+      async listActive(limit) {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+          throw new RangeError("character_evidence_active_limit_out_of_range");
+        }
+        const result = await pool.query<{
+          id: string;
+          queue_job_id: string | null;
+          started_at: Date | null;
+          created_at: Date;
+        }>(
+          `SELECT id, queue_job_id, started_at, created_at
+           FROM character_evidence_runs
+           WHERE status IN ('queued', 'running', 'retrying')
+           ORDER BY created_at, id
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map((row) => ({
+          runId: row.id,
+          queueJobId: row.queue_job_id,
+          startedAt: row.started_at,
+          createdAt: row.created_at
+        }));
+      },
+
+      async releaseAbandoned(runIds) {
+        if (runIds.length === 0) return 0;
+        // Same columns `fail` writes, for the same reason: `failed` is in
+        // neither the active set nor `loadCompletedEvidence`, so the character
+        // falls back to its previous evidence and the next read reserves a
+        // fresh run. The status guard is what makes this lose the race to a
+        // publication rather than overwrite it.
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET status = 'failed', error_code = 'abandoned', completed_at = now(),
+               wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
+           WHERE id = ANY($1::uuid[])
+             AND status IN ('queued', 'running', 'retrying')`,
+          [runIds]
+        );
+        return result.rowCount ?? 0;
       }
     },
 
