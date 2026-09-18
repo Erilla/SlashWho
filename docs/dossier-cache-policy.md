@@ -50,6 +50,22 @@ the full window. A zone already read since its newest kill is dropped before
 the zone budget is measured, so the budget advances into deeper tiers and a
 saturated character stops raising the cap and settles at `complete`.
 
+A run also checks the Warcraft Logs hourly points allowance before it starts.
+When fewer than `EVIDENCE_POINTS_RESERVE` points (1500 by default, capped at a
+tenth of whatever allowance the account in use reports, so a visitor's smaller
+budget is not fenced off by a threshold sized for the worker's; `0` switches
+the gate off) remain, the
+run is claimed, publishes nothing, and reschedules itself for the reported
+reset — clamped to the queue's 1800-second maximum. On the last of its five
+attempts the run refuses without asking for a retry and marks itself `failed`
+with `points_budget_low`. That last step is load-bearing: a run abandoned in
+`running` is counted active by `reserve` with no staleness cutoff and would
+block every later reservation for that character. `failed` is in neither that
+set nor `loadCompletedEvidence`'s `('complete','partial')`, so the character
+falls back to its previous evidence and a later read reserves a fresh run. If the
+allowance itself cannot be read the run proceeds, because a gate that fails
+closed on its own transport errors could stop all collection permanently.
+
 The provider publishes an hourly point budget, not a fixed cost contract for
 `Report.rankings`. The credentialed test probe measured 8 points for one
 three-metric query and 9 points after bounded canonical lookups; those are

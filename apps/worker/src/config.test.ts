@@ -71,12 +71,22 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
   expect(() =>
     loadWorkerConfig({ ...environment, EVIDENCE_PARSE_REQUEST_CAP: "0" })
   ).toThrow("invalid_evidence_parse_request_cap");
+  // Break caught: the reserve is an admitted guess to be revisited within a day
+  // of deployment, and rejecting 0 at boot left a code change and a redeploy as
+  // the only way to switch the gate off if the guess refuses too much.
+  expect(
+    loadWorkerConfig({ ...environment, EVIDENCE_POINTS_RESERVE: "0" })
+  ).toMatchObject({ evidencePointsReserve: 0 });
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_POINTS_RESERVE: "-1" })
+  ).toThrow("invalid_evidence_points_reserve");
 
   expect(loadWorkerConfig(environment)).toMatchObject({
     warcraftLogsClientId: environment.WARCRAFT_LOGS_CLIENT_ID,
     warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
     evidenceRequestCap: 500,
-    evidenceParseRequestCap: 24
+    evidenceParseRequestCap: 24,
+    evidencePointsReserve: 1500
   });
 });
 

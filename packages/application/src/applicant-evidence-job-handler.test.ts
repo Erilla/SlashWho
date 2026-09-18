@@ -19,6 +19,17 @@ const run = {
   className: null as string | null
 };
 
+// Keeps the admission gate open for every test that is not about the budget:
+// the handler now reads the allowance before it collects anything.
+const openGate = {
+  getRateLimit: async () => ({
+    kind: "rate_limit" as const,
+    limitPerHour: 18_000,
+    pointsSpentThisHour: 0,
+    pointsResetInSeconds: 949
+  })
+};
+
 function store(
   activeRun: typeof run = run,
   hydrated: readonly string[] = []
@@ -27,13 +38,19 @@ function store(
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
   }>;
+  failed: Array<{ runId: string; code: string }>;
+  noted: Array<{ runId: string; code: string }>;
 } {
   const published: Array<{
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
   }> = [];
+  const failed: Array<{ runId: string; code: string }> = [];
+  const noted: Array<{ runId: string; code: string }> = [];
   return {
     published,
+    failed,
+    noted,
     async find(id) {
       return id === activeRun.id ? activeRun : null;
     },
@@ -43,7 +60,12 @@ function store(
     async publish(runId, result) {
       published.push({ runId, result });
     },
-    async fail() {},
+    async fail(runId, code) {
+      failed.push({ runId, code });
+    },
+    async recordLimitation(runId, code) {
+      noted.push({ runId, code });
+    },
     async collectedTierZones() {
       return [];
     },
@@ -101,13 +123,14 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = createApplicantEvidenceJobHandler({
       evidence,
-      warcraftLogs: { getFirstKillReports } as Pick<
+      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
-        "getFirstKillReports"
+        "getFirstKillReports" | "getRateLimit"
       >,
       requestCap: 500,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -157,6 +180,7 @@ describe("applicant evidence job handler", () => {
     const handler = createApplicantEvidenceJobHandler({
       evidence,
       warcraftLogs: {
+        ...openGate,
         async getFirstKillReports() {
           return {
             kind: "limitation",
@@ -168,6 +192,7 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -201,6 +226,7 @@ describe("applicant evidence job handler", () => {
     const handler = createApplicantEvidenceJobHandler({
       evidence,
       warcraftLogs: {
+        ...openGate,
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
@@ -240,6 +266,7 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -294,6 +321,7 @@ describe("applicant evidence job handler", () => {
     // Break caught: a visitor-supplied WCL credential could be ignored in
     // favor of the worker's own shared client, or leaked unencrypted.
     const perRunGateway = {
+      ...openGate,
       getFirstKillReports: vi.fn().mockResolvedValue({
         kind: "evidence",
         kills: [],
@@ -319,17 +347,19 @@ describe("applicant evidence job handler", () => {
       publish: vi.fn().mockResolvedValue(undefined),
       find: vi.fn(),
       fail: vi.fn(),
+      recordLimitation: vi.fn(),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([])
     };
     const handler = createApplicantEvidenceJobHandler({
       evidence,
-      warcraftLogs: { getFirstKillReports: vi.fn() }, // must NOT be called
+      warcraftLogs: { ...openGate, getFirstKillReports: vi.fn() }, // must NOT be called
       createWarcraftLogsGateway,
       decryptionKey: encryptionKey,
       requestCap: 80,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
     });
 
     await handler.execute("run-1", {
@@ -359,13 +389,14 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = createApplicantEvidenceJobHandler({
       evidence,
-      warcraftLogs: { getFirstKillReports } as Pick<
+      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
-        "getFirstKillReports"
+        "getFirstKillReports" | "getRateLimit"
       >,
       requestCap: 500,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -398,13 +429,14 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = createApplicantEvidenceJobHandler({
       evidence,
-      warcraftLogs: { getFirstKillReports } as Pick<
+      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
-        "getFirstKillReports"
+        "getFirstKillReports" | "getRateLimit"
       >,
       requestCap: 500,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -431,13 +463,14 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = createApplicantEvidenceJobHandler({
       evidence,
-      warcraftLogs: { getFirstKillReports } as Pick<
+      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
-        "getFirstKillReports"
+        "getFirstKillReports" | "getRateLimit"
       >,
       requestCap: 500,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -453,6 +486,405 @@ describe("applicant evidence job handler", () => {
     );
   });
 
+  function budgetGateway(
+    rateLimit: Awaited<ReturnType<WarcraftLogsGateway["getRateLimit"]>>,
+    getFirstKillReports = vi.fn(async () => ({
+      kind: "evidence" as const,
+      kills: [],
+      wipes: [],
+      tierBests: []
+    }))
+  ) {
+    return {
+      getRateLimit: vi.fn(async () => rateLimit),
+      getFirstKillReports
+    } as unknown as Pick<
+      WarcraftLogsGateway,
+      "getFirstKillReports" | "getRateLimit"
+    > & { getRateLimit: ReturnType<typeof vi.fn> };
+  }
+
+  it("refuses to start when too little of the hourly allowance remains", async () => {
+    // Break caught: ten runs started against an exhausted allowance on
+    // 2026-09-17, were all rate limited within six minutes, and gained nothing.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 17_500.5,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toMatchObject({
+      retryable: true,
+      retryAfterMs: 949_000
+    });
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    // Nothing published: a zero-kill publish risks the destructive merge of #250.
+    expect(evidence.published).toEqual([]);
+  });
+
+  it("clamps a refusal's retry past the queue's maximum delay", async () => {
+    // Break caught: requestedRetryDelaySeconds returns null above 1800, the job
+    // falls back to retryDelay 1 with backoff, and retries straight into another
+    // refusal. pointsResetIn reaches 3600.
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs: budgetGateway({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 17_999,
+        pointsResetInSeconds: 3_600
+      }),
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toMatchObject({
+      retryable: true,
+      retryAfterMs: 1_800_000
+    });
+  });
+
+  it("records the refusal on the run so a reader can be told why", async () => {
+    // Break caught: the refusal publishes nothing, so the dossier read only the
+    // completed run and the deferral copy was unreachable. A reader saw an
+    // unexplained "collecting" state for as long as the allowance stayed spent.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: budgetGateway({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 17_500.5,
+        pointsResetInSeconds: 949
+      }),
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+
+    expect(evidence.noted).toEqual([
+      { runId: run.id, code: "points_budget_low" }
+    ]);
+  });
+
+  it("fails a run whose refusal exhausts the last attempt", async () => {
+    // Break caught: nothing called the evidence store's fail, so a run that
+    // refused on every attempt stayed `running` once pg-boss gave up. `reserve`
+    // counts ('queued','running','retrying') as active with no staleness
+    // cutoff, so that character could never be collected again.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 17_500.5,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 5,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+
+    expect(evidence.failed).toEqual([
+      { runId: run.id, code: "points_budget_low" }
+    ]);
+    expect(evidence.published).toEqual([]);
+  });
+
+  it("asks for no retry it cannot have on the last attempt", async () => {
+    // Break caught: a retryable error on the final attempt sends the queue to
+    // updateActiveRetryDelay, whose `AND state = 'active'` matches no row once
+    // the job is failing. It throws, replacing the refusal, and the real cause
+    // is lost from the logs.
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs: budgetGateway({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 17_500.5,
+        pointsResetInSeconds: 949
+      }),
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    const error = await handler
+      .execute(run.id, {
+        attempt: 5,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).not.toHaveProperty("retryable");
+    expect(error).not.toHaveProperty("retryAfterMs");
+  });
+
+  it("collects when the allowance is healthy", async () => {
+    // Break caught: an off-by-one or inverted comparison would refuse every run
+    // and stop collection entirely.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 1_000.25,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledOnce();
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("scales the reserve down to a smaller account's allowance", async () => {
+    // Break caught: the reserve is an absolute count applied to whichever
+    // account the run carries. A visitor's default allowance is 3600 against
+    // the worker's 18000, so a flat 1500 fences off 42% of their budget and
+    // refuses runs the account could comfortably afford.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 2_600,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledOnce();
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("still refuses a small account with almost nothing left", async () => {
+    // Break caught: scaling the reserve to the allowance must not amount to
+    // removing the gate for accounts that need it most.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 3_400,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("collects with the gate switched off, even past the allowance", async () => {
+    // Break caught: a reserve of 0 is the operator's off switch for a policy
+    // the code itself calls a guess. Reading it as "refuse whenever nothing
+    // remains" would keep gating exactly when it was asked to stop -- spend
+    // overruns the limit, 9058.65 against 9000 was observed.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 18_058.65,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 0
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledOnce();
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("publishes what it collected when the closing measurement fails", async () => {
+    // Break caught: the closing sample is an extra round trip between a
+    // finished collection and its publish. The gateway rethrows the abort
+    // reason, so a graceful shutdown landing in that window discarded a run
+    // that had already spent its whole request and parse budget.
+    const evidence = store();
+    const getRateLimit = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 1_000.25,
+        pointsResetInSeconds: 949
+      })
+      .mockRejectedValueOnce(new Error("aborted"));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        getRateLimit,
+        getFirstKillReports: vi.fn(async () => ({
+          kind: "evidence" as const,
+          kills: [],
+          wipes: [],
+          tierBests: []
+        }))
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await handler.execute(run.id);
+
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("collects when the allowance itself cannot be read", async () => {
+    // Break caught: a gate that fails closed on its own transport errors can
+    // stop all evidence collection permanently.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "limitation",
+      code: "unavailable"
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledOnce();
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("logs what the run spent against the allowance", async () => {
+    // Break caught: the 1500 reserve is an admitted guess, and without a measured
+    // per-run spend there is nothing to replace it with.
+    const infos: Array<Record<string, unknown>> = [];
+    const getRateLimit = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 1_000.25,
+        pointsResetInSeconds: 949
+      })
+      .mockResolvedValueOnce({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 1_950.75,
+        pointsResetInSeconds: 900
+      });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: store(),
+      warcraftLogs: {
+        getRateLimit,
+        getFirstKillReports: vi.fn(async () => ({
+          kind: "evidence" as const,
+          kills: [],
+          wipes: [],
+          tierBests: []
+        }))
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500,
+      logger: { info: (value) => infos.push(value) }
+    });
+
+    await handler.execute(run.id);
+
+    expect(infos.at(-1)).toMatchObject({
+      pointsLimitPerHour: 18_000,
+      pointsRemainingBefore: 16_999.75,
+      pointsSpentByRun: 950.5,
+      pointsRemainingAfter: 16_049.25
+    });
+  });
   describe("evidence_job record", () => {
     // Fixtures local to this describe block: the brief's tests exercise
     // runIds ("run-1".."run-4") that the module-level `run`/`store()` fixture
@@ -469,6 +901,7 @@ describe("applicant evidence job handler", () => {
         },
         async publish() {},
         async fail() {},
+        async recordLimitation() {},
         async collectedTierZones() {
           return [];
         },
@@ -483,6 +916,7 @@ describe("applicant evidence job handler", () => {
       return {
         evidence: evidenceStore(),
         warcraftLogs: {
+          ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
             tierBests: [],
@@ -492,7 +926,8 @@ describe("applicant evidence job handler", () => {
         },
         requestCap: 500,
         parseRequestCap: 8,
-        parseCapRetryMs: 1_800_000
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500
       };
     }
 
@@ -537,6 +972,7 @@ describe("applicant evidence job handler", () => {
       const handler = createApplicantEvidenceJobHandler({
         ...baseOptions(),
         warcraftLogs: {
+          ...openGate,
           getFirstKillReports: async () => ({
             kind: "limitation" as const,
             code: "rate_limited" as const
@@ -583,6 +1019,7 @@ describe("applicant evidence job handler", () => {
       const handler = createApplicantEvidenceJobHandler({
         ...baseOptions(),
         warcraftLogs: {
+          ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
             tierBests: [],
@@ -679,6 +1116,7 @@ describe("applicant evidence job handler", () => {
           })
         }),
         createWarcraftLogsGateway: () => ({
+          ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
             tierBests: [],

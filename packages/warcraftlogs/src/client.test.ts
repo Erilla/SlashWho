@@ -375,6 +375,61 @@ describe("Warcraft Logs gateway", () => {
     await client.resolveCharacter(key);
     expect(tokens).toBe(1);
   });
+  it("reads the hourly points allowance including a fractional spend", async () => {
+    // Break caught: an integer validator on pointsSpentThisHour would reject the
+    // real 9058.65 as schema drift, and the budget gate would silently fail open.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              rateLimitData: {
+                limitPerHour: 18000,
+                pointsSpentThisHour: 9058.65,
+                pointsResetIn: 949
+              }
+            }
+          })
+    );
+
+    expect(await client.getRateLimit()).toEqual({
+      kind: "rate_limit",
+      limitPerHour: 18000,
+      pointsSpentThisHour: 9058.65,
+      pointsResetInSeconds: 949
+    });
+  });
+
+  it("returns a limitation when the rate limit query cannot be read", async () => {
+    // Break caught: throwing here would make the admission gate fail closed on
+    // its own transport errors and stop all evidence collection permanently.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : new Response("upstream-body-marker", { status: 503 })
+    );
+
+    expect(await client.getRateLimit()).toEqual({
+      kind: "limitation",
+      code: "unavailable"
+    });
+  });
+
+  it("reports schema drift when the rate limit response omits its fields", async () => {
+    // Break caught: a missing limitPerHour read as 0 would make every run look
+    // over budget and refuse collection forever.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({ data: { rateLimitData: { pointsResetIn: 949 } } })
+    );
+
+    expect(await client.getRateLimit()).toEqual({
+      kind: "limitation",
+      code: "schema_drift"
+    });
+  });
+
   it("resolves a requested key to Warcraft Logs' canonical public character", async () => {
     // Break caught: an upstream transfer or rename could be attributed to the
     // requested key instead of the canonical public character.

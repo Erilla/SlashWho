@@ -8,6 +8,7 @@ import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
   WarcraftLogsLimitationCode,
+  WarcraftLogsRateLimit,
   WarcraftLogsWipeEvidence
 } from "@slashwho/warcraftlogs";
 
@@ -44,6 +45,14 @@ export type ApplicantEvidenceStore = {
   ): Promise<void>;
   fail(runId: string, code: WarcraftLogsLimitationCode): Promise<void>;
   /**
+   * Records why a still-active run collected nothing. A refusal publishes
+   * nothing, so this is the only way the reason reaches a reader.
+   */
+  recordLimitation(
+    runId: string,
+    code: WarcraftLogsLimitationCode
+  ): Promise<void>;
+  /**
    * Fight URLs whose parses are already stored for this character, so a
    * budget-limited run spends its requests on what is still missing rather
    * than redoing the same reports on every run.
@@ -61,11 +70,14 @@ export type ApplicantEvidenceStore = {
 
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   evidence: ApplicantEvidenceStore;
-  warcraftLogs: Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  warcraftLogs: Pick<
+    WarcraftLogsGateway,
+    "getFirstKillReports" | "getRateLimit"
+  >;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
-  }) => Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">;
   decryptionKey?: Buffer;
   requestCap: number;
   parseRequestCap: number;
@@ -77,6 +89,12 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
    * settles permanently short of the data it knows it did not fetch.
    */
   parseCapRetryMs: number;
+  /**
+   * How many Warcraft Logs points must remain unspent this hour before a run
+   * may start. The gateway reports the allowance; this is the policy applied
+   * to it.
+   */
+  pointsReserve: number;
   now?: () => Date;
   logger?: { info(value: Record<string, unknown>): void };
   monotonic?: () => number;
@@ -120,6 +138,79 @@ function toCharacterMythicKillInput(
   };
 }
 
+// The queue's own ceiling. `requestedRetryDelaySeconds` rejects anything above
+// `retryDelayMax` and the job then falls back to `retryDelay: 1` with backoff,
+// retrying almost immediately into another refusal. `pointsResetIn` reaches
+// 3600, so a long reset costs one extra attempt; by the second refusal the
+// reset is necessarily within this window.
+const MAXIMUM_REFUSAL_RETRY_SECONDS = 1_800;
+
+type PointsBudgetRefusal = Error & {
+  readonly retryable: true;
+  readonly retryAfterMs: number;
+  readonly code: "points_budget_low";
+};
+
+function pointsBudgetRefusal(resetInSeconds: number): PointsBudgetRefusal {
+  // Whole seconds, at least 1 and at most 1800: outside that range
+  // `requestedRetryDelaySeconds` returns null and the delay is discarded.
+  const delaySeconds = Math.min(
+    Math.max(Math.ceil(resetInSeconds), 1),
+    MAXIMUM_REFUSAL_RETRY_SECONDS
+  );
+  return Object.assign(new Error("evidence_points_budget_low"), {
+    retryable: true as const,
+    retryAfterMs: delaySeconds * 1_000,
+    code: "points_budget_low" as const
+  });
+}
+
+/**
+ * The final attempt asks for no retry: there is none left to schedule, and a
+ * retryable error would send the queue to `updateActiveRetryDelay`, whose
+ * `AND state = 'active'` matches no row once the job is failing. That throws,
+ * replacing this refusal and losing the cause from the logs.
+ */
+function terminalPointsBudgetRefusal(): Error & {
+  readonly code: "points_budget_low";
+} {
+  return Object.assign(new Error("evidence_points_budget_low"), {
+    code: "points_budget_low" as const
+  });
+}
+
+function isPointsBudgetRefusal(error: unknown): error is PointsBudgetRefusal {
+  return (
+    error instanceof Error &&
+    (error as Partial<PointsBudgetRefusal>).code === "points_budget_low"
+  );
+}
+
+function remainingPoints(budget: WarcraftLogsRateLimit): number {
+  return budget.limitPerHour - budget.pointsSpentThisHour;
+}
+
+/**
+ * The configured reserve is sized for the worker's own allowance, but a run may
+ * carry a visitor's credentials, and their account's limit is its own -- 3600
+ * by default against the worker's 18000. Applied flat, a 1500 reserve fences
+ * off 42% of a visitor's budget and refuses runs their account could afford.
+ * Capping it at a share of the *reported* allowance keeps the intent -- leave
+ * room for roughly one more run -- at any account size, and can only lower the
+ * configured value, never raise it.
+ */
+const MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE = 0.1;
+
+function effectiveReserve(
+  budget: WarcraftLogsRateLimit,
+  configured: number
+): number {
+  return Math.min(
+    configured,
+    budget.limitPerHour * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
+  );
+}
+
 /**
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
@@ -158,6 +249,10 @@ export function createApplicantEvidenceJobHandler(
         parseLimitationCode: null,
         killCount: 0,
         requestCapUsed: options.requestCap,
+        pointsLimitPerHour: null,
+        pointsRemainingBefore: null,
+        pointsSpentByRun: null,
+        pointsRemainingAfter: null,
         durationMs: 0
       };
 
@@ -189,6 +284,54 @@ export function createApplicantEvidenceJobHandler(
               })
             : options.warcraftLogs;
 
+        // Read from `gateway`, not `options.warcraftLogs`: a run carrying a
+        // visitor's own credentials spends *their* allowance, and the worker's
+        // shared allowance says nothing about it.
+        //
+        // A limitation here does not refuse the run. We are no worse off than
+        // before this gate existed, and a gate that fails closed on its own
+        // transport errors could stop all collection permanently.
+        const budgetBefore = await gateway.getRateLimit(activeContext.signal);
+        const openingBudget =
+          budgetBefore.kind === "rate_limit" ? budgetBefore : null;
+        if (openingBudget) {
+          record.pointsLimitPerHour = openingBudget.limitPerHour;
+          record.pointsRemainingBefore = remainingPoints(openingBudget);
+          // A reserve of 0 is off, not "refuse once nothing remains": spend
+          // overruns the limit (9058.65 against 9000 was observed), so the
+          // remaining-points reading goes negative and a bare comparison would
+          // gate hardest exactly when it was asked to stop.
+          if (
+            options.pointsReserve > 0 &&
+            remainingPoints(openingBudget) <
+              effectiveReserve(openingBudget, options.pointsReserve)
+          ) {
+            // The run stays claimed and nothing is published. Leaving it
+            // unclaimed instead would be a bug: `reserve` counts
+            // ('queued','running','retrying') as active, so the character
+            // would join a run that is never processed and never collect
+            // again. Publishing instead risks the destructive merge of #250.
+            record.outcome = "points_budget_low";
+            record.limitationCode = "points_budget_low";
+            // Nothing is published, so the run row is the only place a reader
+            // can learn why the dossier is waiting rather than collecting.
+            await evidence.recordLimitation(run.id, "points_budget_low");
+            if (activeContext.attempt >= activeContext.maxAttempts) {
+              // The queue is about to give up, and a run abandoned in
+              // `running` is never collected again: `reserve` counts
+              // ('queued','running','retrying') as active with no staleness
+              // cutoff, so it would block every later reservation for this
+              // character. `failed` is in neither that set nor
+              // `loadCompletedEvidence`'s ('complete','partial'), so the
+              // character falls back to its previous evidence and a later
+              // read reserves a fresh run.
+              await evidence.fail(run.id, "points_budget_low");
+              throw terminalPointsBudgetRefusal();
+            }
+            throw pointsBudgetRefusal(openingBudget.pointsResetInSeconds);
+          }
+        }
+
         activeContext.signal.throwIfAborted();
         const hydratedFightUrls = new Set(
           await options.evidence.hydratedFightUrls(run.key)
@@ -212,6 +355,29 @@ export function createApplicantEvidenceJobHandler(
           })
         );
         activeContext.signal.throwIfAborted();
+
+        // What the run actually cost. This is the measurement that replaces the
+        // guessed reserve with evidence, so it is sampled even when the run was
+        // limited. A negative `pointsSpentByRun` means the hourly window reset
+        // mid-run; it is logged as observed rather than clamped away.
+        // Never at the cost of the collection it is measuring. This is an extra
+        // round trip standing between a finished scan and its publish, and the
+        // gateway rethrows the abort reason -- a graceful shutdown landing in
+        // this window would otherwise discard a run that has already spent its
+        // whole request and parse budget.
+        try {
+          const budgetAfter = await gateway.getRateLimit(activeContext.signal);
+          if (budgetAfter.kind === "rate_limit") {
+            record.pointsRemainingAfter = remainingPoints(budgetAfter);
+            if (openingBudget) {
+              record.pointsSpentByRun =
+                budgetAfter.pointsSpentThisHour -
+                openingBudget.pointsSpentThisHour;
+            }
+          }
+        } catch {
+          // Left as null on the record: unmeasured, which is what happened.
+        }
 
         if (response.kind === "limitation") {
           record.outcome = "limitation";
@@ -272,7 +438,9 @@ export function createApplicantEvidenceJobHandler(
       } catch (error) {
         record.outcome = activeContext.signal.aborted
           ? "cancelled"
-          : "unexpected_error";
+          : isPointsBudgetRefusal(error)
+            ? "points_budget_low"
+            : "unexpected_error";
         throw error;
       } finally {
         if (options.logger) {

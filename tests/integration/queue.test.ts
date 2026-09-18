@@ -14,6 +14,7 @@ import { startPostgres } from "./postgres";
 const queueName = "discover-character";
 const maintenanceQueueName = "maintenance-cleanup";
 const fingerprintAdmissionQueueName = "fingerprint-admission";
+const characterEvidenceQueueName = "collect-character-evidence";
 const key: CharacterKey = {
   region: "eu",
   realm: "silvermoon",
@@ -372,6 +373,43 @@ describe("durable discovery queue", () => {
       return job?.state === "retry";
     });
     const [retrying] = await inspector.findJobs(queueName, { id: jobId });
+    expect(retrying!.startAfter.getTime()).toBeGreaterThanOrEqual(
+      failedAt + 4_900
+    );
+  });
+
+  it("schedules an evidence retry no earlier than the requested delay", async () => {
+    // Break caught: workCharacterEvidence ignored retryAfterMs entirely, so a
+    // points-budget refusal retried on the 1-second backoff, straight into
+    // another refusal, and burned every attempt in seconds.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const inspector = new PgBoss(connectionString);
+    cleanup.push(() => inspector.stop({ graceful: false, timeout: 1_000 }));
+    await inspector.start();
+
+    let failedAt = 0;
+    await queue.workCharacterEvidence(async () => {
+      failedAt = Date.now();
+      throw Object.assign(new Error("evidence_points_budget_low"), {
+        retryable: true,
+        retryAfterMs: 5_000
+      });
+    });
+    const jobId = await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000009"
+    );
+
+    await eventually(async () => {
+      const [job] = await inspector.findJobs(characterEvidenceQueueName, {
+        id: jobId
+      });
+      return job?.state === "retry";
+    });
+    const [retrying] = await inspector.findJobs(characterEvidenceQueueName, {
+      id: jobId
+    });
     expect(retrying!.startAfter.getTime()).toBeGreaterThanOrEqual(
       failedAt + 4_900
     );

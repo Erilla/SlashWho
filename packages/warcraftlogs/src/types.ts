@@ -4,6 +4,8 @@ export type WarcraftLogsLimitationCode =
   | "not_found"
   | "private"
   | "rate_limited"
+  /** We declined to start: too little of the hourly allowance was left. */
+  | "points_budget_low"
   | "request_cap"
   | "unavailable"
   | "schema_drift"
@@ -27,6 +29,23 @@ export type WarcraftLogsIdentity = Readonly<{
 
 export type WarcraftLogsIdentityResult =
   WarcraftLogsIdentity | WarcraftLogsLimitation;
+
+/**
+ * The Warcraft Logs hourly points allowance as the API reports it. Normalised
+ * facts only: the reserve threshold that decides what is "too little left" is
+ * policy and lives with the caller.
+ */
+export type WarcraftLogsRateLimit = Readonly<{
+  kind: "rate_limit";
+  limitPerHour: number;
+  /** Fractional upstream; a real observed value is 9058.65. */
+  pointsSpentThisHour: number;
+  /** Upstream calls this `pointsResetIn`. It reaches 3600. */
+  pointsResetInSeconds: number;
+}>;
+
+export type WarcraftLogsRateLimitResult =
+  WarcraftLogsRateLimit | WarcraftLogsLimitation;
 
 export type WarcraftLogsParseMetric =
   | Readonly<{ state: "available"; percentile: number }>
@@ -110,6 +129,7 @@ export interface WarcraftLogsGateway {
     key: CharacterKey,
     signal?: AbortSignal
   ): Promise<WarcraftLogsIdentityResult>;
+  getRateLimit(signal?: AbortSignal): Promise<WarcraftLogsRateLimitResult>;
   getFirstKillReports(
     key: CharacterKey,
     options: Readonly<{

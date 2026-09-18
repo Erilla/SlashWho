@@ -239,6 +239,7 @@ function policyFixture(
       async collectedTierZones() {
         return [];
       },
+      async recordLimitation() {},
       async clearStaleCredentials() {
         return 0;
       }

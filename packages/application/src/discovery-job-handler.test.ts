@@ -424,6 +424,7 @@ function createMemoryRepositories(): Repositories {
       async collectedTierZones() {
         return [];
       },
+      async recordLimitation() {},
       async clearStaleCredentials() {
         return 0;
       }
