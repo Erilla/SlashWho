@@ -168,10 +168,22 @@ resolved. Then validate the resulting `main` deployment in staging.
 
 ### The automated review
 
-Every pull request from a branch in this repository is reviewed automatically
-by the `claude-code-review` workflow, on open and on each push. It posts an
-inline comment on each issue it finds, or a single summary comment when it
-finds none.
+A pull request from a branch in this repository is reviewed automatically by
+the `claude-code-review` workflow when it opens, is reopened, or is marked
+ready for review. It posts an inline comment on each issue it finds, or a
+single summary comment when it finds none.
+
+It deliberately does **not** run again on later pushes. The review costs the
+same on every run whatever the diff size, because the plugin fans out to a
+fixed fleet of agents rather than scaling to the change, so the only way to
+control the bill is to run it less often. A pull request that is already
+open therefore keeps its original review; push a fix and the comment stays
+until you resolve it yourself. Pull requests that touch only markdown or
+`docs/` are skipped entirely.
+
+To get a fresh review after substantial changes, close and reopen the pull
+request, or re-run the workflow job from the Actions tab. Both are deliberate
+acts that cost money, which is the point.
 
 The review is advisory: it never approves the pull request and its job is not
 a required check, so it does not block auto-merge. Treat its comments like any
@@ -182,9 +194,9 @@ because the reply is what tells a later reader the disagreement was considered.
 It reads `CLAUDE.md`, which imports `AGENTS.md`, so repository conventions
 belong in those files rather than in the workflow.
 
-The review runs on Anthropic's API and costs tokens per run. Keep pull requests
-small and avoid pushing a long series of one-line fixes to an open pull
-request, since each push starts a fresh review.
+The review runs on Anthropic's API and is billed per run, so a review that
+never finishes still costs what it used. If the check fails without posting
+anything, read the run log before re-running it.
 
 ## 8. Clean up
 
