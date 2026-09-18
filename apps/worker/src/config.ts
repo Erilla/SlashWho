@@ -312,6 +312,19 @@ export function loadWorkerConfig(
     // EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway (12) and code
     // (24) until 2026-09-17 precisely because nothing forced that review, so
     // this default and the Railway variable were set in the same change.
+    //
+    // That was not enough, and the reason is worth reading before trusting the
+    // numbers above. Within an hour of 5000 landing, the parse cap reverted
+    // from 48 to 24 -- correctly, once #314 fixed properly what the 48 had
+    // worked around -- and the whole sample became a measurement of a
+    // configuration that no longer ran. The same failure this paragraph
+    // describes, one level up. The configuration the sample was taken under is
+    // therefore also asserted, in apps/worker/src/evidence-run-budget.test.ts,
+    // so the next such change fails CI instead of quietly expiring a constant
+    // in another file. #295 stays open for a clean sample post-#331: the runs
+    // above overlapped the repeated-work loop, so they bound a broken run
+    // rather than measuring a healthy one, and post-revert costs top out
+    // nearer 2900.
     // 0 switches the gate off, which is deliberate: an operator who finds it
     // refusing too much needs a lever that is not a code change and a redeploy.
     evidencePointsReserve: integerInRange(
