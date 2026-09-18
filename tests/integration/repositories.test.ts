@@ -1114,6 +1114,48 @@ describe("PostgreSQL repositories", () => {
     await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
   });
 
+  it("forgets marks on a rebuild without discarding the evidence they cover", async () => {
+    // A rebuild must not leave a dossier empty while it waits for the
+    // replacement evidence to arrive.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "rebuildkeeps"
+    } as const;
+    const at = new Date("2026-09-18T12:00:00.000Z");
+    const reserved = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: at,
+      at
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: at,
+      kills: [mythicKill({ raidId: "42" })],
+      wipes: [mythicWipe({ raidId: "42" })]
+    });
+    await repositories.evidence.markTerminalTiers(
+      key,
+      [
+        { raidId: "42", domain: "kills" },
+        { raidId: "42", domain: "parses" }
+      ],
+      at
+    );
+
+    await expect(repositories.evidence.clearTerminalTiers(key)).resolves.toBe(
+      2
+    );
+
+    await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
+    const completed = await repositories.evidence.getCompleted(key);
+    expect(completed?.kills).toHaveLength(1);
+    expect(completed?.wipes).toHaveLength(1);
+  });
+
   it("keeps one character's terminal tiers out of another's", async () => {
     const mine = {
       region: "eu",
