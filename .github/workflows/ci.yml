@@ -5,8 +5,14 @@ on:
   push:
     branches: [main, prod]
 
+# `ci` is a required status check on main. A required check that never reports
+# blocks merging forever, and GitHub cannot tell "skipped by a path filter"
+# apart from "has not run yet" — so this workflow must always trigger and
+# always report. Prose-only pull requests are made cheap by skipping the
+# steps, not by skipping the workflow.
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,55 +24,123 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      # Decides whether this change can affect the build. Anything unrecognised
+      # runs the full suite: the failure mode of running too often is a slow
+      # pull request, and of running too rarely is a broken main.
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "Not a pull request; running the full suite."
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files=$(gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --jq '.[].filename')
+
+          if [ -z "$files" ]; then
+            echo "No files reported; running the full suite."
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          run_full=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              # This file defines the suite below, so a change to it must be
+              # executed rather than taken on trust.
+              .github/workflows/ci.yml) run_full=true ;;
+              *.md | docs/* | LICENSE | .github/ISSUE_TEMPLATE/* | .github/workflows/*) ;;
+              *) run_full=true ;;
+            esac
+            if [ "$run_full" = "true" ]; then break; fi
+          done < <(printf '%s\n' "$files")
+
+          if [ "$run_full" = "true" ]; then
+            echo "Code changed; running the full suite."
+          else
+            echo "Only prose and non-CI workflow files changed; skipping the suite."
+            echo "$files" | sed 's/^/  /'
+          fi
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+
       - uses: pnpm/action-setup@v4
+        if: steps.scope.outputs.run_full == 'true'
         with:
           version: 11.20.0
           run_install: false
       - uses: actions/setup-node@v4
+        if: steps.scope.outputs.run_full == 'true'
         with:
           node-version: 22.15.0
           cache: pnpm
       - run: corepack pnpm install --frozen-lockfile
+        if: steps.scope.outputs.run_full == 'true'
       - uses: actions/cache@v4
+        if: steps.scope.outputs.run_full == 'true'
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-1.62.1-chromium
       - run: corepack pnpm playwright install --with-deps chromium
+        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm format:check
+        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm lint
+        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm typecheck
+        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm exec vitest run --project unit apps/web
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit apps/worker
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/application
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/blizzard
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/contracts
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/database
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/domain
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/raiderio
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit packages/warcraftlogs
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm exec vitest run --project unit scripts
+        if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm test:integration
+        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm build
+        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm playwright test tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts
+        if: steps.scope.outputs.run_full == 'true'
       - run: docker build -f Dockerfile.web -t slashwho-web:ci .
+        if: steps.scope.outputs.run_full == 'true'
       - run: docker build -f Dockerfile.worker -t slashwho-worker:ci .
+        if: steps.scope.outputs.run_full == 'true'

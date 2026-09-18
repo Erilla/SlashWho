@@ -146,6 +146,13 @@ gh pr checks --watch
 gh pr view --comments
 ```
 
+`ci` is a required check, so it always runs and always reports. On a pull
+request that changes only markdown, `docs/`, `LICENSE`, issue templates, or a
+workflow other than `ci.yml`, it skips its steps and goes green in well under a
+minute. A fast green `ci` on such a branch means the suite was correctly
+judged irrelevant, not that it ran — so it is no substitute for the local gate
+in step 5. Anything the check cannot classify runs in full.
+
 Fix anything that stands between the pull request and its merge:
 
 - **Failing checks** — fix the cause on the branch and push; do not re-run CI
