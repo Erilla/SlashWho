@@ -106,6 +106,10 @@ WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
 # while its evidence job runs. Must be identical in both services.
 # 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
 EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the web service's value>
+# A ceiling on the pages of report history one run may scan, not the value a
+# run receives: the worker scales it to the allowance the run's credentials
+# report, and to whose credentials they are. At 18000 the effective cap is 300;
+# a visitor's 3600 account gets 18.
 EVIDENCE_REQUEST_CAP=500
 # Per-cycle cap, not a per-guild limit: a sweep that reaches it resumes from a
 # stored cursor on a follow-up cycle until the roster is exhausted. Known
