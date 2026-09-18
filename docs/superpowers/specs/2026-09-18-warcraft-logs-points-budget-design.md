@@ -147,24 +147,53 @@ Two constraints from `queueOptions`:
 
 ### The reserve threshold
 
-`EVIDENCE_POINTS_RESERVE`, a worker config value, defaulting to **1500**
-points.
+`EVIDENCE_POINTS_RESERVE`, a worker config value, defaulting to **5000**
+points. **This is measured, not guessed** — the derivation is below, and a
+reader should be able to tell the two apart without archaeology.
 
-**1500 is a guess and must be labelled as one in the config comment.** It is
-derived only from the observation that ten runs exceeded 9000 points, so the
-average run costs more than 900; 1500 is that floor plus headroom, chosen so a
-run is refused rather than started and abandoned part-way. That floor says nothing about
-the distribution, only the average. The
-logged deltas are what replace the guess with evidence, and the threshold should
-be revisited within a day of the first deployment rather than left to ossify —
-`EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway (12) and code (24)
-until 2026-09-17 precisely because nothing forced that review.
+It began at 1500, a labelled guess derived only from the observation that ten
+runs exceeded 9000 points on 2026-09-17, so the average run costs more than
+900; 1500 was that floor plus headroom, chosen so a run is refused rather than
+started and abandoned part-way. That floor said nothing about the distribution,
+only the average.
 
-That revisit is tracked in #295 rather than left to memory. It could not happen
-on the first deployment's data: the deltas were contaminated by concurrent runs
-(see Admission above) and eleven of the twelve executions were failures (#290),
-whose spend need not resemble a successful run's. The reserve stays at 1500
-until there is a distribution of successful, serial runs to read it from.
+#295 settled it against the logged `pointsSpentByRun` deltas on 2026-09-18,
+in the first window where they mean anything: #296 made runs serial, so a
+before/after delta no longer charges overlapping runs to each other, and #293
+stopped runs failing before they collected. Twenty-two deltas were logged
+between 12:10 and 15:10; three read a character with nothing to fetch and cost
+2, 22 and 31 points. The other nineteen collected:
+
+| min | p25  | median | p75  | p90  | max  |
+| --- | ---- | ------ | ---- | ---- | ---- |
+| 862 | 1392 | 1609   | 2216 | 3627 | 4775 |
+
+Three things follow.
+
+**The old reserve was below the median.** Twelve of the nineteen cost more than
+1500, so admission was approving runs that could not finish more often than it
+was not — the exact failure the reserve exists to prevent. The suspicion
+recorded in #291 is confirmed. 5000 covers the measured maximum.
+
+**The spread is structural.** Spend tracks request volume at a steady 15–20
+points each, and the history scan varies from 32 to 190 requests with how much
+history a character has. A 5x range between characters is the normal case, not
+noise, which is why a threshold has to be read off the tail rather than the
+average.
+
+**The share cap had become the real threshold.** `effectiveReserve` clips the
+configured value to a share of the account's reported allowance; at 0.1 of the
+worker's 18000 that was 1800, so any configured value above 1800 was inert.
+The share moves to **0.3** in the same change, so 5000 reaches the gate intact
+and a visitor's 3600 account keeps a 1080 reserve — about the least a
+collection can cost.
+
+Two caveats for whoever reads this next. Every collection in the sample was
+truncated by `parse_request_cap`, so these are capped costs and an uncapped run
+costs at least this much. And the code default and the Railway variable were
+set together, because `EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway
+(12) and code (24) until 2026-09-17 precisely because nothing forced that
+second look.
 
 ### Limitation code
 

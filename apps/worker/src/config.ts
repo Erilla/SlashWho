@@ -266,21 +266,44 @@ export function loadWorkerConfig(
     // How much of the Warcraft Logs hourly allowance must remain before a run
     // is allowed to start.
     //
-    // 1500 IS A GUESS. It is derived only from ten runs exceeding 9000 points
-    // on 2026-09-17, so the average run costs more than 900; 1500 is that
-    // floor plus headroom, picked so a run is refused rather than started and
-    // abandoned part-way. The average says nothing about the distribution.
-    // The `pointsSpentByRun` deltas the evidence job now logs are what replace
-    // this guess with evidence -- revisit this within a day of the first
-    // deployment. EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway (12)
-    // and code (24) until 2026-09-17 precisely because nothing forced that
-    // review.
-    // 0 switches the gate off, which is deliberate: the value above is a guess,
-    // and an operator who finds it refusing too much needs a lever that is not
-    // a code change and a redeploy.
+    // 5000 IS MEASURED, not guessed (#295). It replaces an earlier 1500, which
+    // was inferred from ten runs exceeding 9000 points in total on 2026-09-17
+    // -- an average above 900 and nothing about the spread.
+    //
+    // The measurement: 22 `pointsSpentByRun` deltas logged between 12:10 and
+    // 15:10 on 2026-09-18, the first window in which they mean anything, since
+    // #296 made runs serial and #293 stopped them failing before they collected
+    // (a before/after delta charges overlapping runs to each other). Nineteen
+    // of the 22 collected something; the other three read a character with
+    // nothing to fetch and cost 2, 22 and 31 points.
+    //
+    // Across those nineteen: min 862, p25 1392, median 1609, p75 2216,
+    // p90 3627, max 4775. Twelve of them cost more than the old 1500 reserve,
+    // so admission was approving runs that could not finish more often than
+    // not -- the exact failure the reserve exists to prevent. 5000 covers the
+    // measured maximum.
+    //
+    // The spread is structural rather than noise: spend tracks request volume
+    // at a steady 15-20 points each, and the history scan varies from 32 to 190
+    // requests with how much history a character has. Expect a 5x range between
+    // characters, not a tight cluster around the median.
+    //
+    // Two caveats a later reader should keep. Every collection in the sample
+    // was truncated by `parse_request_cap`, so these are capped costs and an
+    // uncapped run costs at least this much. And a configured value only
+    // reaches the run through `effectiveReserve`, which caps it at a share of
+    // the account's reported allowance -- see MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
+    // in applicant-evidence-job-handler.ts, raised to 0.3 alongside this so
+    // 5000 is not silently clipped to 1800.
+    //
+    // EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway (12) and code
+    // (24) until 2026-09-17 precisely because nothing forced that review, so
+    // this default and the Railway variable were set in the same change.
+    // 0 switches the gate off, which is deliberate: an operator who finds it
+    // refusing too much needs a lever that is not a code change and a redeploy.
     evidencePointsReserve: integerInRange(
       environment.EVIDENCE_POINTS_RESERVE,
-      1_500,
+      5_000,
       0,
       Number.MAX_SAFE_INTEGER,
       "invalid_evidence_points_reserve"
