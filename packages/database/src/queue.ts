@@ -411,7 +411,25 @@ export function createDiscoveryQueue(
         {
           pollingIntervalSeconds: 0.5,
           includeMetadata: true,
-          localConcurrency: 3
+          // One run at a time, deliberately. The binding constraint on evidence
+          // collection is the hourly Warcraft Logs points allowance, not worker
+          // slots: parallel runs do not collect more per hour, they reach the
+          // ceiling sooner. On 2026-09-18 three runs at this setting spent the
+          // whole 18000-point allowance in eight minutes and produced the same
+          // failures faster, not more coverage.
+          //
+          // Serial execution is also what makes the two points measurements
+          // mean anything. The #283 admission check reads the remaining
+          // allowance and then acts on it, so it is only sound when no other
+          // run can spend between the read and the act; and `pointsSpentByRun`
+          // is a before/after delta, so overlapping runs charge their spend to
+          // each other.
+          //
+          // This is per worker instance. One instance runs today, so this is
+          // sufficient. Scaling horizontally would reintroduce the race across
+          // instances, and that -- not now -- is when a shared reservation
+          // stops being premature.
+          localConcurrency: 1
         },
         async ([job]) => {
           if (!job) return;

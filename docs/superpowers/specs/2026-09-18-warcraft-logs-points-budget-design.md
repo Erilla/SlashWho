@@ -93,6 +93,28 @@ A failed `getRateLimit` does **not** refuse the run. We are no worse off than
 today, and a gate that fails closed on its own transport errors would be able
 to stop all collection permanently.
 
+**This is check-then-act, and it is only sound while runs are serial.** The
+design assumed serial execution on the grounds that pg-boss `batchSize`
+defaults to 1 and the worker awaits its handler. That was wrong: the evidence
+queue also set `localConcurrency: 3`, so one worker ran three handlers at once.
+#291 recorded the consequence — on 2026-09-18 three runs started within a
+second, each read a near-full allowance before any had spent anything, all
+three were admitted, and between them they spent the full 18000-point
+allowance in eight minutes. The gate refused exactly one run, after most of
+the allowance was gone.
+
+The same overlap made the delta measurement unattributable: `pointsSpentByRun`
+is a before/after difference, so concurrent runs charge their spend to each
+other. Twelve deltas from that window summed to roughly 33,000 against an
+18,000 allowance.
+
+`localConcurrency` is now 1, which restores the assumption rather than
+replacing the mechanism. Note that it is **per worker instance** — one instance
+runs today, so this is sufficient, but horizontal scaling would reintroduce the
+race across instances. A shared reservation is the answer at that point, and
+not before: reserving requires predicting a run's cost, and Warcraft Logs holds
+the truth about per-query cost.
+
 ### Refusing a run
 
 A refused run throws a retryable error carrying `retryAfterMs`. This reuses
@@ -137,6 +159,12 @@ logged deltas are what replace the guess with evidence, and the threshold should
 be revisited within a day of the first deployment rather than left to ossify —
 `EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway (12) and code (24)
 until 2026-09-17 precisely because nothing forced that review.
+
+That revisit is tracked in #295 rather than left to memory. It could not happen
+on the first deployment's data: the deltas were contaminated by concurrent runs
+(see Admission above) and eleven of the twelve executions were failures (#290),
+whose spend need not resemble a successful run's. The reserve stays at 1500
+until there is a distribution of successful, serial runs to read it from.
 
 ### Limitation code
 
