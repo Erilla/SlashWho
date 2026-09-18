@@ -1951,6 +1951,249 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  describe("abandoned evidence runs", () => {
+    // What recovery reads and writes. A run whose worker dies between `claim`
+    // and `publish`/`fail` stays active forever, and `reserve` then joins
+    // every later read to a run that is running nowhere.
+    async function reserveRun(key: CharacterKey, at: Date): Promise<string> {
+      const reservation = await repositories.evidence.reserve({
+        key,
+        freshnessCutoff: at,
+        at
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("evidence_not_reserved");
+      }
+      return reservation.run.id;
+    }
+
+    it("lists an active run with the job id and claim time recovery needs", async () => {
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.markEnqueued(runId, "job-1");
+      await repositories.evidence.claim(runId, 1);
+
+      const active = await repositories.evidence.listActive(25);
+
+      expect(active).toHaveLength(1);
+      expect(active[0]).toMatchObject({ runId, queueJobId: "job-1" });
+      expect(active[0]?.startedAt).toBeInstanceOf(Date);
+      expect(active[0]?.createdAt).toBeInstanceOf(Date);
+    });
+
+    it("lists a reserved run that has not been enqueued yet, with no job id", async () => {
+      // The run recovery must never ask the queue about: `reserve` inserts the
+      // row before `enqueue` returns an id.
+      const runId = await reserveRun(rootKey, new Date("2026-09-18T13:25:00.000Z"));
+
+      const active = await repositories.evidence.listActive(25);
+
+      expect(active).toEqual([
+        expect.objectContaining({ runId, queueJobId: null, startedAt: null })
+      ]);
+    });
+
+    it("omits a run that has already settled", async () => {
+      const runId = await reserveRun(rootKey, new Date("2026-09-18T13:25:00.000Z"));
+      await repositories.evidence.fail(runId, "collection_failed");
+
+      await expect(repositories.evidence.listActive(25)).resolves.toEqual([]);
+    });
+
+    it("returns the oldest active runs first, up to the limit", async () => {
+      const rootRunId = await reserveRun(
+        rootKey,
+        new Date("2026-09-18T13:00:00.000Z")
+      );
+      await reserveRun(altKey, new Date("2026-09-18T13:10:00.000Z"));
+
+      const limited = await repositories.evidence.listActive(1);
+
+      expect(limited).toEqual([
+        expect.objectContaining({ runId: rootRunId })
+      ]);
+    });
+
+    it("releases an abandoned run so the character can be collected again", async () => {
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.claim(runId, 1);
+
+      const released = await repositories.evidence.releaseAbandoned([runId]);
+
+      expect(released).toBe(1);
+      const run = await repositories.evidence.find(runId);
+      expect(run).toMatchObject({ status: "failed", errorCode: "abandoned" });
+      expect(run?.completedAt).not.toBeNull();
+      // `failed` is in neither the active set nor `loadCompletedEvidence`, so
+      // the next read reserves a fresh run rather than joining a dead one.
+      await expect(repositories.evidence.listActive(25)).resolves.toEqual([]);
+      const next = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-09-18T13:30:00.000Z"),
+        at: new Date("2026-09-18T13:30:00.000Z")
+      });
+      expect(next.kind).toBe("reserved");
+    });
+
+    it("clears the credentials of a run it releases", async () => {
+      // `publish` and `fail` clear these on every normal path; a released run
+      // must not leave a visitor's ciphertext behind either.
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const reservation = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: at,
+        at,
+        credentials: {
+          wclClientIdEncrypted: "cipher-id",
+          wclClientSecretEncrypted: "cipher-secret"
+        }
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("evidence_not_reserved");
+      }
+
+      await repositories.evidence.releaseAbandoned([reservation.run.id]);
+
+      const run = await repositories.evidence.find(reservation.run.id);
+      expect(run?.wclClientIdEncrypted ?? null).toBeNull();
+      expect(run?.wclClientSecretEncrypted ?? null).toBeNull();
+    });
+
+    it("leaves a run that settled between the read and the write", async () => {
+      // Break caught: releasing unconditionally would overwrite a publication
+      // that landed while the sweep was deciding, losing collected evidence.
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.claim(runId, 1);
+      await repositories.evidence.publish(runId, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: at
+      });
+
+      const released = await repositories.evidence.releaseAbandoned([runId]);
+
+      expect(released).toBe(0);
+      await expect(repositories.evidence.find(runId)).resolves.toMatchObject({
+        status: "complete"
+      });
+    });
+
+    it("releases nothing when asked for nothing", async () => {
+      await expect(repositories.evidence.releaseAbandoned([])).resolves.toBe(0);
+    });
+
+    it("rejects a scan limit outside the bounds it can serve", async () => {
+      // The sweep's limit is configuration, and a value this rejects but the
+      // caller accepts would throw on every tick rather than at boot.
+      await expect(repositories.evidence.listActive(0)).rejects.toThrow(
+        "character_evidence_active_limit_out_of_range"
+      );
+      await expect(repositories.evidence.listActive(1_001)).rejects.toThrow(
+        "character_evidence_active_limit_out_of_range"
+      );
+    });
+
+    it("drops the staged collection of a run it releases", async () => {
+      // A run abandoned after `stageCollection` and before `publish` holds a
+      // scan that has already been paid for upstream. Releasing it discards
+      // that scan: the stage belongs to an attempt nothing will republish, so
+      // the cleanup removes it and the replacement run collects again. The
+      // cost is a repeated Warcraft Logs scan, not a leak.
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.claim(runId, 1);
+      await repositories.evidence.stageCollection(runId, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: at.toISOString()
+      });
+
+      await repositories.evidence.releaseAbandoned([runId]);
+
+      await expect(
+        repositories.evidence.clearSettledCollectionStages()
+      ).resolves.toBe(1);
+      await expect(
+        repositories.evidence.stagedCollection(runId)
+      ).resolves.toBeNull();
+    });
+
+    it("returns a character to the resume sweep when its previous run left a deadline", async () => {
+      // The two halves meeting: while the run sat abandoned, `listResumable`
+      // excluded this character through its active guard, so the sweep that
+      // exists to drive waiting runs was the one thing that could not reach
+      // it. Releasing the run is what puts it back in the sweep's population.
+      const publishedAt = new Date("2026-09-18T12:14:00.000Z");
+      const first = await reserveRun(rootKey, publishedAt);
+      await repositories.evidence.publish(first, {
+        state: "partial",
+        limitationCode: "parse_request_cap",
+        parseLimitationCode: null,
+        retryAfterAt: new Date("2026-09-18T12:40:00.000Z"),
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: publishedAt
+      });
+      const at = new Date("2026-09-18T13:08:00.000Z");
+      const abandoned = await reserveRun(rootKey, at);
+      await repositories.evidence.claim(abandoned, 1);
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([]);
+
+      await repositories.evidence.releaseAbandoned([abandoned]);
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([rootKey]);
+    });
+
+    it("leaves a released character to the next reader when its previous run is settled", async () => {
+      // The limit of what recovery claims. A previous run that finished
+      // cleanly carries no deadline, so nothing schedules this character: it
+      // is unblocked, not back in circulation, and a dossier read is what
+      // starts it collecting again.
+      const publishedAt = new Date("2026-09-18T12:14:00.000Z");
+      const first = await reserveRun(rootKey, publishedAt);
+      await repositories.evidence.publish(first, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: publishedAt
+      });
+      const at = new Date("2026-09-18T13:08:00.000Z");
+      const abandoned = await reserveRun(rootKey, at);
+      await repositories.evidence.claim(abandoned, 1);
+
+      await repositories.evidence.releaseAbandoned([abandoned]);
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([]);
+      const next = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: at,
+        at
+      });
+      expect(next.kind).toBe("reserved");
+    });
+  });
+
   describe("manual dossier connections", () => {
     const pendingKey = {
       region: "eu",

@@ -544,7 +544,33 @@ export interface EvidenceRepository {
     settled: Date;
     active: Date;
   }): Promise<number>;
+  /**
+   * Every run `reserve` currently counts as active, oldest first, with the two
+   * facts recovery judges them by: the job they were sent to, and when a
+   * worker claimed them. A null `queueJobId` is a run reserved but not yet
+   * enqueued -- possibly milliseconds old, because `reserve` inserts the row
+   * before `enqueue` returns an id.
+   */
+  listActive(limit: number): Promise<readonly ActiveEvidenceRunRow[]>;
+  /**
+   * Settles runs nothing is working on any more as `failed` with the code
+   * `abandoned`, clearing their credentials as `fail` would. Returns how many
+   * rows it actually changed.
+   *
+   * Guarded on the active statuses, so a run that published or failed between
+   * the sweep's read and this write keeps its outcome: recovery must never
+   * overwrite a publication that landed while it was deciding.
+   */
+  releaseAbandoned(runIds: readonly string[]): Promise<number>;
 }
+
+/** One active evidence run, as recovery reads it. */
+export type ActiveEvidenceRunRow = Readonly<{
+  runId: string;
+  queueJobId: string | null;
+  startedAt: Date | null;
+  createdAt: Date;
+}>;
 
 export type FingerprintAdmission =
   | { kind: "not_due" }

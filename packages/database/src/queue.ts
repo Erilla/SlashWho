@@ -83,6 +83,15 @@ export interface DiscoveryQueue {
    * waiting character would sit for up to an extra hour.
    */
   scheduleEvidenceResume(handler: () => Promise<void>): Promise<void>;
+  /**
+   * The subset of `jobIds` whose evidence job can no longer run: completed,
+   * cancelled, failed, or archived out of the job table altogether. A run row
+   * still active behind one of these is a run nothing is working on, which is
+   * the only way to tell a killed worker's run from one that is simply slow.
+   */
+  settledEvidenceJobIds(
+    jobIds: readonly string[]
+  ): Promise<readonly string[]>;
   stop(options: {
     graceful: boolean;
     timeoutMs: number;
@@ -100,6 +109,9 @@ export interface DiscoveryQueue {
 export type CreateDiscoveryQueueOptions = {
   connectionString: string;
 };
+
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const queueOptions = {
   retryLimit: 4,
@@ -562,6 +574,32 @@ export function createDiscoveryQueue(
         }
       );
       evidenceResumeRegistered = true;
+    },
+
+    async settledEvidenceJobIds(jobIds) {
+      if (!ready) throw new Error("discovery_queue_not_ready");
+      // A non-uuid id would fail the cast and take the whole sweep down with
+      // it, so it is left out and answers to the recovery time cutoff instead.
+      const candidates = jobIds.filter((id) => uuidPattern.test(id));
+      if (candidates.length === 0) return [];
+      // The enum ordering (created < retry < active < completed < cancelled <
+      // failed) is the same test the queue's own policy migration uses, and
+      // `name` narrows the scan to this queue's rows. An id with no row at all
+      // -- deleted once its retention elapsed -- is absent from `runnable` and
+      // so counts as settled, which is what it is. pg-boss's own expiry path
+      // deletes and reinserts a timed-out job under the same id, so a run's
+      // recorded job id still matches across every retry.
+      const result = await boss.getDb().executeSql(
+        `SELECT id::text AS id FROM pgboss.job
+         WHERE name = $1 AND id = ANY($2::uuid[]) AND state < 'completed'`,
+        [collectCharacterEvidenceQueueName, candidates]
+      );
+      const runnable = new Set(
+        result.rows
+          .map((row) => (row as { id?: unknown }).id)
+          .filter((id): id is string => typeof id === "string")
+      );
+      return candidates.filter((id) => !runnable.has(id));
     },
 
     async stop({ graceful, timeoutMs, abortGraceMs }) {

@@ -15,6 +15,13 @@ export type {
   ResumeEvidenceQueue,
   ResumeWaitingEvidenceOptions
 } from "./resume-waiting-evidence";
+export { recoverAbandonedEvidenceRuns } from "./recover-abandoned-evidence-runs";
+export type {
+  AbandonableEvidenceStore,
+  AbandonedEvidenceQueue,
+  ActiveEvidenceRun,
+  RecoverAbandonedEvidenceRunsOptions
+} from "./recover-abandoned-evidence-runs";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export { refreshCharacter } from "./refresh-character";
 export type { RefreshCharacterResult } from "./refresh-character";

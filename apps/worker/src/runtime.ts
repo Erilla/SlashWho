@@ -3,6 +3,7 @@ import {
   cleanupExpired,
   createDiscoveryJobHandler,
   recoverPendingSearches,
+  recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
@@ -44,6 +45,40 @@ const STALE_EVIDENCE_CREDENTIAL_RETENTION_MS = 60 * 60_000;
  * account and spends the wrong allowance on a visitor's dossier.
  */
 const STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS = 6 * 60 * 60_000;
+/**
+ * The far backstop: a run older than this is released whatever the queue says
+ * about it, so it has to clear the longest life a *healthy* run can have. The
+ * evidence queue allows five attempts, each able to occupy its full
+ * 1800-second expiry and to wait up to another 1800 seconds before the next,
+ * and `started_at` is stamped on the first claim and never advanced -- so a
+ * run working normally through a points-budget deferral chain can measure
+ * close to five hours old. Eight hours leaves three hours of margin.
+ *
+ * Almost nothing reaches this. A run that was enqueued is judged by whether
+ * its job can still run, and one that was never touched by the orphan cutoff
+ * below.
+ */
+const ABANDONED_EVIDENCE_RUN_RETENTION_MS = 8 * 60 * 60_000;
+/**
+ * How long a run nothing has ever touched -- no job id, never claimed -- may
+ * stay active before recovery releases it. `reserve` inserts the row and
+ * `markEnqueued` follows within milliseconds, so a run still in that gap after
+ * fifteen minutes is orphaned with near-certainty: its reserving process died
+ * before `enqueue` returned.
+ *
+ * Such a run cannot be deferred and cannot be mid-collection, so the long
+ * backstop above buys nothing here and costs a character most of a working
+ * day. The margin is against clock skew and a pathologically slow enqueue, not
+ * against a deferral chain.
+ */
+const ORPHANED_EVIDENCE_RESERVATION_MS = 15 * 60_000;
+/**
+ * How many active runs one tick inspects. Deliberately not
+ * `evidenceResumeSweepLimit`: that bounds reserve-and-enqueue work, while this
+ * bounds two cheap reads, and sharing it would let a backlog of legitimately
+ * queued characters hide an abandoned run behind them indefinitely.
+ */
+const ABANDONED_EVIDENCE_SCAN_LIMIT = 200;
 
 type RuntimePool = {
   query(text: string): Promise<unknown>;
@@ -499,6 +534,38 @@ export async function createWorkerRuntime(
     // at a time and the points gate still refuses a run it cannot afford, so
     // this cannot spend more per hour than a reader already could.
     await initializedQueue.scheduleEvidenceResume(async () => {
+      // Recovery runs first, and shares this five-minute schedule rather than
+      // the hourly cleanup, because an abandoned run is precisely what hides a
+      // character from the pass below: `reserve` counts it as active, so the
+      // resume sweep skips that character as already in hand. Releasing first
+      // means one whose previous evidence is due can resume on this same tick
+      // instead of waiting for the next one.
+      //
+      // Guarded, and not merely for tidiness: an unguarded throw here would
+      // skip the resume pass below on every tick, and the resume queue's
+      // `retryLimit` is 1, so the only symptom would be a log line that
+      // stopped appearing while no character was ever resumed again.
+      let released = 0;
+      try {
+        released = await recoverAbandonedEvidenceRuns(
+          repositories.evidence,
+          initializedQueue,
+          {
+            startedBefore: new Date(
+              Date.now() - ABANDONED_EVIDENCE_RUN_RETENTION_MS
+            ),
+            reservedBefore: new Date(
+              Date.now() - ORPHANED_EVIDENCE_RESERVATION_MS
+            ),
+            limit: ABANDONED_EVIDENCE_SCAN_LIMIT
+          }
+        );
+      } catch (error) {
+        logger?.info({
+          event: "evidence_recovery_failed",
+          failure: error instanceof Error ? error.name : "unknown"
+        });
+      }
       const resumed = await resumeWaitingEvidence(
         repositories.evidence,
         initializedQueue,
@@ -510,10 +577,10 @@ export async function createWorkerRuntime(
           ...(logger ? { logger } : {})
         }
       );
-      // A count only, never a character key: this says whether the sweep is
+      // Counts only, never a character key: this says whether the sweep is
       // doing anything, which is the thing that was impossible to tell before
       // it existed.
-      logger?.info({ event: "evidence_resume_sweep", resumed });
+      logger?.info({ event: "evidence_resume_sweep", resumed, released });
     });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);

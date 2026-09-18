@@ -262,6 +262,12 @@ function policyFixture(
         return 0;
       },
       async recordLimitation() {},
+      async listActive() {
+        return [];
+      },
+      async releaseAbandoned() {
+        return 0;
+      },
       async clearStaleCredentials() {
         return 0;
       }

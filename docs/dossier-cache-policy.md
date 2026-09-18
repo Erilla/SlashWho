@@ -100,6 +100,84 @@ was true before the sweep existed. Widening the population to cover it would
 also make a `not_found` character retry forever, so it needs the limitation
 classification above to be consulted there too.
 
+## Recovering a run nothing is working on
+
+A run whose worker dies between `claim` and its publication stays `running`
+for ever. `reserve` counts `(queued, running, retrying)` as active with no
+staleness cutoff, so every later dossier read joins a run that is running
+nowhere, the resume sweep skips the character as already in hand, and it never
+collects again. An orderly shutdown records an outcome; a hard kill, an OOM, a
+container pulled by the platform or a database failure mid-publish cannot.
+
+The same five-minute sweep therefore releases abandoned runs before it resumes
+waiting ones — first, so a character freed on a tick can resume on that same
+tick. A run is abandoned when either holds:
+
+- **Its queue job can no longer run.** Completed, cancelled, failed, or
+  deleted from pg-boss altogether: whatever the run row says, nothing is going
+  to pick that job up. This is the arm that fires in practice.
+- **Nothing has ever touched it and it is older than fifteen minutes.** No
+  job id and no claim means `reserve` created the row and the process died
+  before `enqueue` returned. `markEnqueued` normally follows within
+  milliseconds, so a run still in that gap after fifteen minutes is orphaned
+  with near-certainty — and it cannot be deferred or mid-collection, so there
+  is nothing to wait out.
+- **It is older than eight hours**, measured from `started_at` where a worker
+  claimed it and `created_at` where none did. The far backstop, for anything
+  pathological that slips past both arms above.
+
+**This is recovery in hours, not minutes, and deliberately so.** When a worker
+is killed, pg-boss does not fail its job — it expires the `active` job after
+`expireInSeconds` (1800) and moves it to `retry` while retries remain, and
+each of those redeliveries genuinely re-claims and re-collects the run. With
+`retryLimit` 4 that chain can run five times before the job reaches `failed`.
+Until then the run is not abandoned at all, and releasing it would buy a
+duplicate Warcraft Logs collection. The queue arm therefore fires once the
+chain is spent, which is the first moment the run is provably dead. What the
+five-minute cadence buys is that recovery happens promptly *after* that point
+rather than up to an hour later.
+
+Eight hours for the far backstop follows from the same arithmetic. `started_at` is
+stamped on the first claim and never advanced, so a healthy run working
+through a full deferral chain — five attempts, each able to occupy 1800
+seconds and to wait up to another 1800 before the next — can measure close to
+five hours old. Six hours would leave about an hour of margin; eight leaves
+three. Releasing a live run costs a duplicate collection rather than
+corruption, but it is still spend nobody asked for.
+
+A run that has been reserved but not yet enqueued is deliberately exempt from
+the queue arm: `reserve` inserts the row before `enqueue` returns an id, so
+asking the queue about it would find nothing and release a run a reader is
+still starting.
+
+The orphan cutoff is gated on never having been claimed, not merely on having
+no job id, because those are different populations. `markEnqueued` requires
+status `queued`, so a worker that claims the job before the enqueuing process
+records its id leaves a genuinely running run with no job id for its whole
+life. `claim` stamps `started_at`, so that run is excluded from the orphan
+arm and keeps the eight-hour backstop. The claim guard alone would not save
+it: that guard refuses the *next* claim, while the attempt already collecting
+would carry on and discard its entire scan at `publish`.
+
+Released runs become `failed` with the code `abandoned`, which is in neither
+the active set nor `loadCompletedEvidence`. The character falls back to its
+previous evidence immediately. The write is guarded on the active statuses, so
+a publication that lands while the sweep is deciding keeps its outcome.
+
+A released run's staged collection is discarded with it. A run abandoned
+after `stageCollection` but before `publish` holds a scan already paid for
+upstream; the stage belongs to an attempt nothing will republish, so the
+hourly cleanup removes it and the replacement run pays for that scan again.
+Republishing the stage instead would be strictly cheaper and is not done here
+— it is a change to what recovery *is*, from releasing a dead run to
+completing one.
+
+Recovery unblocks a character; it does not by itself put one back in
+circulation. If the previous completed run left a retry deadline, the resume
+pass takes it on the same tick. If that run finished cleanly, or the character
+has no completed run at all, nothing schedules it and a dossier read is what
+starts collection again — the same gap the resume sweep already has.
+
 ## Concluded tiers are stored once
 
 A concluded raid tier cannot change, so its evidence is stored once and never
