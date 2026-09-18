@@ -1137,4 +1137,202 @@ describe("applicant evidence job handler", () => {
       expect(serialized).not.toContain("wclClient");
     });
   });
+  describe("evidence run announcements", () => {
+    function announcingStore(
+      overrides: Partial<ApplicantEvidenceStore> = {}
+    ): ApplicantEvidenceStore {
+      return {
+        async find(id) {
+          return id === run.id ? run : null;
+        },
+        async claim(id) {
+          return { ...run, id };
+        },
+        async publish() {},
+        async fail() {},
+        async recordLimitation() {},
+        async collectedTierZones() {
+          return [];
+        },
+        async hydratedFightUrls() {
+          return [];
+        },
+        ...overrides
+      };
+    }
+
+    function announcingOptions() {
+      return {
+        evidence: announcingStore(),
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async () => ({
+            kind: "evidence" as const,
+            tierBests: [],
+            kills: [],
+            wipes: []
+          })
+        },
+        requestCap: 500,
+        parseRequestCap: 8,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 1_500
+      };
+    }
+
+    function recordingNotifier() {
+      const started: Array<Record<string, unknown>> = [];
+      const finished: Array<Record<string, unknown>> = [];
+      return {
+        started,
+        finished,
+        notifier: {
+          started: (value: Record<string, unknown>) => {
+            started.push(value);
+          },
+          finished: (value: Record<string, unknown>) => {
+            finished.push(value);
+          }
+        }
+      };
+    }
+
+    it("announces the run against the claimed character once it is owned", async () => {
+      // Break caught: announcing before `claim` would post for a run this
+      // worker does not own, and would have no character key to name.
+      const notifier = recordingNotifier();
+      const handler = createApplicantEvidenceJobHandler({
+        ...announcingOptions(),
+        evidenceRunNotifier: notifier.notifier
+      });
+
+      await handler.execute("run-1", {
+        attempt: 2,
+        maxAttempts: 3,
+        signal: new AbortController().signal
+      });
+
+      expect(notifier.started).toEqual([
+        {
+          runId: "run-1",
+          region: "eu",
+          realm: "silvermoon",
+          name: "rinn",
+          attempt: 2
+        }
+      ]);
+    });
+
+    it("announces the outcome the record reports", async () => {
+      // Break caught: the announcement could drift from the logged outcome,
+      // so a watcher sees success while the record says the run was limited.
+      const notifier = recordingNotifier();
+      const handler = createApplicantEvidenceJobHandler({
+        ...announcingOptions(),
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async () => ({
+            kind: "limitation" as const,
+            code: "rate_limited" as const
+          })
+        },
+        evidenceRunNotifier: notifier.notifier
+      });
+
+      await handler.execute("run-2");
+
+      expect(notifier.finished).toHaveLength(1);
+      expect(notifier.finished[0]).toMatchObject({
+        runId: "run-2",
+        region: "eu",
+        realm: "silvermoon",
+        name: "rinn",
+        attempt: 1,
+        outcome: "limitation",
+        limitationCode: "rate_limited",
+        parseLimitationCode: null
+      });
+    });
+
+    it("carries the points the run spent when the allowance was readable", async () => {
+      // Break caught: the whole point of #288's evening case is seeing the
+      // allowance drain, so a run that spent points must say how many.
+      const notifier = recordingNotifier();
+      let call = 0;
+      const handler = createApplicantEvidenceJobHandler({
+        ...announcingOptions(),
+        warcraftLogs: {
+          getRateLimit: async () => ({
+            kind: "rate_limit" as const,
+            limitPerHour: 18_000,
+            pointsSpentThisHour: call++ === 0 ? 1_000 : 3_400,
+            pointsResetInSeconds: 949
+          }),
+          getFirstKillReports: async () => ({
+            kind: "evidence" as const,
+            tierBests: [],
+            kills: [],
+            wipes: []
+          })
+        },
+        evidenceRunNotifier: notifier.notifier
+      });
+
+      await handler.execute("run-3");
+
+      expect(notifier.finished[0]).toMatchObject({
+        outcome: "complete",
+        pointsSpent: 2_400
+      });
+    });
+
+    it("stays silent about a run it never claimed", async () => {
+      // Break caught: a run another worker owns would be announced twice —
+      // once by each worker — and this one has no character key to name.
+      const notifier = recordingNotifier();
+      const handler = createApplicantEvidenceJobHandler({
+        ...announcingOptions(),
+        evidence: announcingStore({ claim: async () => null }),
+        evidenceRunNotifier: notifier.notifier
+      });
+
+      await handler.execute("run-4");
+
+      expect(notifier.started).toEqual([]);
+      expect(notifier.finished).toEqual([]);
+    });
+
+    it("completes the run when the notifier throws", async () => {
+      // Break caught: the seam is public, so a chat outage must not fail or
+      // stall evidence collection. Resilience belongs at the call site.
+      const published: Array<unknown> = [];
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...announcingOptions(),
+        evidence: announcingStore({
+          async publish(_runId, result) {
+            published.push(result);
+          }
+        }),
+        evidenceRunNotifier: {
+          started: () => {
+            throw new Error("webhook down");
+          },
+          finished: () => {
+            throw new Error("webhook down");
+          }
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(handler.execute("run-5")).resolves.toBeUndefined();
+
+      expect(published).toHaveLength(1);
+      expect(
+        records.filter(
+          (entry) => entry.event === "evidence_run_announcement_failed"
+        )
+      ).toHaveLength(2);
+    });
+  });
 });
