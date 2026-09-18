@@ -148,7 +148,10 @@ export function terminalTiersFrom(
 export function killScanFloorFrom(
   terminal: readonly TerminalTier[],
   kills: readonly TerminalTierKill[],
-  wipes: readonly TerminalTierWipe[] = []
+  // Required rather than defaulted: defaulting it to `[]` is the bug this
+  // parameter exists to stop, and it would reappear silently at any call site
+  // that forgot it.
+  wipes: readonly TerminalTierWipe[]
 ): string | undefined {
   const terminalKillRaids = new Set(
     terminal
