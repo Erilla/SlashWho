@@ -2719,7 +2719,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const result = await pool.query<EvidenceRunRow>(
           `UPDATE character_evidence_runs
            SET status = 'running', attempt = $2,
-               started_at = COALESCE(started_at, now()), error_code = NULL
+               started_at = COALESCE(started_at, now()), error_code = NULL,
+               limitation_code = NULL
            WHERE id = $1
              AND attempt < $2
              AND status IN ('queued', 'running', 'retrying')
@@ -3066,16 +3067,39 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows.map(mapEvidenceRun);
       },
 
-      async clearStaleCredentials(cutoff) {
-        if (Number.isNaN(cutoff.valueOf())) {
+      async recordLimitation(runId, code) {
+        if (code.length === 0) {
+          throw new RangeError("character_evidence_limitation_invalid");
+        }
+        await pool.query(
+          `UPDATE character_evidence_runs
+           SET limitation_code = $2
+           WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
+          [runId, code]
+        );
+      },
+
+      async clearStaleCredentials(cutoffs) {
+        if (
+          Number.isNaN(cutoffs.settled.valueOf()) ||
+          Number.isNaN(cutoffs.active.valueOf())
+        ) {
           throw new RangeError("character_evidence_credential_cutoff_invalid");
         }
+        // A run still in the active set keeps its credentials for the longer
+        // window: it may simply be waiting out a points-budget deferral, and a
+        // run stripped mid-flight does not fail -- it quietly spends the
+        // worker's shared allowance instead of the visitor's.
         const result = await pool.query(
           `UPDATE character_evidence_runs
            SET wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
-           WHERE created_at < $1
+           WHERE created_at < CASE
+                   WHEN status IN ('queued', 'running', 'retrying')
+                     THEN $2::timestamptz
+                   ELSE $1::timestamptz
+                 END
              AND (wcl_client_id_encrypted IS NOT NULL OR wcl_client_secret_encrypted IS NOT NULL)`,
-          [cutoff]
+          [cutoffs.settled, cutoffs.active]
         );
         return result.rowCount ?? 0;
       }

@@ -45,6 +45,14 @@ export type ApplicantEvidenceStore = {
   ): Promise<void>;
   fail(runId: string, code: WarcraftLogsLimitationCode): Promise<void>;
   /**
+   * Records why a still-active run collected nothing. A refusal publishes
+   * nothing, so this is the only way the reason reaches a reader.
+   */
+  recordLimitation(
+    runId: string,
+    code: WarcraftLogsLimitationCode
+  ): Promise<void>;
+  /**
    * Fight URLs whose parses are already stored for this character, so a
    * budget-limited run spends its requests on what is still missing rather
    * than redoing the same reports on every run.
@@ -276,6 +284,9 @@ export function createApplicantEvidenceJobHandler(
             // again. Publishing instead risks the destructive merge of #250.
             record.outcome = "points_budget_low";
             record.limitationCode = "points_budget_low";
+            // Nothing is published, so the run row is the only place a reader
+            // can learn why the dossier is waiting rather than collecting.
+            await evidence.recordLimitation(run.id, "points_budget_low");
             if (activeContext.attempt >= activeContext.maxAttempts) {
               // The queue is about to give up, and a run abandoned in
               // `running` is never collected again: `reserve` counts

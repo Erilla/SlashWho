@@ -81,6 +81,8 @@ function fixture(
     evidenceParseLimitationCode?: string | null;
     evidenceCompletedAt?: Date;
     gatheringCharacter?: CharacterKey | null;
+    /** A limitation recorded on the run that is collecting right now. */
+    activeLimitationCode?: string | null;
     /** Fresh stored evidence with a refresh collecting over it right now. */
     refreshingCharacter?: CharacterKey | null;
     onCacheEvent?: (source: string, event: string) => void;
@@ -151,7 +153,7 @@ function fixture(
                 queueJobId: "evidence-job",
                 status: "running",
                 attempt: 1,
-                limitationCode: null,
+                limitationCode: options.activeLimitationCode ?? null,
                 parseLimitationCode: null,
                 errorCode: null,
                 createdAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -1494,6 +1496,29 @@ describe("applicant dossier service", () => {
           "Warcraft Logs collection was deferred because this dossier's hourly " +
           "points allowance is nearly spent. It resumes automatically once the " +
           "allowance resets; shown evidence is partial."
+      })
+    );
+  });
+
+  it("explains a deferral recorded on the run that is still collecting", async () => {
+    // Break caught: limitations were read only from the completed run, and a
+    // points-budget refusal publishes nothing -- so the copy written for a
+    // deferral could never reach a reader, who saw an unexplained "collecting"
+    // state instead for as long as the allowance stayed spent.
+    const { dossiers } = fixture({
+      gatheringCharacter: root,
+      activeLimitationCode: "points_budget_low"
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    const limitation = result.dossier.limitations.find(
+      (item) => item.code === "points_budget_low"
+    );
+    expect(limitation).toEqual(
+      expect.objectContaining({
+        source: "warcraft_logs",
+        code: "points_budget_low"
       })
     );
   });

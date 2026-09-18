@@ -1308,20 +1308,91 @@ describe("PostgreSQL repositories", () => {
     });
     await repositories.evidence.claim(reservation.run.id, 1);
     // Simulate the job never reaching publish()/fail() (a crash, a timeout,
-    // the process being killed) by backdating created_at past the window.
+    // the process being killed) by backdating created_at past the window. An
+    // active run is swept on the longer cutoff, so this must outlive that one.
     await pool.query(
       `UPDATE character_evidence_runs SET created_at = $2 WHERE id = $1`,
-      [reservation.run.id, new Date(Date.now() - 2 * 60 * 60_000)]
+      [reservation.run.id, new Date(Date.now() - 8 * 60 * 60_000)]
     );
 
-    const removed = await repositories.evidence.clearStaleCredentials(
-      new Date(Date.now() - 60 * 60_000)
-    );
+    const removed = await repositories.evidence.clearStaleCredentials({
+      settled: new Date(Date.now() - 60 * 60_000),
+      active: new Date(Date.now() - 6 * 60 * 60_000)
+    });
 
     expect(removed).toBe(1);
     const found = await repositories.evidence.find(reservation.run.id);
     expect(found?.wclClientIdEncrypted).toBeNull();
     expect(found?.wclClientSecretEncrypted).toBeNull();
+  });
+
+  it("keeps credentials on a run that is still waiting to retry", async () => {
+    // Break caught: the sweep had no status filter, so a run deferred by a
+    // points-budget refusal -- up to five attempts of 1800s -- crossed the
+    // one-hour cutoff while still live. Its next attempt found no credentials,
+    // silently fell back to the worker's shared account, and spent the wrong
+    // allowance on a visitor's dossier.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter14"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: {
+        wclClientIdEncrypted: "encrypted-id",
+        wclClientSecretEncrypted: "encrypted-secret"
+      }
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+    await pool.query(
+      `UPDATE character_evidence_runs
+       SET status = 'retrying', created_at = $2
+       WHERE id = $1`,
+      [reservation.run.id, new Date(Date.now() - 2 * 60 * 60_000)]
+    );
+
+    const removed = await repositories.evidence.clearStaleCredentials({
+      settled: new Date(Date.now() - 60 * 60_000),
+      active: new Date(Date.now() - 6 * 60 * 60_000)
+    });
+
+    expect(removed).toBe(0);
+    const found = await repositories.evidence.find(reservation.run.id);
+    expect(found?.wclClientIdEncrypted).toBe("encrypted-id");
+    expect(found?.wclClientSecretEncrypted).toBe("encrypted-secret");
+  });
+
+  it("records a limitation on an active run and clears it on the next claim", async () => {
+    // Break caught: a refusal publishes nothing, so this is the only way a
+    // deferral reaches a reader. Left uncleared it would outlive the attempt
+    // that recorded it and describe a run that is collecting normally.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacter15"
+    } as const;
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date()
+    });
+    await repositories.evidence.claim(reservation.run.id, 1);
+
+    await repositories.evidence.recordLimitation(
+      reservation.run.id,
+      "points_budget_low"
+    );
+    expect(
+      (await repositories.evidence.find(reservation.run.id))?.limitationCode
+    ).toBe("points_budget_low");
+
+    await repositories.evidence.claim(reservation.run.id, 2);
+    expect(
+      (await repositories.evidence.find(reservation.run.id))?.limitationCode
+    ).toBeNull();
   });
 
   it("leaves credentials on runs created after the cutoff untouched", async () => {
@@ -1340,9 +1411,10 @@ describe("PostgreSQL repositories", () => {
       }
     });
 
-    const removed = await repositories.evidence.clearStaleCredentials(
-      new Date(Date.now() - 60 * 60_000)
-    );
+    const removed = await repositories.evidence.clearStaleCredentials({
+      settled: new Date(Date.now() - 60 * 60_000),
+      active: new Date(Date.now() - 6 * 60 * 60_000)
+    });
 
     expect(removed).toBe(0);
     const found = await repositories.evidence.find(reservation.run.id);

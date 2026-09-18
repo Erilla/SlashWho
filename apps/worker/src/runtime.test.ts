@@ -138,8 +138,8 @@ function runtimeFakes() {
     negativeCache: vi.fn(async () => 3),
     suppressions: vi.fn(async () => 4),
     fingerprintRequests: vi.fn(async () => 5),
-    evidence: vi.fn(async (cutoff: Date) => {
-      void cutoff;
+    evidence: vi.fn(async (cutoffs: { settled: Date; active: Date }) => {
+      void cutoffs;
       return 6;
     })
   };
@@ -675,11 +675,17 @@ describe("worker runtime", () => {
     expect(fakes.cleanup.suppressions).toHaveBeenCalledOnce();
     expect(fakes.cleanup.fingerprintRequests).toHaveBeenCalledOnce();
     expect(fakes.cleanup.evidence).toHaveBeenCalledOnce();
-    const [cutoff] = fakes.cleanup.evidence.mock.calls[0] as [Date];
-    expect(cutoff).toBeInstanceOf(Date);
-    const ageMs = Date.now() - cutoff.getTime();
-    expect(ageMs).toBeGreaterThanOrEqual(60 * 60_000 - 5_000);
-    expect(ageMs).toBeLessThan(60 * 60_000 + 5_000);
+    const [cutoffs] = fakes.cleanup.evidence.mock.calls[0]!;
+    const settledAgeMs = Date.now() - cutoffs.settled.getTime();
+    expect(settledAgeMs).toBeGreaterThanOrEqual(60 * 60_000 - 5_000);
+    expect(settledAgeMs).toBeLessThan(60 * 60_000 + 5_000);
+    // Break caught: a run still waiting out a points-budget deferral -- up to
+    // five attempts of 1800 seconds -- would cross a one-hour cutoff while
+    // live, lose its credentials, and silently spend the worker's shared
+    // allowance on a visitor's dossier. The active window must outlive that
+    // chain by a clear margin.
+    const activeAgeMs = Date.now() - cutoffs.active.getTime();
+    expect(activeAgeMs).toBeGreaterThan(5 * 1_800_000);
     await runtime.stop();
   });
 

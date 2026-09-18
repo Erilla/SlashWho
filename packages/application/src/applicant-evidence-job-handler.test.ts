@@ -39,15 +39,18 @@ function store(
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
   }>;
   failed: Array<{ runId: string; code: string }>;
+  noted: Array<{ runId: string; code: string }>;
 } {
   const published: Array<{
     runId: string;
     result: Parameters<ApplicantEvidenceStore["publish"]>[1];
   }> = [];
   const failed: Array<{ runId: string; code: string }> = [];
+  const noted: Array<{ runId: string; code: string }> = [];
   return {
     published,
     failed,
+    noted,
     async find(id) {
       return id === activeRun.id ? activeRun : null;
     },
@@ -59,6 +62,9 @@ function store(
     },
     async fail(runId, code) {
       failed.push({ runId, code });
+    },
+    async recordLimitation(runId, code) {
+      noted.push({ runId, code });
     },
     async collectedTierZones() {
       return [];
@@ -341,6 +347,7 @@ describe("applicant evidence job handler", () => {
       publish: vi.fn().mockResolvedValue(undefined),
       find: vi.fn(),
       fail: vi.fn(),
+      recordLimitation: vi.fn(),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([])
     };
@@ -561,6 +568,38 @@ describe("applicant evidence job handler", () => {
     });
   });
 
+  it("records the refusal on the run so a reader can be told why", async () => {
+    // Break caught: the refusal publishes nothing, so the dossier read only the
+    // completed run and the deferral copy was unreachable. A reader saw an
+    // unexplained "collecting" state for as long as the allowance stayed spent.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: budgetGateway({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 17_500.5,
+        pointsResetInSeconds: 949
+      }),
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+
+    expect(evidence.noted).toEqual([
+      { runId: run.id, code: "points_budget_low" }
+    ]);
+  });
+
   it("fails a run whose refusal exhausts the last attempt", async () => {
     // Break caught: nothing called the evidence store's fail, so a run that
     // refused on every attempt stayed `running` once pg-boss gave up. `reserve`
@@ -739,6 +778,7 @@ describe("applicant evidence job handler", () => {
         },
         async publish() {},
         async fail() {},
+        async recordLimitation() {},
         async collectedTierZones() {
           return [];
         },

@@ -404,14 +404,31 @@ export interface EvidenceRepository {
   ): Promise<readonly (readonly [string, string])[]>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
   /**
-   * Clears any lingering encrypted WCL credential columns from evidence runs
-   * created before `cutoff`. `publish` and `fail` already clear these columns
-   * on every normal completion path; this is the backstop for a run whose job
-   * never reaches either (a crash, a timeout, a killed process between
-   * `claim()` and `publish()`/`fail()`), so ciphertext never outlives the run
-   * by more than the retention window. Returns the number of rows cleared.
+   * Records a limitation on a run that is still active, without publishing
+   * anything. A points-budget refusal collects nothing and publishes nothing,
+   * so this is the only way the reason a dossier is waiting reaches a reader.
+   * `claim` clears it, so it never outlives the attempt that recorded it.
    */
-  clearStaleCredentials(cutoff: Date): Promise<number>;
+  recordLimitation(runId: string, code: string): Promise<void>;
+  /**
+   * Clears any lingering encrypted WCL credential columns from evidence runs.
+   * `publish` and `fail` already clear these columns on every normal
+   * completion path; this is the backstop for a run whose job never reaches
+   * either (a crash, a timeout, a killed process between `claim()` and
+   * `publish()`/`fail()`), so ciphertext never outlives the run by more than
+   * the retention window. Returns the number of rows cleared.
+   *
+   * Two cutoffs, because a still-active run may legitimately be waiting: a
+   * points-budget refusal defers it for up to five attempts of 1800 seconds.
+   * Stripping its credentials mid-flight would not fail the run -- it would
+   * silently fall back to the worker's shared account and spend the wrong
+   * allowance on a visitor's dossier. `active` must therefore outlive the
+   * longest deferral chain; `settled` applies to everything else.
+   */
+  clearStaleCredentials(cutoffs: {
+    settled: Date;
+    active: Date;
+  }): Promise<number>;
 }
 
 export type FingerprintAdmission =

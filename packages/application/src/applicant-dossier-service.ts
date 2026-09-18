@@ -398,6 +398,22 @@ async function gatherCharacterEvidence(
       )
     );
   }
+  // The run that is collecting right now, not the last one that finished. A
+  // points-budget refusal publishes nothing, so a deferral exists only here --
+  // without this the reader sees an indefinite "collecting" and no reason for
+  // it. `claim` clears the code, so it never describes a healthy attempt.
+  const active = reservation.active;
+  if (active?.limitationCode && active.id !== completed?.run.id) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        character.key,
+        active.limitationCode,
+        active.startedAt ?? active.createdAt,
+        active.retryAfterAt
+      )
+    );
+  }
   if (completed?.run.parseLimitationCode) {
     limitations.push(
       limitation(

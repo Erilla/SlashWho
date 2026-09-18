@@ -34,6 +34,14 @@ import type { WorkerHealth } from "./health-server";
 // `fail`) clears these columns immediately; this is only the backstop for a
 // job that never reaches either.
 const STALE_EVIDENCE_CREDENTIAL_RETENTION_MS = 60 * 60_000;
+/**
+ * A still-active run keeps its credentials for longer, because it may simply
+ * be waiting: a points-budget refusal defers a run for up to five attempts of
+ * 1800 seconds, so a live run can legitimately be 2.5 hours old. Stripping it
+ * mid-flight does not fail the run -- it falls back to the worker's shared
+ * account and spends the wrong allowance on a visitor's dossier.
+ */
+const STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS = 6 * 60 * 60_000;
 
 type RuntimePool = {
   query(text: string): Promise<unknown>;
@@ -395,9 +403,14 @@ export async function createWorkerRuntime(
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
       const removedEvidenceRuns =
-        await repositories.evidence.clearStaleCredentials(
-          new Date(Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS)
-        );
+        await repositories.evidence.clearStaleCredentials({
+          settled: new Date(
+            Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS
+          ),
+          active: new Date(
+            Date.now() - STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS
+          )
+        });
       // On the injected logger rather than console.info: this record now passes
       // through the worker's redaction like every other one. It carries a count
       // only — never a credential, a run id or a character key.
