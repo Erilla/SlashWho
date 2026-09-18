@@ -171,6 +171,17 @@ export interface WarcraftLogsGateway {
         parses: ReadonlySet<string>;
         tierBests: ReadonlySet<string>;
       }>;
+      /**
+       * The instant below which the report scan may stop, as an ISO string.
+       * Set when every tier that closed before it is terminal for kills, so
+       * pages older than it can only re-find evidence already stored.
+       *
+       * Reports arrive newest first, so a page whose fights all predate this
+       * ends the scan -- cleanly, raising no limitation. A cap here would mark
+       * the run partial and, under the clean-read rule, block the very marks
+       * that allowed the stop, so the character would never settle.
+       */
+      killScanFloor?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

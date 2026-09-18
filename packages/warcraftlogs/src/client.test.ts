@@ -1350,6 +1350,153 @@ describe("Warcraft Logs gateway", () => {
     expect(result).not.toHaveProperty("parseLimitation");
   });
 
+  it("stops paging once a page falls entirely below the kill scan floor", async () => {
+    // 36 pages of `RecentReports` on every run is the other half of what a
+    // 353-report character costs. Reports come newest first, so once a page is
+    // wholly below the floor, everything past it is too.
+    const pages: number[] = [];
+    const startTimes = [
+      Date.parse("2026-09-10T00:00:00.000Z"),
+      Date.parse("2023-01-01T00:00:00.000Z"),
+      Date.parse("2022-01-01T00:00:00.000Z")
+    ];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { page?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const page = body.variables?.page ?? 1;
+      pages.push(page);
+      const startTime = startTimes[page - 1];
+      if (startTime === undefined) throw new Error("unexpected_report_page");
+      return jsonResponse(
+        performanceReport([26], true, `report-${page}`, 3306, startTime)
+      );
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 10,
+      parseRequestCap: 9,
+      killScanFloor: "2024-01-01T00:00:00.000Z"
+    });
+
+    expect(pages).toEqual([1, 2]);
+    // A clean stop, not a cap. A limitation here would mark the run partial and
+    // block the very marks that allowed the stop, so it would never settle.
+    expect(result).not.toHaveProperty("limitation");
+  });
+
+  it("keeps paging when a page below the floor still carries a newer fight", async () => {
+    const pages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { page?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const page = body.variables?.page ?? 1;
+      pages.push(page);
+      if (page === 1) {
+        // One old fight and one recent one in the same page.
+        const report = performanceReport(
+          [26],
+          true,
+          "report-1",
+          3306,
+          Date.parse("2022-01-01T00:00:00.000Z")
+        ) as {
+          data: {
+            characterData: {
+              character: { recentReports: { data: unknown[] } };
+            };
+          };
+        };
+        const recent = performanceReport(
+          [27],
+          true,
+          "report-1b",
+          3307,
+          Date.parse("2026-09-10T00:00:00.000Z")
+        ) as {
+          data: {
+            characterData: {
+              character: { recentReports: { data: unknown[] } };
+            };
+          };
+        };
+        report.data.characterData.character.recentReports.data.push(
+          recent.data.characterData.character.recentReports.data[0]
+        );
+        return jsonResponse(report);
+      }
+      return jsonResponse(
+        performanceReport(
+          [28],
+          false,
+          "report-2",
+          3308,
+          Date.parse("2026-09-01T00:00:00.000Z")
+        )
+      );
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 10,
+      parseRequestCap: 9,
+      killScanFloor: "2024-01-01T00:00:00.000Z"
+    });
+
+    expect(pages).toEqual([1, 2]);
+  });
+
+  it("pages the whole history when no floor is given", async () => {
+    const pages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { page?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const page = body.variables?.page ?? 1;
+      pages.push(page);
+      return jsonResponse(
+        performanceReport(
+          [26],
+          page < 2,
+          `report-${page}`,
+          3306,
+          Date.parse("2022-01-01T00:00:00.000Z")
+        )
+      );
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 10,
+      parseRequestCap: 9
+    });
+
+    expect(pages).toEqual([1, 2]);
+  });
+
   it("spends no zone request on a tier already terminal for tier bests", async () => {
     // A concluded tier read cleanly cannot change, so re-reading its bests
     // spends a rate-limited request on an answer we already hold.

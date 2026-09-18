@@ -1404,6 +1404,12 @@ export function createWarcraftLogsClient(
         parses: ReadonlySet<string>;
         tierBests: ReadonlySet<string>;
       }>;
+      /**
+       * The instant below which the report scan may stop, as an ISO string.
+       * Reports arrive newest first, so a page whose fights all predate this
+       * ends the scan cleanly, raising no limitation.
+       */
+      killScanFloor?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1449,6 +1455,20 @@ export function createWarcraftLogsClient(
       if (normalized.limitation) {
         scanLimitation = normalized.limitation;
         break;
+      }
+
+      // Below every terminal tier, so any further page can only re-find
+      // evidence already stored. This is a clean stop: it sets no limitation,
+      // because a partial run would block the marks that allowed it.
+      const floor = options.killScanFloor;
+      if (floor !== undefined) {
+        const dated = [
+          ...normalized.kills.map((kill) => kill.killedAt),
+          ...normalized.wipes.map((wipe) => wipe.attemptedAt)
+        ];
+        // A page with nothing dated says nothing about how far back the scan
+        // has reached, so it must not end it.
+        if (dated.length > 0 && dated.every((at) => at < floor)) break;
       }
 
       const hasMorePages = hasMoreReportPages(result.value);
