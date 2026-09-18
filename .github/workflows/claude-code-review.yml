@@ -1,8 +1,20 @@
 name: claude-code-review
 
+# The review costs the same on every run regardless of diff size: the plugin
+# fans out to a fixed fleet of agents, two of them Opus, plus one Opus
+# subagent per candidate finding. Cost is therefore controlled by running it
+# less often, not by making each run smaller.
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    # Deliberately no `synchronize`: reviewing every push multiplied the cost
+    # by the number of pushes, and an in-flight review killed by the next push
+    # was billed in full for nothing.
+    types: [opened, ready_for_review, reopened]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
 
 permissions:
   contents: read
@@ -12,7 +24,8 @@ permissions:
 
 concurrency:
   group: claude-code-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Never cancel a review that is already paying for itself.
+  cancel-in-progress: false
 
 jobs:
   review:
@@ -30,4 +43,12 @@ jobs:
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # --model sets the orchestrating session only. The plugin names its
+          # own subagent models in its prompt, so the Opus review and
+          # validation agents are unaffected. --max-turns is a runaway
+          # backstop, not a cost dial: setting it low buys a truncated review
+          # at full price.
+          claude_args: >-
+            --model claude-sonnet-5
+            --max-turns 50
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"
