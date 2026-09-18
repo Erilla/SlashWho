@@ -191,6 +191,27 @@ function remainingPoints(budget: WarcraftLogsRateLimit): number {
 }
 
 /**
+ * The configured reserve is sized for the worker's own allowance, but a run may
+ * carry a visitor's credentials, and their account's limit is its own -- 3600
+ * by default against the worker's 18000. Applied flat, a 1500 reserve fences
+ * off 42% of a visitor's budget and refuses runs their account could afford.
+ * Capping it at a share of the *reported* allowance keeps the intent -- leave
+ * room for roughly one more run -- at any account size, and can only lower the
+ * configured value, never raise it.
+ */
+const MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE = 0.1;
+
+function effectiveReserve(
+  budget: WarcraftLogsRateLimit,
+  configured: number
+): number {
+  return Math.min(
+    configured,
+    budget.limitPerHour * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
+  );
+}
+
+/**
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
  */
@@ -276,7 +297,15 @@ export function createApplicantEvidenceJobHandler(
         if (openingBudget) {
           record.pointsLimitPerHour = openingBudget.limitPerHour;
           record.pointsRemainingBefore = remainingPoints(openingBudget);
-          if (remainingPoints(openingBudget) < options.pointsReserve) {
+          // A reserve of 0 is off, not "refuse once nothing remains": spend
+          // overruns the limit (9058.65 against 9000 was observed), so the
+          // remaining-points reading goes negative and a bare comparison would
+          // gate hardest exactly when it was asked to stop.
+          if (
+            options.pointsReserve > 0 &&
+            remainingPoints(openingBudget) <
+              effectiveReserve(openingBudget, options.pointsReserve)
+          ) {
             // The run stays claimed and nothing is published. Leaving it
             // unclaimed instead would be a bug: `reserve` counts
             // ('queued','running','retrying') as active, so the character
@@ -331,14 +360,23 @@ export function createApplicantEvidenceJobHandler(
         // guessed reserve with evidence, so it is sampled even when the run was
         // limited. A negative `pointsSpentByRun` means the hourly window reset
         // mid-run; it is logged as observed rather than clamped away.
-        const budgetAfter = await gateway.getRateLimit(activeContext.signal);
-        if (budgetAfter.kind === "rate_limit") {
-          record.pointsRemainingAfter = remainingPoints(budgetAfter);
-          if (openingBudget) {
-            record.pointsSpentByRun =
-              budgetAfter.pointsSpentThisHour -
-              openingBudget.pointsSpentThisHour;
+        // Never at the cost of the collection it is measuring. This is an extra
+        // round trip standing between a finished scan and its publish, and the
+        // gateway rethrows the abort reason -- a graceful shutdown landing in
+        // this window would otherwise discard a run that has already spent its
+        // whole request and parse budget.
+        try {
+          const budgetAfter = await gateway.getRateLimit(activeContext.signal);
+          if (budgetAfter.kind === "rate_limit") {
+            record.pointsRemainingAfter = remainingPoints(budgetAfter);
+            if (openingBudget) {
+              record.pointsSpentByRun =
+                budgetAfter.pointsSpentThisHour -
+                openingBudget.pointsSpentThisHour;
+            }
           }
+        } catch {
+          // Left as null on the record: unmeasured, which is what happened.
         }
 
         if (response.kind === "limitation") {

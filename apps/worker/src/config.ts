@@ -209,9 +209,14 @@ export function loadWorkerConfig(
     // deployment. EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway (12)
     // and code (24) until 2026-09-17 precisely because nothing forced that
     // review.
-    evidencePointsReserve: positiveInteger(
+    // 0 switches the gate off, which is deliberate: the value above is a guess,
+    // and an operator who finds it refusing too much needs a lever that is not
+    // a code change and a redeploy.
+    evidencePointsReserve: integerInRange(
       environment.EVIDENCE_POINTS_RESERVE,
       1_500,
+      0,
+      Number.MAX_SAFE_INTEGER,
       "invalid_evidence_points_reserve"
     ),
     blizzardBaseUrl: optionalHttpUrl(

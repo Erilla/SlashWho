@@ -691,6 +691,129 @@ describe("applicant evidence job handler", () => {
     expect(evidence.published).toHaveLength(1);
   });
 
+  it("scales the reserve down to a smaller account's allowance", async () => {
+    // Break caught: the reserve is an absolute count applied to whichever
+    // account the run carries. A visitor's default allowance is 3600 against
+    // the worker's 18000, so a flat 1500 fences off 42% of their budget and
+    // refuses runs the account could comfortably afford.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 2_600,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledOnce();
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("still refuses a small account with almost nothing left", async () => {
+    // Break caught: scaling the reserve to the allowance must not amount to
+    // removing the gate for accounts that need it most.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 3_600,
+      pointsSpentThisHour: 3_400,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await expect(
+      handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      })
+    ).rejects.toThrow("evidence_points_budget_low");
+    expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+  });
+
+  it("collects with the gate switched off, even past the allowance", async () => {
+    // Break caught: a reserve of 0 is the operator's off switch for a policy
+    // the code itself calls a guess. Reading it as "refuse whenever nothing
+    // remains" would keep gating exactly when it was asked to stop -- spend
+    // overruns the limit, 9058.65 against 9000 was observed.
+    const evidence = store();
+    const warcraftLogs = budgetGateway({
+      kind: "rate_limit",
+      limitPerHour: 18_000,
+      pointsSpentThisHour: 18_058.65,
+      pointsResetInSeconds: 949
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 0
+    });
+
+    await handler.execute(run.id);
+
+    expect(warcraftLogs.getFirstKillReports).toHaveBeenCalledOnce();
+    expect(evidence.published).toHaveLength(1);
+  });
+
+  it("publishes what it collected when the closing measurement fails", async () => {
+    // Break caught: the closing sample is an extra round trip between a
+    // finished collection and its publish. The gateway rethrows the abort
+    // reason, so a graceful shutdown landing in that window discarded a run
+    // that had already spent its whole request and parse budget.
+    const evidence = store();
+    const getRateLimit = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "rate_limit",
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 1_000.25,
+        pointsResetInSeconds: 949
+      })
+      .mockRejectedValueOnce(new Error("aborted"));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        getRateLimit,
+        getFirstKillReports: vi.fn(async () => ({
+          kind: "evidence" as const,
+          kills: [],
+          wipes: [],
+          tierBests: []
+        }))
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      requestCap: 500,
+      parseRequestCap: 24,
+      parseCapRetryMs: 1_800_000,
+      pointsReserve: 1_500
+    });
+
+    await handler.execute(run.id);
+
+    expect(evidence.published).toHaveLength(1);
+  });
+
   it("collects when the allowance itself cannot be read", async () => {
     // Break caught: a gate that fails closed on its own transport errors can
     // stop all evidence collection permanently.
