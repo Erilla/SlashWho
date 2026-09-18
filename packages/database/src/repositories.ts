@@ -348,6 +348,19 @@ export type EvidenceReservationResult =
       active: CharacterEvidenceRun;
     };
 
+/**
+ * The parts of a character's Warcraft Logs evidence that settle independently,
+ * so a collection fix can re-collect one without disturbing the others.
+ */
+export type EvidenceCollectionDomain = "kills" | "parses" | "tier_bests";
+
+/** One raid a character is finished collecting one domain of evidence for. */
+export type TerminalTier = Readonly<{
+  /** The Warcraft Logs zone id, as carried on the character's stored kills. */
+  raidId: string;
+  domain: EvidenceCollectionDomain;
+}>;
+
 export interface EvidenceRepository {
   reserve(input: {
     key: CharacterKey;
@@ -402,6 +415,30 @@ export interface EvidenceRepository {
   collectedTierZones(
     key: CharacterKey
   ): Promise<readonly (readonly [string, string])[]>;
+  /**
+   * The raid tiers this character is finished with, at or above the current
+   * collection version for their own domain. A mark below it is omitted, which
+   * is how bumping one domain's version re-collects that domain and leaves the
+   * rest settled.
+   */
+  terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
+  /**
+   * Records tiers as terminal, stamping each with its domain's current
+   * collection version. Idempotent: a run that re-reads an already-settled
+   * tier refreshes the mark rather than failing on the primary key.
+   */
+  markTerminalTiers(
+    key: CharacterKey,
+    tiers: readonly TerminalTier[],
+    at: Date
+  ): Promise<void>;
+  /**
+   * Forgets every terminal mark for one character, so its history is collected
+   * again over as many runs as the budget allows. Deletes no evidence: the
+   * stored kills, wipes and tier bests stay readable until their replacements
+   * arrive. Returns the number of marks forgotten.
+   */
+  clearTerminalTiers(key: CharacterKey): Promise<number>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
   /**
    * Records a limitation on a run that is still active, without publishing

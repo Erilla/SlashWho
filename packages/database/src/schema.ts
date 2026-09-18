@@ -55,6 +55,17 @@ export const characterMythicKillParseState = pgEnum(
   ["available", "not_applicable", "unavailable"]
 );
 
+/**
+ * The parts of a character's Warcraft Logs evidence that settle independently.
+ * Each carries its own collection version, so a parse fix re-collects parses
+ * without also re-collecting kills and tier bests.
+ */
+export const evidenceCollectionDomain = pgEnum("evidence_collection_domain", [
+  "kills",
+  "parses",
+  "tier_bests"
+]);
+
 export const characters = pgTable(
   "characters",
   {
@@ -485,7 +496,18 @@ export const characterMythicKills = pgTable(
     bossDamageParseState: characterMythicKillParseState(
       "boss_damage_parse_state"
     ).notNull(),
-    bossDamagePercentile: doublePrecision("boss_damage_percentile")
+    bossDamagePercentile: doublePrecision("boss_damage_percentile"),
+    /**
+     * When this fight's parses were actually read. A percentile is a value
+     * against a ranking pool with no record of when it was observed, so drift
+     * is unmeasurable from what we store. This column makes it measurable from
+     * our own data at no upstream cost, and is what should eventually replace
+     * the guessed `EVIDENCE_KILL_SETTLE_DAYS`. Carried forward unchanged when
+     * a later run skips a fight it has already hydrated.
+     */
+    collectedAt: timestamp("collected_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
   },
   (table) => [
     uniqueIndex("character_mythic_kills_source_fight_idx").on(
@@ -598,5 +620,48 @@ export const characterMythicWipes = pgTable(
       table.fightUrl
     ),
     index("character_mythic_wipes_run_idx").on(table.evidenceRunId)
+  ]
+);
+
+/**
+ * The raid tiers one character's evidence is stored for indefinitely: read
+ * once, then never re-queried.
+ *
+ * Keyed by character rather than by evidence run, because the worker's
+ * maintenance deletes terminal runs after 30 days and a mark has to outlive
+ * that or the whole design unwinds every month.
+ *
+ * `collectionVersion` is the automatic half of the correction path. Bumping one
+ * domain's version drops that domain's marks out of every read, so its tiers
+ * re-collect once and settle again while the other domains stay terminal.
+ * `character_evidence_runs.evidence_version` cannot serve this: it invalidates
+ * everything at once, which is affordable while nothing is terminal and ruinous
+ * when the point is to stop re-querying.
+ */
+export const characterTerminalTiers = pgTable(
+  "character_terminal_tiers",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    /** The Warcraft Logs zone id, matching `character_mythic_kills.raid_id`. */
+    raidId: text("raid_id").notNull(),
+    domain: evidenceCollectionDomain("domain").notNull(),
+    collectionVersion: integer("collection_version").notNull(),
+    markedAt: timestamp("marked_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_terminal_tiers_pkey",
+      columns: [
+        table.region,
+        table.realmSlug,
+        table.normalizedName,
+        table.raidId,
+        table.domain
+      ]
+    })
   ]
 );

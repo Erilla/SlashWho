@@ -875,6 +875,101 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("stores terminal tiers per character and returns them until cleared", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "terminalmarks"
+    } as const;
+    const at = new Date("2026-09-18T10:00:00.000Z");
+
+    await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
+
+    await repositories.evidence.markTerminalTiers(
+      key,
+      [
+        { raidId: "42", domain: "kills" },
+        { raidId: "42", domain: "parses" },
+        { raidId: "43", domain: "tier_bests" }
+      ],
+      at
+    );
+
+    await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "parses" },
+      { raidId: "43", domain: "tier_bests" }
+    ]);
+
+    // Marking again must be idempotent rather than a duplicate-key failure: a
+    // run re-reads a tier it had already settled whenever a rebuild drains.
+    await repositories.evidence.markTerminalTiers(
+      key,
+      [{ raidId: "42", domain: "kills" }],
+      at
+    );
+    await expect(
+      repositories.evidence.terminalTiers(key)
+    ).resolves.toHaveLength(3);
+
+    await expect(repositories.evidence.clearTerminalTiers(key)).resolves.toBe(
+      3
+    );
+    await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
+  });
+
+  it("keeps one character's terminal tiers out of another's", async () => {
+    const mine = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "marksmine"
+    } as const;
+    const theirs = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "markstheirs"
+    } as const;
+    const at = new Date("2026-09-18T10:00:00.000Z");
+
+    await repositories.evidence.markTerminalTiers(
+      mine,
+      [{ raidId: "42", domain: "kills" }],
+      at
+    );
+
+    await expect(repositories.evidence.terminalTiers(theirs)).resolves.toEqual(
+      []
+    );
+    await expect(
+      repositories.evidence.clearTerminalTiers(theirs)
+    ).resolves.toBe(0);
+    await expect(
+      repositories.evidence.terminalTiers(mine)
+    ).resolves.toHaveLength(1);
+  });
+
+  it("omits a terminal tier recorded below its domain's collection version", async () => {
+    // Per-domain versions: a parse fix bumps `parses` and re-collects parses
+    // alone, leaving kills and tier bests settled. A global bump cannot serve
+    // this -- it invalidates everything, which is ruinous once the whole point
+    // is to stop re-querying.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "domainbump"
+    } as const;
+    await pool.query(
+      `INSERT INTO character_terminal_tiers
+         (region, realm_slug, normalized_name, raid_id, domain, collection_version)
+       VALUES ($1, $2, $3, '42', 'parses', 0), ($1, $2, $3, '42', 'kills', 1)`,
+      [key.region, key.realm, key.name]
+    );
+
+    await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([
+      { raidId: "42", domain: "kills" }
+    ]);
+  });
+
   it("recovers complete evidence hidden behind a legacy partial refresh", async () => {
     const first = await repositories.evidence.reserve({
       key: rootKey,

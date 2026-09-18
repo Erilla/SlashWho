@@ -12,6 +12,7 @@ import type {
   EvidenceReservationResult,
   CreateSnapshotInput,
   DiscoveryRun,
+  EvidenceCollectionDomain,
   FingerprintAdmission,
   Repositories,
   SnapshotHistoryItem,
@@ -184,6 +185,27 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
 const CURRENT_EVIDENCE_VERSION = 13;
+
+/**
+ * Per-domain collection versions, for evidence stored indefinitely.
+ *
+ * Bump one when a collection fix changes what that domain stores: terminal
+ * tiers below the new version drop out of `terminalTiers`, re-collect once and
+ * settle again, while the other domains stay terminal. `CURRENT_EVIDENCE_VERSION`
+ * cannot serve this -- it invalidates everything, which is affordable while
+ * nothing is terminal and ruinous when the whole point is to stop re-querying.
+ *
+ * Whoever writes the next collection fix has to bump the right one. If that
+ * habit does not stick, this degrades to the blunt global bump it replaced.
+ */
+const CURRENT_COLLECTION_VERSIONS: Readonly<
+  Record<EvidenceCollectionDomain, number>
+> = {
+  kills: 1,
+  parses: 1,
+  tier_bests: 1
+};
+
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -3043,6 +3065,82 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows
           .map((row) => [row.raid_id, row.collected_at.toISOString()] as const)
           .sort((a, b) => a[0].localeCompare(b[0]));
+      },
+
+      async terminalTiers(key) {
+        const result = await pool.query<{
+          raid_id: string;
+          domain: EvidenceCollectionDomain;
+        }>(
+          `SELECT raid_id, domain
+             FROM character_terminal_tiers
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND collection_version >= CASE domain
+                    WHEN 'kills' THEN $4::integer
+                    WHEN 'parses' THEN $5::integer
+                    ELSE $6::integer
+                  END
+            ORDER BY raid_id, domain`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            CURRENT_COLLECTION_VERSIONS.kills,
+            CURRENT_COLLECTION_VERSIONS.parses,
+            CURRENT_COLLECTION_VERSIONS.tier_bests
+          ]
+        );
+        return result.rows.map((row) => ({
+          raidId: row.raid_id,
+          domain: row.domain
+        }));
+      },
+
+      async markTerminalTiers(key, tiers, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_terminal_tier_time_invalid");
+        }
+        if (tiers.length === 0) return;
+        await pool.query(
+          `INSERT INTO character_terminal_tiers
+             (region, realm_slug, normalized_name, raid_id, domain,
+              collection_version, marked_at)
+           SELECT $1, $2, $3, entry.raid_id,
+                  entry.domain::evidence_collection_domain,
+                  CASE entry.domain
+                    WHEN 'kills' THEN $6::integer
+                    WHEN 'parses' THEN $7::integer
+                    ELSE $8::integer
+                  END,
+                  $9
+             FROM unnest($4::text[], $5::text[]) AS entry(raid_id, domain)
+           ON CONFLICT (region, realm_slug, normalized_name, raid_id, domain)
+           DO UPDATE SET collection_version = EXCLUDED.collection_version,
+                         marked_at = EXCLUDED.marked_at`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            tiers.map((tier) => tier.raidId),
+            tiers.map((tier) => tier.domain),
+            CURRENT_COLLECTION_VERSIONS.kills,
+            CURRENT_COLLECTION_VERSIONS.parses,
+            CURRENT_COLLECTION_VERSIONS.tier_bests,
+            at
+          ]
+        );
+      },
+
+      async clearTerminalTiers(key) {
+        // Marks only. The stored kills, wipes and tier bests stay exactly where
+        // they are: a rebuild must not leave a dossier empty while it waits for
+        // the replacement evidence to arrive.
+        const result = await pool.query(
+          `DELETE FROM character_terminal_tiers
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rowCount ?? 0;
       },
 
       async listStatus(keys) {
