@@ -95,7 +95,7 @@ Railway setup, variables, health checks, backups, and validation are documented 
 
 ## Repository guidance
 
-- Agent instructions: [`AGENTS.md`](AGENTS.md)
+- Agent instructions: [`AGENTS.md`](AGENTS.md), imported by [`CLAUDE.md`](CLAUDE.md)
 - Contribution and branch workflow: [`docs/contributing.md`](docs/contributing.md)
 - Implementation and worktree workflow: [`docs/agents/implementation-workflow.md`](docs/agents/implementation-workflow.md)
 - Issue-tracker conventions: [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)

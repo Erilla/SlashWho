@@ -159,6 +159,26 @@ Fix anything that stands between the pull request and its merge:
 Auto-merge takes over once the checks are green and the conversations are
 resolved. Then validate the resulting `main` deployment in staging.
 
+### The automated review
+
+Every pull request from a branch in this repository is reviewed automatically
+by the `claude-code-review` workflow, on open and on each push. It posts an
+inline comment on each issue it finds, or a single summary comment when it
+finds none.
+
+The review is advisory: it never approves the pull request and its job is not
+a required check, so it does not block auto-merge. Treat its comments like any
+other review — address them, or reply saying why the finding is wrong. A
+finding you disagree with is worth answering rather than silently resolving,
+because the reply is what tells a later reader the disagreement was considered.
+
+It reads `CLAUDE.md`, which imports `AGENTS.md`, so repository conventions
+belong in those files rather than in the workflow.
+
+The review runs on Anthropic's API and costs tokens per run. Keep pull requests
+small and avoid pushing a long series of one-line fixes to an open pull
+request, since each push starts a fresh review.
+
 ## 8. Clean up
 
 Once the pull request is merged, remove the worktree in the same session that
