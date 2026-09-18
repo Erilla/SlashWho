@@ -141,9 +141,31 @@ naturally well before the cap. Taken against the #308 counters, the scan is at
 least 68–86% of a run's cost at s ≥ 21.1 points per page, so even a partial
 reduction is worth having.
 
-Because this version costs nothing in completeness, it is worth doing whatever
-the measured size turns out to be. The counters from #303 remain the way to
-confirm the effect after it ships.
+That bound is derived, and the derivation should be falsifiable rather than
+inherited. It solves
+
+```
+124s − 3z + 3f = 2617.67
+```
+
+for the per-page scan cost `s`, under the judgement that **z ≥ f**: a zone
+request spans a whole tier across three metric aliases, where a fight-parse
+request covers a single report. Relax `z ≥ f` and the lower bound moves. It is
+one judgement, not a measurement, and a reader who disagrees with it should
+recompute rather than trust the figure.
+
+Nothing in the decision rests on it. Because this version costs nothing in
+completeness, it is worth doing whatever the measured size turns out to be. The
+counters from #303 remain the way to confirm the effect after it ships.
+
+### Reading the records afterwards
+
+**`killCount` will fall for veterans once this ships, and that is the fix
+working.** The floor means the scan returns fewer kills per run, so the number
+on an `evidence_job` record drops — it measures what one run re-read, not what
+the character has. What makes that safe is that `publish` carries stored kills
+forward rather than replacing them with the run's own. Worth knowing before
+someone reads the drop as evidence loss at a glance.
 
 ## Risks
 
@@ -151,11 +173,27 @@ confirm the effect after it ships.
   the state this change exists to create, and it is already representable —
   `character_terminal_tiers` is keyed per domain and `TerminalTier` carries one.
   What is new is that it will now occur routinely rather than never.
-- **The kills mark now rests on a single guard.** Previously the parse-domain
-  trouble set masked any weakness in the scan-limitation check. If a history
-  scan could ever fail without raising a limitation, kills would be frozen
-  incomplete. The existing `hasMoreReportPages === null → schema_drift` and the
-  per-page limitation checks are what stand behind that, and they are unchanged.
+- **The kills mark now rests on a single guard — checked, and it holds.**
+  Previously the parse-domain trouble set masked any weakness in the
+  scan-limitation check. If a history scan could ever fail without raising a
+  limitation, kills would be frozen incomplete.
+
+  The worst case is the population this change targets: a very large character
+  whose scan silently truncates at the page cap and then has its incomplete
+  kills frozen terminal. It cannot happen. The scan loop sets a limitation on
+  exhausting its cap (`client.ts`):
+
+  ```ts
+  if (page === options.requestCap) {
+    scanLimitation = { kind: "limitation", code: "request_cap" };
+  }
+  ```
+
+  `terminalTiersFrom` returns no marks at all when `scanLimitation !== null`, so
+  a truncated scan settles nothing, in any domain. The other exits are covered
+  the same way: `hasMoreReportPages === null → schema_drift`, and the per-page
+  limitation checks. All unchanged by this design.
+
 - **Sizing is still derived, not measured end to end.** The effect on run cost
   should be confirmed from the #303 counters on the next sweep.
 
