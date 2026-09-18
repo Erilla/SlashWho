@@ -67,6 +67,31 @@ Terminal is additionally gated on the kill having settled — see "A kill must
 settle before it goes terminal". A kill in a concluded tier satisfies that by
 age; a kill in the current tier becomes terminal once it does.
 
+### Terminal requires a clean read
+
+**A tier only goes terminal if the run that read it reported no limitation for
+it.** Drift, `schema_changed`, a request cap, a rate limit or a refused budget
+all leave the tier re-queryable, however old it is.
+
+This is what makes the design safe to ship while collection is still imperfect.
+Without it, "store indefinitely" means "freeze whatever we happened to get,
+including the gaps". With it, the question stops being a judgement call about
+whether collection is good enough yet, and becomes an invariant the code
+enforces per tier: only a tier read without incident is allowed to stop being
+re-read.
+
+It is not hypothetical. On 2026-09-18, `rinn` and `riln` had carried
+`parse_schema_drift` and `schema_changed` for over sixteen hours with no retry,
+and `schema_changed` means _history_ is incomplete — kills and wipes possibly
+missing, not merely parses. Marking those tiers terminal would permanently
+under-report what those characters did, and the cause (#271, #273) is still
+unexplained.
+
+The practical consequence is that a dossier converges rather than completing in
+one pass: clean tiers settle and stop costing requests, while tiers that hit
+trouble keep being retried until a run reads them cleanly. That is the desired
+behaviour — the budget drains towards the parts that are actually unfinished.
+
 ## What "concluded" means
 
 `packages/domain/src/raid-current-content-windows.generated.json` already holds
@@ -221,9 +246,10 @@ budget stops being consumed by history. That reframes several open issues:
 
 ## Risks
 
-- **A wrong terminal mark is durable.** A record stored from a buggy decode is
-  frozen until someone notices and bumps that domain's version. This raises the
-  cost of a silent decoding bug, which is exactly the shape of
+- **A wrong terminal mark is durable.** The clean-read rule above stops a
+  _reported_ failure from being frozen, but not a silent one: a decode that
+  succeeds and produces the wrong value raises no limitation and would go
+  terminal. That is the residual risk, and it is the shape of
   `parse_schema_drift` (#271, #273), still unexplained at the time of writing.
   Storing raw payloads for failed decodes so they can be re-read offline would
   reduce that risk and is worth considering alongside this.
@@ -237,6 +263,9 @@ budget stops being consumed by history. That reframes several open issues:
 ## Testing
 
 - A concluded tier is not re-queried on a second run; a current tier is.
+- A concluded tier whose run reported drift, `schema_changed`, a cap, a rate
+  limit or a refused budget is re-queried on the next run, and goes terminal
+  only once a run reads it without incident.
 - A kill younger than the settle threshold is re-queried even in a concluded
   tier; the same kill is terminal once older than it.
 - A `rebuild` re-collects a character whose tiers are all terminal, and does so
