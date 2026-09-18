@@ -82,6 +82,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [
         {
@@ -230,6 +231,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             parseLimitation: {
               kind: "limitation" as const,
@@ -383,6 +385,7 @@ describe("applicant evidence job handler", () => {
     ]);
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [],
       wipes: []
@@ -423,6 +426,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [],
       wipes: []
@@ -457,6 +461,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store({ ...run, className: "Death Knight" });
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [],
       wipes: []
@@ -490,6 +495,7 @@ describe("applicant evidence job handler", () => {
     rateLimit: Awaited<ReturnType<WarcraftLogsGateway["getRateLimit"]>>,
     getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       kills: [],
       wipes: [],
       tierBests: []
@@ -795,6 +801,7 @@ describe("applicant evidence job handler", () => {
         getRateLimit,
         getFirstKillReports: vi.fn(async () => ({
           kind: "evidence" as const,
+          troubledRaidIds: [],
           kills: [],
           wipes: [],
           tierBests: []
@@ -861,6 +868,7 @@ describe("applicant evidence job handler", () => {
         getRateLimit,
         getFirstKillReports: vi.fn(async () => ({
           kind: "evidence" as const,
+          troubledRaidIds: [],
           kills: [],
           wipes: [],
           tierBests: []
@@ -919,6 +927,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -1022,6 +1031,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             limitation: {
               kind: "limitation" as const,
@@ -1200,6 +1210,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -1249,6 +1260,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -1351,6 +1363,7 @@ describe("applicant evidence job handler", () => {
           }),
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
