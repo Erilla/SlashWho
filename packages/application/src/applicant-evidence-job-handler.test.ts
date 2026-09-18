@@ -166,7 +166,8 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -237,7 +238,8 @@ describe("applicant evidence job handler", () => {
       },
       requestCap: 500,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -315,7 +317,8 @@ describe("applicant evidence job handler", () => {
       },
       requestCap: 500,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -370,6 +373,155 @@ describe("applicant evidence job handler", () => {
     ]);
   });
 
+  it("gives a transport failure a retry, so nothing waits on a reader forever", async () => {
+    // Break caught: `unavailable` published with no retry time, which
+    // `isEvidenceFresh` reads as "never" -- an upstream blip stranded the
+    // character until an evidence version bump or a manual refresh.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return { kind: "limitation" as const, code: "unavailable" as const };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published[0]?.result.retryAfterAt).toEqual(
+      new Date("2026-09-13T12:16:00.000Z")
+    );
+  });
+
+  it("leaves drift with no retry, because waiting does not fix a decoding bug", async () => {
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return { kind: "limitation" as const, code: "schema_drift" as const };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published[0]?.result).not.toHaveProperty("retryAfterAt");
+  });
+
+  it("keeps an upstream retry hint rather than replacing it with the default", async () => {
+    // Break caught: folding the default in with Math.max would overrule a
+    // 90-second Retry-After with a 15-minute guess. Upstream knows better than
+    // we do about when upstream will be ready.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return {
+            kind: "limitation" as const,
+            code: "rate_limited" as const,
+            retryAfterMs: 90_000
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published[0]?.result.retryAfterAt).toEqual(
+      new Date("2026-09-13T12:02:30.000Z")
+    );
+  });
+
+  it("gives a partial scan's transient limitation a retry", async () => {
+    // A scan that collected what it could and then lost the upstream still has
+    // work outstanding, so the partial path needs the same default as the
+    // limitation-only one.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return {
+            kind: "evidence" as const,
+            troubledRaidIds: [],
+            tierBests: [],
+            kills: [],
+            wipes: [],
+            parseLimitation: {
+              kind: "limitation" as const,
+              code: "parse_unavailable" as const
+            }
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published[0]?.result.retryAfterAt).toEqual(
+      new Date("2026-09-13T12:16:00.000Z")
+    );
+  });
+
   it("builds a per-run gateway from encrypted run credentials when present", async () => {
     // Break caught: a visitor-supplied WCL credential could be ignored in
     // favor of the worker's own shared client, or leaked unencrypted.
@@ -416,7 +568,8 @@ describe("applicant evidence job handler", () => {
       decryptionKey: encryptionKey,
       requestCap: 80,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -457,7 +610,8 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -501,7 +655,8 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -539,7 +694,8 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 8,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -593,7 +749,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -629,7 +786,8 @@ describe("applicant evidence job handler", () => {
       }),
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -663,7 +821,8 @@ describe("applicant evidence job handler", () => {
       }),
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -700,7 +859,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -736,7 +896,8 @@ describe("applicant evidence job handler", () => {
       }),
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -770,7 +931,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -800,7 +962,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -828,7 +991,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -862,7 +1026,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 0,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -907,7 +1072,8 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -932,7 +1098,8 @@ describe("applicant evidence job handler", () => {
       warcraftLogs,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -980,7 +1147,8 @@ describe("applicant evidence job handler", () => {
       >,
       requestCap: 500,
       parseRequestCap: 24,
-      parseCapRetryMs: 1_800_000,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
       pointsReserve: 1_500,
       killSettleMs: 7 * 24 * 60 * 60 * 1000,
       retryCostCeiling: 250,
@@ -1048,7 +1216,8 @@ describe("applicant evidence job handler", () => {
         warcraftLogs: scanningGateway(),
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1083,7 +1252,8 @@ describe("applicant evidence job handler", () => {
         warcraftLogs: scanningGateway(0, 2_523.24),
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1115,7 +1285,8 @@ describe("applicant evidence job handler", () => {
         warcraftLogs: scanningGateway(0, 12),
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1145,7 +1316,8 @@ describe("applicant evidence job handler", () => {
         warcraftLogs,
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1178,7 +1350,8 @@ describe("applicant evidence job handler", () => {
         warcraftLogs: scanningGateway(),
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1248,7 +1421,8 @@ describe("applicant evidence job handler", () => {
         },
         requestCap: 500,
         parseRequestCap: 8,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1650,7 +1824,8 @@ describe("applicant evidence job handler", () => {
         },
         requestCap: 500,
         parseRequestCap: 8,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 1_500,
         killSettleMs: 7 * 24 * 60 * 60 * 1000,
         retryCostCeiling: 250,
@@ -1855,7 +2030,8 @@ describe("applicant evidence job handler", () => {
         >,
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 0,
         retryCostCeiling: 250,
         failureCooldownMs: 1_800_000,
@@ -1929,7 +2105,8 @@ describe("applicant evidence job handler", () => {
         >,
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 0,
         retryCostCeiling: 250,
         failureCooldownMs: 1_800_000,
@@ -1980,7 +2157,8 @@ describe("applicant evidence job handler", () => {
         >,
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 0,
         retryCostCeiling: 250,
         failureCooldownMs: 1_800_000,
@@ -2020,7 +2198,8 @@ describe("applicant evidence job handler", () => {
         >,
         requestCap: 500,
         parseRequestCap: 24,
-        parseCapRetryMs: 1_800_000,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
         pointsReserve: 0,
         retryCostCeiling: 250,
         failureCooldownMs: 1_800_000,

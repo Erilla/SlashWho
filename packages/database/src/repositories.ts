@@ -501,6 +501,22 @@ export interface EvidenceRepository {
    * arrive. Returns the number of marks forgotten.
    */
   clearTerminalTiers(key: CharacterKey): Promise<number>;
+  /**
+   * Characters whose last completed run asked to be resumed and whose deadline
+   * has passed, oldest deadline first, with nothing already in flight for them.
+   *
+   * This is what a background sweep drives, because `reserve` is otherwise
+   * only reached from a dossier read: a run that set `retry_after_at` became
+   * *eligible* to resume and nothing made it happen, so collection continued
+   * only when somebody happened to load the page.
+   *
+   * Deliberately narrower than `reserve`'s own staleness rule, which also
+   * hands back evidence that is merely older than the freshness window.
+   * Sweeping those too would turn this into a background re-collection of
+   * every character ever seen; they are re-collected when read, as before.
+   * This returns only characters that asked to be resumed.
+   */
+  listResumable(limit: number, at: Date): Promise<readonly CharacterKey[]>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
   /**
    * Records a limitation on a run that is still active, without publishing

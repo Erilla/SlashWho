@@ -1847,6 +1847,110 @@ describe("PostgreSQL repositories", () => {
     expect(found?.wclClientSecretEncrypted).toBe("encrypted-secret");
   });
 
+  describe("resumable evidence", () => {
+    // What a background sweep drives. Before it existed, `reserve` was reached
+    // only from a dossier read, so a run that deferred itself resumed only if
+    // somebody happened to load the page.
+    const at = new Date("2026-09-18T13:08:00.000Z");
+
+    async function publishWaiting(
+      key: CharacterKey,
+      retryAfterAt: Date | null,
+      completedAt = new Date("2026-09-18T12:14:00.000Z")
+    ): Promise<string> {
+      // Reserved as of its own completion, so an earlier run of the same
+      // character is never still fresh and this always gets a new run.
+      const reservation = await repositories.evidence.reserve({
+        key,
+        freshnessCutoff: completedAt,
+        at: completedAt
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("evidence_not_reserved");
+      }
+      await repositories.evidence.publish(reservation.run.id, {
+        state: "partial",
+        limitationCode: "parse_request_cap",
+        parseLimitationCode: null,
+        retryAfterAt,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt
+      });
+      return reservation.run.id;
+    }
+
+    it("returns a character whose retry deadline has passed", async () => {
+      await publishWaiting(rootKey, new Date("2026-09-18T12:40:00.000Z"));
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([rootKey]);
+    });
+
+    it("leaves a character whose deadline has not arrived", async () => {
+      await publishWaiting(rootKey, new Date("2026-09-18T13:40:00.000Z"));
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([]);
+    });
+
+    it("leaves a character with no retry deadline at all", async () => {
+      // A limitation classified terminal-for-now. It is recovered by a rebuild,
+      // not by a sweep, and a sweep that took it would retry a character with
+      // no public logs forever.
+      await publishWaiting(rootKey, null);
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([]);
+    });
+
+    it("leaves a character already being collected", async () => {
+      await publishWaiting(rootKey, new Date("2026-09-18T12:40:00.000Z"));
+      // A reader got there first, which leaves a run queued for this character.
+      const active = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-09-18T13:00:00.000Z"),
+        at
+      });
+      expect(active.kind).toBe("reserved");
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([]);
+    });
+
+    it("judges a character by its newest completed run only", async () => {
+      // Break caught: reading every completed run rather than the latest would
+      // resurrect a deadline a later, cleaner run had already superseded.
+      await publishWaiting(
+        rootKey,
+        new Date("2026-09-18T12:40:00.000Z"),
+        new Date("2026-09-18T12:14:00.000Z")
+      );
+      await publishWaiting(rootKey, null, new Date("2026-09-18T12:50:00.000Z"));
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([]);
+    });
+
+    it("returns the longest-waiting characters first, up to the limit", async () => {
+      await publishWaiting(altKey, new Date("2026-09-18T12:50:00.000Z"));
+      await publishWaiting(rootKey, new Date("2026-09-18T12:40:00.000Z"));
+
+      await expect(
+        repositories.evidence.listResumable(25, at)
+      ).resolves.toEqual([rootKey, altKey]);
+      await expect(repositories.evidence.listResumable(1, at)).resolves.toEqual(
+        [rootKey]
+      );
+    });
+  });
+
   describe("manual dossier connections", () => {
     const pendingKey = {
       region: "eu",

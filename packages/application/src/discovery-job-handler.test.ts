@@ -424,6 +424,9 @@ function createMemoryRepositories(): Repositories {
       async getCompleted() {
         return null;
       },
+      async listResumable() {
+        return [];
+      },
       async listStatus() {
         return [];
       },

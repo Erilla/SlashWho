@@ -43,17 +43,62 @@ not manufacture a zero or silently claim completeness. `not_applicable` is
 distinct and is used only when independent role evidence establishes that a
 metric does not apply.
 
-A run that spends its whole parse budget publishes `partial` and records
-`retry_after_at` at `EVIDENCE_PARSE_CAP_RETRY_MS` (30 minutes by default),
+A run that spends one of its own request budgets publishes `partial` and
+records `retry_after_at` at `EVIDENCE_CAP_RETRY_MS` (30 minutes by default),
 which is what makes the next read collect it rather than treat it as fresh for
 the full window. A zone already read since its newest kill is dropped before
 the zone budget is measured, so the budget advances into deeper tiers and a
 saturated character stops raising the cap and settles at `complete`.
 
+Every other limitation is classified the same way, and the classification is
+the whole of it: a code either has an answer to "when might this be worth
+trying again" or it does not. An unreachable upstream and throttling that
+carried no `Retry-After` are transient and wait `EVIDENCE_TRANSIENT_RETRY_MS`
+(15 minutes by default). A character with no public logs, a private one, and
+schema drift get no retry, because none of those is resolved by waiting —
+drift needs a code fix and the rebuild that follows it. Where upstream sent its
+own `Retry-After`, that is kept in preference to either default.
+
+A code with no retry is genuinely settled rather than merely quiet, but it
+still reads on the dossier as an unfinished run. Making that distinction
+visible is outstanding work, not something this classification achieves.
+
 Such a run carries its shortfall in `parse_limitation_code` alone:
 `limitation_code` reports the history scan, which finished, and the negative
 conclusions resting on it stand. A `partial` publication must name a shortfall
 in one of the two channels, and either one satisfies that.
+
+## What drives a waiting run
+
+A `retry_after_at` makes a run _eligible_ to resume; it does not make it
+happen. The worker runs a resume sweep every five minutes that lists the
+characters whose newest completed run asked to be resumed and whose deadline
+has passed, then reserves and enqueues each of them, up to
+`EVIDENCE_RESUME_SWEEP_LIMIT` (25 by default) per tick.
+
+Without it, `reserve` was reached only from a dossier read or the refresh
+endpoint. Collection therefore continued only when somebody happened to load
+the page — so the dossier nobody was watching was the one that quietly never
+finished, and every completeness measurement was an artefact of how often
+someone looked.
+
+The sweep only reserves and enqueues. It adds no concurrency and holds no
+budget of its own: the evidence queue still collects one run at a time and the
+points gate still refuses a run it cannot afford, so a sweep cannot spend more
+per hour than a reader already could. It carries no credentials either — a
+visitor's Warcraft Logs key belongs to the read that supplied it, so a sweep
+reserves anonymously and the run falls back to the worker's own account.
+
+Its population is deliberately narrower than `reserve`'s own staleness rule,
+which also hands back evidence merely older than `FRESHNESS_HOURS`. Sweeping
+those too would make this a background re-collection of every character ever
+seen; they are re-collected when read, as before.
+
+One gap remains. A character whose _first ever_ run fails outright has no
+completed run for the sweep to read, so only a dossier read recovers it — as
+was true before the sweep existed. Widening the population to cover it would
+also make a `not_found` character retry forever, so it needs the limitation
+classification above to be consulted there too.
 
 ## Concluded tiers are stored once
 

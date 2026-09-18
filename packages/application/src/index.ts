@@ -8,6 +8,13 @@ export type {
   ApplicantEvidenceStore,
   EvidenceRunNotifier
 } from "./applicant-evidence-job-handler";
+export { retryDelayMsFor } from "./limitation-retry-policy";
+export { resumeWaitingEvidence } from "./resume-waiting-evidence";
+export type {
+  ResumableEvidenceStore,
+  ResumeEvidenceQueue,
+  ResumeWaitingEvidenceOptions
+} from "./resume-waiting-evidence";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export { refreshCharacter } from "./refresh-character";
 export type { RefreshCharacterResult } from "./refresh-character";
