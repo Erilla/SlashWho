@@ -260,6 +260,78 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("carries a fight's newest parses forward, not an arbitrary run's", async () => {
+    // Break caught: the carry-forward loader returned one row per fight *per
+    // run* in its window, every copy tied on `(killed_at, source_fight_key)`.
+    // Seeding the merge from that list therefore picked an arbitrary run's
+    // copy of each fight, and PostgreSQL stops preserving insertion order for
+    // tied rows once the set is more than a handful -- so a publish reseeded
+    // fights from the blank baseline and wrote their percentiles away. Enough
+    // fights here that the pick cannot come out right by luck.
+    const fights = 30;
+    const start = Date.parse("2026-08-04T12:00:00.000Z");
+    const blank = Array.from({ length: fights }, (_, index) =>
+      mythicKill({
+        bossId: String(1000 + index),
+        killedAt: new Date(start - (fights - index) * 86_400_000).toISOString(),
+        fightUrl: `https://www.warcraftlogs.com/reports/example#fight=${index}`
+      })
+    );
+    const enriched = blank.map((kill) =>
+      mythicKill({
+        bossId: kill.bossId,
+        killedAt: kill.killedAt,
+        fightUrl: kill.fightUrl,
+        performance: {
+          spec: null,
+          damage: { state: "available", percentile: 77 },
+          healing: { state: "unavailable" },
+          bossDamage: { state: "unavailable" }
+        }
+      })
+    );
+
+    const publish = async (
+      kills: readonly CharacterMythicKillInput[],
+      minute: number,
+      state: "complete" | "partial"
+    ) => {
+      const at = new Date(start + minute * 60_000);
+      const reservation = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date(at.getTime() - 60_000),
+        at
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("evidence_not_reserved");
+      }
+      await repositories.evidence.publish(reservation.run.id, {
+        state,
+        limitationCode: null,
+        parseLimitationCode: state === "partial" ? "parse_request_cap" : null,
+        kills: [...kills],
+        wipes: [],
+        tierBests: [],
+        completedAt: new Date(at.getTime() + 30_000)
+      });
+    };
+
+    // The baseline found every fight but held no parses for them yet.
+    await publish(blank, 0, "complete");
+    // A later run enriched all of them.
+    await publish(enriched, 10, "partial");
+    // A run that re-found nothing, because collection skips hydrated fights.
+    await publish([], 20, "partial");
+
+    const stored = await repositories.evidence.getCompleted(rootKey);
+    expect(stored?.kills).toHaveLength(fights);
+    expect(
+      stored?.kills.filter(
+        (kill) => kill.performance.damage.state === "available"
+      )
+    ).toHaveLength(fights);
+  });
+
   it("carries forward tier bests for zones a later run did not read", async () => {
     // Break caught: one run reads only the newest few zones, so a publish that
     // did not reach a zone would blank a best parse it already holds.
