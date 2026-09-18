@@ -21,6 +21,30 @@ export type WarcraftLogsLimitation = Readonly<{
   retryAfterMs?: number;
 }>;
 
+/**
+ * The classes of upstream request one `getFirstKillReports` issues. A single
+ * gateway call spans all four, so run cost can only be attributed -- to the
+ * history scan or to rankings -- by counting them apart.
+ */
+export type WarcraftLogsQueryType =
+  /** `RecentReports`, one per page of the history scan. */
+  | "history_scan"
+  /** `CharacterZoneParses`, one per raid zone read for tier bests. */
+  | "zone_rankings"
+  /** `ReportFightParses`, one per report group hydrated. */
+  | "fight_parses"
+  /** `RankingCharacterIdentities`, one shared lookup per run. */
+  | "ranking_identities";
+
+export type WarcraftLogsRequestEvent = Readonly<{
+  query: WarcraftLogsQueryType;
+  /**
+   * Whether the request came back as a limitation rather than a payload. The
+   * request was issued and paid for either way, so it is counted either way.
+   */
+  limited: boolean;
+}>;
+
 export type WarcraftLogsIdentity = Readonly<{
   kind: "identity";
   key: CharacterKey;
@@ -182,6 +206,16 @@ export interface WarcraftLogsGateway {
        * that allowed the stop, so the character would never settle.
        */
       killScanFloor?: string;
+      /**
+       * Called once per upstream request this call issues, naming the class of
+       * query. Scoped to the call rather than to the client so the counts
+       * attribute to one run: the client is a process-wide singleton.
+       *
+       * It reports requests already being made and adds none. A throwing
+       * observer is swallowed -- a counter must not cost the collection it
+       * measures.
+       */
+      onRequest?(event: WarcraftLogsRequestEvent): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

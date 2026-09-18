@@ -190,6 +190,7 @@ describe("applicant evidence job handler", () => {
         parses: new Set(),
         tierBests: new Set()
       },
+      onRequest: expect.any(Function),
       signal: expect.any(AbortSignal)
     });
     expect(evidence.published).toEqual([
@@ -1287,6 +1288,47 @@ describe("applicant evidence job handler", () => {
         warcraftLogsCalls: 1
       });
       expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(1_900);
+    });
+
+    it("records the requests the collection issued, by query type", async () => {
+      // Break caught: `warcraftLogsCalls=1` counts gateway invocations, not
+      // upstream requests, so there was no way to tell whether a run's points
+      // went on re-scanning history or on ranking requests.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({ query: "zone_rankings", limited: true });
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "ranking_identities",
+              limited: false
+            });
+            return {
+              kind: "evidence" as const,
+              troubledRaidIds: [],
+              tierBests: [],
+              kills: [],
+              wipes: []
+            };
+          }
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-2");
+
+      expect(records[0]).toMatchObject({
+        warcraftLogsHistoryScanRequests: 2,
+        warcraftLogsZoneRankingsRequests: 1,
+        warcraftLogsZoneRankingsLimited: 1,
+        warcraftLogsFightParsesRequests: 1,
+        warcraftLogsRankingIdentitiesRequests: 1
+      });
     });
 
     it("records a limitation outcome", async () => {
