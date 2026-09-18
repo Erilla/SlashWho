@@ -793,22 +793,48 @@ async function loadPositiveEvidenceForPartial(
     baselineIndex === -1 ? runs.rows : runs.rows.slice(0, baselineIndex + 1);
   const runIds = relevantRuns.map((run) => run.id);
   if (runIds.length === 0) return { kills: [], wipes: [] };
+  // Every run in the window holds its own copy of each fight, and those copies
+  // are identical on `(killed_at, source_fight_key)` -- so ordering by that
+  // alone leaves which copy of a fight the caller sees up to the sort, which
+  // PostgreSQL does not keep stable once the set outgrows a handful of rows.
+  // The newest run's copy is the only correct one: it is the one every earlier
+  // publish already merged into. Pick it explicitly (#326).
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
             guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile
-     FROM character_mythic_kills
-     WHERE evidence_run_id = ANY($1::uuid[])
+     FROM (
+       SELECT DISTINCT ON (k.fight_url)
+              k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
+              k.journal_boss_id, k.boss_order, k.is_final_boss, k.killed_at,
+              k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
+              k.guild_realm, k.historic_world_rank, k.spec_name, k.spec_icon_url,
+              k.damage_parse_state, k.damage_percentile,
+              k.healing_parse_state, k.healing_percentile,
+              k.boss_damage_parse_state, k.boss_damage_percentile
+         FROM character_mythic_kills k
+         JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+        WHERE k.evidence_run_id = ANY($1::uuid[])
+        ORDER BY k.fight_url, r.completed_at DESC NULLS LAST, r.id DESC
+     ) k
      ORDER BY killed_at, source_fight_key`,
     [runIds]
   );
   const wipes = await client.query<CharacterMythicWipeRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, attempted_at, report_url, fight_url
-     FROM character_mythic_wipes
-     WHERE evidence_run_id = ANY($1::uuid[])
+     FROM (
+       SELECT DISTINCT ON (w.fight_url)
+              w.id, w.raid_id, w.raid_name, w.boss_id, w.boss_name,
+              w.journal_boss_id, w.boss_order, w.attempted_at, w.report_url,
+              w.fight_url
+         FROM character_mythic_wipes w
+         JOIN character_evidence_runs r ON r.id = w.evidence_run_id
+        WHERE w.evidence_run_id = ANY($1::uuid[])
+        ORDER BY w.fight_url, r.completed_at DESC NULLS LAST, r.id DESC
+     ) w
      ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
     [runIds]
   );
