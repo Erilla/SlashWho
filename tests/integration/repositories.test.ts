@@ -332,6 +332,102 @@ describe("PostgreSQL repositories", () => {
     ).toHaveLength(fights);
   });
 
+  it("agrees with the dossier on which run is newest when two tie", async () => {
+    // Break caught: `loadStoredPerformanceByFightUrl` ordered by
+    // `completed_at DESC` with no tiebreak, while `loadCompletedEvidence`
+    // orders by `completed_at DESC, id DESC`. On a tie the two disagreed about
+    // which run was newest, so a publish could carry forward a copy of a fight
+    // the dossier does not show -- the same shape as #331, where a tie in an
+    // ORDER BY left the winner to PostgreSQL's discretion and coverage
+    // oscillated for a day before anyone could attribute it.
+    const enriched = mythicKill({
+      performance: {
+        spec: null,
+        damage: { state: "available", percentile: 91 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    });
+    const completedAt = new Date("2026-08-04T12:05:00.000Z");
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [enriched],
+      wipes: [],
+      tierBests: [],
+      completedAt
+    });
+
+    // A second settled run sharing that completion instant, holding the same
+    // fight blank. Its id sorts above the first, so the dossier's
+    // `id DESC` tiebreak prefers it -- and a loader without that tiebreak is
+    // free to prefer the other one.
+    const tied = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    await pool.query(
+      `INSERT INTO character_evidence_runs
+         (id, region, realm_slug, normalized_name, status, attempt,
+          evidence_version, created_at, completed_at)
+       VALUES ($1, $2, $3, $4, 'complete', 1,
+               (SELECT evidence_version FROM character_evidence_runs WHERE id = $5),
+               $6, $6)`,
+      [
+        tied,
+        rootKey.region,
+        rootKey.realm,
+        rootKey.name,
+        first.run.id,
+        completedAt
+      ]
+    );
+    await pool.query(
+      `INSERT INTO character_mythic_kills
+         (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
+          boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
+          report_url, fight_url, damage_parse_state, healing_parse_state,
+          boss_damage_parse_state, collected_at)
+       SELECT $1, source_fight_key, raid_id, raid_name, boss_id, boss_name,
+              journal_boss_id, boss_order, is_final_boss, killed_at,
+              report_url, fight_url, 'unavailable', 'unavailable',
+              'unavailable', collected_at
+         FROM character_mythic_kills
+        WHERE evidence_run_id = $2`,
+      [tied, first.run.id]
+    );
+
+    // Whatever the dossier reads is by definition the newest stored copy.
+    const before = await repositories.evidence.getCompleted(rootKey);
+    const expected = before?.kills[0]?.performance.damage;
+
+    // A later run that re-found the fight without re-hydrating it. Raid 42 is
+    // not terminal, so nothing is carried forward wholesale and the publish
+    // has to consult the stored-performance loader.
+    const later = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (later.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(later.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+
+    const after = await repositories.evidence.getCompleted(rootKey);
+    expect(after?.kills[0]?.performance.damage).toEqual(expected);
+  });
+
   it("carries forward tier bests for zones a later run did not read", async () => {
     // Break caught: one run reads only the newest few zones, so a publish that
     // did not reach a zone would blank a best parse it already holds.
