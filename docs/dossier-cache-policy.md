@@ -43,12 +43,25 @@ not manufacture a zero or silently claim completeness. `not_applicable` is
 distinct and is used only when independent role evidence establishes that a
 metric does not apply.
 
-A run that spends its whole parse budget publishes `partial` and records
-`retry_after_at` at `EVIDENCE_PARSE_CAP_RETRY_MS` (30 minutes by default),
+A run that spends one of its own request budgets publishes `partial` and
+records `retry_after_at` at `EVIDENCE_CAP_RETRY_MS` (30 minutes by default),
 which is what makes the next read collect it rather than treat it as fresh for
 the full window. A zone already read since its newest kill is dropped before
 the zone budget is measured, so the budget advances into deeper tiers and a
 saturated character stops raising the cap and settles at `complete`.
+
+Every other limitation is classified the same way, and the classification is
+the whole of it: a code either has an answer to "when might this be worth
+trying again" or it does not. An unreachable upstream and throttling that
+carried no `Retry-After` are transient and wait `EVIDENCE_TRANSIENT_RETRY_MS`
+(15 minutes by default). A character with no public logs, a private one, and
+schema drift get no retry, because none of those is resolved by waiting —
+drift needs a code fix and the rebuild that follows it. Where upstream sent its
+own `Retry-After`, that is kept in preference to either default.
+
+A code with no retry is genuinely settled rather than merely quiet, but it
+still reads on the dossier as an unfinished run. Making that distinction
+visible is outstanding work, not something this classification achieves.
 
 Such a run carries its shortfall in `parse_limitation_code` alone:
 `limitation_code` reports the history scan, which finished, and the negative

@@ -21,6 +21,7 @@ import {
   classifyEvidenceFailure,
   evidenceRetryDecision
 } from "./evidence-retry-policy";
+import { retryDelayMsFor } from "./limitation-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
@@ -163,13 +164,21 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   requestCap: number;
   parseRequestCap: number;
   /**
-   * How long a run that exhausted its parse budget waits before it is
-   * collectable again. A capped run records that work is outstanding, and
-   * `retry_after_at` is the one signal that makes `reserve` hand it back: with
-   * no retry the run stays fresh for the full 24 hours and the character
+   * How long a run that exhausted one of its own request budgets waits before
+   * it is collectable again. A capped run records that work is outstanding,
+   * and `retry_after_at` is the one signal that makes `reserve` hand it back:
+   * with no retry the run stays fresh for the full 24 hours and the character
    * settles permanently short of the data it knows it did not fetch.
    */
-  parseCapRetryMs: number;
+  capRetryMs: number;
+  /**
+   * How long a run stopped by something outside itself -- an unreachable
+   * upstream, or throttling that carried no `Retry-After` -- waits before it
+   * is collectable again. Applied only where upstream supplied no hint of its
+   * own; see `retryDelayMsFor` for which codes get one and which are left
+   * alone.
+   */
+  transientRetryMs: number;
   /**
    * How many Warcraft Logs points must remain unspent this hour before a run
    * may start. The gateway reports the allowance; this is the policy applied
@@ -368,6 +377,27 @@ export function createApplicantEvidenceJobHandler(
   options: ApplicantEvidenceJobHandlerOptions
 ) {
   const now = options.now ?? (() => new Date());
+
+  /**
+   * How long this limitation should defer the character, or `null` for one
+   * that waiting cannot help. An upstream `Retry-After` always wins: upstream
+   * knows better than a configured default when upstream will be ready.
+   */
+  function retryDelayMs(
+    limitation:
+      | Readonly<{ code: WarcraftLogsLimitationCode; retryAfterMs?: number }>
+      | null
+      | undefined
+  ): number | null {
+    if (!limitation) return null;
+    return (
+      limitation.retryAfterMs ??
+      retryDelayMsFor(limitation.code, {
+        transientRetryMs: options.transientRetryMs,
+        capRetryMs: options.capRetryMs
+      })
+    );
+  }
 
   return {
     async execute(
@@ -639,10 +669,11 @@ export function createApplicantEvidenceJobHandler(
         if (response.kind === "limitation") {
           record.outcome = "limitation";
           record.limitationCode = response.code;
+          const limitationRetryMs = retryDelayMs(response);
           const retryAfterAt =
-            response.retryAfterMs === undefined
+            limitationRetryMs === null
               ? undefined
-              : new Date(now().getTime() + response.retryAfterMs);
+              : new Date(now().getTime() + limitationRetryMs);
           await stageAndPublish({
             state: "partial",
             limitationCode: response.code,
@@ -656,19 +687,13 @@ export function createApplicantEvidenceJobHandler(
           return;
         }
 
-        // A cap carries no upstream retry hint -- it is our own budget, not a
-        // 429 -- so the run supplies one. Without it `retry_after_at` stays
-        // null, the run is fresh on the ordinary 24-hour rule, and nothing
-        // ever collects the rest: the same machinery that resumes a
-        // rate-limited run, which the cap simply was not using.
-        const parseCapRetryMs =
-          response.parseLimitation?.code === "parse_request_cap"
-            ? options.parseCapRetryMs
-            : 0;
+        // Whichever limitation asks to wait longest decides, because the run
+        // is not collectable again until both are. A limitation with no answer
+        // at all contributes nothing rather than forcing a retry the code was
+        // deliberately not given.
         const retryAfterMs = Math.max(
-          response.limitation?.retryAfterMs ?? 0,
-          response.parseLimitation?.retryAfterMs ?? 0,
-          parseCapRetryMs
+          retryDelayMs(response.limitation) ?? 0,
+          retryDelayMs(response.parseLimitation) ?? 0
         );
         // Honest about the run, not just about its history scan: a run that
         // spent its whole parse budget did not finish, and reporting it

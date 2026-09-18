@@ -22,7 +22,8 @@ export type WorkerConfig = {
   warcraftLogsClientSecret: string;
   evidenceRequestCap: number;
   evidenceParseRequestCap: number;
-  evidenceParseCapRetryMs: number;
+  evidenceCapRetryMs: number;
+  evidenceTransientRetryMs: number;
   evidencePointsReserve: number;
   evidenceKillSettleDays: number;
   evidenceRetryCostCeiling: number;
@@ -190,15 +191,38 @@ export function loadWorkerConfig(
       24,
       "invalid_evidence_parse_request_cap"
     ),
-    // A run that spends its whole parse budget has work outstanding and no
-    // upstream retry hint to carry, so it supplies its own. Half an hour
-    // matches the observed recovery of a rate-limited run, which resumed and
-    // added parses without intervention; it saturates a ten-character dossier
-    // in hours rather than days while the per-run budget still bounds load.
-    evidenceParseCapRetryMs: positiveInteger(
-      environment.EVIDENCE_PARSE_CAP_RETRY_MS,
+    // A run that spends one of its own request budgets has work outstanding
+    // and no upstream retry hint to carry, so it supplies its own. Half an
+    // hour matches the observed recovery of a rate-limited run, which resumed
+    // and added parses without intervention; it saturates a ten-character
+    // dossier in hours rather than days while the per-run budget still bounds
+    // load.
+    //
+    // EVIDENCE_PARSE_CAP_RETRY_MS is the name this was deployed under while it
+    // governed the parse cap alone. It is still read, because renaming a
+    // variable an operator may have set on Railway would silently revert their
+    // value to the default -- exactly the divergence the note above warns of.
+    evidenceCapRetryMs: positiveInteger(
+      environment.EVIDENCE_CAP_RETRY_MS ??
+        environment.EVIDENCE_PARSE_CAP_RETRY_MS,
       30 * 60_000,
-      "invalid_evidence_parse_cap_retry_ms"
+      "invalid_evidence_cap_retry_ms"
+    ),
+    // A run stopped by an unreachable upstream, or by throttling that carried
+    // no Retry-After, waits this long instead of forever. Before this existed
+    // those runs published no retry at all, which `isEvidenceFresh` reads as
+    // "never": a transport blip stranded a character until someone bumped the
+    // evidence version.
+    //
+    // Fifteen minutes is a guess, and a deliberately shorter one than the cap
+    // delay: a cap means we stopped on purpose with a known amount left to
+    // fetch, while an unavailable upstream may be back in a minute. The cost
+    // of guessing low is one wasted request against a points allowance that
+    // fully resets each hour.
+    evidenceTransientRetryMs: positiveInteger(
+      environment.EVIDENCE_TRANSIENT_RETRY_MS,
+      15 * 60_000,
+      "invalid_evidence_transient_retry_ms"
     ),
     // How much of the Warcraft Logs hourly allowance must remain before a run
     // is allowed to start.
