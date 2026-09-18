@@ -175,6 +175,15 @@ it is terminal for kills, which is the same condition that let the scan stop
 above it. The two rules are the same rule seen from either end; changing one
 without the other would lose evidence.
 
+> **Correction (#326).** That last paragraph held for kills and not for wipes.
+> `publish` filters stored wipes by the same terminal-kill marks, but
+> `killScanFloorFrom` derived the floor from stored kills alone, so the two
+> rules were _not_ the same rule: a raid a character has only ever wiped in has
+> no kill to settle and so can never be marked terminal, yet the floor could sit
+> above its wipes and a complete publish then dropped them. Fixed by giving the
+> floor the stored wipes too — see
+> [`2026-09-18-kill-scan-floor-wipes-design.md`](2026-09-18-kill-scan-floor-wipes-design.md).
+
 ## Risks
 
 - **A raid terminal for kills but troubled for parses is a new state.** It is

@@ -3,7 +3,7 @@ import type {
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
   StagedEvidenceCollection,
-  StoredKillTier,
+  StoredEvidenceTiers,
   TerminalTier
 } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
@@ -95,10 +95,10 @@ export type ApplicantEvidenceStore = {
    * them, and the means to record the ones it has just finished with.
    */
   /**
-   * Where and when this character's stored kills happened, which is what turns
-   * a terminal raid id into a date the report scan can stop at.
+   * Where and when this character's stored kills and wipes happened, which is
+   * what turns a terminal raid id into a date the report scan can stop at.
    */
-  storedKillTiers(key: CharacterKey): Promise<readonly StoredKillTier[]>;
+  storedEvidenceTiers(key: CharacterKey): Promise<StoredEvidenceTiers>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   markTerminalTiers(
     key: CharacterKey,
@@ -652,10 +652,14 @@ export function createApplicantEvidenceJobHandler(
           )
         };
         // How far back the report scan still has to page. Pages below this can
-        // only re-find kills already stored, so the scan stops there.
+        // only re-find evidence already stored, so the scan stops there.
+        const storedEvidence = await options.evidence.storedEvidenceTiers(
+          run.key
+        );
         const killScanFloor = killScanFloorFrom(
           storedTerminal,
-          await options.evidence.storedKillTiers(run.key)
+          storedEvidence.kills,
+          storedEvidence.wipes
         );
         activeContext.signal.throwIfAborted();
         // A light refresh reads one page of reports. The gateway marks a

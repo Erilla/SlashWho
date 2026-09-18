@@ -361,6 +361,22 @@ export type StoredKillTier = Readonly<{
   killedAt: string;
 }>;
 
+/** Where and when one stored wipe happened, without its evidence. */
+export type StoredWipeTier = Readonly<{
+  raidId: string;
+  attemptedAt: string;
+}>;
+
+/**
+ * Everything a character holds that a complete publish would drop if the scan
+ * stopped above it. Kills and wipes travel together because the publish keeps
+ * them on the same condition.
+ */
+export type StoredEvidenceTiers = Readonly<{
+  kills: readonly StoredKillTier[];
+  wipes: readonly StoredWipeTier[];
+}>;
+
 /** One raid a character is finished collecting one domain of evidence for. */
 export type TerminalTier = Readonly<{
   /** The Warcraft Logs zone id, as carried on the character's stored kills. */
@@ -476,13 +492,16 @@ export interface EvidenceRepository {
    * rest settled.
    */
   /**
-   * The raid, name and kill time of every stored kill. This is what turns a
+   * The raid and time of every stored kill and wipe. This is what turns a
    * terminal raid id into a date the report scan can stop at: the marks carry
-   * Warcraft Logs zone ids, and only the kills say when that zone was raided.
+   * Warcraft Logs zone ids, and only the evidence says when that zone was
+   * raided. Wipes are included because a complete publish drops them on the
+   * same condition it drops kills, so a floor blind to them skips evidence
+   * nothing carries forward (#326).
    *
    * Scoped like `hydratedFightUrls`, to the evidence `getCompleted` returns.
    */
-  storedKillTiers(key: CharacterKey): Promise<readonly StoredKillTier[]>;
+  storedEvidenceTiers(key: CharacterKey): Promise<StoredEvidenceTiers>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   /**
    * Records tiers as terminal, stamping each with its domain's current

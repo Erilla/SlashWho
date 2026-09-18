@@ -1,6 +1,7 @@
 import type {
   StagedEvidenceCollection,
   StoredKillTier,
+  StoredWipeTier,
   TerminalTier
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
@@ -49,6 +50,7 @@ function store(
   settleCutoffs: Date[];
   stored: TerminalTier[];
   storedKills: StoredKillTier[];
+  storedWipes: StoredWipeTier[];
   staged: Map<string, StagedEvidenceCollection>;
 } {
   const published: Array<{
@@ -61,6 +63,7 @@ function store(
   const settleCutoffs: Date[] = [];
   const stored: TerminalTier[] = [];
   const storedKills: StoredKillTier[] = [];
+  const storedWipes: StoredWipeTier[] = [];
   const staged = new Map<string, StagedEvidenceCollection>();
   return {
     published,
@@ -70,8 +73,9 @@ function store(
     settleCutoffs,
     stored,
     storedKills,
-    async storedKillTiers() {
-      return storedKills;
+    storedWipes,
+    async storedEvidenceTiers() {
+      return { kills: storedKills, wipes: storedWipes };
     },
     async terminalTiers() {
       return stored;
@@ -557,7 +561,7 @@ describe("applicant evidence job handler", () => {
       stagedCollection: vi.fn().mockResolvedValue(null),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([]),
-      storedKillTiers: vi.fn().mockResolvedValue([]),
+      storedEvidenceTiers: vi.fn().mockResolvedValue({ kills: [], wipes: [] }),
       terminalTiers: vi.fn().mockResolvedValue([]),
       markTerminalTiers: vi.fn().mockResolvedValue(undefined)
     };
@@ -1423,8 +1427,8 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
-        async storedKillTiers() {
-          return [];
+        async storedEvidenceTiers() {
+          return { kills: [], wipes: [] };
         },
         async terminalTiers() {
           return [];
@@ -1826,8 +1830,8 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
-        async storedKillTiers() {
-          return [];
+        async storedEvidenceTiers() {
+          return { kills: [], wipes: [] };
         },
         async terminalTiers() {
           return [];
@@ -2229,6 +2233,56 @@ describe("applicant evidence job handler", () => {
         key,
         expect.objectContaining({
           killScanFloor: "2026-09-01T00:00:00.000Z"
+        })
+      );
+    });
+
+    it("pages back to a stored wipe in a raid that was never killed in", async () => {
+      // Break caught: #326. A complete publish keeps a stored wipe on the same
+      // condition it keeps a stored kill -- the raid being terminal for kills
+      // -- and raid 43 has no kill to settle, so it can never earn that mark.
+      // A floor weighing kills alone stopped the scan above the wipe, and the
+      // publish then dropped it.
+      const evidence = store();
+      evidence.stored.push({ raidId: "42", domain: "kills" });
+      evidence.storedKills.push({
+        raidId: "42",
+        raidName: "The Dreamrift",
+        killedAt: "2026-06-01T00:00:00.000Z"
+      });
+      evidence.storedWipes.push({
+        raidId: "43",
+        attemptedAt: "2026-03-01T00:00:00.000Z"
+      });
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({
+          killScanFloor: "2026-03-01T00:00:00.000Z"
         })
       );
     });

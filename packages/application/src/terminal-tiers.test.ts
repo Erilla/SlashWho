@@ -14,6 +14,10 @@ function kill(raidId: string, raidName: string, killedAt: string) {
   return { raidId, raidName, killedAt };
 }
 
+function wipe(raidId: string, attemptedAt: string) {
+  return { raidId, attemptedAt };
+}
+
 function input(overrides: Partial<Parameters<typeof terminalTiersFrom>[0]>) {
   return terminalTiersFrom({
     at,
@@ -192,12 +196,16 @@ describe("killScanFloorFrom", () => {
     // Nothing to save, and stored kills may come from a run that never
     // finished, so the scan is left alone.
     expect(
-      killScanFloorFrom([], [kill("42", concluded, "2024-01-01T00:00:00.000Z")])
+      killScanFloorFrom(
+        [],
+        [kill("42", concluded, "2024-01-01T00:00:00.000Z")],
+        []
+      )
     ).toBeUndefined();
   });
 
   it("gives no floor for a character with nothing stored", () => {
-    expect(killScanFloorFrom(terminalKills, [])).toBeUndefined();
+    expect(killScanFloorFrom(terminalKills, [], [])).toBeUndefined();
   });
 
   it("stops at the oldest kill of a tier that is not terminal", () => {
@@ -205,20 +213,79 @@ describe("killScanFloorFrom", () => {
     // still page past it. Taking the newest terminal boundary as the floor
     // would strand raid 43 forever.
     expect(
-      killScanFloorFrom(terminalKills, [
-        kill("42", concluded, "2023-01-01T00:00:00.000Z"),
-        kill("43", concluded, "2024-01-01T00:00:00.000Z"),
-        kill("43", concluded, "2024-06-01T00:00:00.000Z")
-      ])
+      killScanFloorFrom(
+        terminalKills,
+        [
+          kill("42", concluded, "2023-01-01T00:00:00.000Z"),
+          kill("43", concluded, "2024-01-01T00:00:00.000Z"),
+          kill("43", concluded, "2024-06-01T00:00:00.000Z")
+        ],
+        []
+      )
     ).toBe("2024-01-01T00:00:00.000Z");
   });
 
   it("stops at the newest kill once every tier held is terminal", () => {
     expect(
-      killScanFloorFrom(terminalKills, [
-        kill("42", concluded, "2023-01-01T00:00:00.000Z"),
-        kill("42", concluded, "2024-06-01T00:00:00.000Z")
-      ])
+      killScanFloorFrom(
+        terminalKills,
+        [
+          kill("42", concluded, "2023-01-01T00:00:00.000Z"),
+          kill("42", concluded, "2024-06-01T00:00:00.000Z")
+        ],
+        []
+      )
     ).toBe("2024-06-01T00:00:00.000Z");
+  });
+
+  it("stops at the oldest wipe of a tier that is not terminal", () => {
+    // Break caught: a complete publish keeps stored wipes on the same
+    // condition as stored kills -- the raid being terminal for kills -- so a
+    // floor that only weighed kills let the scan skip past a wipe nothing
+    // would carry forward. Raid 43 has wiped and never killed, so it can never
+    // be marked terminal, and the floor must hold open for it.
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [kill("42", concluded, "2024-06-01T00:00:00.000Z")],
+        [wipe("43", "2024-01-01T00:00:00.000Z")]
+      )
+    ).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("stops at the oldest of the two when both are outstanding", () => {
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [
+          kill("42", concluded, "2023-01-01T00:00:00.000Z"),
+          kill("43", concluded, "2024-06-01T00:00:00.000Z")
+        ],
+        [wipe("44", "2024-03-01T00:00:00.000Z")]
+      )
+    ).toBe("2024-03-01T00:00:00.000Z");
+  });
+
+  it("leaves a terminal tier's own wipes below the floor", () => {
+    // Raid 42 is terminal for kills, so the publish carries its wipes forward
+    // as well. They must not drag the floor back down and undo the saving.
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [kill("42", concluded, "2024-06-01T00:00:00.000Z")],
+        [wipe("42", "2023-01-01T00:00:00.000Z")]
+      )
+    ).toBe("2024-06-01T00:00:00.000Z");
+  });
+
+  it("gives no floor for a character holding wipes and no kills", () => {
+    // Nothing is terminal without a kill, so there is no saving to take.
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [],
+        [wipe("43", "2024-01-01T00:00:00.000Z")]
+      )
+    ).toBeUndefined();
   });
 });
