@@ -7,6 +7,7 @@ import {
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
   type DiscoveryRunNotifier,
+  type EvidenceRunNotifier,
   type FingerprintAlertNotifier
 } from "@slashwho/application";
 import { createBlizzardClient } from "@slashwho/blizzard";
@@ -73,6 +74,10 @@ export type WorkerRuntimeDependencies = {
     config: WorkerConfig,
     logger?: DiscoveryLogger
   ) => DiscoveryRunNotifier;
+  createEvidenceRunNotifier?: (
+    config: WorkerConfig,
+    logger?: DiscoveryLogger
+  ) => EvidenceRunNotifier;
   createHandler: (options: DiscoveryJobHandlerOptions) => DiscoveryJobHandler;
   createEvidenceHandler: typeof createApplicantEvidenceJobHandler;
   sleep: (milliseconds: number) => Promise<void>;
@@ -150,6 +155,79 @@ export function createDiscoveryRunNotifier(
           failure: "network_or_timeout"
         });
       }
+    }
+  };
+}
+
+/**
+ * Announces each evidence run to the same chat webhook as discovery, at its
+ * start and again on its outcome. Evidence runs spend the Warcraft Logs
+ * allowance, so `limitationCode`, `parseLimitationCode` and the points spent
+ * are what the message exists to carry.
+ *
+ * Delivery is best effort throughout, exactly as it is for a discovery run:
+ * the channel is a convenience for whoever is watching, never a dependency of
+ * the run.
+ */
+export function createEvidenceRunNotifier(
+  config: WorkerConfig,
+  options: {
+    logger?: DiscoveryLogger;
+    fetch?: typeof globalThis.fetch;
+    timeoutMs?: number;
+  } = {}
+): EvidenceRunNotifier {
+  const fetch = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+
+  async function post(content: string): Promise<void> {
+    if (!config.discoveryWebhookUrl) return;
+    try {
+      const response = await fetch(config.discoveryWebhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!response.ok) {
+        options.logger?.info({
+          event: "evidence_announcement_delivery_failed",
+          failure: "http_status",
+          status: response.status
+        });
+      }
+    } catch {
+      options.logger?.info({
+        event: "evidence_announcement_delivery_failed",
+        failure: "network_or_timeout"
+      });
+    }
+  }
+
+  return {
+    async started(run) {
+      await post(
+        `🧾 Evidence run started — **${run.name}** (${run.region}/${run.realm}) · attempt ${run.attempt} · run \`${run.runId}\``
+      );
+    },
+    async finished(run) {
+      // Only what is actually known: a run with no limitation and no readable
+      // allowance announces its outcome and nothing more.
+      const limitations = [run.limitationCode, run.parseLimitationCode].filter(
+        (code): code is string => Boolean(code)
+      );
+      const details = [
+        ...(limitations.length > 0 ? [limitations.join(" / ")] : []),
+        ...(run.pointsSpent === null ? [] : [`${run.pointsSpent} points`])
+      ];
+      const icon = run.outcome === "complete" ? "✅" : "⚠️";
+      await post(
+        [
+          `${icon} Evidence run ${run.outcome} — **${run.name}** (${run.region}/${run.realm})`,
+          ...details,
+          `run \`${run.runId}\``
+        ].join(" · ")
+      );
     }
   };
 }
@@ -239,6 +317,8 @@ const defaultDependencies: WorkerRuntimeDependencies = {
     createFingerprintAlertNotifier(config, { logger }),
   createDiscoveryRunNotifier: (config, logger) =>
     createDiscoveryRunNotifier(config, { logger }),
+  createEvidenceRunNotifier: (config, logger) =>
+    createEvidenceRunNotifier(config, { logger }),
   createHandler: createDiscoveryJobHandler,
   createEvidenceHandler: createApplicantEvidenceJobHandler,
   sleep: (milliseconds) =>
@@ -313,6 +393,10 @@ export async function createWorkerRuntime(
       }
     ).evidence;
     if (!evidence) throw new Error("character_evidence_repository_unavailable");
+    const evidenceRunNotifier = dependencies.createEvidenceRunNotifier?.(
+      config,
+      logger
+    );
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
       warcraftLogs: dependencies.createEvidenceGateway(config, logger),
@@ -336,6 +420,7 @@ export async function createWorkerRuntime(
       parseRequestCap: config.evidenceParseRequestCap,
       parseCapRetryMs: config.evidenceParseCapRetryMs,
       pointsReserve: config.evidencePointsReserve,
+      ...(evidenceRunNotifier ? { evidenceRunNotifier } : {}),
       ...(logger ? { logger } : {})
     });
     await initializedQueue.start();

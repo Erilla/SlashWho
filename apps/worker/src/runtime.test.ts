@@ -2,7 +2,8 @@ import type {
   ApplicantEvidenceJobHandler,
   ApplicantEvidenceJobHandlerOptions,
   DiscoveryJobHandler,
-  DiscoveryJobHandlerOptions
+  DiscoveryJobHandlerOptions,
+  EvidenceRunNotifier
 } from "@slashwho/application";
 import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import type {
@@ -18,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkerConfig } from "./config";
 import {
   createDiscoveryRunNotifier,
+  createEvidenceRunNotifier,
   createFingerprintAlertNotifier,
   createFingerprintIntegration,
   createRaiderIoGateway,
@@ -403,6 +405,206 @@ describe("worker runtime", () => {
     });
   });
 
+  it("announces an evidence run starting as a message Discord will accept", async () => {
+    // Break caught: posting the raw record is rejected by Discord with 400
+    // "Cannot send an empty message", so every announcement would be lost to
+    // a swallowed failure.
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const notifier = createEvidenceRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.started({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "Sentinel",
+      attempt: 2
+    });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, init] = fetch.mock.calls[0]! as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe(
+      "https://discord.com/api/webhooks/000000000000000000/token"
+    );
+    const body = JSON.parse(String(init.body)) as { content?: string };
+    expect(body.content).toContain("Sentinel");
+    expect(body.content).toContain("eu/silvermoon");
+    expect(body.content).toContain("attempt 2");
+  });
+
+  it("names the limitations and the points an evidence run ended on", async () => {
+    // Break caught: #288's whole case is that `parse_schema_drift` and a
+    // drained allowance were invisible, so an outcome message that omits them
+    // announces nothing anyone needed.
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const notifier = createEvidenceRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.finished({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "rinn",
+      attempt: 1,
+      outcome: "partial",
+      limitationCode: "parse_schema_drift",
+      parseLimitationCode: "schema_changed",
+      pointsSpent: 4_200
+    });
+
+    const [, init] = fetch.mock.calls[0]! as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as { content?: string };
+    expect(body.content).toContain("rinn");
+    expect(body.content).toContain("partial");
+    expect(body.content).toContain("parse_schema_drift");
+    expect(body.content).toContain("schema_changed");
+    expect(body.content).toContain("4200 points");
+  });
+
+  it("omits the points from an evidence outcome that could not measure them", async () => {
+    // Break caught: the allowance is not always readable, and rendering the
+    // absent value would announce "null points" on every such run.
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const notifier = createEvidenceRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.finished({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "rinn",
+      attempt: 1,
+      outcome: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      pointsSpent: null
+    });
+
+    const [, init] = fetch.mock.calls[0]! as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as { content?: string };
+    expect(body.content).toContain("complete");
+    expect(body.content).not.toContain("null");
+    expect(body.content).not.toContain("points");
+  });
+
+  it("posts nothing for an evidence run when no webhook is configured", async () => {
+    // Break caught: an unset webhook must cost no request at all, not a call
+    // to an empty URL that throws on every run.
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const notifier = createEvidenceRunNotifier(
+      { ...config, discoveryWebhookUrl: undefined },
+      { fetch }
+    );
+
+    await notifier.started({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "rinn",
+      attempt: 1
+    });
+    await notifier.finished({
+      runId: "a1b2c3d4-0000-4000-8000-000000000001",
+      region: "eu",
+      realm: "silvermoon",
+      name: "rinn",
+      attempt: 1,
+      outcome: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      pointsSpent: null
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("swallows and logs a rejected evidence announcement", async () => {
+    // Break caught: a ten-character sweep announces twice per run, which is
+    // squarely inside Discord's rate limit, and a 429 that propagated would
+    // fail the evidence run it was only describing.
+    const logger = { info: vi.fn() };
+    const fetch = vi.fn(async () => new Response(null, { status: 429 }));
+    const notifier = createEvidenceRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { logger, fetch }
+    );
+
+    await expect(
+      notifier.finished({
+        runId: "a1b2c3d4-0000-4000-8000-000000000001",
+        region: "eu",
+        realm: "silvermoon",
+        name: "rinn",
+        attempt: 1,
+        outcome: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        pointsSpent: null
+      })
+    ).resolves.toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "evidence_announcement_delivery_failed",
+      failure: "http_status",
+      status: 429
+    });
+  });
+
+  it("swallows and logs an evidence announcement that never returns", async () => {
+    // Break caught: a stalled webhook request would hold the evidence run
+    // open behind a chat message it does not depend on.
+    const logger = { info: vi.fn() };
+    const fetch = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const notifier = createEvidenceRunNotifier(
+      {
+        ...config,
+        discoveryWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { logger, fetch }
+    );
+
+    await expect(
+      notifier.started({
+        runId: "a1b2c3d4-0000-4000-8000-000000000001",
+        region: "eu",
+        realm: "silvermoon",
+        name: "rinn",
+        attempt: 1
+      })
+    ).resolves.toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "evidence_announcement_delivery_failed",
+      failure: "network_or_timeout"
+    });
+  });
+
   it("swallows and logs a non-successful maintainer webhook response", async () => {
     // Break caught: a provider outage could reject discovery work and cause the
     // durable job to retry after its sweep had already changed state.
@@ -509,6 +711,30 @@ describe("worker runtime", () => {
     );
 
     expect(handlerOptions?.logger).toBe(logger);
+    await runtime.stop();
+  });
+
+  it("passes the evidence run notifier to the evidence handler", async () => {
+    // Break caught: #288 is exactly this wiring going missing — the notifier
+    // can be built correctly and still never reach the handler that spends
+    // the Warcraft Logs allowance, leaving evidence runs silent.
+    const fakes = runtimeFakes();
+    const notifier: EvidenceRunNotifier = {
+      started: () => {},
+      finished: () => {}
+    };
+    let evidenceOptions: ApplicantEvidenceJobHandlerOptions | undefined;
+    Object.assign(fakes.dependencies, {
+      createEvidenceRunNotifier: () => notifier,
+      createEvidenceHandler(options: ApplicantEvidenceJobHandlerOptions) {
+        evidenceOptions = options;
+        return fakes.evidenceHandler;
+      }
+    });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(evidenceOptions?.evidenceRunNotifier).toBe(notifier);
     await runtime.stop();
   });
 

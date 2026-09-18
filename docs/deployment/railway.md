@@ -83,8 +83,10 @@ RAIDER_IO_TIMEOUT_MS=10000
 # is the service that benefits most. Omit it to call Raider.IO anonymously.
 RAIDER_IO_ACCESS_KEY=<Raider.IO API key>
 # Optional secret: announces each discovery run to a Discord channel as it
-# starts, once per execution. Worker-only, because runs execute here. The URL
-# is a credential in full. Omit it to announce nothing.
+# starts, once per execution, and each evidence run twice — as it starts and
+# again on its outcome, carrying any limitation codes and the Warcraft Logs
+# points it spent. Worker-only, because runs execute here. The URL is a
+# credential in full. Omit it to announce nothing.
 DISCOVERY_WEBHOOK_URL=<Discord webhook URL>
 DATABASE_STARTUP_ATTEMPTS=5
 DATABASE_STARTUP_RETRY_MS=1000

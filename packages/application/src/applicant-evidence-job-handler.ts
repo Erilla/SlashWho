@@ -68,6 +68,39 @@ export type ApplicantEvidenceStore = {
   ): Promise<readonly (readonly [string, string])[]>;
 };
 
+/**
+ * Announces an evidence run to whoever is watching. Evidence runs spend the
+ * Warcraft Logs allowance, so a run that starts, stalls or drains it should be
+ * visible without anyone deliberately querying for it.
+ *
+ * Both calls carry only what `evidence_job` already records: run identity, the
+ * canonical (public) character key, the attempt and the outcome. Never the
+ * run's credentials, an owner id or a correlation id.
+ *
+ * Delivery is the implementation's problem and is best effort. The handler
+ * treats either call throwing as a non-event.
+ */
+export type EvidenceRunNotifier = {
+  started(run: {
+    runId: string;
+    region: string;
+    realm: string;
+    name: string;
+    attempt: number;
+  }): Promise<void> | void;
+  finished(run: {
+    runId: string;
+    region: string;
+    realm: string;
+    name: string;
+    attempt: number;
+    outcome: string;
+    limitationCode: string | null;
+    parseLimitationCode: string | null;
+    pointsSpent: number | null;
+  }): Promise<void> | void;
+};
+
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   evidence: ApplicantEvidenceStore;
   warcraftLogs: Pick<
@@ -97,6 +130,7 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   pointsReserve: number;
   now?: () => Date;
   logger?: { info(value: Record<string, unknown>): void };
+  evidenceRunNotifier?: EvidenceRunNotifier;
   monotonic?: () => number;
 }>;
 
@@ -255,12 +289,34 @@ export function createApplicantEvidenceJobHandler(
         pointsRemainingAfter: null,
         durationMs: 0
       };
+      // Set once the run is claimed, and the sole gate on announcing: a run
+      // this execution never owned is neither started nor finished.
+      let announced: CharacterKey | undefined;
 
       try {
         const run = await evidence.claim(job.runId, activeContext.attempt);
         if (!run) {
           record.outcome = "not_claimed";
           return;
+        }
+        // Announcing only once the claim succeeds keeps one run to one pair of
+        // announcements however many workers race for it, and is the first
+        // point at which there is a character to name.
+        announced = run.key;
+        try {
+          await options.evidenceRunNotifier?.started({
+            runId: job.runId,
+            region: run.key.region,
+            realm: run.key.realm,
+            name: run.key.name,
+            attempt: activeContext.attempt
+          });
+        } catch {
+          options.logger?.info({
+            event: "evidence_run_announcement_failed",
+            runId: job.runId,
+            phase: "started"
+          });
         }
 
         // The run's own Warcraft Logs credentials when the enqueuing visitor
@@ -446,6 +502,29 @@ export function createApplicantEvidenceJobHandler(
         if (options.logger) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
           options.logger.info({ ...record, ...scope.totals() });
+        }
+        if (announced) {
+          // Read from `record`, so the announcement and the log can never
+          // disagree about how the run ended.
+          try {
+            await options.evidenceRunNotifier?.finished({
+              runId: job.runId,
+              region: announced.region,
+              realm: announced.realm,
+              name: announced.name,
+              attempt: activeContext.attempt,
+              outcome: record.outcome as string,
+              limitationCode: record.limitationCode as string | null,
+              parseLimitationCode: record.parseLimitationCode as string | null,
+              pointsSpent: record.pointsSpentByRun as number | null
+            });
+          } catch {
+            options.logger?.info({
+              event: "evidence_run_announcement_failed",
+              runId: job.runId,
+              phase: "finished"
+            });
+          }
         }
       }
     }

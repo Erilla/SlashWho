@@ -5,7 +5,8 @@ export type {
   ApplicantEvidenceJobHandlerOptions,
   ApplicantEvidenceJobInput,
   ApplicantEvidenceRun,
-  ApplicantEvidenceStore
+  ApplicantEvidenceStore,
+  EvidenceRunNotifier
 } from "./applicant-evidence-job-handler";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export type {
