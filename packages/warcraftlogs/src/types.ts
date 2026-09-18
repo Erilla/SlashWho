@@ -4,6 +4,8 @@ export type WarcraftLogsLimitationCode =
   | "not_found"
   | "private"
   | "rate_limited"
+  /** We declined to start: too little of the hourly allowance was left. */
+  | "points_budget_low"
   | "request_cap"
   | "unavailable"
   | "schema_drift"

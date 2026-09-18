@@ -157,6 +157,7 @@ export const dossierLimitationSchema = z
       "not_found",
       "private",
       "rate_limited",
+      "points_budget_low",
       "request_cap",
       "unavailable",
       "schema_changed",

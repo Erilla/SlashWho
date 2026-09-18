@@ -1470,6 +1470,34 @@ describe("applicant dossier service", () => {
     }
   );
 
+  it("describes points_budget_low as a deferral, not a parse failure", async () => {
+    // Break caught: points_budget_low does not start with "parse_", so without an
+    // explicit case it falls through limitationMessage's default and tells the
+    // reader parse availability is partial -- when in fact nothing was collected
+    // and the run is waiting for the allowance to reset.
+    const { dossiers } = fixture({
+      evidenceLimitationCode: "points_budget_low"
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    const limitation = result.dossier.limitations.find(
+      (item) =>
+        item.source === "warcraft_logs" &&
+        item.character !== null &&
+        item.character.name === root.name
+    );
+    expect(limitation).toEqual(
+      expect.objectContaining({
+        code: "points_budget_low",
+        message:
+          "Warcraft Logs collection was deferred because this dossier's hourly " +
+          "points allowance is nearly spent. It resumes automatically once the " +
+          "allowance resets; shown evidence is partial."
+      })
+    );
+  });
+
   it("leaves the rank unknown when multiple leaderboard rows match the same kill", async () => {
     const { dossiers, raiderio } = fixture();
     vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
