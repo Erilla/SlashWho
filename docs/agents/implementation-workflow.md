@@ -170,16 +170,21 @@ resolved. Then validate the resulting `main` deployment in staging.
 
 A pull request from a branch in this repository is reviewed automatically by
 the `claude-code-review` workflow when it opens, is reopened, or is marked
-ready for review. It posts an inline comment on each issue it finds, or a
-single summary comment when it finds none.
+ready for review. It runs `.claude/skills/pr-review` and posts one comment:
+the findings, or a note that it found nothing.
 
-It deliberately does **not** run again on later pushes. The review costs the
-same on every run whatever the diff size, because the plugin fans out to a
-fixed fleet of agents rather than scaling to the change, so the only way to
-control the bill is to run it less often. A pull request that is already
-open therefore keeps its original review; push a fix and the comment stays
-until you resolve it yourself. Pull requests that touch only markdown or
-`docs/` are skipped entirely.
+It deliberately does **not** run again on later pushes. Each run is billed, and
+what it costs grows with the size of the diff and the number of findings it has
+to check, so running once per pull request rather than once per push is the
+main control on the bill. A pull request that is already open therefore keeps
+its original review; push a fix and the comment stays until you resolve it
+yourself. Pull requests that touch only markdown or `docs/` are skipped
+entirely.
+
+The reviewer is deliberately cheap, and the cost of that is precision: it
+reads the diff once rather than sending several agents over it, so it will
+occasionally flag something that turns out to be fine. Say so in a reply when
+it does.
 
 To get a fresh review after substantial changes, close and reopen the pull
 request, or re-run the workflow job from the Actions tab. Both are deliberate
