@@ -576,7 +576,12 @@ export async function createWorkerRuntime(
           try {
             await initializedQueue.stop({
               graceful: true,
-              timeoutMs: config.workerDrainTimeoutMs
+              timeoutMs: config.workerDrainTimeoutMs,
+              // Waiting out the whole budget was the bug: an evidence run
+              // cannot finish inside it, so the wait only ever expired. The
+              // grace covers a job that is nearly done; past it the run is
+              // aborted, and the handler releases it with the remainder.
+              abortGraceMs: config.workerAbortGraceMs
             });
           } catch (error) {
             if (error instanceof DiscoveryQueueStopTimeoutError) {

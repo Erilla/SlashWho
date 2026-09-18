@@ -91,6 +91,12 @@ DISCOVERY_WEBHOOK_URL=<Discord webhook URL>
 DATABASE_STARTUP_ATTEMPTS=5
 DATABASE_STARTUP_RETRY_MS=1000
 WORKER_DRAIN_TIMEOUT_MS=30000
+# How much of the drain budget a still-running job may spend finishing before
+# its signal is aborted. Observed evidence runs take 199-591 seconds, so none
+# of them can finish inside the drain budget; aborting is what lets the handler
+# release the run instead of dying with it left `running`. Capped at half the
+# drain budget, because the release needs the remainder. 0 aborts at once.
+WORKER_ABORT_GRACE_MS=5000
 WORKER_HEALTH_HOST=0.0.0.0
 BLIZZARD_CLIENT_ID=<Blizzard OAuth client ID secret>
 BLIZZARD_CLIENT_SECRET=<Blizzard OAuth client secret>

@@ -37,6 +37,7 @@ vi.mock("pg-boss", () => ({
 
 import {
   createDiscoveryQueue,
+  DiscoveryQueueStopTimeoutError,
   collectCharacterEvidenceQueueName,
   discoverCharacterQueueName,
   fingerprintAdmissionQueueName,
@@ -289,5 +290,156 @@ describe("job telemetry", () => {
     expect(queueFakes.send.mock.calls[0]?.[1]).toEqual({
       runId: "00000000-0000-4000-8000-000000000013"
     });
+  });
+});
+
+describe("shutdown", () => {
+  const connectionString = "postgres://worker:secret@database/slashwho";
+  const runId = "00000000-0000-4000-8000-000000000020";
+
+  /**
+   * The evidence worker most recently registered. `queueFakes.workers`
+   * accumulates across this file, so the first match belongs to an earlier
+   * test's closure.
+   */
+  function latestEvidenceWorker() {
+    return queueFakes.workers
+      .filter(({ name }) => name === collectCharacterEvidenceQueueName)
+      .at(-1);
+  }
+
+  function deliver(
+    worker: ReturnType<typeof latestEvidenceWorker>,
+    signal = new AbortController().signal
+  ) {
+    return worker?.handler([
+      { data: { runId }, retryCount: 0, retryLimit: 4, signal } as never
+    ]);
+  }
+
+  it("aborts in-flight work instead of spending the whole budget waiting", async () => {
+    // Break caught: #306. `stop` waited out its entire drain budget on an
+    // evidence run that takes 199-591 seconds, so the handler's abort path --
+    // the one thing that releases the run -- never ran on a deploy.
+    const queue = createDiscoveryQueue({ connectionString });
+    let released = false;
+
+    await queue.start();
+    await queue.workCharacterEvidence(
+      async (_payload, context) =>
+        new Promise<void>((resolve) => {
+          context.signal.addEventListener("abort", () => {
+            released = true;
+            resolve();
+          });
+        })
+    );
+    const execution = deliver(latestEvidenceWorker());
+
+    await queue.stop({ graceful: true, timeoutMs: 1_000, abortGraceMs: 10 });
+    await execution;
+
+    expect(released).toBe(true);
+  });
+
+  it("spends only the grace on waiting and keeps the rest for the release", async () => {
+    // Break caught: handing pg-boss the whole budget leaves nothing for the
+    // handler's release write, which is what the abort exists to allow.
+    const queue = createDiscoveryQueue({ connectionString });
+    await queue.start();
+    queueFakes.stop.mockClear();
+
+    await queue.stop({ graceful: true, timeoutMs: 1_000, abortGraceMs: 200 });
+
+    expect(queueFakes.stop).toHaveBeenCalledWith({
+      graceful: true,
+      timeout: 200
+    });
+  });
+
+  it("caps the grace at half the budget so a release always has time", async () => {
+    // Break caught: a grace configured wider than the drain budget would
+    // reproduce #306 exactly -- all waiting, no abort.
+    const queue = createDiscoveryQueue({ connectionString });
+    await queue.start();
+    queueFakes.stop.mockClear();
+
+    await queue.stop({ graceful: true, timeoutMs: 1_000, abortGraceMs: 9_000 });
+
+    expect(queueFakes.stop).toHaveBeenCalledWith({
+      graceful: true,
+      timeout: 500
+    });
+  });
+
+  it("aborts at once when the stop is not graceful", async () => {
+    // Break caught: the initialization-failure path has no reason to wait, and
+    // a job left running there holds a database pool that is about to close.
+    const queue = createDiscoveryQueue({ connectionString });
+    let released = false;
+
+    await queue.start();
+    await queue.workCharacterEvidence(
+      async (_payload, context) =>
+        new Promise<void>((resolve) => {
+          context.signal.addEventListener("abort", () => {
+            released = true;
+            resolve();
+          });
+        })
+    );
+    const execution = deliver(latestEvidenceWorker());
+    queueFakes.stop.mockClear();
+
+    await queue.stop({ graceful: false, timeoutMs: 1_000 });
+    await execution;
+
+    expect(queueFakes.stop).toHaveBeenCalledWith({
+      graceful: false,
+      timeout: 1_000
+    });
+    expect(released).toBe(true);
+  });
+
+  it("still reports a timeout when an aborted job does not settle", async () => {
+    // Break caught: swallowing the timeout would report a clean shutdown for a
+    // process that is about to be killed mid-run.
+    const queue = createDiscoveryQueue({ connectionString });
+
+    await queue.start();
+    await queue.workCharacterEvidence(
+      async () => new Promise<void>(() => undefined)
+    );
+    void deliver(latestEvidenceWorker());
+
+    await expect(
+      queue.stop({ graceful: true, timeoutMs: 40, abortGraceMs: 10 })
+    ).rejects.toBeInstanceOf(DiscoveryQueueStopTimeoutError);
+  });
+
+  it("keeps honouring the job's own abort signal", async () => {
+    // Break caught: the shutdown signal replacing pg-boss's own would lose the
+    // job-expiry and heartbeat-failure aborts it carries.
+    const queue = createDiscoveryQueue({ connectionString });
+    const expiry = new AbortController();
+    let released = false;
+
+    await queue.start();
+    await queue.workCharacterEvidence(
+      async (_payload, context) =>
+        new Promise<void>((resolve) => {
+          context.signal.addEventListener("abort", () => {
+            released = true;
+            resolve();
+          });
+        })
+    );
+    const execution = deliver(latestEvidenceWorker(), expiry.signal);
+
+    expiry.abort(new Error("job_expired"));
+    await execution;
+
+    expect(released).toBe(true);
+    await queue.stop({ graceful: false, timeoutMs: 10 });
   });
 });

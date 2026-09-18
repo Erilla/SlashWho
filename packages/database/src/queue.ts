@@ -83,7 +83,17 @@ export interface DiscoveryQueue {
    * waiting character would sit for up to an extra hour.
    */
   scheduleEvidenceResume(handler: () => Promise<void>): Promise<void>;
-  stop(options: { graceful: boolean; timeoutMs: number }): Promise<void>;
+  stop(options: {
+    graceful: boolean;
+    timeoutMs: number;
+    /**
+     * How much of `timeoutMs` a still-running job may spend finishing before
+     * its signal is aborted. Capped at half the budget: the remainder belongs
+     * to the handler's release path, which is the only thing that takes an
+     * abandoned run out of the active set. Absent means abort at once.
+     */
+    abortGraceMs?: number;
+  }): Promise<void>;
   isReady(): boolean;
 }
 
@@ -190,6 +200,12 @@ export function createDiscoveryQueue(
 ): DiscoveryQueue {
   const boss = new PgBoss(options.connectionString);
   const inFlight = new Set<Promise<void>>();
+  /**
+   * Aborted by `stop`, so a shutdown can end work it cannot wait out. Every
+   * handler sees this alongside pg-boss's own per-job signal rather than
+   * instead of it: that one still carries job expiry and heartbeat failure.
+   */
+  const shutdown = new AbortController();
   let ready = false;
   let maintenanceRegistered = false;
   let evidenceResumeRegistered = false;
@@ -338,7 +354,7 @@ export function createDiscoveryQueue(
               await handler(job.data, {
                 attempt: job.retryCount + 1,
                 maxAttempts: job.retryLimit + 1,
-                signal: job.signal
+                signal: AbortSignal.any([job.signal, shutdown.signal])
               });
             } catch (error) {
               const retryDelaySeconds = requestedRetryDelaySeconds(error);
@@ -447,7 +463,7 @@ export function createDiscoveryQueue(
               await handler(job.data, {
                 attempt: job.retryCount + 1,
                 maxAttempts: job.retryLimit + 1,
-                signal: job.signal
+                signal: AbortSignal.any([job.signal, shutdown.signal])
               });
             } catch (error) {
               // A points-budget refusal carries how long to wait. Without this
@@ -548,20 +564,40 @@ export function createDiscoveryQueue(
       evidenceResumeRegistered = true;
     },
 
-    async stop({ graceful, timeoutMs }) {
+    async stop({ graceful, timeoutMs, abortGraceMs }) {
       ready = false;
       maintenanceRegistered = false;
       evidenceResumeRegistered = false;
       fingerprintAdmissionsRegistered = false;
       characterEvidenceRegistered = false;
       acceptingFingerprintAdmissions = false;
+      // The budget is split rather than spent entirely on waiting (#306). An
+      // evidence run takes 199-591 seconds, so no realistic drain budget lets
+      // one finish; waiting out the whole of it only guaranteed that the
+      // handler's release path never ran. Half is the ceiling on the wait, so
+      // there is always a remainder for the release itself.
+      const graceMs = graceful
+        ? Math.min(Math.max(abortGraceMs ?? 0, 0), Math.floor(timeoutMs / 2))
+        : 0;
       let stopError: unknown;
       try {
-        await boss.stop({ graceful, timeout: timeoutMs });
+        // pg-boss stops polling immediately and then waits for active jobs, so
+        // this is the grace: nothing new is fetched during it, and a job that
+        // is nearly done still gets to finish.
+        await boss.stop({ graceful, timeout: graceful ? graceMs : timeoutMs });
       } catch (error) {
         stopError = error;
       }
-      await settleInFlight(timeoutMs);
+      // Whatever is still running now cannot finish inside this shutdown.
+      // Aborting is what gives the handler its one database write -- releasing
+      // the run -- instead of dying mid-flight with it left `running`.
+      if (!shutdown.signal.aborted) {
+        shutdown.abort(new Error("worker_shutdown"));
+      }
+      // The declared remainder, not the measured one: pg-boss floors its own
+      // stop timeout at one second, and a grace shorter than that must not be
+      // allowed to eat the window the release needs.
+      await settleInFlight(timeoutMs - graceMs);
       if (stopError) throw stopError;
     },
 
