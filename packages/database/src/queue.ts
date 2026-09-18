@@ -416,11 +416,27 @@ export function createDiscoveryQueue(
         async ([job]) => {
           if (!job) return;
           const execution = (async () => {
-            await handler(job.data, {
-              attempt: job.retryCount + 1,
-              maxAttempts: job.retryLimit + 1,
-              signal: job.signal
-            });
+            try {
+              await handler(job.data, {
+                attempt: job.retryCount + 1,
+                maxAttempts: job.retryLimit + 1,
+                signal: job.signal
+              });
+            } catch (error) {
+              // A points-budget refusal carries how long to wait. Without this
+              // the job retries on the 1-second backoff, straight into another
+              // refusal, and exhausts retryLimit in seconds.
+              const retryDelaySeconds = requestedRetryDelaySeconds(error);
+              if (retryDelaySeconds !== null) {
+                await updateActiveRetryDelay(
+                  boss.getDb(),
+                  job.id,
+                  retryDelaySeconds,
+                  collectCharacterEvidenceQueueName
+                );
+              }
+              throw error;
+            }
           })();
           inFlight.add(execution);
           try {
