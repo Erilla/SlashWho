@@ -386,6 +386,23 @@ export interface StagedEvidenceCollection {
   tierBests: readonly CharacterTierBestParseInput[];
   /** ISO 8601. */
   completedAt: string;
+  /**
+   * Raids the run attributed a parse-domain limitation to, which is the one
+   * input terminal marking needs that no other column records. Without it a
+   * republished stage stores evidence but settles nothing, and the character
+   * re-pays for zones and scan pages it had already earned the right to stop
+   * re-querying.
+   *
+   * Optional because stages written before this field existed are still
+   * republishable. **Absent is not the same as empty**: a stage that cannot
+   * say which raids it had trouble with settles nothing at all, because
+   * reading its silence as "none" would mark a troubled raid terminal and
+   * freeze the parse gaps that trouble was raised to keep open.
+   */
+  troubledRaidIds?: Readonly<{
+    parses: readonly string[];
+    tierBests: readonly string[];
+  }>;
 }
 
 export interface EvidenceRepository {
@@ -567,6 +584,12 @@ export interface EvidenceRepository {
 /** One active evidence run, as recovery reads it. */
 export type ActiveEvidenceRunRow = Readonly<{
   runId: string;
+  /**
+   * Whose run it is. Recovery needs it only to mark terminal tiers for a run
+   * it republishes -- `markTerminalTiers` is keyed by character, not by run --
+   * and it must not reach the sweep's log record, which carries counts alone.
+   */
+  key: CharacterKey;
   queueJobId: string | null;
   startedAt: Date | null;
   createdAt: Date;

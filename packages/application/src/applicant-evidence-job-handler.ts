@@ -26,6 +26,13 @@ import { retryDelayMsFor } from "./limitation-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+import {
+  fromStagedCollection,
+  terminalTiersFromStage,
+  toStagedCollection,
+  type EvidenceLimitationCode,
+  type EvidencePublication
+} from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 
 export type ApplicantEvidenceRun = Readonly<{
@@ -38,16 +45,7 @@ export type ApplicantEvidenceRun = Readonly<{
   className?: string | null;
 }>;
 
-/**
- * What a run may name as its shortfall.
- *
- * Wider than `WarcraftLogsLimitationCode` because "our own code threw" is not
- * a Warcraft Logs fact, and the Warcraft Logs package should keep describing
- * only Warcraft Logs. A run whose attempt ended in a fault it cannot expect to
- * survive a retry publishes what it has under `collection_failed` (#292).
- */
-export type EvidenceLimitationCode =
-  WarcraftLogsLimitationCode | "collection_failed";
+export type { EvidenceLimitationCode };
 
 export type ApplicantEvidenceStore = {
   find(runId: string): Promise<ApplicantEvidenceRun | null>;
@@ -341,48 +339,6 @@ function effectiveReserve(
   );
 }
 
-type EvidencePublication = Parameters<ApplicantEvidenceStore["publish"]>[1];
-
-/**
- * The stage crosses a JSON boundary, so its two timestamps travel as ISO
- * strings and everything else is the publication verbatim. Nothing derived
- * from the run's credentials is in either direction.
- */
-function toStagedCollection(
-  publication: EvidencePublication
-): StagedEvidenceCollection {
-  return {
-    state: publication.state,
-    limitationCode: publication.limitationCode,
-    parseLimitationCode: publication.parseLimitationCode,
-    retryAfterAt: publication.retryAfterAt
-      ? publication.retryAfterAt.toISOString()
-      : null,
-    kills: publication.kills,
-    wipes: publication.wipes,
-    tierBests: publication.tierBests,
-    completedAt: publication.completedAt.toISOString()
-  };
-}
-
-function fromStagedCollection(
-  staged: StagedEvidenceCollection
-): EvidencePublication {
-  return {
-    state: staged.state,
-    limitationCode: staged.limitationCode as EvidenceLimitationCode | null,
-    parseLimitationCode:
-      staged.parseLimitationCode as EvidenceLimitationCode | null,
-    ...(staged.retryAfterAt
-      ? { retryAfterAt: new Date(staged.retryAfterAt) }
-      : {}),
-    kills: staged.kills,
-    wipes: staged.wipes,
-    tierBests: staged.tierBests,
-    completedAt: new Date(staged.completedAt)
-  };
-}
-
 /**
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
@@ -509,6 +465,24 @@ export function createApplicantEvidenceJobHandler(
           record.parseLimitationCode = staged.parseLimitationCode;
           record.killCount = staged.kills.length;
           await evidence.publish(run.id, fromStagedCollection(staged));
+          // Marked here too, and for the same reason the collect path marks:
+          // a republication that stored evidence and settled nothing left the
+          // character re-paying for zones and scan pages the original run had
+          // already earned the right to stop re-querying. Timed from the
+          // stage's own `completedAt`, which is the instant the run that
+          // collected it would have used.
+          const stagedMarks = terminalTiersFromStage(
+            staged,
+            options.killSettleMs
+          );
+          record.terminalTierCount = stagedMarks.length;
+          if (stagedMarks.length > 0) {
+            await evidence.markTerminalTiers(
+              run.key,
+              stagedMarks,
+              new Date(staged.completedAt)
+            );
+          }
           return;
         }
 
@@ -585,10 +559,17 @@ export function createApplicantEvidenceJobHandler(
         // scan has been paid for, so a publication that fails transiently is
         // retried from the stage rather than from Warcraft Logs. `publish`
         // deletes it in its own transaction.
-        const stageAndPublish = async (publication: EvidencePublication) => {
+        // The trouble sets travel with the publication because terminal
+        // marking needs them and nothing a settled run stores records them. A
+        // stage is read by a re-claimed retry and by the recovery sweep alike,
+        // and neither has the gateway response that raised them.
+        const stageAndPublish = async (
+          publication: EvidencePublication,
+          troubledRaidIds: StagedEvidenceCollection["troubledRaidIds"]
+        ) => {
           await evidence.stageCollection(
             run.id,
-            toStagedCollection(publication)
+            toStagedCollection(publication, troubledRaidIds)
           );
           await evidence.publish(run.id, publication);
         };
@@ -700,16 +681,22 @@ export function createApplicantEvidenceJobHandler(
             limitationRetryMs === null
               ? undefined
               : new Date(now().getTime() + limitationRetryMs);
-          await stageAndPublish({
-            state: "partial",
-            limitationCode: response.code,
-            parseLimitationCode: null,
-            ...(retryAfterAt ? { retryAfterAt } : {}),
-            kills: [],
-            wipes: [],
-            tierBests: [],
-            completedAt: now()
-          });
+          // Empty rather than absent, and it changes nothing either way: a
+          // stage carrying a scan limitation settles no tier in any domain,
+          // because a scan that went wrong may be missing reports from any.
+          await stageAndPublish(
+            {
+              state: "partial",
+              limitationCode: response.code,
+              parseLimitationCode: null,
+              ...(retryAfterAt ? { retryAfterAt } : {}),
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              completedAt: now()
+            },
+            { parses: [], tierBests: [] }
+          );
           return;
         }
 
@@ -731,18 +718,21 @@ export function createApplicantEvidenceJobHandler(
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = response.parseLimitation?.code ?? null;
         record.killCount = response.kills.length;
-        await stageAndPublish({
-          state: incomplete ? "partial" : "complete",
-          limitationCode: response.limitation?.code ?? null,
-          parseLimitationCode: response.parseLimitation?.code ?? null,
-          ...(retryAfterMs > 0
-            ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
-            : {}),
-          kills: response.kills.map(toCharacterMythicKillInput),
-          wipes: response.wipes,
-          tierBests: response.tierBests,
-          completedAt: now()
-        });
+        await stageAndPublish(
+          {
+            state: incomplete ? "partial" : "complete",
+            limitationCode: response.limitation?.code ?? null,
+            parseLimitationCode: response.parseLimitation?.code ?? null,
+            ...(retryAfterMs > 0
+              ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
+              : {}),
+            kills: response.kills.map(toCharacterMythicKillInput),
+            wipes: response.wipes,
+            tierBests: response.tierBests,
+            completedAt: now()
+          },
+          response.troubledRaidIds
+        );
 
         // Marked only after publication succeeded. A mark that outlived a
         // failed publish would stop the tier being collected while nothing

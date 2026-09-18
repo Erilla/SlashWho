@@ -1,3 +1,4 @@
+import { recoverAbandonedEvidenceRuns } from "../../packages/application/src";
 import type { CharacterKey } from "@slashwho/domain";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -155,6 +156,9 @@ describe("PostgreSQL repositories", () => {
       character_mythic_kills,
       character_mythic_wipes,
       character_evidence_runs,
+      -- Keyed by character rather than by run, so nothing above cascades to
+      -- it and a mark left by one test would be read by the next.
+      character_terminal_tiers,
       snapshot_characters,
       snapshots,
       discovery_runs,
@@ -2104,11 +2108,12 @@ describe("PostgreSQL repositories", () => {
     });
 
     it("drops the staged collection of a run it releases", async () => {
-      // A run abandoned after `stageCollection` and before `publish` holds a
-      // scan that has already been paid for upstream. Releasing it discards
-      // that scan: the stage belongs to an attempt nothing will republish, so
-      // the cleanup removes it and the replacement run collects again. The
-      // cost is a repeated Warcraft Logs scan, not a leak.
+      // The repository contract, which the sweep above no longer exercises:
+      // recovery republishes a stage rather than releasing the run that holds
+      // one. This remains the guarantee for a stage that is released by some
+      // other route -- once the run has settled, the stage belongs to an
+      // attempt nothing will republish, and the cleanup removes it rather than
+      // leaving it to outlive its run.
       const at = new Date("2026-09-18T13:25:00.000Z");
       const runId = await reserveRun(rootKey, at);
       await repositories.evidence.claim(runId, 1);
@@ -2195,6 +2200,163 @@ describe("PostgreSQL repositories", () => {
         at
       });
       expect(next.kind).toBe("reserved");
+    });
+
+    it("lists the character key a republished run needs to settle its tiers", async () => {
+      // `markTerminalTiers` is keyed by character, not by run, so recovery
+      // cannot settle what it republishes without this. It goes no further
+      // than that: the sweep's own record carries counts alone.
+      const runId = await reserveRun(
+        rootKey,
+        new Date("2026-09-18T13:25:00.000Z")
+      );
+
+      const active = await repositories.evidence.listActive(25);
+
+      expect(active).toEqual([
+        expect.objectContaining({ runId, key: rootKey })
+      ]);
+    });
+
+    it("completes an abandoned run from its staged scan rather than releasing it", async () => {
+      // The whole of #312, end to end against real rows: a worker died between
+      // `stageCollection` and `publish`, so the run holds a finished Warcraft
+      // Logs scan -- 68-86% of what the run cost. Recovery publishes it
+      // instead of throwing it away.
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.markEnqueued(runId, "job-staged");
+      await repositories.evidence.claim(runId, 1);
+      const kill = mythicKill({
+        // Closed 2026-08-19, and killed long enough ago to have settled, so
+        // this tier is eligible to go terminal.
+        raidName: "The Dreamrift",
+        killedAt: "2026-06-01T20:00:00.000Z"
+      });
+      await repositories.evidence.stageCollection(runId, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        kills: [kill],
+        wipes: [],
+        tierBests: [],
+        completedAt: at.toISOString(),
+        troubledRaidIds: { parses: [kill.raidId], tierBests: [] }
+      });
+
+      const recovered = await recoverAbandonedEvidenceRuns(
+        repositories.evidence,
+        {
+          async settledEvidenceJobIds(jobIds) {
+            return jobIds;
+          }
+        },
+        {
+          startedBefore: new Date("2026-09-18T06:00:00.000Z"),
+          reservedBefore: new Date("2026-09-18T13:10:00.000Z"),
+          settleMs: 7 * 24 * 60 * 60 * 1000,
+          limit: 25
+        }
+      );
+
+      expect(recovered).toEqual({ released: 0, republished: 1 });
+      const run = await repositories.evidence.find(runId);
+      expect(run).toMatchObject({ status: "complete", errorCode: null });
+      // The evidence is readable, which is the point: the character is not
+      // merely unblocked, it has the scan it paid for.
+      const completed = await repositories.evidence.getCompleted(rootKey);
+      expect(completed?.kills.map((k) => k.fightUrl)).toEqual([kill.fightUrl]);
+      // `publish` deletes the stage in its own transaction.
+      await expect(
+        repositories.evidence.stagedCollection(runId)
+      ).resolves.toBeNull();
+      // Settled exactly as the run that collected it would have: parses stay
+      // re-queryable because that raid was troubled in that domain.
+      await expect(
+        repositories.evidence.terminalTiers(rootKey)
+      ).resolves.toEqual([
+        { raidId: kill.raidId, domain: "kills" },
+        { raidId: kill.raidId, domain: "tier_bests" }
+      ]);
+      // And it is out of the active set, so the next read is not stuck behind
+      // a run that is running nowhere.
+      await expect(repositories.evidence.listActive(25)).resolves.toEqual([]);
+    });
+
+    it("settles nothing for a stage written before trouble sets were carried", async () => {
+      // Absent is not empty. A stage from before the field existed cannot say
+      // which raids it had trouble with, so it publishes and marks nothing --
+      // reading its silence as "none" would freeze the parse gaps that trouble
+      // exists to hold open.
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.markEnqueued(runId, "job-old-stage");
+      await repositories.evidence.claim(runId, 1);
+      const kill = mythicKill({
+        raidName: "The Dreamrift",
+        killedAt: "2026-06-01T20:00:00.000Z"
+      });
+      await repositories.evidence.stageCollection(runId, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        kills: [kill],
+        wipes: [],
+        tierBests: [],
+        completedAt: at.toISOString()
+      });
+
+      const recovered = await recoverAbandonedEvidenceRuns(
+        repositories.evidence,
+        {
+          async settledEvidenceJobIds(jobIds) {
+            return jobIds;
+          }
+        },
+        {
+          startedBefore: new Date("2026-09-18T06:00:00.000Z"),
+          reservedBefore: new Date("2026-09-18T13:10:00.000Z"),
+          settleMs: 7 * 24 * 60 * 60 * 1000,
+          limit: 25
+        }
+      );
+
+      expect(recovered).toEqual({ released: 0, republished: 1 });
+      await expect(
+        repositories.evidence.terminalTiers(rootKey)
+      ).resolves.toEqual([]);
+    });
+
+    it("releases an abandoned run that never got as far as a stage", async () => {
+      // The other half, unchanged from #305: nothing was paid for, so there is
+      // nothing to publish and the run is settled as `abandoned`.
+      const at = new Date("2026-09-18T13:25:00.000Z");
+      const runId = await reserveRun(rootKey, at);
+      await repositories.evidence.markEnqueued(runId, "job-bare");
+      await repositories.evidence.claim(runId, 1);
+
+      const recovered = await recoverAbandonedEvidenceRuns(
+        repositories.evidence,
+        {
+          async settledEvidenceJobIds(jobIds) {
+            return jobIds;
+          }
+        },
+        {
+          startedBefore: new Date("2026-09-18T06:00:00.000Z"),
+          reservedBefore: new Date("2026-09-18T13:10:00.000Z"),
+          settleMs: 7 * 24 * 60 * 60 * 1000,
+          limit: 25
+        }
+      );
+
+      expect(recovered).toEqual({ released: 1, republished: 0 });
+      await expect(repositories.evidence.find(runId)).resolves.toMatchObject({
+        status: "failed",
+        errorCode: "abandoned"
+      });
     });
   });
 

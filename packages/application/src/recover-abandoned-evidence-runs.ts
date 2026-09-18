@@ -1,6 +1,20 @@
+import type {
+  StagedEvidenceCollection,
+  TerminalTier
+} from "@slashwho/database";
+import type { CharacterKey } from "@slashwho/domain";
+
+import {
+  fromStagedCollection,
+  terminalTiersFromStage,
+  type EvidencePublication
+} from "./evidence-publication";
+
 /** One evidence run the reservation gate currently counts as active. */
 export type ActiveEvidenceRun = Readonly<{
   runId: string;
+  /** Whose run it is, so a republished stage can settle its tiers. */
+  key: CharacterKey;
   /**
    * Null until `markEnqueued` records the job this run was sent to -- so
    * either a run not yet enqueued, or one whose `markEnqueued` was refused
@@ -16,6 +30,18 @@ export type ActiveEvidenceRun = Readonly<{
 export type AbandonableEvidenceStore = {
   listActive(limit: number): Promise<readonly ActiveEvidenceRun[]>;
   releaseAbandoned(runIds: readonly string[]): Promise<number>;
+  /**
+   * The finished scan an abandoned run was holding on its way to storage, if
+   * it got that far. Recovery reads this only for runs it has already decided
+   * are abandoned.
+   */
+  stagedCollection(runId: string): Promise<StagedEvidenceCollection | null>;
+  publish(runId: string, input: EvidencePublication): Promise<void>;
+  markTerminalTiers(
+    key: CharacterKey,
+    tiers: readonly TerminalTier[],
+    at: Date
+  ): Promise<void>;
 };
 
 export type AbandonedEvidenceQueue = {
@@ -40,12 +66,29 @@ export type RecoverAbandonedEvidenceRunsOptions = Readonly<{
    * `markEnqueued`.
    */
   reservedBefore: Date;
+  /**
+   * How long after a kill its rankings are taken to have settled, for deciding
+   * which tiers a republished stage may mark terminal. The same value the
+   * collection handler uses, so recovery settles what the original run would
+   * have.
+   */
+  settleMs: number;
   limit: number;
 }>;
 
+/** What one sweep did, split by which outcome each run reached. */
+export type RecoveredEvidenceRuns = Readonly<{
+  /** Runs settled as `failed` with the code `abandoned`. */
+  released: number;
+  /** Runs completed from the scan they had already paid for. */
+  republished: number;
+}>;
+
 /**
- * Releases every evidence run nothing is working on any more, so the character
- * it belongs to can be collected again. Returns how many runs it released.
+ * Settles every evidence run nothing is working on any more, so the character
+ * it belongs to can be collected again -- by completing it from the scan it
+ * had already paid for where there is one, and releasing it where there is
+ * not.
  *
  * A run whose worker dies between `claim` and `publish`/`fail` stays `running`
  * for good: `reserve` counts ('queued','running','retrying') as active with no
@@ -85,17 +128,28 @@ export type RecoverAbandonedEvidenceRunsOptions = Readonly<{
  * the guard stops the *next* claim, while the attempt already in flight
  * carries on and discards its whole scan at `publish`.
  *
- * Like the other sweeps, this only releases. It enqueues nothing: the released
- * character falls back to its previous evidence, and the next reader -- or the
- * resume sweep, if the previous run left a deadline -- reserves a fresh run.
+ * An abandoned run holding a staged collection is completed rather than
+ * released. The stage exists precisely so a publication that failed on its way
+ * to storage is retried without paying for the scan again (#292), and the
+ * history scan is 68-86% of what a run costs (#308) -- so a released stage
+ * throws away the expensive part of the run, not an incidental part of it. The
+ * bytes published here are the same ones a re-claimed attempt would republish;
+ * the only novelty is that no worker observed the original attempt finishing.
+ *
+ * This enqueues nothing either way. A released character falls back to its
+ * previous evidence; a republished one is complete, or partial with the
+ * deadline its stage carried -- and because recovery runs before the resume
+ * pass on the same tick, a partial republication is resumed immediately rather
+ * than waiting for somebody to load the dossier.
  */
 export async function recoverAbandonedEvidenceRuns(
   evidence: AbandonableEvidenceStore,
   queue: AbandonedEvidenceQueue,
   options: RecoverAbandonedEvidenceRunsOptions
-): Promise<number> {
+): Promise<RecoveredEvidenceRuns> {
+  const nothing: RecoveredEvidenceRuns = { released: 0, republished: 0 };
   const active = await evidence.listActive(options.limit);
-  if (active.length === 0) return 0;
+  if (active.length === 0) return nothing;
 
   // Measured from `started_at` where there is one: a run claimed long after it
   // was created is working, not abandoned, and reading `created_at` would
@@ -128,9 +182,56 @@ export async function recoverAbandonedEvidenceRuns(
       overAge(run) ||
       (run.queueJobId !== null && settled.has(run.queueJobId))
   );
-  if (abandoned.length === 0) return 0;
+  if (abandoned.length === 0) return nothing;
 
-  // The repository guards the write on the active statuses, so a run that
-  // published between the read and the write is not counted here.
-  return evidence.releaseAbandoned(abandoned.map((run) => run.runId));
+  // Serially, not in parallel: `publish` is a long multi-statement transaction
+  // that locks the run row, and the staged population is a handful at most --
+  // it is the narrow window between a finished scan and a stored one.
+  let republished = 0;
+  const releasable: string[] = [];
+  for (const run of abandoned) {
+    const staged = await evidence.stagedCollection(run.runId);
+    if (!staged) {
+      releasable.push(run.runId);
+      continue;
+    }
+    try {
+      await evidence.publish(run.runId, fromStagedCollection(staged));
+    } catch {
+      // Two cases, one handler, deliberately. A stage `publish` refuses must
+      // not leave the run active for ever; and a run that published for real
+      // between the read above and this write throws
+      // `character_evidence_run_not_active`, for which `releaseAbandoned`'s
+      // own status guard makes the fallback a no-op. Neither needs telling
+      // apart to be handled correctly.
+      releasable.push(run.runId);
+      continue;
+    }
+    republished += 1;
+    // Only after the publication succeeded, for the reason the collection
+    // handler gives: a mark that outlived a failed publish would stop the tier
+    // being collected while nothing was stored for it. A mark that fails after
+    // one succeeded is the harmless direction -- the evidence is stored and
+    // the run has left the active set, so releasing it now would be wrong, and
+    // all an unmarked tier costs is a re-query.
+    const marks = terminalTiersFromStage(staged, options.settleMs);
+    if (marks.length > 0) {
+      try {
+        await evidence.markTerminalTiers(
+          run.key,
+          marks,
+          new Date(staged.completedAt)
+        );
+      } catch {
+        // Left unmarked. The publication stands.
+      }
+    }
+  }
+
+  // One batched write for everything with nothing worth keeping. The
+  // repository guards it on the active statuses, so a run that published
+  // between the read and the write is not counted here.
+  const released =
+    releasable.length === 0 ? 0 : await evidence.releaseAbandoned(releasable);
+  return { released, republished };
 }

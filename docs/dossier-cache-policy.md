@@ -164,19 +164,61 @@ the active set nor `loadCompletedEvidence`. The character falls back to its
 previous evidence immediately. The write is guarded on the active statuses, so
 a publication that lands while the sweep is deciding keeps its outcome.
 
-A released run's staged collection is discarded with it. A run abandoned
-after `stageCollection` but before `publish` holds a scan already paid for
-upstream; the stage belongs to an attempt nothing will republish, so the
-hourly cleanup removes it and the replacement run pays for that scan again.
-Republishing the stage instead would be strictly cheaper and is not done here
-— it is a change to what recovery _is_, from releasing a dead run to
-completing one.
+**An abandoned run holding a staged collection is completed, not released.** A
+run abandoned after `stageCollection` but before `publish` holds a finished
+Warcraft Logs scan, and the history scan is 68–86% of what a run costs, so
+releasing it would throw away the expensive part of the run rather than an
+incidental part of it. The window is the whole interval between a finished scan
+and a stored one, and every hard kill, OOM or container pull during it lands
+here. Recovery therefore publishes the stage and counts the run as
+`republished` rather than `released`.
+
+The bytes published are the ones a re-claimed attempt would have republished
+anyway, and `publish` takes the run row `FOR UPDATE` and refuses anything not
+still active — so a publication that lands while the sweep is deciding keeps
+its outcome. A publication that throws for any other reason drops the run into
+the release batch instead, which needs no case analysis: a stage `publish`
+refuses must not leave the run active for ever, and a run that published for
+real between the read and the write makes the release a no-op through the same
+status guard.
+
+A republished run settles its terminal tiers, exactly as the run that collected
+it would have. That needs the raids the run attributed a parse-domain
+limitation to, which no settled column records, so the stage carries them
+alongside the publication. Marking is timed from the stage's own `completedAt`
+rather than the sweep's clock: that is the instant the original run would have
+used, and it is the stricter of the two, since a later reading widens the
+settled window and could freeze a percentile that was still moving when the
+scan read it.
+
+**A stage carrying no trouble sets settles nothing, and that is not the same as
+one whose trouble sets are empty.** Stages written before the field existed
+cannot say which raids they had trouble with, and reading that silence as
+"none" would mark a troubled raid terminal and freeze the parse gaps the
+trouble was raised to hold open. Marking nothing costs a re-query; over-marking
+costs evidence that can only be corrected by a rebuild. The population is
+self-clearing within a deploy.
+
+Marking happens only after the publication succeeds, because a mark that
+outlived a failed publish would stop the tier being collected while nothing was
+stored for it. A mark that fails after a successful publication is left
+unmarked and the publication stands — the evidence is stored and the run has
+left the active set, so releasing it at that point would be wrong.
 
 Recovery unblocks a character; it does not by itself put one back in
 circulation. If the previous completed run left a retry deadline, the resume
 pass takes it on the same tick. If that run finished cleanly, or the character
 has no completed run at all, nothing schedules it and a dossier read is what
-starts collection again — the same gap the resume sweep already has.
+starts collection again — the same gap the resume sweep already has. A
+republication is the case where the ordering pays twice over: a stage that was
+`partial` carries its own `retry_after_at`, so publishing it on this tick puts
+the character in front of the resume pass on the same tick, and the run it
+resumes into starts from a smaller scan because the republication settled its
+tiers first.
+
+The sweep's record carries counts alone — `resumed`, `released` and
+`republished` — and never a character key, although recovery now reads one to
+mark what it republishes.
 
 ## Concluded tiers are stored once
 
@@ -336,9 +378,17 @@ stopping this way can only add to what is stored.
 Between a finished Warcraft Logs scan and a successful publication the
 collection is held in `character_evidence_collections`, one row per run. A
 retry that finds a stage republishes it instead of paying for the scan again,
-and the publication deletes the stage in its own transaction. Maintenance drops
-stages whose run has settled and reports the count as
-`removedCollectionStages` on the `evidence_cache_cleanup` record.
+and the publication deletes the stage in its own transaction. The recovery
+sweep reads the same stage for a run whose worker never came back, so the two
+readers publish and settle identically. Maintenance drops stages whose run has
+settled and reports the count as `removedCollectionStages` on the
+`evidence_cache_cleanup` record.
+
+The stage carries the raids the run attributed a parse-domain limitation to
+alongside the publication, because terminal marking needs them and nothing a
+settled run stores records them. That is what lets either reader settle the
+tiers the collecting run had earned rather than storing the evidence and
+settling nothing.
 
 Verification covers repeated and concurrent reads, TTL expiry, failed refresh,
 snapshot membership changes, least-recently-used memory eviction, shared token
