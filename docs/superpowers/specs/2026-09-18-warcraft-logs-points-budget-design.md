@@ -160,7 +160,7 @@ be revisited within a day of the first deployment rather than left to ossify —
 `EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway (12) and code (24)
 until 2026-09-17 precisely because nothing forced that review.
 
-That revisit is tracked in #295 rather than left to memory. It could not happen
+That revisit is tracked in #294 rather than left to memory. It could not happen
 on the first deployment's data: the deltas were contaminated by concurrent runs
 (see Admission above) and eleven of the twelve executions were failures (#290),
 whose spend need not resemble a successful run's. The reserve stays at 1500
