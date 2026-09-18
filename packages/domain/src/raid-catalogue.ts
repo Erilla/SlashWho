@@ -12,9 +12,24 @@ export type RaidCatalogueEncounter = Readonly<{
   imageUrl: string | null;
 }>;
 
+/**
+ * Where a resolved current-content window came from.
+ *
+ * `raiderio-raiding-static-data` is the generated snapshot, which is a union
+ * across regions and so answers "was this raid current anywhere" -- optionally
+ * widened further by a reviewed Blizzard announcement.
+ * `blizzard-release-dates` is curated in full, because the schedule source does
+ * not reach the raid at all; its bounds are sourced release dates rather than a
+ * regional union, and the two are not the same quantity. Keeping the
+ * distinction on the window means a reader can see which they are holding.
+ */
+export type RaidContentWindowSource =
+  "raiderio-raiding-static-data" | "blizzard-release-dates";
+
 export type RaidCurrentContentWindow = Readonly<{
   startsAt: string;
   endsAt: string | null;
+  source: RaidContentWindowSource;
 }>;
 
 const raiderIoRaidSlugs = new Map<string, string>([
@@ -52,25 +67,143 @@ const raiderIoRaidSlugs = new Map<string, string>([
 // reproducible. A null end means no close had been reviewed yet, not that the
 // tier never closes. See
 // docs/research/2026-09-14-raid-current-content-windows.md.
+/**
+ * Raids that predate the schedule source, curated from Blizzard release dates.
+ *
+ * Raider.IO's raiding static data starts at Legion (it answers 400 for earlier
+ * expansions), so these four Warlords-and-earlier raids have no generated
+ * window and never will. Left unwindowed they read as `unknown`, which meant
+ * they could never be marked terminal -- and one kill in any of them pinned
+ * `killScanFloorFrom` to the bottom of a veteran's history, so the report scan
+ * re-read all of it on every run and #304's saving never arrived (#326).
+ *
+ * `startsAt` is the raid's opening, at 00:00:00Z for a reproducible boundary,
+ * the same convention as the reviewed windows above.
+ *
+ * `endsAt` is **the next tier's opening, recorded as exactly that** -- not a
+ * separately sourced closing date. It is the same quantity Raider.IO's `ends`
+ * approximates, and naming it honestly is worth more than implying a precision
+ * we do not have. Hellfire Citadel therefore ends where the generated snapshot
+ * starts The Emerald Nightmare, so the two schedules meet rather than overlap.
+ *
+ * These are superseded automatically: `resolveContentWindow` prefers a
+ * generated window wherever one exists, so if Raider.IO ever extends coverage
+ * backwards nobody has to remember to delete an entry here.
+ */
+const preLegionContentWindows = new Map<string, RaidCurrentContentWindow>([
+  [
+    // Siege of Orgrimmar, patch 5.4. Ends at Highmaul's opening.
+    "369",
+    {
+      startsAt: "2013-09-10T00:00:00.000Z",
+      endsAt: "2014-12-02T00:00:00.000Z",
+      source: "blizzard-release-dates"
+    }
+  ],
+  [
+    // Highmaul, the first Warlords tier. Ends at Blackrock Foundry's opening.
+    "477",
+    {
+      startsAt: "2014-12-02T00:00:00.000Z",
+      endsAt: "2015-02-03T00:00:00.000Z",
+      source: "blizzard-release-dates"
+    }
+  ],
+  [
+    // Blackrock Foundry. Ends at Hellfire Citadel's opening.
+    "457",
+    {
+      startsAt: "2015-02-03T00:00:00.000Z",
+      endsAt: "2015-06-23T00:00:00.000Z",
+      source: "blizzard-release-dates"
+    }
+  ],
+  [
+    // Hellfire Citadel, the last Warlords tier. Ends where the generated
+    // snapshot opens The Emerald Nightmare, which is the first raid Raider.IO
+    // serves -- the seam between the two schedules.
+    "669",
+    {
+      startsAt: "2015-06-23T00:00:00.000Z",
+      endsAt: "2016-09-20T07:00:00.000Z",
+      source: "blizzard-release-dates"
+    }
+  ]
+]);
+
 const reviewedContentWindows = new Map<string, RaidCurrentContentWindow>([
   [
     "1273",
-    { startsAt: "2024-09-17T00:00:00.000Z", endsAt: "2025-03-04T00:00:00.000Z" }
+    {
+      startsAt: "2024-09-17T00:00:00.000Z",
+      endsAt: "2025-03-04T00:00:00.000Z",
+      source: "raiderio-raiding-static-data"
+    }
   ],
   [
     "1296",
-    { startsAt: "2025-03-04T00:00:00.000Z", endsAt: "2025-08-12T00:00:00.000Z" }
+    {
+      startsAt: "2025-03-04T00:00:00.000Z",
+      endsAt: "2025-08-12T00:00:00.000Z",
+      source: "raiderio-raiding-static-data"
+    }
   ],
   [
     "1302",
-    { startsAt: "2025-08-12T00:00:00.000Z", endsAt: "2026-03-17T00:00:00.000Z" }
+    {
+      startsAt: "2025-08-12T00:00:00.000Z",
+      endsAt: "2026-03-17T00:00:00.000Z",
+      source: "raiderio-raiding-static-data"
+    }
   ],
-  ["1305", { startsAt: "2026-05-20T00:00:00.000Z", endsAt: null }],
-  ["1307", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
-  ["1308", { startsAt: "2026-03-31T00:00:00.000Z", endsAt: null }],
-  ["1314", { startsAt: "2026-03-24T00:00:00.000Z", endsAt: null }],
-  ["1317", { startsAt: "2026-08-19T00:00:00.000Z", endsAt: null }],
-  ["1320", { startsAt: "2026-08-01T00:00:00.000Z", endsAt: null }]
+  [
+    "1305",
+    {
+      startsAt: "2026-05-20T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    }
+  ],
+  [
+    "1307",
+    {
+      startsAt: "2026-03-24T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    }
+  ],
+  [
+    "1308",
+    {
+      startsAt: "2026-03-31T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    }
+  ],
+  [
+    "1314",
+    {
+      startsAt: "2026-03-24T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    }
+  ],
+  [
+    "1317",
+    {
+      startsAt: "2026-08-19T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    }
+  ],
+  [
+    "1320",
+    {
+      startsAt: "2026-08-01T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    }
+  ]
 ]);
 
 // Raider.IO's raiding static data publishes each raid's opening and closing per
@@ -79,11 +212,22 @@ const reviewedContentWindows = new Map<string, RaidCurrentContentWindow>([
 // omission.
 const generatedContentWindows = new Map<string, RaidCurrentContentWindow>(
   [...raiderIoRaidSlugs].flatMap(([journalRaidId, raiderIoRaidSlug]) => {
-    const window: RaidCurrentContentWindow | undefined =
+    const window:
+      Readonly<{ startsAt: string; endsAt: string | null }> | undefined =
       currentContentWindowSnapshot.windows[
         raiderIoRaidSlug as keyof typeof currentContentWindowSnapshot.windows
       ];
-    return window ? [[journalRaidId, window] as const] : [];
+    // The snapshot carries one source for the whole file; stamp it per window
+    // so a resolved window says where it came from without the reader having
+    // to know which map it fell out of.
+    return window
+      ? [
+          [
+            journalRaidId,
+            { ...window, source: "raiderio-raiding-static-data" as const }
+          ] as const
+        ]
+      : [];
   })
 );
 
@@ -118,35 +262,61 @@ function widestContentWindow(
         ? null
         : ends.reduce((latest, endsAt) =>
             Date.parse(endsAt) > Date.parse(latest) ? endsAt : latest
-          )
+          ),
+    // A widened window is still anchored on the generated schedule; the review
+    // only ever moves a boundary outwards from it.
+    source: generated.source
   };
 }
 
-// An absent entry is unknown, never legacy — the raid-catalogue guard test
-// keeps that set to the raids Raider.IO does not serve, so a new tier fails the
-// build instead of silently discarding kills.
+/**
+ * The window for one raid, and which source it came from.
+ *
+ * Two rules, and the difference between them is the point of the provenance:
+ *
+ * - A **pre-Legion** window is curated only because the schedule source does
+ *   not reach that raid. A generated window therefore *replaces* it outright
+ *   the moment one exists, so extending Raider.IO's coverage backwards needs
+ *   nobody to remember to delete an entry here.
+ * - A **reviewed** window is a Blizzard announcement deliberately widening a
+ *   generated one, so the two are merged rather than ranked. Letting the
+ *   generated value win there would narrow live tiers -- today it would cut 27
+ *   days off Sporefall's opening and 15 off Manaforge Omega's close -- and a
+ *   narrowed window withholds real progression kills.
+ */
+function resolveContentWindow(
+  journalRaidId: string
+): RaidCurrentContentWindow | null {
+  const generated = generatedContentWindows.get(journalRaidId);
+  if (generated) {
+    return widestContentWindow(
+      reviewedContentWindows.get(journalRaidId),
+      generated
+    );
+  }
+  return (
+    preLegionContentWindows.get(journalRaidId) ??
+    reviewedContentWindows.get(journalRaidId) ??
+    null
+  );
+}
+
+// An absent entry is unknown, never legacy - the raid-catalogue guard test
+// asserts every catalogued raid resolves to a window from one source or the
+// other, so a new tier fails the build instead of silently discarding kills or
+// stranding a veteran's scan floor.
 const currentContentWindows = new Map<string, RaidCurrentContentWindow>(
   [
     ...new Set([
+      ...preLegionContentWindows.keys(),
       ...reviewedContentWindows.keys(),
       ...generatedContentWindows.keys()
     ])
   ].flatMap((journalRaidId) => {
-    const window = widestContentWindow(
-      reviewedContentWindows.get(journalRaidId),
-      generatedContentWindows.get(journalRaidId)
-    );
+    const window = resolveContentWindow(journalRaidId);
     return window ? [[journalRaidId, window] as const] : [];
   })
 );
-
-/**
- * Catalogued raids with no current-content window, and therefore no shown
- * Mythic kills. Raider.IO's raiding static data starts at Legion, so the four
- * Warlords-and-earlier raids have no published schedule to generate from.
- */
-export const raidsWithoutCurrentContentWindow: readonly string[] =
-  Object.freeze(["369", "457", "477", "669"]);
 
 const canonicalTierOrdinals = new Map<string, number>([
   ["369", 0],

@@ -109,10 +109,60 @@ Blizzard's Mythic unlock is later than Raider.IO's raid opening, or for the four
 pre-Legion raids Raider.IO does not serve. Both maps live in
 `packages/domain/src/raid-catalogue.ts`.
 
+## Pre-Legion raids
+
+Raider.IO's raiding static data answers 400 for expansions before Legion, so the
+four Warlords-and-earlier raids have no generated window and never will. They
+are curated in `preLegionContentWindows`:
+
+| Raid                       | Window                                           |
+| -------------------------- | ------------------------------------------------ |
+| Siege of Orgrimmar (`369`) | `2013-09-10T00:00:00Z` to `2014-12-02T00:00:00Z` |
+| Highmaul (`477`)           | `2014-12-02T00:00:00Z` to `2015-02-03T00:00:00Z` |
+| Blackrock Foundry (`457`)  | `2015-02-03T00:00:00Z` to `2015-06-23T00:00:00Z` |
+| Hellfire Citadel (`669`)   | `2015-06-23T00:00:00Z` to `2016-09-20T07:00:00Z` |
+
+`startsAt` is the raid's opening at `00:00:00Z`, the same reproducible-boundary
+convention as the reviewed windows. **`endsAt` is the next tier's opening,
+recorded as exactly that** — not a separately sourced closing date. It is the
+same quantity Raider.IO's `ends` approximates, and naming it honestly is worth
+more than implying a precision we do not have. Hellfire Citadel therefore closes
+where the generated snapshot opens The Emerald Nightmare
+(`2016-09-20T07:00:00Z`), so the curated and generated schedules meet at a seam
+rather than overlapping.
+
+Leaving these four unwindowed was a live defect, not a cosmetic gap: an
+unwindowed raid reads as `unknown` to `raidTierConclusion`, so it can never be
+marked terminal, so one kill in any of them pinned `killScanFloorFrom` to the
+bottom of a veteran's history and the report scan re-read all of it on every
+run. That is the scan half of #326.
+
+## Provenance
+
+A resolved window carries the source it came from, because the two sources
+measure different things — a generated window is a union across regions, a
+curated one is a sourced release date:
+
+- `raiderio-raiding-static-data` — 25 raids, from the generated snapshot,
+  optionally widened by a reviewed Blizzard announcement.
+- `blizzard-release-dates` — the four pre-Legion raids, curated in full.
+
+`resolveContentWindow` ranks the two differently, and the provenance is what
+decides which rule applies. A **generated** window replaces a **pre-Legion**
+curated one outright, so extending Raider.IO's coverage backwards needs nobody
+to remember to delete an entry. A **reviewed** window is merged with the
+generated one instead, taking the widest span, because a review only ever moves
+a boundary outwards. Letting the generated value win there would narrow live
+tiers — today it would cut 27 days off Sporefall's opening, 17 off The Venomous
+Abyss's, and 15 days off Manaforge Omega's close — and a narrowed window
+withholds real progression kills.
+
 ## Guards
 
-`packages/domain/src/raid-catalogue.test.ts` fails when a catalogued raid has no
-resolved window, pinned to `raidsWithoutCurrentContentWindow`, so a new tier
-breaks the build rather than silently discarding kills. A second test rejects
-any resolved window whose start is not before its end, and the boundary policy
-above is pinned by tests over the real generated data.
+`packages/domain/src/raid-catalogue.test.ts` fails when any catalogued raid has
+no resolved window at all, so a new tier breaks the build rather than silently
+discarding kills or stranding a veteran's scan floor. Further tests pin the
+provenance split at 25/4, reject a curated window for any raid the generated
+snapshot already serves, and reject any resolved window whose start is not
+before its end. The boundary policy above is pinned by tests over the real
+generated data.

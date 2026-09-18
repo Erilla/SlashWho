@@ -7,9 +7,9 @@ import {
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
   raidTierConclusion,
-  raidsWithoutCurrentContentWindow,
   supportedRaidCatalogue
 } from "./raid-catalogue";
+import currentContentWindowSnapshot from "./raid-current-content-windows.generated.json";
 
 it("exposes supported raids newest-first with bosses in natural order", () => {
   // Break caught: gap rows cannot be complete or stable when callers must
@@ -131,14 +131,89 @@ it("matches a unique generated raid name independently of its boss", () => {
 });
 
 // Break caught: a catalogued raid with no current-content window silently
-// discards every Mythic kill in that raid, because currentness() cannot
-// judge it. A new tier must fail here rather than in a reviewer's dossier.
+// discards every Mythic kill in that raid, because currentness() cannot judge
+// it. Since #326 an unwindowed raid also reads as `unknown` to
+// `raidTierConclusion`, so it can never be marked terminal and one kill in it
+// pins a veteran's scan floor to the bottom of their history -- which is how
+// the last gap went unnoticed for months. Every catalogued raid must resolve
+// to a window from one source or the other, so the next gap fails the build.
 it("covers every catalogued raid with a current-content window", () => {
   const uncovered = supportedRaidCatalogue()
     .filter((raid) => lookupRaidCurrentContentWindow(raid.raidId) === null)
-    .map((raid) => raid.raidId)
+    .map((raid) => `${raid.raidId} ${raid.raidName}`)
     .sort();
-  expect(uncovered).toEqual([...raidsWithoutCurrentContentWindow].sort());
+  expect(uncovered).toEqual([]);
+});
+
+// The provenance is the point: a generated window is a union across regions,
+// a curated one is a sourced release date, and they are not the same quantity.
+// Only the raids the schedule source cannot reach may read as curated.
+it("attributes every window to the source it actually came from", () => {
+  const bySource = supportedRaidCatalogue().reduce<Record<string, string[]>>(
+    (acc, raid) => {
+      const window = lookupRaidCurrentContentWindow(raid.raidId);
+      if (window) (acc[window.source] ??= []).push(raid.raidName);
+      return acc;
+    },
+    {}
+  );
+  expect(bySource["blizzard-release-dates"]?.sort()).toEqual([
+    "Blackrock Foundry",
+    "Hellfire Citadel",
+    "Highmaul",
+    "Siege of Orgrimmar"
+  ]);
+  expect(bySource["raiderio-raiding-static-data"]).toHaveLength(25);
+});
+
+// Break caught: `457` is Blackrock Foundry and `477` is Highmaul, which is the
+// opposite of the order they released in -- easy to transpose, and a transposed
+// pair still satisfies every count and provenance check above. Pin each curated
+// window to its raid by name, and pin the chain: each one ends where the next
+// opens, and Hellfire Citadel meets the generated schedule's first raid.
+it("chains the curated windows in release order, by name", () => {
+  const windowOf = (raidName: string) => {
+    const raid = lookupRaidByName(raidName);
+    if (raid === null) throw new Error(`uncatalogued: ${raidName}`);
+    return lookupRaidCurrentContentWindow(raid.raidId);
+  };
+  const order = [
+    "Siege of Orgrimmar",
+    "Highmaul",
+    "Blackrock Foundry",
+    "Hellfire Citadel"
+  ];
+  expect(order.map((raidName) => windowOf(raidName)?.startsAt)).toEqual([
+    "2013-09-10T00:00:00.000Z",
+    "2014-12-02T00:00:00.000Z",
+    "2015-02-03T00:00:00.000Z",
+    "2015-06-23T00:00:00.000Z"
+  ]);
+  // Each close is the next tier's opening, recorded as exactly that.
+  expect(
+    order.slice(0, -1).map((raidName) => windowOf(raidName)?.endsAt)
+  ).toEqual(order.slice(1).map((raidName) => windowOf(raidName)?.startsAt));
+  // And the last one meets the generated schedule rather than overlapping it.
+  expect(windowOf("Hellfire Citadel")?.endsAt).toBe(
+    windowOf("The Emerald Nightmare")?.startsAt
+  );
+});
+
+// Break caught: a curated window exists only because the schedule source does
+// not reach that raid. If coverage ever extends backwards the generated value
+// has to take over on its own, rather than waiting for someone to notice.
+it("prefers the generated schedule wherever it reaches", () => {
+  const curated = supportedRaidCatalogue().filter(
+    (raid) =>
+      lookupRaidCurrentContentWindow(raid.raidId)?.source ===
+      "blizzard-release-dates"
+  );
+  const served = curated.filter(
+    (raid) =>
+      raid.raiderIoRaidSlug !== null &&
+      raid.raiderIoRaidSlug in currentContentWindowSnapshot.windows
+  );
+  expect(served.map((raid) => raid.raidName)).toEqual([]);
 });
 
 it("orders every current-content window start before its end", () => {
@@ -182,7 +257,8 @@ it("keeps the later known close when the reviewed end outlasts the generated one
 it("widens a reviewed window on both sides from the generated schedule", () => {
   expect(lookupRaidCurrentContentWindow("1273")).toEqual({
     startsAt: "2024-09-10T15:00:00.000Z",
-    endsAt: "2025-03-05T23:00:00.000Z"
+    endsAt: "2025-03-05T23:00:00.000Z",
+    source: "raiderio-raiding-static-data"
   });
 });
 
@@ -191,7 +267,8 @@ it("widens a reviewed window on both sides from the generated schedule", () => {
 it("covers a historic tier the reviewed windows never reached", () => {
   expect(lookupRaidCurrentContentWindow("1195")).toEqual({
     startsAt: "2022-03-01T15:00:00.000Z",
-    endsAt: "2022-08-03T23:00:00.000Z"
+    endsAt: "2022-08-03T23:00:00.000Z",
+    source: "raiderio-raiding-static-data"
   });
 });
 
