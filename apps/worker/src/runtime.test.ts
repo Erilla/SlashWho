@@ -208,7 +208,10 @@ function runtimeFakes() {
       createQueue: () => queue,
       createGateway: () => ({}) as RaiderIoGateway,
       createEvidenceGateway: () =>
-        ({}) as Pick<WarcraftLogsGateway, "getFirstKillReports">,
+        ({}) as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
       createEvidenceHandler: (options: ApplicantEvidenceJobHandlerOptions) => {
         void options;
         return evidenceHandler;
@@ -554,7 +557,10 @@ describe("worker runtime", () => {
     // would ever claim them, leaving dossier history permanently stale.
     const fakes = runtimeFakes();
     let handlerOptions: ApplicantEvidenceJobHandlerOptions | undefined;
-    const warcraftLogs = {} as Pick<WarcraftLogsGateway, "getFirstKillReports">;
+    const warcraftLogs = {} as Pick<
+      WarcraftLogsGateway,
+      "getFirstKillReports" | "getRateLimit"
+    >;
     Object.assign(fakes.dependencies, {
       createEvidenceGateway: () => warcraftLogs,
       createEvidenceHandler(options: ApplicantEvidenceJobHandlerOptions) {
@@ -576,6 +582,7 @@ describe("worker runtime", () => {
       decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: 500,
       parseRequestCap: 8,
+      pointsReserve: config.evidencePointsReserve,
       evidence: (
         fakes.repositories as typeof fakes.repositories & {
           evidence: unknown;

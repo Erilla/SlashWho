@@ -52,7 +52,7 @@ export type WorkerRuntimeDependencies = {
   createEvidenceGateway: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
-  ) => Pick<WarcraftLogsGateway, "getFirstKillReports">;
+  ) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">;
   createFingerprintIntegration?: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
@@ -327,6 +327,7 @@ export async function createWorkerRuntime(
       requestCap: config.evidenceRequestCap,
       parseRequestCap: config.evidenceParseRequestCap,
       parseCapRetryMs: config.evidenceParseCapRetryMs,
+      pointsReserve: config.evidencePointsReserve,
       ...(logger ? { logger } : {})
     });
     await initializedQueue.start();
