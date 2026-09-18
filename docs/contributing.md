@@ -12,12 +12,14 @@ Branches should be short-lived and contain one coherent change. There is no `dev
 
 ## Pull-request flow
 
-1. Create a branch from the latest `main`.
-2. Make and verify one coherent change.
-3. Open a pull request targeting `main`.
-4. Resolve review conversations and ensure all required checks pass.
-5. Squash-merge the pull request using a conventional title.
-6. Validate the resulting `main` deployment in staging.
+1. Create an isolated worktree, branched from `origin/main`, as described in [`docs/agents/implementation-workflow.md`](agents/implementation-workflow.md).
+2. Make one coherent change.
+3. Run the full gate — format, lint, typecheck, tests, build — and see it pass.
+4. Merge `origin/main` back in, resolve any conflicts, and run the gate again.
+5. Open a pull request targeting `main` and set auto-merge.
+6. Resolve review conversations and ensure all required checks pass.
+7. Squash-merge the pull request using a conventional title.
+8. Validate the resulting `main` deployment in staging and remove the worktree.
 
 Use conventional commit prefixes such as `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, and `chore:`. Add a scope when it makes the affected area clearer, for example `feat(api): add character lookup`.
 
