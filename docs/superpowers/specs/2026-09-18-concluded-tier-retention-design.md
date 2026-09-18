@@ -69,16 +69,33 @@ age; a kill in the current tier becomes terminal once it does.
 
 ### Terminal requires a clean read
 
-**A tier only goes terminal if the run that read it reported no limitation for
-it.** Drift, `schema_changed`, a request cap, a rate limit or a refused budget
-all leave the tier re-queryable, however old it is.
+**A tier only goes terminal in a domain if the run that read it reported no
+limitation against that domain.** Drift, `schema_changed`, a request cap, a rate
+limit or a refused budget all leave the tier re-queryable, however old it is.
+
+The scope of a limitation is what decides how far it reaches, and the two cases
+are not the same (#304):
+
+- **A limitation attributed to a raid blocks the domain it was raised against,
+  and only that domain.** Both kinds are parse-side — a failed or drifted
+  `CharacterZoneParses` blocks `tier_bests`, a failed `ReportFightParses` or a
+  spent hydration budget blocks `parses`. Neither says anything about whether
+  that raid's kills were fully discovered, because kills do not come from those
+  requests.
+- **A limitation on the history scan blocks every domain of every raid.** A
+  truncated or drifted scan may be missing reports from any tier — kills and
+  wipes, not merely parses — so nothing the run saw can be trusted complete.
 
 This is what makes the design safe to ship while collection is still imperfect.
 Without it, "store indefinitely" means "freeze whatever we happened to get,
 including the gaps". With it, the question stops being a judgement call about
 whether collection is good enough yet, and becomes an invariant the code
-enforces per tier: only a tier read without incident is allowed to stop being
-re-read.
+enforces per tier and per domain: only a tier read without incident, in that
+domain, is allowed to stop being re-read.
+
+The per-domain reading is not a loosening. It is what stops a routine parse
+shortfall — the normal state of a veteran, whose kills span more raids than the
+zone budget reaches — from holding the kill scan open forever.
 
 It is not hypothetical. On 2026-09-18, `rinn` and `riln` had carried
 `parse_schema_drift` and `schema_changed` for over sixteen hours with no retry,

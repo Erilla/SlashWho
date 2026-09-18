@@ -400,7 +400,7 @@ function firstKillReports(
           tierBests: [],
           // One page's normalisation attributes trouble to no raid: the caller
           // owns that judgement across the whole read.
-          troubledRaidIds: [],
+          troubledRaidIds: { parses: [], tierBests: [] },
           limitation: { kind: "limitation", code: "schema_drift" }
         }
       : { kind: "limitation", code: "schema_drift" };
@@ -588,7 +588,7 @@ function firstKillReports(
   return {
     kind: "evidence",
     tierBests: [],
-    troubledRaidIds: [],
+    troubledRaidIds: { parses: [], tierBests: [] },
     kills: [...kills.values()].sort(
       (a, b) =>
         a.bossOrder - b.bossOrder ||
@@ -1511,9 +1511,15 @@ export function createWarcraftLogsClient(
 
     let parseLimitation: WarcraftLogsLimitation | undefined;
     let parseRequests = 0;
-    // Raids this read had trouble with, of any kind. Kept per raid rather than
-    // per run so one zone's failure does not stop every other zone settling.
-    const troubledRaidIds = new Set<string>();
+    // Raids this read had trouble with, split by the collection domain the
+    // trouble belongs to. Kept per raid rather than per run so one zone's
+    // failure does not stop every other zone settling, and per domain so a
+    // parse shortfall does not stop the raid's kills settling either (#304).
+    // Neither set is ever written by the history scan: a scan that goes wrong
+    // may be missing reports from any tier, so it reports itself through
+    // `scanLimitation` rather than blaming a raid.
+    const troubledTierBestRaidIds = new Set<string>();
+    const troubledParseRaidIds = new Set<string>();
 
     // The zones whose kills this dossier can display, newest raid night first.
     // A kill outside its raid's current-content window is never shown, so its
@@ -1579,7 +1585,7 @@ export function createWarcraftLogsClient(
       // The zones the budget will not reach were read by nobody, so none of
       // them may settle on the strength of this run.
       for (const zone of pendingZones.slice(zoneRequestCap)) {
-        troubledRaidIds.add(String(zone.zoneId));
+        troubledTierBestRaidIds.add(String(zone.zoneId));
       }
     }
     for (const zone of pendingZones.slice(0, zoneRequestCap)) {
@@ -1601,14 +1607,14 @@ export function createWarcraftLogsClient(
         })
       );
       if (rankings.kind !== "success") {
-        troubledRaidIds.add(String(zone.zoneId));
+        troubledTierBestRaidIds.add(String(zone.zoneId));
         tierParseLimitation = toParseLimitation(rankings);
         // The loop stops here, so every zone still queued was read by nobody.
         for (const pending of pendingZones.slice(
           pendingZones.indexOf(zone) + 1,
           zoneRequestCap
         )) {
-          troubledRaidIds.add(String(pending.zoneId));
+          troubledTierBestRaidIds.add(String(pending.zoneId));
         }
         break;
       }
@@ -1619,7 +1625,7 @@ export function createWarcraftLogsClient(
         options.className
       );
       if (isLimitation(decoded)) {
-        troubledRaidIds.add(String(zone.zoneId));
+        troubledTierBestRaidIds.add(String(zone.zoneId));
         tierParseLimitation = decoded;
         // Drift describes this one zone's response. Every other zone is a
         // separate request with its own answer, so the budget goes on reading
@@ -1629,7 +1635,7 @@ export function createWarcraftLogsClient(
           pendingZones.indexOf(zone) + 1,
           zoneRequestCap
         )) {
-          troubledRaidIds.add(String(pending.zoneId));
+          troubledTierBestRaidIds.add(String(pending.zoneId));
         }
         break;
       }
@@ -1720,7 +1726,7 @@ export function createWarcraftLogsClient(
     function troubleGroups(scopes: Iterable<RankingScope>): void {
       for (const scope of scopes) {
         for (const raidId of groupRaidIds.get(scope.reportCode) ?? []) {
-          troubledRaidIds.add(raidId);
+          troubledParseRaidIds.add(raidId);
         }
       }
     }
@@ -1880,7 +1886,10 @@ export function createWarcraftLogsClient(
         a.fightUrl.localeCompare(b.fightUrl)
     );
     const reportedParseLimitation = parseLimitation ?? tierParseLimitation;
-    const troubled = [...troubledRaidIds].sort();
+    const troubled = {
+      parses: [...troubledParseRaidIds].sort(),
+      tierBests: [...troubledTierBestRaidIds].sort()
+    };
     return sortedKills.length || sortedWipes.length
       ? {
           kind: "evidence",

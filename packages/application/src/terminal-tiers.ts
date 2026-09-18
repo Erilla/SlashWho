@@ -18,8 +18,16 @@ export type TerminalTierInput = Readonly<{
   kills: readonly TerminalTierKill[];
   /** The run's history-scan limitation, if it reported one. */
   scanLimitation: string | null;
-  /** Raids this run attributed a limitation to. */
-  troubledRaidIds: readonly string[];
+  /**
+   * Raids this run attributed a limitation to, per collection domain. Both
+   * sets are parse-domain: nothing in the history scan attributes trouble to a
+   * raid, because a scan that goes wrong may be missing reports from any tier
+   * and so reports itself through `scanLimitation` instead.
+   */
+  troubledRaidIds: Readonly<{
+    parses: readonly string[];
+    tierBests: readonly string[];
+  }>;
 }>;
 
 /**
@@ -31,13 +39,22 @@ export type TerminalTierInput = Readonly<{
  *    never concluded. Freezing evidence we cannot place in time is worse than
  *    re-querying it, and `current_content_window_unknown` is live on real
  *    characters today.
- * 2. **The run read the tier without incident.** A limitation attributed to a
- *    raid leaves that raid re-queryable however old it is; a limitation on the
- *    history scan leaves *every* raid re-queryable, because a truncated or
- *    drifted scan may be missing reports from any tier -- kills and wipes, not
- *    merely parses. This is what makes storing evidence indefinitely safe while
+ * 2. **The run read the tier without incident, in that domain.** A limitation
+ *    attributed to a raid leaves that raid re-queryable however old it is --
+ *    but only for the domain it was raised against. Both trouble sets are
+ *    parse-domain, so neither says anything about whether the raid's kills were
+ *    fully discovered: kills come from the history scan alone, and a scan that
+ *    goes wrong reports itself through `scanLimitation`, which leaves *every*
+ *    raid re-queryable in *every* domain, because a truncated or drifted scan
+ *    may be missing reports from any tier -- kills and wipes, not merely
+ *    parses. This is what makes storing evidence indefinitely safe while
  *    collection is still imperfect: "is collection good enough yet" stops being
- *    a judgement call and becomes an invariant enforced per tier.
+ *    a judgement call and becomes an invariant enforced per tier, per domain.
+ *
+ *    Conflating the two is what #304 was: a veteran exhausts the parse budget
+ *    on every run, so every raid came back troubled, so nothing settled for
+ *    kills, so the scan floor never engaged and the whole history was
+ *    re-scanned forever.
  * 3. **Every kill in the tier has settled.** Rankings move for a few days after
  *    a kill, and a percentile frozen early cannot be corrected without a
  *    rebuild.
@@ -56,7 +73,8 @@ export function terminalTiersFrom(
   if (input.scanLimitation !== null) return [];
 
   const settledBefore = input.at.getTime() - input.settleMs;
-  const troubled = new Set(input.troubledRaidIds);
+  const troubledParses = new Set(input.troubledRaidIds.parses);
+  const troubledTierBests = new Set(input.troubledRaidIds.tierBests);
   const raids = new Map<string, { raidName: string; settled: boolean }>();
   for (const kill of input.kills) {
     const killedAt = Date.parse(kill.killedAt);
@@ -75,13 +93,14 @@ export function terminalTiersFrom(
     a.localeCompare(b)
   )) {
     if (!raid.settled) continue;
-    if (troubled.has(raidId)) continue;
     if (raidTierConclusion(raid.raidName, input.at) !== "concluded") continue;
-    marks.push(
-      { raidId, domain: "kills" },
-      { raidId, domain: "parses" },
-      { raidId, domain: "tier_bests" }
-    );
+    // Kills survive parse-domain trouble: the scan that found them raised no
+    // limitation, which is the whole of what this mark rests on.
+    marks.push({ raidId, domain: "kills" });
+    if (!troubledParses.has(raidId)) marks.push({ raidId, domain: "parses" });
+    if (!troubledTierBests.has(raidId)) {
+      marks.push({ raidId, domain: "tier_bests" });
+    }
   }
   return marks;
 }
@@ -90,11 +109,21 @@ export function terminalTiersFrom(
  * The instant the report scan may stop at, or `undefined` for no early stop.
  *
  * Derived from the character's own stored kills rather than from the content
- * windows, which is both simpler and stricter. A tier only goes terminal for
- * kills after a run whose history scan raised no limitation, so the stored
- * kills of such a character are its whole history: the oldest kill in a raid
- * that is *not* terminal is therefore the oldest thing the scan still has to
- * reach, and everything below it is already held.
+ * windows, which is both simpler and stricter.
+ *
+ * The one thing this rests on: **a tier goes terminal for kills only after a
+ * run whose history scan raised no limitation at all.** That is now the sole
+ * guard, so it is worth stating plainly rather than leaving among the others.
+ * Parse-domain trouble deliberately does not block the kills mark -- kills come
+ * from the history scan alone, so a zone request that failed or a hydration
+ * budget that ran out says nothing about whether this raid's kills are
+ * complete.
+ *
+ * A clean scan therefore means the stored kills of such a character are its
+ * whole history: the oldest kill in a raid that is *not* terminal is the oldest
+ * thing the scan still has to reach, and everything below it is already held.
+ * A scan that truncates at its page cap raises `request_cap`, which settles
+ * nothing in any domain, so an incomplete history can never be frozen here.
  *
  * With nothing terminal there is no saving to take, and stored kills may come
  * from a run that never finished, so the scan is left alone.

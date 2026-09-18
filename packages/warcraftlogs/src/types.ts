@@ -144,12 +144,24 @@ export type WarcraftLogsReportResult =
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
       /**
-       * Raids a limitation was attributed to during this read. A caller storing
-       * evidence indefinitely must not mark these terminal: the tier was read,
-       * but not cleanly. Kept per raid rather than per run so one zone's drift
-       * does not stop every other zone settling.
+       * Raids a limitation was attributed to during this read, per collection
+       * domain. A caller storing evidence indefinitely must not mark these
+       * terminal for that domain: the tier was read, but not cleanly. Kept per
+       * raid rather than per run so one zone's drift does not stop every other
+       * zone settling.
+       *
+       * Both domains are parse-side, and deliberately so. Kills and wipes come
+       * from the history scan, which never attributes trouble to a single raid
+       * -- a scan that goes wrong may be missing reports from any tier, so it
+       * reports itself through `limitation` instead. A caller may therefore
+       * treat a raid listed here as complete for kills (#304).
        */
-      troubledRaidIds: readonly string[];
+      troubledRaidIds: Readonly<{
+        /** `ReportFightParses` and the identity lookup behind it. */
+        parses: readonly string[];
+        /** `CharacterZoneParses`, including zones the zone budget never reached. */
+        tierBests: readonly string[];
+      }>;
       limitation?: WarcraftLogsLimitation;
       parseLimitation?: WarcraftLogsLimitation;
     }>
