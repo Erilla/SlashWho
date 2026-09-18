@@ -11,7 +11,8 @@ import type {
   DiscoverCharacterJob,
   DiscoveryQueue,
   DiscoveryWorkContext,
-  Repositories
+  Repositories,
+  StagedEvidenceCollection
 } from "@slashwho/database";
 import type { RaiderIoGateway } from "@slashwho/domain";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
@@ -181,6 +182,7 @@ function runtimeFakes() {
   // nothing is working on any more.
   const activeEvidenceRuns: Array<{
     runId: string;
+    key: { region: "eu"; realm: string; name: string };
     queueJobId: string | null;
     startedAt: Date | null;
     createdAt: Date;
@@ -193,6 +195,11 @@ function runtimeFakes() {
   });
   const releaseAbandoned = vi.fn(
     async (runIds: readonly string[]) => runIds.length
+  );
+  // No stage by default, so recovery releases -- the arms these tests exercise
+  // are about which runs it judges abandoned, not what it does with the scan.
+  const stagedCollection = vi.fn(
+    async (): Promise<StagedEvidenceCollection | null> => null
   );
   const repositories = {
     evidence: {
@@ -208,6 +215,8 @@ function runtimeFakes() {
       },
       async publish() {},
       async fail() {},
+      stagedCollection,
+      async markTerminalTiers() {},
       reserve: evidenceReserve,
       async getCompleted() {
         return null;
@@ -314,6 +323,7 @@ function runtimeFakes() {
     sweepOrder,
     listActive,
     releaseAbandoned,
+    stagedCollection,
     get evidenceResumeHandler() {
       return evidenceResumeHandler;
     },
@@ -1021,6 +1031,7 @@ describe("worker runtime", () => {
     const fakes = runtimeFakes();
     fakes.activeEvidenceRuns.push({
       runId: "00000000-0000-4000-8000-000000000031",
+      key: { region: "eu" as const, realm: "silvermoon", name: "adeline" },
       queueJobId: "00000000-0000-4000-8000-000000000032",
       startedAt: new Date(Date.now() - 20 * 60_000),
       createdAt: new Date(Date.now() - 21 * 60_000)
@@ -1077,10 +1088,11 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
-  it("reports what each sweep released and resumed", async () => {
+  it("reports what each sweep released, republished and resumed", async () => {
     const fakes = runtimeFakes();
     fakes.activeEvidenceRuns.push({
       runId: "00000000-0000-4000-8000-000000000042",
+      key: { region: "eu" as const, realm: "silvermoon", name: "adeline" },
       queueJobId: "00000000-0000-4000-8000-000000000043",
       startedAt: new Date(Date.now() - 20 * 60_000),
       createdAt: new Date(Date.now() - 21 * 60_000)
@@ -1098,8 +1110,60 @@ describe("worker runtime", () => {
     expect(logger.info).toHaveBeenCalledWith({
       event: "evidence_resume_sweep",
       resumed: 0,
-      released: 1
+      released: 1,
+      republished: 0
     });
+    await runtime.stop();
+  });
+
+  it("completes an abandoned run from its staged scan, and says so in counts alone", async () => {
+    // The whole point of #312: the stage is the finished history scan, which
+    // is most of what the run cost. It is also the first thing recovery reads
+    // a character key for, so the record it writes is worth pinning -- counts
+    // only, never the key.
+    const fakes = runtimeFakes();
+    fakes.activeEvidenceRuns.push({
+      runId: "00000000-0000-4000-8000-000000000044",
+      key: {
+        region: "eu" as const,
+        realm: "silvermoon",
+        name: "private-value"
+      },
+      queueJobId: "00000000-0000-4000-8000-000000000045",
+      startedAt: new Date(Date.now() - 20 * 60_000),
+      createdAt: new Date(Date.now() - 21 * 60_000)
+    });
+    fakes.settledEvidenceJobs.push("00000000-0000-4000-8000-000000000045");
+    fakes.stagedCollection.mockResolvedValue({
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      retryAfterAt: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date(Date.now() - 19 * 60_000).toISOString(),
+      troubledRaidIds: { parses: [], tierBests: [] }
+    });
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "evidence_resume_sweep",
+      resumed: 0,
+      released: 0,
+      republished: 1
+    });
+    expect(fakes.releaseAbandoned).not.toHaveBeenCalled();
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
     await runtime.stop();
   });
 
@@ -1110,12 +1174,14 @@ describe("worker runtime", () => {
     fakes.activeEvidenceRuns.push(
       {
         runId: "00000000-0000-4000-8000-000000000033",
+        key: { region: "eu" as const, realm: "silvermoon", name: "adeline" },
         queueJobId: null,
         startedAt: null,
         createdAt: new Date(Date.now() - 60_000)
       },
       {
         runId: "00000000-0000-4000-8000-000000000034",
+        key: { region: "eu" as const, realm: "silvermoon", name: "adeline" },
         queueJobId: null,
         startedAt: null,
         createdAt: new Date(Date.now() - 30 * 60_000)
@@ -1140,12 +1206,14 @@ describe("worker runtime", () => {
     fakes.activeEvidenceRuns.push(
       {
         runId: "00000000-0000-4000-8000-000000000035",
+        key: { region: "eu" as const, realm: "silvermoon", name: "adeline" },
         queueJobId: null,
         startedAt: new Date(Date.now() - 40 * 60_000),
         createdAt: new Date(Date.now() - 41 * 60_000)
       },
       {
         runId: "00000000-0000-4000-8000-000000000036",
+        key: { region: "eu" as const, realm: "silvermoon", name: "adeline" },
         queueJobId: null,
         startedAt: new Date(Date.now() - 9 * 60 * 60_000),
         createdAt: new Date(Date.now() - 9 * 60 * 60_000)

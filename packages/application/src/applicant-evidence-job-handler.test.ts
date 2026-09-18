@@ -1382,6 +1382,155 @@ describe("applicant evidence job handler", () => {
       ]);
     });
 
+    it("settles the tiers a republished stage had already earned", async () => {
+      // Break caught, and older than #312: the republish branch returns before
+      // the marking below it, so a re-claimed retry stored the evidence and
+      // settled nothing -- making the character re-pay for zones and scan
+      // pages the original run had earned the right to stop re-querying.
+      const evidence = store();
+      evidence.staged.set(run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        kills: [
+          {
+            raidId: "42",
+            // Closed 2026-08-19, so concluded when the stage was collected.
+            raidName: "The Dreamrift",
+            bossId: "7",
+            bossName: "Final Boss",
+            journalBossId: "7",
+            bossOrder: 7,
+            isFinalBoss: true,
+            killedAt: "2026-06-01T20:00:00.000Z",
+            reportUrl: "https://www.warcraftlogs.com/reports/abc",
+            fightUrl: "https://www.warcraftlogs.com/reports/abc#fight=1",
+            guild: null,
+            performance: {
+              damage: { state: "unavailable" as const },
+              healing: { state: "unavailable" as const },
+              bossDamage: { state: "unavailable" as const }
+            }
+          }
+        ],
+        wipes: [],
+        tierBests: [],
+        completedAt: "2026-09-18T09:43:26.000Z",
+        troubledRaidIds: { parses: ["42"], tierBests: [] }
+      });
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(),
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
+      });
+
+      await handler.execute(run.id, context);
+
+      // Parses stay re-queryable: the run attributed a limitation to that raid
+      // in that domain, and the stage is what carried the fact through.
+      expect(evidence.marked).toEqual([
+        { raidId: "42", domain: "kills" },
+        { raidId: "42", domain: "tier_bests" }
+      ]);
+    });
+
+    it("settles nothing for a stage written before trouble sets were carried", async () => {
+      // Absent is not empty. A stage that cannot say which raids it had
+      // trouble with must not have that read as "none", which would mark a
+      // troubled raid terminal and freeze the parse gaps it exists to hold.
+      const evidence = store();
+      evidence.staged.set(run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        kills: [
+          {
+            raidId: "42",
+            raidName: "The Dreamrift",
+            bossId: "7",
+            bossName: "Final Boss",
+            journalBossId: "7",
+            bossOrder: 7,
+            isFinalBoss: true,
+            killedAt: "2026-06-01T20:00:00.000Z",
+            reportUrl: "https://www.warcraftlogs.com/reports/abc",
+            fightUrl: "https://www.warcraftlogs.com/reports/abc#fight=1",
+            guild: null,
+            performance: {
+              damage: { state: "unavailable" as const },
+              healing: { state: "unavailable" as const },
+              bossDamage: { state: "unavailable" as const }
+            }
+          }
+        ],
+        wipes: [],
+        tierBests: [],
+        completedAt: "2026-09-18T09:43:26.000Z"
+      });
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(),
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
+      });
+
+      await handler.execute(run.id, context);
+
+      expect(evidence.published).toHaveLength(1);
+      expect(evidence.marked).toEqual([]);
+    });
+
+    it("stages the raids it had trouble with, so a later publication can settle them", async () => {
+      // The trouble sets are the one terminal-marking input no settled column
+      // records, so the stage is the only place they can survive the death of
+      // the process that collected them.
+      const evidence = store();
+      const troubledRaidIds = { parses: ["42"], tierBests: ["43"] };
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: scanningGateway(
+          0,
+          0,
+          vi.fn(async () => ({
+            kind: "evidence" as const,
+            kills: [],
+            wipes: [],
+            tierBests: [],
+            troubledRaidIds
+          }))
+        ),
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
+      });
+
+      await handler.execute(run.id, context);
+
+      expect(evidence.staged.get(run.id)?.troubledRaidIds).toEqual(
+        troubledRaidIds
+      );
+    });
+
     it("stages a finished scan before publishing it", async () => {
       // Break caught: staging after the publication would leave exactly the
       // window this is for -- a scan paid for and a publication that failed --

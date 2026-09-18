@@ -3388,11 +3388,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
         const result = await pool.query<{
           id: string;
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
           queue_job_id: string | null;
           started_at: Date | null;
           created_at: Date;
         }>(
-          `SELECT id, queue_job_id, started_at, created_at
+          `SELECT id, region, realm_slug, normalized_name,
+                  queue_job_id, started_at, created_at
            FROM character_evidence_runs
            WHERE status IN ('queued', 'running', 'retrying')
            ORDER BY created_at, id
@@ -3401,6 +3405,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
         return result.rows.map((row) => ({
           runId: row.id,
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
           queueJobId: row.queue_job_id,
           startedAt: row.started_at,
           createdAt: row.created_at

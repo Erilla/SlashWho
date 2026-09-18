@@ -546,8 +546,9 @@ export async function createWorkerRuntime(
       // `retryLimit` is 1, so the only symptom would be a log line that
       // stopped appearing while no character was ever resumed again.
       let released = 0;
+      let republished = 0;
       try {
-        released = await recoverAbandonedEvidenceRuns(
+        ({ released, republished } = await recoverAbandonedEvidenceRuns(
           repositories.evidence,
           initializedQueue,
           {
@@ -557,9 +558,10 @@ export async function createWorkerRuntime(
             reservedBefore: new Date(
               Date.now() - ORPHANED_EVIDENCE_RESERVATION_MS
             ),
+            settleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
             limit: ABANDONED_EVIDENCE_SCAN_LIMIT
           }
-        );
+        ));
       } catch (error) {
         logger?.info({
           event: "evidence_recovery_failed",
@@ -577,10 +579,16 @@ export async function createWorkerRuntime(
           ...(logger ? { logger } : {})
         }
       );
-      // Counts only, never a character key: this says whether the sweep is
-      // doing anything, which is the thing that was impossible to tell before
-      // it existed.
-      logger?.info({ event: "evidence_resume_sweep", resumed, released });
+      // Counts only, never a character key -- recovery reads one now, to mark
+      // the tiers a republished stage earned, and it must not leak here. This
+      // says whether the sweep is doing anything, which is the thing that was
+      // impossible to tell before it existed.
+      logger?.info({
+        event: "evidence_resume_sweep",
+        resumed,
+        released,
+        republished
+      });
     });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);
