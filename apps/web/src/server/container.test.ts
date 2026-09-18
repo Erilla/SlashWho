@@ -151,7 +151,14 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
       return { kind: "removed" as const };
     },
     async refreshCharacter() {
-      return { mode: "full" as const, lastCollectedAt: null };
+      return { mode: "full" as const, lastCollectedAt: null, clearedTiers: 0 };
+    },
+    async rebuildCharacter() {
+      return {
+        mode: "rebuild" as const,
+        lastCollectedAt: null,
+        clearedTiers: 0
+      };
     }
   };
 

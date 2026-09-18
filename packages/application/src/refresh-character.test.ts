@@ -7,11 +7,12 @@ const key = { region: "eu" as const, realm: "silvermoon", name: "ryii" };
 const at = new Date("2026-09-16T12:00:00.000Z");
 const cooldownMs = 15 * 60 * 1000;
 
-function harness(lastCompletedAt: Date | null) {
+function harness(lastCompletedAt: Date | null, rebuild = false) {
   const reserve = vi.fn().mockResolvedValue({
     kind: "reserved",
     run: { id: "run-1", key, status: "queued" }
   });
+  const clearTerminalTiers = vi.fn().mockResolvedValue(3);
   const getCompleted = vi
     .fn()
     .mockResolvedValue(
@@ -26,13 +27,20 @@ function harness(lastCompletedAt: Date | null) {
     getCompleted,
     markEnqueued,
     enqueueCharacterEvidence,
+    clearTerminalTiers,
     run: () =>
       refreshCharacter({
         key,
         at,
         cooldownMs,
+        ...(rebuild ? { rebuild: true } : {}),
         repositories: {
-          evidence: { reserve, getCompleted, markEnqueued }
+          evidence: {
+            reserve,
+            getCompleted,
+            markEnqueued,
+            clearTerminalTiers
+          }
         } as never,
         queue: { enqueueCharacterEvidence } as never
       })
@@ -114,5 +122,48 @@ describe("refreshCharacter", () => {
     await expect(h.run()).resolves.toMatchObject({ mode: "full" });
 
     expect(h.enqueueCharacterEvidence).not.toHaveBeenCalled();
+  });
+
+  it("clears every terminal mark before reserving a rebuild", async () => {
+    const h = harness(new Date("2026-09-16T11:00:00.000Z"), true);
+
+    await expect(h.run()).resolves.toMatchObject({
+      mode: "rebuild",
+      clearedTiers: 3
+    });
+
+    expect(h.clearTerminalTiers).toHaveBeenCalledWith(key);
+  });
+
+  it("does not clear terminal marks on an ordinary refresh", async () => {
+    // The reader-facing control must never re-collect a character's history.
+    const h = harness(new Date("2026-09-16T11:00:00.000Z"));
+
+    await h.run();
+
+    expect(h.clearTerminalTiers).not.toHaveBeenCalled();
+  });
+
+  it("does not clear terminal marks inside the cooldown either", async () => {
+    const h = harness(new Date("2026-09-16T11:55:00.000Z"));
+
+    await expect(h.run()).resolves.toMatchObject({ mode: "light" });
+
+    expect(h.clearTerminalTiers).not.toHaveBeenCalled();
+  });
+
+  it("queues a rebuild as one ordinary run, not a whole history at once", async () => {
+    // The flag is the whole mechanism. One character spans 353 reports and no
+    // single run can afford that, so the backlog drains across as many runs as
+    // the budget allows.
+    const h = harness(new Date("2026-09-16T11:00:00.000Z"), true);
+
+    await h.run();
+
+    expect(h.enqueueCharacterEvidence).toHaveBeenCalledTimes(1);
+    expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({ mode: "full" })
+    );
   });
 });
