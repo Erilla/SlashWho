@@ -12,8 +12,10 @@ import type {
   WarcraftLogsLimitation,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
+  WarcraftLogsQueryType,
   WarcraftLogsRateLimitResult,
   WarcraftLogsReportResult,
+  WarcraftLogsRequestEvent,
   WarcraftLogsWipeEvidence
 } from "./types";
 
@@ -1410,6 +1412,11 @@ export function createWarcraftLogsClient(
        * ends the scan cleanly, raising no limitation.
        */
       killScanFloor?: string;
+      /**
+       * Called once per upstream request this call issues, naming the class of
+       * query. Scoped to the call so the counts attribute to one run.
+       */
+      onRequest?(event: WarcraftLogsRequestEvent): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1424,18 +1431,38 @@ export function createWarcraftLogsClient(
       return { kind: "limitation", code: "parse_request_cap" };
     }
 
+    // Counted here rather than inside `graphql` so the observer stays scoped to
+    // this call: the client is a process-wide singleton, so a
+    // construction-level observer could not attribute a request to the run that
+    // issued it. Every call site passes its result through, limitation or not
+    // -- the request was issued and paid for either way.
+    const counted = <T extends GraphqlResult>(
+      query: WarcraftLogsQueryType,
+      result: T
+    ): T => {
+      try {
+        options.onRequest?.({ query, limited: result.kind !== "success" });
+      } catch {
+        // A counter must never cost the collection it is measuring.
+      }
+      return result;
+    };
+
     const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
     for (let page = 1; page <= options.requestCap; page++) {
-      const result = await graphql(
-        recentReportsQuery,
-        { name: key.name, realm: key.realm, region: key.region, page },
-        options.signal
-      ).catch((error: unknown) => {
-        if (options.signal?.reason?.name !== "TimeoutError") throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      });
+      const result = counted(
+        "history_scan",
+        await graphql(
+          recentReportsQuery,
+          { name: key.name, realm: key.realm, region: key.region, page },
+          options.signal
+        ).catch((error: unknown) => {
+          if (options.signal?.reason?.name !== "TimeoutError") throw error;
+          return { kind: "limitation" as const, code: "unavailable" as const };
+        })
+      );
       if (result.kind !== "success") {
         scanLimitation = result;
         break;
@@ -1557,19 +1584,22 @@ export function createWarcraftLogsClient(
     }
     for (const zone of pendingZones.slice(0, zoneRequestCap)) {
       parseRequests += 1;
-      const rankings = await graphql(
-        characterZoneParsesQuery,
-        {
-          name: key.name,
-          realm: key.realm,
-          region: key.region,
-          zoneID: zone.zoneId
-        },
-        options.signal
-      ).catch((error: unknown) => {
-        if (options.signal?.reason?.name !== "TimeoutError") throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      });
+      const rankings = counted(
+        "zone_rankings",
+        await graphql(
+          characterZoneParsesQuery,
+          {
+            name: key.name,
+            realm: key.realm,
+            region: key.region,
+            zoneID: zone.zoneId
+          },
+          options.signal
+        ).catch((error: unknown) => {
+          if (options.signal?.reason?.name !== "TimeoutError") throw error;
+          return { kind: "limitation" as const, code: "unavailable" as const };
+        })
+      );
       if (rankings.kind !== "success") {
         troubledRaidIds.add(String(zone.zoneId));
         tierParseLimitation = toParseLimitation(rankings);
@@ -1716,14 +1746,17 @@ export function createWarcraftLogsClient(
         break;
       }
       parseRequests += 1;
-      const rankings = await graphql(
-        reportFightParsesQuery,
-        { code: group.reportCode, fightIDs: [...group.fights.keys()] },
-        options.signal
-      ).catch((error: unknown) => {
-        if (options.signal?.reason?.name !== "TimeoutError") throw error;
-        return { kind: "limitation" as const, code: "unavailable" as const };
-      });
+      const rankings = counted(
+        "fight_parses",
+        await graphql(
+          reportFightParsesQuery,
+          { code: group.reportCode, fightIDs: [...group.fights.keys()] },
+          options.signal
+        ).catch((error: unknown) => {
+          if (options.signal?.reason?.name !== "TimeoutError") throw error;
+          return { kind: "limitation" as const, code: "unavailable" as const };
+        })
+      );
       if (rankings.kind !== "success") {
         parseLimitation = toParseLimitation(rankings);
         troubleGroups(orderedGroups.slice(index));
@@ -1755,19 +1788,25 @@ export function createWarcraftLogsClient(
         troubleGroups(decodedGroups.map(({ group }) => group));
       } else {
         const canonicalIdentities = [...identities.values()];
-        const canonical = await graphql(
-          rankingCharacterIdentityQuery(canonicalIdentities),
-          Object.fromEntries(
-            canonicalIdentities.map((identity, index) => [
-              `character${index}`,
-              identity.id
-            ])
-          ),
-          options.signal
-        ).catch((error: unknown) => {
-          if (options.signal?.reason?.name !== "TimeoutError") throw error;
-          return { kind: "limitation" as const, code: "unavailable" as const };
-        });
+        const canonical = counted(
+          "ranking_identities",
+          await graphql(
+            rankingCharacterIdentityQuery(canonicalIdentities),
+            Object.fromEntries(
+              canonicalIdentities.map((identity, index) => [
+                `character${index}`,
+                identity.id
+              ])
+            ),
+            options.signal
+          ).catch((error: unknown) => {
+            if (options.signal?.reason?.name !== "TimeoutError") throw error;
+            return {
+              kind: "limitation" as const,
+              code: "unavailable" as const
+            };
+          })
+        );
         if (canonical.kind !== "success") {
           parseLimitation = toParseLimitation(canonical);
           troubleGroups(decodedGroups.map(({ group }) => group));

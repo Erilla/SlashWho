@@ -9,9 +9,11 @@ export type {
   WarcraftLogsLimitationCode,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
+  WarcraftLogsQueryType,
   WarcraftLogsRateLimit,
   WarcraftLogsRateLimitResult,
   WarcraftLogsReportResult,
+  WarcraftLogsRequestEvent,
   WarcraftLogsTierBestParse,
   WarcraftLogsWipeEvidence
 } from "./types";

@@ -3729,6 +3729,125 @@ describe("Warcraft Logs gateway", () => {
       expect(result.kills.length).toBeGreaterThan(0);
   });
 
+  it("counts the requests it issues by query type", async () => {
+    // Break caught: one `getFirstKillReports` is a single gateway call but four
+    // classes of upstream request, so a run's cost cannot be attributed to the
+    // history scan or to rankings without counting them apart.
+    const requests: Array<{ query: string; limited: boolean }> = [];
+    const { client } = performanceClient(
+      performanceRankings({ damage: 91, healing: 12, bossDamage: 44 })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8,
+      onRequest: (event) => requests.push(event)
+    });
+
+    expect(result.kind).toBe("evidence");
+    expect(requests).toEqual([
+      { query: "history_scan", limited: false },
+      { query: "zone_rankings", limited: false },
+      { query: "fight_parses", limited: false },
+      { query: "ranking_identities", limited: false }
+    ]);
+  });
+
+  it("reports a zone-rankings request that came back limited", async () => {
+    // Break caught: counting only issued requests hides which class of query is
+    // the one being refused, which is the class an optimisation must target.
+    const requests: Array<{ query: string; limited: boolean }> = [];
+    // Built directly rather than through `clientFor`: that harness reshapes any
+    // zone response it cannot parse, which would swallow the 503 under test.
+    const client = createWarcraftLogsClient({
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        return body.query.includes("CharacterZoneParses")
+          ? new Response("", { status: 503 })
+          : jsonResponse(performanceReport([26]));
+      }) as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker"
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8,
+      onRequest: (event) => requests.push(event)
+    });
+
+    expect(requests).toContainEqual({ query: "zone_rankings", limited: true });
+    expect(
+      requests.filter((event) => event.query === "zone_rankings")
+    ).toHaveLength(1);
+  });
+
+  it("counts the history scan even when the run returns a bare limitation", async () => {
+    // Break caught: a run that fails outright returns no evidence to hang
+    // counters on, and it is exactly the run whose spend needs explaining.
+    const requests: Array<{ query: string; limited: boolean }> = [];
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : new Response("", { status: 429 })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8,
+      onRequest: (event) => requests.push(event)
+    });
+
+    expect(result).toMatchObject({ kind: "limitation", code: "rate_limited" });
+    expect(requests).toEqual([{ query: "history_scan", limited: true }]);
+  });
+
+  it("counts one history-scan request per page of a paginated scan", async () => {
+    // Break caught: the scan is the one class whose count varies with history
+    // depth, so a per-run count rather than a per-page count would say nothing.
+    const requests: Array<{ query: string; limited: boolean }> = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("RecentReports")) {
+        return jsonResponse(performanceReport([26], true));
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 3,
+      parseRequestCap: 8,
+      onRequest: (event) => requests.push(event)
+    });
+
+    expect(
+      requests.filter((event) => event.query === "history_scan")
+    ).toHaveLength(3);
+  });
+
+  it("keeps a throwing onRequest from changing the returned evidence", async () => {
+    // Break caught: an unguarded counter would turn an instrumented run into an
+    // unexpected_error job retry, making the measurement cost what it measures.
+    const { client } = performanceClient(
+      performanceRankings({ damage: 91, healing: 12, bossDamage: 44 })
+    );
+
+    await expect(
+      client.getFirstKillReports(key, {
+        requestCap: 1,
+        parseRequestCap: 8,
+        onRequest: () => {
+          throw new Error("counter-exploded-marker");
+        }
+      })
+    ).resolves.toMatchObject({ kind: "evidence" });
+  });
+
   it("classifies malformed GraphQL envelopes as schema drift without returning them", async () => {
     const { client } = clientFor((url) =>
       url.pathname === "/oauth/token"

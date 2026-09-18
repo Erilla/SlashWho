@@ -11,6 +11,7 @@ import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
   WarcraftLogsLimitationCode,
+  WarcraftLogsQueryType,
   WarcraftLogsRateLimit,
   WarcraftLogsWipeEvidence
 } from "@slashwho/warcraftlogs";
@@ -244,6 +245,19 @@ function toCharacterMythicKillInput(
     performance: kill.performance
   };
 }
+
+/**
+ * Log-field prefix per class of upstream Warcraft Logs request. A closed map
+ * authored in source rather than a name derived from the query type, so every
+ * field on the `evidence_job` record is greppable from the field name alone.
+ */
+const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
+  {
+    history_scan: "warcraftLogsHistoryScan",
+    zone_rankings: "warcraftLogsZoneRankings",
+    fight_parses: "warcraftLogsFightParses",
+    ranking_identities: "warcraftLogsRankingIdentities"
+  };
 
 // The queue's own ceiling. `requestedRetryDelaySeconds` rejects anything above
 // `retryDelayMax` and the job then falls back to `retryDelay: 1` with backoff,
@@ -620,6 +634,18 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            // `warcraftLogsCalls` counts gateway invocations; one of those is
+            // four classes of upstream request. Counting them apart is what
+            // makes a run's points attributable to the history scan or to
+            // rankings, rather than a total nobody can act on (#303).
+            onRequest: (event) => {
+              scope.increment(`${REQUEST_COUNTER_PREFIX[event.query]}Requests`);
+              if (event.limited) {
+                scope.increment(
+                  `${REQUEST_COUNTER_PREFIX[event.query]}Limited`
+                );
+              }
+            },
             signal: activeContext.signal
           })
         );
