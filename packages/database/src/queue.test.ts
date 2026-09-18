@@ -185,6 +185,68 @@ describe("character evidence queue", () => {
       expect.any(Function)
     );
   });
+
+  it("reports the evidence jobs no worker will run again", async () => {
+    // Break caught: a run abandoned in `running` is only recoverable if
+    // something can tell a job still in flight from one the queue has
+    // finished with -- including one archived out of the job table.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    const runnable = "00000000-0000-4000-8000-000000000010";
+    const settled = "00000000-0000-4000-8000-000000000011";
+    const archived = "00000000-0000-4000-8000-000000000012";
+    await queue.start();
+    queueFakes.db.executeSql.mockResolvedValueOnce({
+      rows: [{ id: runnable }]
+    } as never);
+    const result = await queue.settledEvidenceJobIds([
+      runnable,
+      settled,
+      archived
+    ]);
+
+    expect(result).toEqual([settled, archived]);
+    const [sql, params] = queueFakes.db.executeSql.mock.lastCall as unknown as [
+      string,
+      unknown[]
+    ];
+    expect(sql).toContain("state < 'completed'");
+    expect(params).toEqual([
+      collectCharacterEvidenceQueueName,
+      [runnable, settled, archived]
+    ]);
+  });
+
+  it("asks the database nothing when no run has a job id", async () => {
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+
+    await queue.start();
+    queueFakes.db.executeSql.mockClear();
+    const result = await queue.settledEvidenceJobIds([]);
+
+    expect(result).toEqual([]);
+    expect(queueFakes.db.executeSql).not.toHaveBeenCalled();
+  });
+
+  it("treats a job id that is not a uuid as still runnable", async () => {
+    // A malformed id would fail the uuid cast and take the whole sweep with
+    // it. Excluding it leaves that one run to the time cutoff instead.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    await queue.start();
+    queueFakes.db.executeSql.mockClear();
+    const result = await queue.settledEvidenceJobIds(["not-a-uuid"]);
+
+    expect(result).toEqual([]);
+    expect(queueFakes.db.executeSql).not.toHaveBeenCalledWith(
+      expect.anything(),
+      [collectCharacterEvidenceQueueName, ["not-a-uuid"]]
+    );
+  });
 });
 
 describe("job telemetry", () => {

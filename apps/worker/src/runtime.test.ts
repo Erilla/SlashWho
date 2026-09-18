@@ -119,6 +119,9 @@ function runtimeFakes() {
     async scheduleEvidenceResume(handler) {
       evidenceResumeHandler = handler;
     },
+    async settledEvidenceJobIds(jobIds: readonly string[]) {
+      return jobIds.filter((id) => settledEvidenceJobs.includes(id));
+    },
     async workFingerprintAdmissions(handler) {
       admissionHandler = handler;
     },
@@ -160,7 +163,10 @@ function runtimeFakes() {
   // The resume sweep's three calls, kept addressable so a test can say what is
   // due and then assert the sweep reserved and enqueued it.
   const resumable: CharacterKey[] = [];
-  const listResumable = vi.fn(async () => resumable);
+  const listResumable = vi.fn(async () => {
+    sweepOrder.push("listResumable");
+    return resumable;
+  });
   const evidenceReserve = vi.fn(
     async (
       input: Record<string, unknown>
@@ -170,6 +176,24 @@ function runtimeFakes() {
     }
   );
   const evidenceMarkEnqueued = vi.fn(async () => {});
+  // Recovery's two calls. `activeEvidenceRuns` is what the reservation gate
+  // still counts as active; `settledEvidenceJobs` is what the queue says
+  // nothing is working on any more.
+  const activeEvidenceRuns: Array<{
+    runId: string;
+    queueJobId: string | null;
+    startedAt: Date | null;
+    createdAt: Date;
+  }> = [];
+  const settledEvidenceJobs: string[] = [];
+  const sweepOrder: string[] = [];
+  const listActive = vi.fn(async () => {
+    sweepOrder.push("listActive");
+    return activeEvidenceRuns;
+  });
+  const releaseAbandoned = vi.fn(
+    async (runIds: readonly string[]) => runIds.length
+  );
   const repositories = {
     evidence: {
       clearStaleCredentials: cleanup.evidence,
@@ -189,6 +213,8 @@ function runtimeFakes() {
         return null;
       },
       listResumable: listResumable,
+      listActive,
+      releaseAbandoned,
       markEnqueued: evidenceMarkEnqueued,
       async listStatus() {
         return [];
@@ -283,6 +309,11 @@ function runtimeFakes() {
     get maintenanceHandler() {
       return maintenanceHandler;
     },
+    activeEvidenceRuns,
+    settledEvidenceJobs,
+    sweepOrder,
+    listActive,
+    releaseAbandoned,
     get evidenceResumeHandler() {
       return evidenceResumeHandler;
     },
@@ -978,6 +1009,155 @@ describe("worker runtime", () => {
       "credentials"
     );
     expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledOnce();
+    await runtime.stop();
+  });
+
+  it("releases an evidence run abandoned in running on the same sweep", async () => {
+    // Break caught: #305. A run whose worker is killed mid-flight stays
+    // `running` for ever, so `reserve` reports the character as collecting and
+    // the resume sweep skips it -- the one character recovery cannot reach is
+    // the one that needs it. Recovery rides the five-minute sweep rather than
+    // the hourly cleanup for the same reason the resume sweep does.
+    const fakes = runtimeFakes();
+    fakes.activeEvidenceRuns.push({
+      runId: "00000000-0000-4000-8000-000000000031",
+      queueJobId: "00000000-0000-4000-8000-000000000032",
+      startedAt: new Date(Date.now() - 20 * 60_000),
+      createdAt: new Date(Date.now() - 21 * 60_000)
+    });
+    fakes.settledEvidenceJobs.push("00000000-0000-4000-8000-000000000032");
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.releaseAbandoned).toHaveBeenCalledWith([
+      "00000000-0000-4000-8000-000000000031"
+    ]);
+    await runtime.stop();
+  });
+
+  it("releases abandoned runs before it resumes waiting ones", async () => {
+    // Load-bearing ordering, not housekeeping: a character freed by recovery
+    // is only resumable once its dead run is out of the active set, so
+    // resuming first would always leave it to the following tick.
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.sweepOrder).toEqual(["listActive", "listResumable"]);
+    await runtime.stop();
+  });
+
+  it("still resumes waiting runs when recovery throws", async () => {
+    // Break caught: the resume queue retries once and then gives up, so an
+    // unguarded recovery failure would stop every character being resumed and
+    // show up only as a log line that quietly stopped appearing.
+    const fakes = runtimeFakes();
+    fakes.listActive.mockRejectedValueOnce(new RangeError("boom"));
+    fakes.resumable.push({ region: "eu", realm: "silvermoon", name: "ryii" });
+    fakes.evidenceReserve.mockResolvedValue({
+      kind: "reserved",
+      run: { id: "00000000-0000-4000-8000-000000000041" }
+    });
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledOnce();
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "evidence_recovery_failed",
+      failure: "RangeError"
+    });
+    await runtime.stop();
+  });
+
+  it("reports what each sweep released and resumed", async () => {
+    const fakes = runtimeFakes();
+    fakes.activeEvidenceRuns.push({
+      runId: "00000000-0000-4000-8000-000000000042",
+      queueJobId: "00000000-0000-4000-8000-000000000043",
+      startedAt: new Date(Date.now() - 20 * 60_000),
+      createdAt: new Date(Date.now() - 21 * 60_000)
+    });
+    fakes.settledEvidenceJobs.push("00000000-0000-4000-8000-000000000043");
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "evidence_resume_sweep",
+      resumed: 0,
+      released: 1
+    });
+    await runtime.stop();
+  });
+
+  it("frees a character orphaned at reservation within minutes", async () => {
+    // Nothing ever touched this run, so the long backstop buys nothing and
+    // would hide the character for most of a working day.
+    const fakes = runtimeFakes();
+    fakes.activeEvidenceRuns.push(
+      {
+        runId: "00000000-0000-4000-8000-000000000033",
+        queueJobId: null,
+        startedAt: null,
+        createdAt: new Date(Date.now() - 60_000)
+      },
+      {
+        runId: "00000000-0000-4000-8000-000000000034",
+        queueJobId: null,
+        startedAt: null,
+        createdAt: new Date(Date.now() - 30 * 60_000)
+      }
+    );
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.releaseAbandoned).toHaveBeenCalledWith([
+      "00000000-0000-4000-8000-000000000034"
+    ]);
+    await runtime.stop();
+  });
+
+  it("holds a claimed run whose job id was never recorded to the long backstop", async () => {
+    // `markEnqueued` requires status `queued`, so a worker claiming before the
+    // enqueuing process writes the id leaves a running run with no job id. The
+    // orphan cutoff must not reach it: the claim guard would stop the next
+    // claim, but the attempt already collecting would lose its whole scan.
+    const fakes = runtimeFakes();
+    fakes.activeEvidenceRuns.push(
+      {
+        runId: "00000000-0000-4000-8000-000000000035",
+        queueJobId: null,
+        startedAt: new Date(Date.now() - 40 * 60_000),
+        createdAt: new Date(Date.now() - 41 * 60_000)
+      },
+      {
+        runId: "00000000-0000-4000-8000-000000000036",
+        queueJobId: null,
+        startedAt: new Date(Date.now() - 9 * 60 * 60_000),
+        createdAt: new Date(Date.now() - 9 * 60 * 60_000)
+      }
+    );
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.releaseAbandoned).toHaveBeenCalledWith([
+      "00000000-0000-4000-8000-000000000036"
+    ]);
     await runtime.stop();
   });
 

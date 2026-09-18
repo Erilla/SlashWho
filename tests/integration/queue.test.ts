@@ -668,4 +668,56 @@ describe("durable discovery queue", () => {
     });
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
+
+  it("tells an evidence job still in flight from one nothing will run again", async () => {
+    // Break caught: #305. A run whose worker is killed stays `running` for
+    // ever, and only the job behind it can say whether anything is still
+    // working on it. A completed, cancelled or archived job means nothing is.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+
+    const waiting = await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000030"
+    );
+    // A worker holds this one right now. It is also what a killed worker
+    // leaves behind until `expireInSeconds` elapses, which is why recovery
+    // must not treat `active` as settled.
+    const claimed = await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000031"
+    );
+    const failed = await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000032"
+    );
+    const cancelled = await queue.enqueueCharacterEvidence(
+      "00000000-0000-4000-8000-000000000033"
+    );
+    await applicationPool.query(
+      `UPDATE pgboss.job SET state = 'active', started_on = now()
+       WHERE name = $1 AND id = $2::uuid`,
+      [characterEvidenceQueueName, claimed]
+    );
+    await applicationPool.query(
+      `UPDATE pgboss.job SET state = 'failed', completed_on = now()
+       WHERE name = $1 AND id = $2::uuid`,
+      [characterEvidenceQueueName, failed]
+    );
+    await applicationPool.query(
+      `UPDATE pgboss.job SET state = 'cancelled', completed_on = now()
+       WHERE name = $1 AND id = $2::uuid`,
+      [characterEvidenceQueueName, cancelled]
+    );
+    // Never enqueued at all: what an archived or purged job looks like.
+    const archived = "00000000-0000-4000-8000-000000000034";
+
+    await expect(
+      queue.settledEvidenceJobIds([
+        waiting,
+        claimed,
+        failed,
+        cancelled,
+        archived
+      ])
+    ).resolves.toEqual([failed, cancelled, archived]);
+  });
 });
