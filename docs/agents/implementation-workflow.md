@@ -91,8 +91,8 @@ branch short-lived.
 ## 5. Finish before opening the pull request
 
 Implementation is not finished when the code works; it is finished when the
-full gate passes and the branch is up to date with the trunk. Do both, in this
-order, before a pull request exists.
+full gate passes, the work has been reviewed, and the branch is up to date with
+the trunk. Do all three, in this order, before a pull request exists.
 
 ### Run the whole gate, and see it pass
 
@@ -110,6 +110,32 @@ Every one of these must pass. Read the output rather than assuming it: a
 skipped suite is not a passing suite, and `test:integration` and `test:e2e`
 silently need Docker running. Never open a pull request on the strength of the
 subset of tests you happened to run while implementing.
+
+### Review the work
+
+When Claude Code finished the task, review it in the same session before it
+leaves your machine:
+
+```
+/code-review low
+```
+
+`low` reports only the findings it is most confident in, which is what you want
+for a routine change; raise it for something risky or far-reaching. It reviews
+the branch's commits ahead of its upstream plus anything uncommitted, follows
+`CLAUDE.md`, and runs in the background with its own context, so it does not
+crowd the session it came from.
+
+Act on what it finds: fix it, or be able to say why the finding is wrong. If
+you change code in response, **run the gate again** — the review is not a
+substitute for it, and a fix made at this point is the least tested code on the
+branch. `/code-review low --fix` applies the findings directly, which is worth
+using only when you intend to read the resulting diff.
+
+This runs in your session rather than on the API, so it costs nothing per run.
+Prefer it to the automated review on the pull request, which is billed and
+deliberately shallow — the point of reviewing here is that problems are cheaper
+to fix before anyone else has read the branch.
 
 ### Merge `origin/main` back in
 
@@ -173,6 +199,12 @@ the `claude-code-review` workflow when it opens, is reopened, or is marked
 ready for review. It runs `.claude/skills/pr-review` and posts one comment:
 the findings, or a note that it found nothing.
 
+It is a backstop, not the review. The review that matters is the
+`/code-review low` in step 5, which is free, deeper, and happens while the
+branch is still yours to fix quietly. This one exists to catch what reaches a
+pull request without having had that — work from another agent, or from someone
+who skipped the step.
+
 It deliberately does **not** run again on later pushes. Each run is billed, and
 what it costs grows with the size of the diff and the number of findings it has
 to check, so running once per pull request rather than once per push is the
@@ -228,3 +260,4 @@ Run `git worktree list` from the shared checkout to audit what is still open.
 | CI fails on a suite you never ran             | Opened the pull request on a subset of the gate            |
 | Conflicts surface in the pull request         | `origin/main` was not merged in before opening             |
 | Pull request sits open and unmerged           | Auto-merge set, then nobody watched the checks or comments |
+| A bug the author could have caught cheaply    | `/code-review low` was skipped before opening              |
