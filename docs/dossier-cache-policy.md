@@ -302,6 +302,24 @@ per press and would not be if a press could re-collect a whole history on
 demand; keeping the mode unreachable is a better answer than gating a public
 endpoint. A rebuild is operator-only and run with credentials.
 
+A run's history scan is bounded by the same allowance. `EVIDENCE_REQUEST_CAP`
+is a ceiling rather than the value a run receives: the effective cap is a share
+of whatever `limitPerHour` the run's own credentials report, and the share
+differs by whose credentials those are. On the worker's own account that is
+half the allowance, 300 pages at 18000; on a visitor's it is 15%, 18 pages at 3600. The scan buys most of a run's points and all of the variance in them, so
+this is what decides what a started run costs — the reserve below only decides
+whether it starts.
+
+The smaller visitor share is a deliberate product choice, not a tuning
+artefact: a visitor supplied credentials to see one dossier, and spending their
+whole hourly quota every window until the character converges is spending
+someone else's resource. Their dossier converges more slowly as a result.
+
+Neither bound promises a run finishes. A character with deep history costs more
+points to scan than a visitor's entire hourly allowance, at any cap, so that
+case takes several windows by nature — the run publishes what it has, sets a
+retry deadline, and the resume sweep carries it on.
+
 A run also checks the Warcraft Logs hourly points allowance before it starts.
 When fewer than `EVIDENCE_POINTS_RESERVE` points (5000 by default, capped at
 30% of whatever allowance the account in use reports, so a visitor's smaller

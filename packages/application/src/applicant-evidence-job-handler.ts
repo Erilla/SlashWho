@@ -348,6 +348,110 @@ function effectiveReserve(
 }
 
 /**
+ * The history scan is what a run mostly spends its points on, and the request
+ * cap is a flat page count applied to whichever account the run carries -- the
+ * gap `effectiveReserve` already closes for the reserve, left open on the knob
+ * that decides what a *started* run costs (#320).
+ *
+ * The scan's share of a run was measured on 2026-09-18: 58-89% of spend, and
+ * all of the variance, since fight parses sit at a near-constant 33-43 requests
+ * against their own cap while the scan ranges from 32 to 190 pages. A visitor's
+ * 3600 allowance against a flat 500 means one run may plan a scan several times
+ * their whole hourly budget.
+ *
+ * A BACKSTOP, NOT A GUARANTEE. It bounds one run's share of an allowance; it
+ * does not promise the run finishes.
+ *
+ * That is worth the arithmetic, because this constant and
+ * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE are the two halves of a run's budget and
+ * they used to combine only in a reader's head. Admission guarantees a run
+ * starts with at least `effectiveReserve` points left. A run may then spend
+ * `cap * pointsPerPage` on the scan plus a flat parse term (48 requests at
+ * ~13 points, about 630, which does not scale with the allowance at all).
+ * Against the values here:
+ *
+ *   worker, 18000:  admission guarantees >=5000; cap 300 pages
+ *                   worst run 300*20 + 634 = 6634, and 9634 at 30 a page
+ *   visitor, 3600:  admission guarantees >=1080; cap  18 pages
+ *                   worst run  18*20 + 634 =  994, and 1174 at 30 a page
+ *
+ * The worker's does not close, by a wide margin. The visitor's nearly does --
+ * 994 against 1080 -- and tips over only if a page costs nearer 30 than the
+ * measured 20. That is a consequence of the modest visitor share, not a design
+ * goal, and it must not be read as a guarantee: the parse term is flat, so any
+ * rise in the parse cap eats the margin directly.
+ *
+ * Making the worker's close would mean 145 pages, below the deepest scan
+ * already observed (190), truncating collections that currently finish. And
+ * the reason is not arithmetic that can be rebalanced:
+ * a deep character's history is ~3800 points of scan before a single parse,
+ * which does not fit a 3600 allowance at any cap whatsoever. That case takes
+ * more than one window by nature. An overrun already publishes partial, sets a
+ * retry deadline and resumes, so it pays a deferral rather than losing work --
+ * which is why bounding the share is the job here and completing the run is
+ * not.
+ *
+ * If either constant moves, redo the four lines above. They are the only place
+ * the two shares are checked against each other.
+ */
+const MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE = 0.5;
+
+/**
+ * The same bound on a visitor's allowance, which is theirs and not ours.
+ *
+ * This is a product decision, not a tuning constant. Spending the worker's
+ * whole quota is a throughput choice we are entitled to make. Spending a
+ * visitor's, repeatedly across windows until their character converges, is
+ * spending someone else's resource -- and they supplied those credentials to
+ * see one dossier, not to have their Warcraft Logs quota drained every hour.
+ * So the slice is modest and convergence on a visitor's credentials is slower
+ * on purpose: 18 pages a run against a 3600 allowance, where our own would
+ * take 60.
+ *
+ * Keyed off whose credentials the run carries, never off how large the
+ * allowance is. A small allowance only correlates with a visitor: the worker's
+ * own tier moved from 9000 to 18000 inside a day on 2026-09-17, and a visitor
+ * may hold a large account.
+ */
+const MAXIMUM_SCAN_SHARE_OF_VISITOR_ALLOWANCE = 0.15;
+
+/**
+ * Points per history-scan page, for converting that share into a page count.
+ *
+ * 30 is deliberately above the measurement, not equal to it. Two runs on
+ * 2026-09-18 with identical zone and fight counts differed only in scan depth
+ * -- 134 pages against 66, 2894 points against 1531 -- which solves directly to
+ * about 20 a page with no model assumed. Dividing by the measured value would
+ * make the share a floor rather than a ceiling: the cap is `share * limit / s`,
+ * so the run spends `share * limit * (actual / assumed)`, and any page dearer
+ * than the estimate spends *more* than the share, not less. A third run the
+ * same evening does not fit a constant-cost model at all -- it implies a
+ * negative fight cost -- so per-request costs are not uniform across
+ * characters, and the divisor carries headroom for that.
+ */
+const HISTORY_SCAN_POINTS_PER_REQUEST = 30;
+
+function effectiveRequestCap(
+  budget: WarcraftLogsRateLimit,
+  configured: number,
+  credentials: "own" | "visitor"
+): number {
+  const share =
+    credentials === "visitor"
+      ? MAXIMUM_SCAN_SHARE_OF_VISITOR_ALLOWANCE
+      : MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE;
+  return Math.max(
+    1,
+    Math.min(
+      configured,
+      Math.floor(
+        (budget.limitPerHour * share) / HISTORY_SCAN_POINTS_PER_REQUEST
+      )
+    )
+  );
+}
+
+/**
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
  */
@@ -406,6 +510,8 @@ export function createApplicantEvidenceJobHandler(
         parseLimitationCode: null,
         killCount: 0,
         terminalTierCount: 0,
+        // Overwritten with the effective cap once the allowance is read; this
+        // is the value for a run that never got that far.
         requestCapUsed: options.requestCap,
         pointsLimitPerHour: null,
         pointsRemainingBefore: null,
@@ -498,6 +604,14 @@ export function createApplicantEvidenceJobHandler(
         // supplied them, the worker's shared gateway otherwise. The decrypted
         // values are used to build the gateway and never leave this scope:
         // nothing derived from them reaches `record`.
+        // Whose allowance this run spends. The scan share differs by this and
+        // not by how big the allowance turns out to be.
+        const usesVisitorCredentials = Boolean(
+          run.wclClientIdEncrypted &&
+          run.wclClientSecretEncrypted &&
+          options.createWarcraftLogsGateway &&
+          options.decryptionKey
+        );
         const gateway =
           run.wclClientIdEncrypted &&
           run.wclClientSecretEncrypted &&
@@ -646,7 +760,23 @@ export function createApplicantEvidenceJobHandler(
         // A light refresh reads one page of reports. The gateway marks a
         // page-capped scan as a request-cap limitation, so the run publishes
         // as partial and the kills it did not revisit are preserved.
-        const requestCap = job.mode === "light" ? 1 : options.requestCap;
+        // Scaled to the allowance the run's own credentials report, so a
+        // visitor's account is not handed a page budget sized for the worker's.
+        // A budget that could not be read falls back to the configured cap:
+        // the gate above is allowed to fail open, and this has to inherit that
+        // rather than scale off a limit it never saw.
+        const scanCap = openingBudget
+          ? effectiveRequestCap(
+              openingBudget,
+              options.requestCap,
+              usesVisitorCredentials ? "visitor" : "own"
+            )
+          : options.requestCap;
+        const requestCap = job.mode === "light" ? 1 : scanCap;
+        // What the run was actually given, not what was configured. The two
+        // were the same field until #320, and every record for a day named a
+        // 500 that a run may never have been allowed to reach.
+        record.requestCapUsed = requestCap;
         collectionBegan = true;
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
