@@ -41,6 +41,7 @@ const config: WorkerConfig = {
   warcraftLogsClientSecret: "warcraft-logs-client-secret",
   evidenceRequestCap: 500,
   evidenceParseCapRetryMs: 1_800_000,
+  evidencePointsReserve: 1_500,
   evidenceParseRequestCap: 8,
   blizzardSweepRequestCap: 300,
   blizzardHourlyRequestBudget: 28_800,

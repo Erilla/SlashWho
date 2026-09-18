@@ -23,6 +23,7 @@ export type WorkerConfig = {
   evidenceRequestCap: number;
   evidenceParseRequestCap: number;
   evidenceParseCapRetryMs: number;
+  evidencePointsReserve: number;
   blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
@@ -195,6 +196,23 @@ export function loadWorkerConfig(
       environment.EVIDENCE_PARSE_CAP_RETRY_MS,
       30 * 60_000,
       "invalid_evidence_parse_cap_retry_ms"
+    ),
+    // How much of the Warcraft Logs hourly allowance must remain before a run
+    // is allowed to start.
+    //
+    // 1500 IS A GUESS. It is derived only from ten runs exceeding 9000 points
+    // on 2026-09-17, so the average run costs more than 900; 1500 is that
+    // floor plus headroom, picked so a run is refused rather than started and
+    // abandoned part-way. The average says nothing about the distribution.
+    // The `pointsSpentByRun` deltas the evidence job now logs are what replace
+    // this guess with evidence -- revisit this within a day of the first
+    // deployment. EVIDENCE_PARSE_REQUEST_CAP sat diverged between Railway (12)
+    // and code (24) until 2026-09-17 precisely because nothing forced that
+    // review.
+    evidencePointsReserve: positiveInteger(
+      environment.EVIDENCE_POINTS_RESERVE,
+      1_500,
+      "invalid_evidence_points_reserve"
     ),
     blizzardBaseUrl: optionalHttpUrl(
       environment.BLIZZARD_BASE_URL,

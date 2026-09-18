@@ -71,12 +71,16 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
   expect(() =>
     loadWorkerConfig({ ...environment, EVIDENCE_PARSE_REQUEST_CAP: "0" })
   ).toThrow("invalid_evidence_parse_request_cap");
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_POINTS_RESERVE: "0" })
+  ).toThrow("invalid_evidence_points_reserve");
 
   expect(loadWorkerConfig(environment)).toMatchObject({
     warcraftLogsClientId: environment.WARCRAFT_LOGS_CLIENT_ID,
     warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
     evidenceRequestCap: 500,
-    evidenceParseRequestCap: 24
+    evidenceParseRequestCap: 24,
+    evidencePointsReserve: 1500
   });
 });
 
