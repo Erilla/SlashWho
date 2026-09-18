@@ -5,6 +5,7 @@ export const discoverCharacterQueueName = "discover-character";
 export const maintenanceCleanupQueueName = "maintenance-cleanup";
 export const fingerprintAdmissionQueueName = "fingerprint-admission";
 export const collectCharacterEvidenceQueueName = "collect-character-evidence";
+export const evidenceResumeQueueName = "evidence-resume";
 
 /** Optional so jobs enqueued before this deployment stay valid in flight. */
 export type JobTelemetry = {
@@ -75,6 +76,13 @@ export interface DiscoveryQueue {
     ) => Promise<void>
   ): Promise<void>;
   scheduleMaintenanceCleanup(handler: () => Promise<void>): Promise<void>;
+  /**
+   * Runs `handler` every five minutes, to drive evidence runs whose retry
+   * deadline has passed. Separate from the hourly maintenance cleanup because
+   * the deadlines it chases are minutes apart: on the hourly cadence every
+   * waiting character would sit for up to an extra hour.
+   */
+  scheduleEvidenceResume(handler: () => Promise<void>): Promise<void>;
   stop(options: { graceful: boolean; timeoutMs: number }): Promise<void>;
   isReady(): boolean;
 }
@@ -184,6 +192,7 @@ export function createDiscoveryQueue(
   const inFlight = new Set<Promise<void>>();
   let ready = false;
   let maintenanceRegistered = false;
+  let evidenceResumeRegistered = false;
   let fingerprintAdmissionsRegistered = false;
   let characterEvidenceRegistered = false;
   let acceptingFingerprintAdmissions = false;
@@ -502,9 +511,47 @@ export function createDiscoveryQueue(
       maintenanceRegistered = true;
     },
 
+    async scheduleEvidenceResume(handler) {
+      if (!ready) throw new Error("discovery_queue_not_ready");
+      if (evidenceResumeRegistered) return;
+      // A tick only reserves and enqueues, so it is quick and cheap. It is
+      // also idempotent -- a tick that does nothing costs one query -- which
+      // is why a missed run needs no catching up and one retry is plenty.
+      const options = {
+        retryLimit: 1,
+        retryDelay: 60,
+        expireInSeconds: 120
+      };
+      await boss.createQueue(evidenceResumeQueueName, options);
+      await boss.updateQueue(evidenceResumeQueueName, options);
+      await boss.schedule(
+        evidenceResumeQueueName,
+        "*/5 * * * *",
+        {},
+        {
+          tz: "UTC"
+        }
+      );
+      await boss.work(
+        evidenceResumeQueueName,
+        { pollingIntervalSeconds: 0.5 },
+        async () => {
+          const execution = handler();
+          inFlight.add(execution);
+          try {
+            await execution;
+          } finally {
+            inFlight.delete(execution);
+          }
+        }
+      );
+      evidenceResumeRegistered = true;
+    },
+
     async stop({ graceful, timeoutMs }) {
       ready = false;
       maintenanceRegistered = false;
+      evidenceResumeRegistered = false;
       fingerprintAdmissionsRegistered = false;
       characterEvidenceRegistered = false;
       acceptingFingerprintAdmissions = false;

@@ -37,6 +37,7 @@ it("migrates and initializes the durable queue before serving searches", async (
     async workFingerprintAdmissions() {},
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
+    async scheduleEvidenceResume() {},
     async stop() {},
     isReady() {
       return true;
@@ -120,6 +121,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async workFingerprintAdmissions() {},
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
+    async scheduleEvidenceResume() {},
     async stop() {},
     isReady() {
       return true;
@@ -254,6 +256,7 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
     async workFingerprintAdmissions() {},
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
+    async scheduleEvidenceResume() {},
     async stop() {},
     isReady() {
       return true;
@@ -359,6 +362,7 @@ it.each([
       async workFingerprintAdmissions() {},
       async workCharacterEvidence() {},
       async scheduleMaintenanceCleanup() {},
+      async scheduleEvidenceResume() {},
       async stop() {},
       isReady() {
         return true;

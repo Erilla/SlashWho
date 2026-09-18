@@ -3,6 +3,7 @@ import {
   cleanupExpired,
   createDiscoveryJobHandler,
   recoverPendingSearches,
+  resumeWaitingEvidence,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -488,6 +489,31 @@ export async function createWorkerRuntime(
       }
       if (admission.kind !== "admitted") return;
       await dispatchAdmittedFingerprintRun(runId);
+    });
+    // What actually drives a waiting run. `reserve` is otherwise reached only
+    // from a dossier read or the refresh endpoint, so a run that deferred
+    // itself resumed only when somebody happened to load the page — which made
+    // the dossier nobody was watching the one that quietly never finished.
+    //
+    // It only reserves and enqueues. The evidence queue still collects one run
+    // at a time and the points gate still refuses a run it cannot afford, so
+    // this cannot spend more per hour than a reader already could.
+    await initializedQueue.scheduleEvidenceResume(async () => {
+      const resumed = await resumeWaitingEvidence(
+        repositories.evidence,
+        initializedQueue,
+        {
+          freshnessCutoff: new Date(
+            Date.now() - config.evidenceFreshnessHours * 60 * 60 * 1000
+          ),
+          limit: config.evidenceResumeSweepLimit,
+          ...(logger ? { logger } : {})
+        }
+      );
+      // A count only, never a character key: this says whether the sweep is
+      // doing anything, which is the thing that was impossible to tell before
+      // it existed.
+      logger?.info({ event: "evidence_resume_sweep", resumed });
     });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);

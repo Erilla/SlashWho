@@ -24,6 +24,8 @@ export type WorkerConfig = {
   evidenceParseRequestCap: number;
   evidenceCapRetryMs: number;
   evidenceTransientRetryMs: number;
+  evidenceResumeSweepLimit: number;
+  evidenceFreshnessHours: number;
   evidencePointsReserve: number;
   evidenceKillSettleDays: number;
   evidenceRetryCostCeiling: number;
@@ -223,6 +225,30 @@ export function loadWorkerConfig(
       environment.EVIDENCE_TRANSIENT_RETRY_MS,
       15 * 60_000,
       "invalid_evidence_transient_retry_ms"
+    ),
+    // How many waiting characters one resume sweep may start. A tick runs
+    // every five minutes and the queue collects one run at a time, so this
+    // bounds the backlog a single tick can enqueue rather than the rate
+    // anything is collected at -- the points gate still decides that.
+    //
+    // 25 is comfortably more than the ten-character sweeps seen so far, and
+    // low enough that a table full of stranded characters drains over several
+    // ticks instead of flooding the queue in one.
+    evidenceResumeSweepLimit: positiveInteger(
+      environment.EVIDENCE_RESUME_SWEEP_LIMIT,
+      25,
+      "invalid_evidence_resume_sweep_limit"
+    ),
+    // The same FRESHNESS_HOURS the web service reads, and the same default, so
+    // a resume sweep asks `reserve` exactly the question a dossier read would.
+    // A character the sweep picked up is past its retry deadline and so never
+    // fresh whatever this is, but passing a value the read path does not share
+    // would make the two able to disagree about a character neither of them
+    // has a reason to disagree about.
+    evidenceFreshnessHours: positiveInteger(
+      environment.FRESHNESS_HOURS,
+      24,
+      "invalid_freshness_hours"
     ),
     // How much of the Warcraft Logs hourly allowance must remain before a run
     // is allowed to start.

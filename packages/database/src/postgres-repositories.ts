@@ -3264,6 +3264,53 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rowCount ?? 0;
       },
 
+      async listResumable(limit, at) {
+        if (limit <= 0) return [];
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_evidence_resume_time_invalid");
+        }
+        // `latest` is each character's most recent completed run, picked the
+        // same way `loadCompletedEvidence` picks it, so this and the dossier
+        // read never disagree about which run speaks for a character.
+        //
+        // The `NOT EXISTS` is the whole of the in-flight guard: `reserve`
+        // would return `active` for such a character and the sweep would do
+        // nothing, so excluding it here saves the round trip rather than
+        // changing the outcome.
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+        }>(
+          `SELECT latest.region, latest.realm_slug, latest.normalized_name
+           FROM (
+             SELECT DISTINCT ON (region, realm_slug, normalized_name)
+               region, realm_slug, normalized_name, retry_after_at
+             FROM character_evidence_runs
+             WHERE status IN ('complete', 'partial')
+             ORDER BY region, realm_slug, normalized_name,
+               completed_at DESC, id DESC
+           ) AS latest
+           WHERE latest.retry_after_at IS NOT NULL
+             AND latest.retry_after_at <= $1
+             AND NOT EXISTS (
+               SELECT 1 FROM character_evidence_runs active
+               WHERE active.region = latest.region
+                 AND active.realm_slug = latest.realm_slug
+                 AND active.normalized_name = latest.normalized_name
+                 AND active.status IN ('queued', 'running', 'retrying')
+             )
+           ORDER BY latest.retry_after_at
+           LIMIT $2`,
+          [at, limit]
+        );
+        return result.rows.map((row) => ({
+          region: row.region,
+          realm: row.realm_slug,
+          name: row.normalized_name
+        }));
+      },
+
       async listStatus(keys) {
         if (keys.length === 0) return [];
         const result = await pool.query<EvidenceRunRow>(

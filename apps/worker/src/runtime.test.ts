@@ -6,6 +6,7 @@ import type {
   EvidenceRunNotifier
 } from "@slashwho/application";
 import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
+import type { CharacterKey } from "@slashwho/domain";
 import type {
   DiscoverCharacterJob,
   DiscoveryQueue,
@@ -44,6 +45,8 @@ const config: WorkerConfig = {
   evidenceRequestCap: 500,
   evidenceCapRetryMs: 1_800_000,
   evidenceTransientRetryMs: 900_000,
+  evidenceResumeSweepLimit: 25,
+  evidenceFreshnessHours: 24,
   evidencePointsReserve: 1_500,
   evidenceKillSettleDays: 7,
   evidenceRetryCostCeiling: 250,
@@ -68,6 +71,7 @@ function runtimeFakes() {
       ) => Promise<void>)
     | undefined;
   let maintenanceHandler: (() => Promise<void>) | undefined;
+  let evidenceResumeHandler: (() => Promise<void>) | undefined;
   let admissionHandler: ((runId: string) => Promise<void>) | undefined;
   let evidenceWorkHandler:
     | ((
@@ -111,6 +115,9 @@ function runtimeFakes() {
     async scheduleMaintenanceCleanup(handler) {
       maintenanceHandler = handler;
     },
+    async scheduleEvidenceResume(handler) {
+      evidenceResumeHandler = handler;
+    },
     async workFingerprintAdmissions(handler) {
       admissionHandler = handler;
     },
@@ -149,6 +156,19 @@ function runtimeFakes() {
       return 6;
     })
   };
+  // The resume sweep's three calls, kept addressable so a test can say what is
+  // due and then assert the sweep reserved and enqueued it.
+  const resumable: CharacterKey[] = [];
+  const listResumable = vi.fn(async () => resumable);
+  const evidenceReserve = vi.fn(
+    async (
+      input: Record<string, unknown>
+    ): Promise<{ kind: string; run: { id: string } | null }> => {
+      void input;
+      return { kind: "existing", run: null };
+    }
+  );
+  const evidenceMarkEnqueued = vi.fn(async () => {});
   const repositories = {
     evidence: {
       clearStaleCredentials: cleanup.evidence,
@@ -163,12 +183,12 @@ function runtimeFakes() {
       },
       async publish() {},
       async fail() {},
-      async reserve() {
-        return { kind: "existing" as const, run: null };
-      },
+      reserve: evidenceReserve,
       async getCompleted() {
         return null;
       },
+      listResumable: listResumable,
+      markEnqueued: evidenceMarkEnqueued,
       async listStatus() {
         return [];
       }
@@ -262,6 +282,13 @@ function runtimeFakes() {
     get maintenanceHandler() {
       return maintenanceHandler;
     },
+    get evidenceResumeHandler() {
+      return evidenceResumeHandler;
+    },
+    resumable,
+    listResumable,
+    evidenceReserve,
+    evidenceMarkEnqueued,
     get admissionHandler() {
       return admissionHandler;
     },
@@ -919,6 +946,48 @@ describe("worker runtime", () => {
     // chain by a clear margin.
     const activeAgeMs = Date.now() - cutoffs.active.getTime();
     expect(activeAgeMs).toBeGreaterThan(5 * 1_800_000);
+    await runtime.stop();
+  });
+
+  it("drives a waiting evidence run without a reader", async () => {
+    // Break caught: a run that set `retry_after_at` became eligible to resume
+    // and nothing scheduled it, so collection continued only when somebody
+    // happened to load the dossier -- which made the dossier nobody was
+    // watching the one that quietly never finished.
+    const fakes = runtimeFakes();
+    fakes.resumable.push({
+      region: "eu",
+      realm: "silvermoon",
+      name: "ryii"
+    });
+    fakes.evidenceReserve.mockResolvedValue({
+      kind: "reserved",
+      run: { id: "00000000-0000-4000-8000-000000000021" }
+    });
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.evidenceResumeHandler).toBeTypeOf("function");
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.listResumable).toHaveBeenCalledWith(25, expect.any(Date));
+    expect(fakes.evidenceReserve).toHaveBeenCalledOnce();
+    // No credentials: a sweep has no visitor, so it must not reserve with a
+    // stranger's Warcraft Logs key and spend their allowance.
+    expect(fakes.evidenceReserve.mock.calls[0]?.[0]).not.toHaveProperty(
+      "credentials"
+    );
+    expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledOnce();
+    await runtime.stop();
+  });
+
+  it("enqueues nothing when no character is waiting", async () => {
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.evidenceReserve).not.toHaveBeenCalled();
+    expect(fakes.evidenceMarkEnqueued).not.toHaveBeenCalled();
     await runtime.stop();
   });
 

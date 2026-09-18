@@ -23,6 +23,8 @@ const config: WorkerConfig = {
   evidenceRequestCap: 500,
   evidenceCapRetryMs: 1_800_000,
   evidenceTransientRetryMs: 900_000,
+  evidenceResumeSweepLimit: 25,
+  evidenceFreshnessHours: 24,
   evidencePointsReserve: 1_500,
   evidenceKillSettleDays: 7,
   evidenceRetryCostCeiling: 250,
