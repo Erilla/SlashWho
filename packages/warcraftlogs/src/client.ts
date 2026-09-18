@@ -12,6 +12,7 @@ import type {
   WarcraftLogsLimitation,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
+  WarcraftLogsRateLimitResult,
   WarcraftLogsReportResult,
   WarcraftLogsWipeEvidence
 } from "./types";
@@ -134,6 +135,19 @@ const characterZoneParsesQuery = `
   }
 `;
 
+// The allowance the account is actually spending. `Retry-After` and
+// `X-RateLimit-Remaining` track a different bucket and say nothing about this
+// one; two misdiagnoses on 2026-09-17 came from reading them instead.
+const rateLimitQuery = `
+  query RateLimit {
+    rateLimitData {
+      limitPerHour
+      pointsSpentThisHour
+      pointsResetIn
+    }
+  }
+`;
+
 export type CreateWarcraftLogsClientOptions = Readonly<{
   fetch: typeof globalThis.fetch;
   clientId: string;
@@ -179,6 +193,12 @@ function nonNegativeInteger(value: unknown): number | null {
 
 function nonNegativeFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function positiveFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : null;
 }
@@ -283,6 +303,32 @@ function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
     return { kind: "limitation", code: "private" };
   }
   return { kind: "limitation", code: "unavailable" };
+}
+
+function rateLimitFacts(value: unknown): WarcraftLogsRateLimitResult {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const rateLimitData = data && record(data.rateLimitData);
+  const limitPerHour =
+    rateLimitData && positiveFiniteNumber(rateLimitData.limitPerHour);
+  // Fractional upstream. An integer check here would reject 9058.65 as drift.
+  const pointsSpentThisHour =
+    rateLimitData && nonNegativeFiniteNumber(rateLimitData.pointsSpentThisHour);
+  const pointsResetInSeconds =
+    rateLimitData && nonNegativeInteger(rateLimitData.pointsResetIn);
+  if (
+    limitPerHour === null ||
+    pointsSpentThisHour === null ||
+    pointsResetInSeconds === null
+  ) {
+    return { kind: "limitation", code: "schema_drift" };
+  }
+  return {
+    kind: "rate_limit",
+    limitPerHour,
+    pointsSpentThisHour,
+    pointsResetInSeconds
+  };
 }
 
 function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
@@ -1306,6 +1352,13 @@ export function createWarcraftLogsClient(
     }
   }
 
+  async function getRateLimit(
+    signal?: AbortSignal
+  ): Promise<WarcraftLogsRateLimitResult> {
+    const result = await graphql(rateLimitQuery, {}, signal);
+    return result.kind === "success" ? rateLimitFacts(result.value) : result;
+  }
+
   async function resolveCharacter(
     requestedKey: CharacterKey,
     signal?: AbortSignal
@@ -1710,5 +1763,5 @@ export function createWarcraftLogsClient(
           });
   }
 
-  return { resolveCharacter, getFirstKillReports };
+  return { getRateLimit, resolveCharacter, getFirstKillReports };
 }

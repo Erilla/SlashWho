@@ -9,6 +9,8 @@ export type {
   WarcraftLogsLimitationCode,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
+  WarcraftLogsRateLimit,
+  WarcraftLogsRateLimitResult,
   WarcraftLogsReportResult,
   WarcraftLogsTierBestParse,
   WarcraftLogsWipeEvidence
