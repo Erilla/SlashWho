@@ -47,7 +47,7 @@ it("holds the run budget arithmetic that the scan share comment states", () => {
   // Both, or the next reader is misled again.
   expect(budgetFor(WORKER_ALLOWANCE, "own")).toMatchObject({
     scanPages: 300,
-    reservedPoints: 5_000,
+    reservedPoints: 3_500,
     closes: false
   });
   expect(budgetFor(VISITOR_ALLOWANCE, "visitor")).toMatchObject({
@@ -116,25 +116,31 @@ it("never hands a run a cap above the configured ceiling", () => {
 // cost by nearly half. Only a measurement can settle the reserve, so what CI
 // can usefully do is notice when the last one expired.
 const RESERVE_SAMPLE = {
-  takenOn: "2026-09-18",
+  // Eight runs between 22:15 and 22:56, two full cycles of four characters
+  // with no looping and no failures. The first sample taken after #331, and so
+  // the first that measures a healthy run rather than bounding a broken one.
+  takenOn: "2026-09-18T22:15Z/PT41M",
   // What the runs in the sample were configured with. Either of these moving
   // invalidates the measurement.
   parseRequestCap: 24,
   scanPages: 300,
-  // Provisional, and an upper bound rather than a measurement: the runs behind
-  // it overlapped the repeated-work loop #331 fixed, so they are the cost of a
-  // broken run, not a healthy one. #295 stays open for a clean post-#331
-  // sample, and costs falling -- and ceasing to be stable per character -- is
-  // itself how you will know the loop is gone.
-  observedMaximumRunPoints: 2_900
+  // 814 820 1092 1092 1495 1633 2888 2906 -- mean 1593.
+  observedMaximumRunPoints: 2_906
 } as const;
 
 it("expires the reserve's measurement when its configuration changes", () => {
   // Break caught: EVIDENCE_PARSE_REQUEST_CAP moving, as it did on 2026-09-18,
-  // which silently invalidated the sample 5000 was derived from. If this
-  // fails, do not edit RESERVE_SAMPLE to match -- take a fresh sample of
+  // which silently invalidated the sample the reserve was derived from. If
+  // this fails, do not edit RESERVE_SAMPLE to match -- take a fresh sample of
   // `pointsSpentByRun` under the new configuration, then update both this and
   // the derivation comment in config.ts.
+  //
+  // Raising the parse cap is the change most likely to trip this, and there is
+  // a live argument for it: a matched pair at caps 48 and 24 over the same
+  // character and scan cost 2047 and 1495 points for 36 and 13 fights, so the
+  // scan is fixed overhead and a marginal fight is only ~24 points. Cheaper
+  // per parse, dearer per run -- which is exactly why the reserve has to be
+  // re-measured rather than reasoned about when it moves.
   expect(config.evidenceParseRequestCap).toBe(RESERVE_SAMPLE.parseRequestCap);
   expect(budgetFor(WORKER_ALLOWANCE, "own").scanPages).toBe(
     RESERVE_SAMPLE.scanPages

@@ -957,7 +957,7 @@ describe("applicant evidence job handler", () => {
   it("lets the worker's own allowance carry the whole measured reserve", async () => {
     // Break caught: the share cap, not the configured value, was deciding the
     // threshold. At 0.1 of the worker's 18000 it clipped anything above 1800,
-    // so the 5000 measured in #295 would have gone silently inert and 4500
+    // so the 5000 #295 first set would have gone silently inert and 4500
     // remaining -- less than the 4775 an expensive collection costs -- would
     // have been admitted to start a run it could not finish.
     const evidence = store();
@@ -1184,7 +1184,7 @@ describe("applicant evidence job handler", () => {
   it("scales the reserve down to a smaller account's allowance", async () => {
     // Break caught: the reserve is an absolute count applied to whichever
     // account the run carries. A visitor's default allowance is 3600 against
-    // the worker's 18000, so the flat 5000 measured in #295 fences off a
+    // the worker's 18000, so the flat 5000 #295 first set fences off a
     // visitor's entire budget and refuses every run the account could make.
     // 2100 remaining is above the 1080 this account's reserve scales to, and
     // above the 862 that measurement puts at the floor of a real collection.

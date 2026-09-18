@@ -147,7 +147,7 @@ Two constraints from `queueOptions`:
 
 ### The reserve threshold
 
-`EVIDENCE_POINTS_RESERVE`, a worker config value, defaulting to **5000**
+`EVIDENCE_POINTS_RESERVE`, a worker config value, defaulting to **3500**
 points. **This is measured, not guessed** — the derivation is below, and a
 reader should be able to tell the two apart without archaeology.
 
@@ -173,7 +173,9 @@ Three things follow.
 **The old reserve was below the median.** Twelve of the nineteen cost more than
 1500, so admission was approving runs that could not finish more often than it
 was not — the exact failure the reserve exists to prevent. The suspicion
-recorded in #291 is confirmed. 5000 covers the measured maximum.
+recorded in #291 is confirmed. 5000 covers that maximum — and was superseded
+within a day, for reasons that are the useful part of this section. See
+_The post-#331 re-measurement_ below.
 
 **The spread is structural.** Spend tracks request volume at a steady 15–20
 points each, and the history scan varies from 32 to 190 requests with how much
@@ -184,9 +186,9 @@ average.
 **The share cap had become the real threshold.** `effectiveReserve` clips the
 configured value to a share of the account's reported allowance; at 0.1 of the
 worker's 18000 that was 1800, so any configured value above 1800 was inert.
-The share moves to **0.3** in the same change, so 5000 reaches the gate intact
-and a visitor's 3600 account keeps a 1080 reserve — about the least a
-collection can cost.
+The share moves to **0.3** in the same change, so the configured value reaches
+the gate intact — 0.3 of 18000 is 5400 — and a visitor's 3600 account keeps a
+1080 reserve, about the least a collection can cost.
 
 #### Why the maximum, and not p75
 
@@ -217,10 +219,93 @@ has had time to shrink runs**: the spread is driven by history-scan volume,
 which is exactly what that change reduces, so the tail this value is sized
 against should move.
 
+#### The post-#331 re-measurement
+
+5000 lasted about an hour. Two things invalidated it, and neither was visible
+at the time it was chosen.
+
+`EVIDENCE_PARSE_REQUEST_CAP` reverted from 48 to 24 at ~16:45 — correctly, once
+#314 fixed properly what the 48 had been working around — so every run in the
+sample above had been measured under a configuration that no longer ran. And
+most of that sample was taken while four characters repeated identical work,
+which #331 then fixed: those costs bound a broken run rather than measuring a
+healthy one.
+
+The clean sample is eight deltas between 22:15 and 22:56 on 2026-09-18 — two
+full cycles of four characters, no looping, no failures, at the code-default
+parse cap of 24:
+
+|     |     |      |      |      |      |      |      |
+| --- | --- | ---- | ---- | ---- | ---- | ---- | ---- |
+| 814 | 820 | 1092 | 1092 | 1495 | 1633 | 2888 | 2906 |
+
+Maximum 2906, mean 1593, 12741 points across the hour. **3500** covers the
+maximum with about 600 points to spare, and the argument above — cover the
+tail, because the failure being replaced was runs admitted that could not
+finish — is unchanged; only the tail moved.
+
+The throughput case for moving it is exact rather than directional. The reserve
+is the binding constraint on run rate: 18000 − 5000 = 13000 usable over a 1593
+mean is 8.2 runs an hour, and eight is what was observed, so the model predicts
+the system it describes. At 3500 that becomes 14500 / 1593 ≈ 9.1. Holding 5000
+reserves enough for a run that can no longer happen, at a cost of roughly three
+runs a window.
+
+`MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE` stays at 0.3. At 18000 the ceiling is
+5400, so 3500 applies in full; at a visitor's 3600 it is 1080, which already
+bound below both the old value and this one, so visitor behaviour is untouched.
+
+**Verification.** After the change a full hour should land near nine runs. If
+it does not, the model is wrong and that is worth knowing rather than assuming.
+Sum `pointsSpentByRun` per hour from the `evidence_job` records — not spot
+readings of `pointsSpentThisHour`, which reset hourly and cannot distinguish an
+idle system from a fresh window.
+
+#### What stops this recurring
+
+Twice now a measured value has expired quietly: the parse cap diverging between
+Railway and code, and then this reserve outliving the configuration it was
+measured under. Both were invisible because the dependency existed only in
+someone's head.
+
+So the configuration each sample was taken under is recorded next to the sample
+and asserted in `apps/worker/src/evidence-run-budget.test.ts` (#341), which
+fails the build when the parse cap or the effective scan depth moves. It does
+not model run cost, deliberately: `worstCaseAtMeasuredCost` is a ceiling no run
+reaches, and the parse cap moves it by 5% while moving observed cost by nearly
+half, so a guard anchored on it would have passed straight through the incident
+that prompted it. What CI can usefully do is notice that the last measurement
+expired and say so.
+
+Re-deriving still means reading Railway deployment logs one deployment at a
+time, which is why nobody does it casually. #342 tracks persisting
+`pointsSpentByRun` so the question becomes a query.
+
+#### A larger lever, deliberately separate
+
+A matched pair over the same character and the same 66-page scan, differing
+only in the parse cap:
+
+| cap | points | fights | all-in per fight |
+| --- | ------ | ------ | ---------------- |
+| 48  | 2047   | 36     | 57               |
+| 24  | 1495   | 13     | 115              |
+
+The scan is fixed overhead — ~1320 points either way — and a marginal fight is
+only ~24 points, so a larger parse cap roughly halves the all-in cost of a
+first-kill parse. That is a real argument for raising it, and it has nothing to
+do with the terminal-marking workaround #320 reverted.
+
+It is not folded in here. It is a code change with its own derivation, it needs
+its own provenance update, and it changes the sample the reserve is measured
+against — which is the whole reason the reserve is measured under a recorded
+configuration in the first place.
+
 #### Caveats
 
-Every collection in the sample was truncated by `parse_request_cap`, so these
-are capped costs and an uncapped run costs at least this much.
+Every collection in the original (12:10–15:10) sample was truncated by
+`parse_request_cap`, so those are capped costs and an uncapped run costs at
+least that much.
 
 The code default and the Railway variable were set together, because
 `EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway (12) and code (24)
@@ -228,7 +313,7 @@ until 2026-09-17 precisely because nothing forced that second look.
 
 Scaling the reserve to the reported allowance keeps a visitor's account from
 being fenced off, but it does not make a visitor's dossier collectable. Their
-3600 allowance is smaller than the 4775 an expensive run costs, so no reserve
+3600 allowance is smaller than an expensive run costs, so no reserve
 setting reaches that case — the parse cap does, and it is applied flat
 regardless of whose credentials are in play. Tracked in #320; the mechanism
 `effectiveReserve` already uses is the one that is missing from the other knob.
@@ -294,7 +379,7 @@ at ~13 points each, which does not scale with the allowance at all. At
 
 |               | admission guarantees | cap | worst run @20 | @30  |
 | ------------- | -------------------- | --- | ------------- | ---- |
-| worker, 18000 | ≥ 5000               | 300 | 6317          | 9317 |
+| worker, 18000 | ≥ 3500               | 300 | 6317          | 9317 |
 | visitor, 3600 | ≥ 1080               | 18  | 677           | 857  |
 
 The worker's does not close, by a wide margin. The visitor's does, at both page
