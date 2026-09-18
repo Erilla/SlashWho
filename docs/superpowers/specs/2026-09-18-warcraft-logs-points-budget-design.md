@@ -188,12 +188,50 @@ The share moves to **0.3** in the same change, so 5000 reaches the gate intact
 and a visitor's 3600 account keeps a 1080 reserve — about the least a
 collection can cost.
 
-Two caveats for whoever reads this next. Every collection in the sample was
-truncated by `parse_request_cap`, so these are capped costs and an uncapped run
-costs at least this much. And the code default and the Railway variable were
-set together, because `EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway
-(12) and code (24) until 2026-09-17 precisely because nothing forced that
-second look.
+#### Why the maximum, and not p75
+
+Covering the maximum is the conservative reading and it is not free. A 5000
+reserve against a median run of 1609 leaves up to 5000 points — a quarter of
+the window, three median runs' worth — unspent while the sweep has already
+stopped admitting. The window this was measured in ended at 16422 of 18000;
+under the new reserve it would have stopped admitting around 13000.
+
+The argument for the maximum is "never start what you cannot finish", and that
+argument is weaker here than it first sounds, because an overrun is not wasted.
+A run that exceeds the remaining allowance takes a 429, publishes what it has
+as partial, and `mergeParseMetric` carries the work forward into the next
+attempt. What an overrun actually costs is the `retry_after_at` deferral —
+observed at up to about 32 minutes — not the points. So the real trade is
+"refuse and do nothing" against "start, do a couple of thousand points of
+useful work, and defer that character for half an hour". Read that way, p75
+(2216) or p90 (3627) would admit considerably more work per window and pay the
+deferral only sometimes.
+
+The maximum is chosen anyway, for one window's data and deliberately for now.
+The measurement is nineteen runs over three hours on one day, the tail is the
+part of it least well characterised, and a first measured value has more to
+lose from being too permissive than from being too cautious — the failure it
+replaces was runs admitted that could not finish. **Revisit against p75/p90
+once there is a wider sample, and in particular once #314's terminal marking
+has had time to shrink runs**: the spread is driven by history-scan volume,
+which is exactly what that change reduces, so the tail this value is sized
+against should move.
+
+#### Caveats
+
+Every collection in the sample was truncated by `parse_request_cap`, so these
+are capped costs and an uncapped run costs at least this much.
+
+The code default and the Railway variable were set together, because
+`EVIDENCE_PARSE_REQUEST_CAP` sat diverged between Railway (12) and code (24)
+until 2026-09-17 precisely because nothing forced that second look.
+
+Scaling the reserve to the reported allowance keeps a visitor's account from
+being fenced off, but it does not make a visitor's dossier collectable. Their
+3600 allowance is smaller than the 4775 an expensive run costs, so no reserve
+setting reaches that case — the parse cap does, and it is applied flat
+regardless of whose credentials are in play. Tracked in #320; the mechanism
+`effectiveReserve` already uses is the one that is missing from the other knob.
 
 ### Limitation code
 
