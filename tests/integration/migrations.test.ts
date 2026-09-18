@@ -87,10 +87,10 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-4).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 17, tag: "0018_fingerprint_sweep_cursor" },
       { idx: 18, tag: "0019_fingerprint_continuation_failures" },
       { idx: 19, tag: "0020_character_tier_best_parses" },
-      { idx: 20, tag: "0021_tier_best_collected_at" }
+      { idx: 20, tag: "0021_tier_best_collected_at" },
+      { idx: 21, tag: "0022_partial_parse_limitation" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

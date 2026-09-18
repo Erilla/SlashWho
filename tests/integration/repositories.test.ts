@@ -981,6 +981,16 @@ describe("PostgreSQL repositories", () => {
         state: "partial" as const,
         limitationCode: "request_cap",
         parseLimitationCode: "parse_request_cap"
+      },
+      // A run whose only shortfall is its parse budget. The history scan
+      // finished, so `limitation_code` is rightly null -- the negative
+      // conclusions that rest on it stand -- but the run did not finish, and
+      // #280 made it say so. Rejecting this shape is what broke every capped
+      // run in #290.
+      {
+        state: "partial" as const,
+        limitationCode: null,
+        parseLimitationCode: "parse_request_cap"
       }
     ];
     for (const [index, input] of cases.entries()) {
@@ -1013,10 +1023,13 @@ describe("PostgreSQL repositories", () => {
         limitationCode: "request_cap",
         parseLimitationCode: null
       },
+      // Partial with no shortfall of either kind: the state says the run fell
+      // short and nothing says of what, which is the ambiguity the invariant
+      // exists to reject.
       {
         state: "partial" as const,
         limitationCode: null,
-        parseLimitationCode: "parse_request_cap"
+        parseLimitationCode: null
       }
     ].entries()) {
       const reserved = await repositories.evidence.reserve({

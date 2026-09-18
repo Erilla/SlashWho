@@ -148,6 +148,13 @@
       "when": 1790078400000,
       "tag": "0021_tier_best_collected_at",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790164800000,
+      "tag": "0022_partial_parse_limitation",
+      "breakpoints": true
     }
   ]
 }

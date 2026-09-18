@@ -2748,10 +2748,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       },
 
       async publish(runId, input) {
+        // A partial run must name what it fell short of, but either channel
+        // answers that: a run whose history scan finished and whose parse
+        // budget did not is partial with `limitationCode` null, and requiring
+        // the history code here rejected every parse-capped run instead (#290).
         if (
           Number.isNaN(input.completedAt.valueOf()) ||
           (input.state === "complete" && input.limitationCode !== null) ||
-          (input.state === "partial" && input.limitationCode === null)
+          (input.state === "partial" &&
+            input.limitationCode === null &&
+            input.parseLimitationCode === null)
         ) {
           throw new RangeError("character_evidence_publication_invalid");
         }

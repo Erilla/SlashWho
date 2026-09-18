@@ -13,6 +13,7 @@ import type {
 } from "@slashwho/warcraftlogs";
 
 import { decryptCredential } from "./credential-encryption";
+import { errorFields } from "./error-fields";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
@@ -287,6 +288,10 @@ export function createApplicantEvidenceJobHandler(
         pointsRemainingBefore: null,
         pointsSpentByRun: null,
         pointsRemainingAfter: null,
+        // Present on every record so the shape does not change with the
+        // outcome, and filled from whatever is caught below.
+        errorName: null,
+        errorCode: null,
         durationMs: 0
       };
       // Set once the run is claimed, and the sole gate on announcing: a run
@@ -497,6 +502,11 @@ export function createApplicantEvidenceJobHandler(
           : isPointsBudgetRefusal(error)
             ? "points_budget_low"
             : "unexpected_error";
+        // Recorded for every caught error, not only the unexplained ones: the
+        // outcome says which branch was taken, and this says what was thrown
+        // to get there. Bounded to an error class and a code-authored
+        // identifier -- see `errorFields` -- so no message text reaches a log.
+        Object.assign(record, errorFields(error));
         throw error;
       } finally {
         if (options.logger) {
