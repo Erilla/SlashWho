@@ -392,8 +392,14 @@ function effectiveReserve(
  * which is why bounding the share is the job here and completing the run is
  * not.
  *
- * If either constant moves, redo the four lines above. They are the only place
- * the two shares are checked against each other.
+ * These four lines are not the guard, only its explanation. The guard is
+ * `evidence-run-budget.test.ts` in the worker, which computes the same
+ * arithmetic from the real configured defaults and fails the build when any of
+ * it moves -- the two shares, the page costs, or the parse cap, which is what
+ * actually drifted first. If that test fails, fix the numbers here as well as
+ * there: a comment nobody has to update is a comment that goes stale, which is
+ * how this one came to describe a parse cap of 48 that had stopped being
+ * deployed.
  */
 const MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE = 0.5;
 
@@ -465,6 +471,87 @@ function effectiveRequestCap(
       )
     )
   );
+}
+
+/**
+ * What a page of report history actually cost, as opposed to what the cap
+ * assumes. Solved directly from a matched pair on 2026-09-18: two runs with
+ * identical zone and fight counts, 134 pages against 66, 2894 points against
+ * 1531. Used for the optimistic end of a worst-case estimate; nothing sizes a
+ * budget from it, for the reason on HISTORY_SCAN_POINTS_PER_REQUEST.
+ */
+const MEASURED_HISTORY_SCAN_POINTS_PER_REQUEST = 20;
+
+/**
+ * Points a fight-parse request costs, fitted across the runs that carry
+ * per-query-type counters. Only the flat parse term uses it.
+ */
+const FIGHT_PARSE_POINTS_PER_REQUEST = 13.2;
+
+export type EvidenceRunBudget = Readonly<{
+  /** Pages of report history this run may scan. */
+  scanPages: number;
+  /** Points admission guarantees are still unspent when the run starts. */
+  reservedPoints: number;
+  /** The parse term, which does not scale with the allowance. */
+  parsePoints: number;
+  /** Worst-case run cost at the measured page cost, and at the assumed one. */
+  worstCaseAtMeasuredCost: number;
+  worstCaseAtAssumedCost: number;
+  /**
+   * Whether the worst case fits inside what admission guarantees, judged at
+   * the assumed page cost. False is not a fault: see
+   * MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE, which explains why closing the
+   * worker's budget would truncate collections that currently finish.
+   */
+  closes: boolean;
+}>;
+
+/**
+ * The whole of a run's points budget in one place, so the relationship between
+ * the scan share, the reserve share and the flat parse term can be evaluated
+ * rather than recited.
+ *
+ * This exists because the arithmetic in MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE
+ * went stale within a day of being written: it named a parse cap of 48 that
+ * Railway stopped overriding, and nothing failed. A comment can only ask a
+ * human to remember to redo it. `evidence-run-budget.test.ts` in the worker
+ * evaluates this against the real configured defaults instead, so a constant
+ * moving anywhere breaks the build.
+ */
+export function evidenceRunBudget(
+  input: Readonly<{
+    limitPerHour: number;
+    credentials: "own" | "visitor";
+    requestCap: number;
+    parseRequestCap: number;
+    pointsReserve: number;
+  }>
+): EvidenceRunBudget {
+  const budget: WarcraftLogsRateLimit = {
+    kind: "rate_limit",
+    limitPerHour: input.limitPerHour,
+    pointsSpentThisHour: 0,
+    pointsResetInSeconds: 0
+  };
+  const scanPages = effectiveRequestCap(
+    budget,
+    input.requestCap,
+    input.credentials
+  );
+  const reservedPoints = effectiveReserve(budget, input.pointsReserve);
+  const parsePoints = input.parseRequestCap * FIGHT_PARSE_POINTS_PER_REQUEST;
+  const worstCaseAtAssumedCost =
+    scanPages * HISTORY_SCAN_POINTS_PER_REQUEST + parsePoints;
+  return {
+    scanPages,
+    reservedPoints,
+    parsePoints,
+    worstCaseAtMeasuredCost:
+      scanPages * MEASURED_HISTORY_SCAN_POINTS_PER_REQUEST + parsePoints,
+    worstCaseAtAssumedCost,
+    closes: worstCaseAtAssumedCost <= reservedPoints
+  };
 }
 
 /**
@@ -782,11 +869,13 @@ export function createApplicantEvidenceJobHandler(
         // the gate above is allowed to fail open, and this has to inherit that
         // rather than scale off a limit it never saw.
         const scanCap = openingBudget
-          ? effectiveRequestCap(
-              openingBudget,
-              options.requestCap,
-              usesVisitorCredentials ? "visitor" : "own"
-            )
+          ? evidenceRunBudget({
+              limitPerHour: openingBudget.limitPerHour,
+              credentials: usesVisitorCredentials ? "visitor" : "own",
+              requestCap: options.requestCap,
+              parseRequestCap: options.parseRequestCap,
+              pointsReserve: options.pointsReserve
+            }).scanPages
           : options.requestCap;
         const requestCap = job.mode === "light" ? 1 : scanCap;
         // What the run was actually given, not what was configured. The two
