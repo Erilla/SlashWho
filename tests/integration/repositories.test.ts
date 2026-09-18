@@ -447,6 +447,85 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("keeps a staged collection until its publication stores it", async () => {
+    // Break caught: the stage is what stops a transient publication failure
+    // from costing a second full collection (#292). A stage that outlived its
+    // publication would be republished over evidence already stored.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    const staged = {
+      state: "partial" as const,
+      limitationCode: null,
+      parseLimitationCode: "parse_request_cap",
+      retryAfterAt: "2026-08-04T12:35:00.000Z",
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: "2026-08-04T12:05:00.000Z"
+    };
+
+    await repositories.evidence.stageCollection(reservation.run.id, staged);
+    await expect(
+      repositories.evidence.stagedCollection(reservation.run.id)
+    ).resolves.toEqual(staged);
+
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "partial",
+      limitationCode: null,
+      parseLimitationCode: "parse_request_cap",
+      kills: staged.kills,
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.stagedCollection(reservation.run.id)
+    ).resolves.toBeNull();
+  });
+
+  it("drops a stage whose run never reached a publication", async () => {
+    // Break caught: a run whose job died between staging and publishing leaves
+    // a copy of its evidence behind. Nothing will republish it once the run has
+    // settled, so the hourly cleanup is what keeps it from accumulating.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.stageCollection(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      retryAfterAt: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: "2026-08-04T12:05:00.000Z"
+    });
+
+    // Still active: the attempt may yet publish it.
+    await expect(
+      repositories.evidence.clearSettledCollectionStages()
+    ).resolves.toBe(0);
+
+    await repositories.evidence.fail(reservation.run.id, "collection_failed");
+
+    await expect(
+      repositories.evidence.clearSettledCollectionStages()
+    ).resolves.toBe(1);
+    await expect(
+      repositories.evidence.stagedCollection(reservation.run.id)
+    ).resolves.toBeNull();
+  });
+
   it("reports when each zone's tier bests were last collected", async () => {
     // Break caught: the zone list was rebuilt whole every run, so a veteran
     // always exceeded the zone budget and raised `parse_request_cap` however

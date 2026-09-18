@@ -45,6 +45,8 @@ const config: WorkerConfig = {
   evidenceParseCapRetryMs: 1_800_000,
   evidencePointsReserve: 1_500,
   evidenceKillSettleDays: 7,
+  evidenceRetryCostCeiling: 250,
+  evidenceFailureCooldownMs: 1_800_000,
   evidenceParseRequestCap: 8,
   blizzardSweepRequestCap: 300,
   blizzardHourlyRequestBudget: 28_800,
@@ -149,6 +151,9 @@ function runtimeFakes() {
   const repositories = {
     evidence: {
       clearStaleCredentials: cleanup.evidence,
+      async clearSettledCollectionStages() {
+        return 0;
+      },
       async find() {
         return null;
       },

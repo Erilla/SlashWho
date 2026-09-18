@@ -25,6 +25,8 @@ export type WorkerConfig = {
   evidenceParseCapRetryMs: number;
   evidencePointsReserve: number;
   evidenceKillSettleDays: number;
+  evidenceRetryCostCeiling: number;
+  evidenceFailureCooldownMs: number;
   blizzardBaseUrl?: string;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
@@ -237,6 +239,38 @@ export function loadWorkerConfig(
       0,
       365,
       "invalid_evidence_kill_settle_days"
+    ),
+    // Points above which a failed attempt is not retried, whatever kind of
+    // fault it was. #292 charged one run five full collections for a single
+    // deterministic throw: 1,180-2,523 points an attempt, ~8,600 in total,
+    // nothing published.
+    //
+    // 250 IS A GUESS, of the same family as EVIDENCE_POINTS_RESERVE's. It sits
+    // below a real collection (whose average the reserve's comment puts above
+    // 900) and above the handful of requests an early failure makes, which is
+    // all it has to do to tell "failed before doing the work" from "failed
+    // after paying for it". The `pointsSpentByRun` deltas on the evidence job
+    // record are what replace it with evidence -- revisit it against a week of
+    // them. 0 switches the veto off, for an operator who finds it stopping
+    // runs that a retry would have rescued.
+    evidenceRetryCostCeiling: integerInRange(
+      environment.EVIDENCE_RETRY_COST_CEILING,
+      250,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "invalid_evidence_retry_cost_ceiling"
+    ),
+    // How long a run that stopped on a fault waits before a reader may reserve
+    // another. `failed` is invisible to `reserve` -- neither active nor
+    // completed -- so without this a stopped run is re-reserved by the next
+    // page read and a retry storm becomes a reservation storm. Half an hour
+    // matches EVIDENCE_PARSE_CAP_RETRY_MS, and for the same reason: long
+    // enough that a persistently broken character is not re-collected on every
+    // read, short enough that it recovers without intervention.
+    evidenceFailureCooldownMs: positiveInteger(
+      environment.EVIDENCE_FAILURE_COOLDOWN_MS,
+      30 * 60_000,
+      "invalid_evidence_failure_cooldown_ms"
     ),
     blizzardBaseUrl: optionalHttpUrl(
       environment.BLIZZARD_BASE_URL,

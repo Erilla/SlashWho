@@ -201,6 +201,22 @@ events log `dossier_cache` with source and hit/miss/shared/failure/capacity only
 never character names, URLs, payloads or credentials. WCL run status and
 completed timestamps remain queryable in the evidence tables.
 
+A run that stops on a fault publishes as partial under `collection_failed`
+rather than being abandoned, and carries a `retry_after_at` cooldown
+(`EVIDENCE_FAILURE_COOLDOWN_MS`, 30 minutes by default). Reservation honours
+that cooldown, which is what keeps a character whose collection keeps breaking
+from being re-collected on every page read: a `failed` run is invisible to
+reservation, so without the cooldown the next read starts another one. A
+partial publication carries previous kills, wipes and parses forward, so
+stopping this way can only add to what is stored.
+
+Between a finished Warcraft Logs scan and a successful publication the
+collection is held in `character_evidence_collections`, one row per run. A
+retry that finds a stage republishes it instead of paying for the scan again,
+and the publication deletes the stage in its own transaction. Maintenance drops
+stages whose run has settled and reports the count as
+`removedCollectionStages` on the `evidence_cache_cleanup` record.
+
 Verification covers repeated and concurrent reads, TTL expiry, failed refresh,
 snapshot membership changes, least-recently-used memory eviction, shared token
 refresh, concurrent database reservations, atomic publication and retention

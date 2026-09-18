@@ -92,13 +92,30 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
     loadWorkerConfig({ ...environment, EVIDENCE_KILL_SETTLE_DAYS: "1.5" })
   ).toThrow("invalid_evidence_kill_settle_days");
 
+  // Break caught: the cost ceiling is a guess of the same family as the
+  // reserve's, so an operator who finds it stopping runs a retry would have
+  // rescued needs the same lever -- 0, rather than a code change.
+  expect(
+    loadWorkerConfig({ ...environment, EVIDENCE_RETRY_COST_CEILING: "0" })
+  ).toMatchObject({ evidenceRetryCostCeiling: 0 });
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_RETRY_COST_CEILING: "-1" })
+  ).toThrow("invalid_evidence_retry_cost_ceiling");
+  // The cooldown is what keeps a stopped run from being re-reserved by the next
+  // page read, so unlike the ceiling it has no "off".
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_FAILURE_COOLDOWN_MS: "0" })
+  ).toThrow("invalid_evidence_failure_cooldown_ms");
+
   expect(loadWorkerConfig(environment)).toMatchObject({
     warcraftLogsClientId: environment.WARCRAFT_LOGS_CLIENT_ID,
     warcraftLogsClientSecret: environment.WARCRAFT_LOGS_CLIENT_SECRET,
     evidenceRequestCap: 500,
     evidenceParseRequestCap: 24,
     evidencePointsReserve: 1500,
-    evidenceKillSettleDays: 7
+    evidenceKillSettleDays: 7,
+    evidenceRetryCostCeiling: 250,
+    evidenceFailureCooldownMs: 1_800_000
   });
 });
 

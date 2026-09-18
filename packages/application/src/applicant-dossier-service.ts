@@ -217,6 +217,8 @@ function limitationMessage(
       return `${label} is temporarily rate limited.`;
     case "points_budget_low":
       return `${label} collection was deferred because this dossier's hourly points allowance is nearly spent. It resumes automatically once the allowance resets; shown evidence is partial.`;
+    case "collection_failed":
+      return `${label} collection was interrupted by an error before it could be stored. Shown evidence is partial and collection is retried automatically; other kills or wipes may exist.`;
     case "request_cap":
       return `${label} history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.`;
     case "unavailable":

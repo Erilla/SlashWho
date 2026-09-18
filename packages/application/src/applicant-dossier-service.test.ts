@@ -1500,6 +1500,34 @@ describe("applicant dossier service", () => {
     );
   });
 
+  it("describes collection_failed as an interrupted collection, not a parse failure", async () => {
+    // Break caught: `collection_failed` does not start with "parse_" either, so
+    // without its own case it falls through to the default and tells a reader
+    // that parse availability is partial -- when what actually happened is that
+    // the collection was stopped before it could be stored (#292).
+    const { dossiers } = fixture({
+      evidenceLimitationCode: "collection_failed"
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    const limitation = result.dossier.limitations.find(
+      (item) =>
+        item.source === "warcraft_logs" &&
+        item.character !== null &&
+        item.character.name === root.name
+    );
+    expect(limitation).toEqual(
+      expect.objectContaining({
+        code: "collection_failed",
+        message:
+          "Warcraft Logs collection was interrupted by an error before it " +
+          "could be stored. Shown evidence is partial and collection is " +
+          "retried automatically; other kills or wipes may exist."
+      })
+    );
+  });
+
   it("explains a deferral recorded on the run that is still collecting", async () => {
     // Break caught: limitations were read only from the completed run, and a
     // points-budget refusal publishes nothing -- so the copy written for a

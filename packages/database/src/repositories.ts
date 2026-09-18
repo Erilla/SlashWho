@@ -368,6 +368,26 @@ export type TerminalTier = Readonly<{
   domain: EvidenceCollectionDomain;
 }>;
 
+/**
+ * One run's collected evidence, held between a finished Warcraft Logs scan and
+ * a successful publication. Timestamps are ISO strings because this crosses a
+ * JSON boundary; everything else is the publication input verbatim.
+ *
+ * Normalised gateway facts only. Never credentials.
+ */
+export interface StagedEvidenceCollection {
+  state: "complete" | "partial";
+  limitationCode: string | null;
+  parseLimitationCode: string | null;
+  /** ISO 8601, or null when the publication carries no retry hint. */
+  retryAfterAt: string | null;
+  kills: readonly CharacterMythicKillInput[];
+  wipes: readonly CharacterMythicWipeInput[];
+  tierBests: readonly CharacterTierBestParseInput[];
+  /** ISO 8601. */
+  completedAt: string;
+}
+
 export interface EvidenceRepository {
   reserve(input: {
     key: CharacterKey;
@@ -400,6 +420,26 @@ export interface EvidenceRepository {
     }
   ): Promise<void>;
   fail(id: string, code: string): Promise<void>;
+  /**
+   * Holds a finished collection so a retry republishes it rather than paying
+   * for the scan again (#292). Overwrites any stage the run already has: the
+   * newest scan is the one the publication will use.
+   */
+  stageCollection(
+    runId: string,
+    payload: StagedEvidenceCollection
+  ): Promise<void>;
+  /**
+   * The stage `stageCollection` wrote, if this run still has one. `publish`
+   * deletes it in the same transaction, so a stage always means a collection
+   * that has been paid for upstream and not yet stored.
+   */
+  stagedCollection(runId: string): Promise<StagedEvidenceCollection | null>;
+  /**
+   * Drops stages belonging to runs that are no longer active, for a run whose
+   * job never reached a publication. Returns the number of rows removed.
+   */
+  clearSettledCollectionStages(): Promise<number>;
   getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
   /**
    * Fight URLs already carrying at least one available parse metric, so a

@@ -162,6 +162,13 @@
       "when": 1790251200000,
       "tag": "0023_concluded_tier_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790337600000,
+      "tag": "0024_evidence_collection_stage",
+      "breakpoints": true
     }
   ]
 }
