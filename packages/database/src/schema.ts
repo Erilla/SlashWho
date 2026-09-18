@@ -442,9 +442,12 @@ export const characterEvidenceRuns = pgTable(
       table.normalizedName,
       table.completedAt
     ),
+    // A partial run must name a shortfall, in either channel: the history
+    // scan's or the parse budget's. Requiring `limitation_code` alone was the
+    // pre-#280 shape, when a parse cap could not stand on its own.
     check(
       "character_evidence_runs_completion_limitations_check",
-      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND ${table.limitationCode} IS NOT NULL) OR ${table.status} NOT IN ('complete', 'partial')`
+      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
     )
   ]
 );

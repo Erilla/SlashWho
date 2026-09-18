@@ -50,6 +50,11 @@ the full window. A zone already read since its newest kill is dropped before
 the zone budget is measured, so the budget advances into deeper tiers and a
 saturated character stops raising the cap and settles at `complete`.
 
+Such a run carries its shortfall in `parse_limitation_code` alone:
+`limitation_code` reports the history scan, which finished, and the negative
+conclusions resting on it stand. A `partial` publication must name a shortfall
+in one of the two channels, and either one satisfies that.
+
 A run also checks the Warcraft Logs hourly points allowance before it starts.
 When fewer than `EVIDENCE_POINTS_RESERVE` points (1500 by default, capped at a
 tenth of whatever allowance the account in use reports, so a visitor's smaller

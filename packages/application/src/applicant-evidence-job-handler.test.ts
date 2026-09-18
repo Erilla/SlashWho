@@ -1095,6 +1095,87 @@ describe("applicant evidence job handler", () => {
       expect(records[0]).toMatchObject({ outcome: "unexpected_error" });
     });
 
+    it("names the cause of an unexpected error on the record", async () => {
+      // Break caught: `unexpected_error` on its own is not a cause. Eleven
+      // runs failed after spending an hour's allowance (#290) and the reason
+      // was nowhere in the logs, because the record named the outcome and
+      // nothing else.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        evidence: evidenceStore({
+          publish: async () => {
+            throw new RangeError("character_evidence_publication_invalid");
+          }
+        }),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(handler.execute("run-7a")).rejects.toThrow(
+        "character_evidence_publication_invalid"
+      );
+
+      expect(records[0]).toMatchObject({
+        outcome: "unexpected_error",
+        errorName: "RangeError",
+        errorCode: "character_evidence_publication_invalid"
+      });
+    });
+
+    it("keeps a message that is not a code out of the record", async () => {
+      // Break caught: an error message is unbounded text and can carry a
+      // character name, a realm, a URL or an upstream payload. Only a
+      // code-authored identifier -- a snake_case literal or a SQLSTATE --
+      // is allowed through; anything else is reported by class alone.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        evidence: evidenceStore({
+          publish: async () => {
+            throw new Error(
+              'duplicate key value violates unique constraint: "Ryii-Twisting Nether"'
+            );
+          }
+        }),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(handler.execute("run-7b")).rejects.toThrow();
+
+      expect(records[0]).toMatchObject({
+        outcome: "unexpected_error",
+        errorName: "Error",
+        errorCode: null
+      });
+      expect(JSON.stringify(records[0])).not.toContain("Ryii");
+    });
+
+    it("prefers a driver's own error code to the message", async () => {
+      // Break caught: a Postgres error carries its cause as a SQLSTATE and a
+      // message that quotes the offending row. `23514` is the check-constraint
+      // violation that would name a publication the database refused.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        evidence: evidenceStore({
+          publish: async () => {
+            throw Object.assign(
+              new Error('new row for relation "character_evidence_runs" ...'),
+              { code: "23514" }
+            );
+          }
+        }),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await expect(handler.execute("run-7c")).rejects.toThrow();
+
+      expect(records[0]).toMatchObject({
+        outcome: "unexpected_error",
+        errorCode: "23514"
+      });
+    });
+
     it("keeps a run's decrypted credentials out of the record entirely", async () => {
       // Break caught: the record is assembled beside the claimed run, so a
       // field spread from it — or a debugging aid left behind — could put a
