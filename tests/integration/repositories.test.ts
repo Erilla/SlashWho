@@ -1150,6 +1150,50 @@ describe("PostgreSQL repositories", () => {
     expect(stored.rows[0]?.collected_at).toEqual(firstAt);
   });
 
+  it("reports stored wipes alongside stored kills for the scan floor", async () => {
+    // Break caught: #326. The floor is what decides how far back the scan
+    // pages, and a complete publish drops a stored wipe on the same condition
+    // it drops a stored kill. A loader that handed over kills alone let the
+    // floor rise above a raid the character has only ever wiped in -- a raid
+    // that can never be marked terminal, because it has no kill to settle.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "floorevidence"
+    } as const;
+    const at = new Date("2026-09-18T00:00:00.000Z");
+    const reserved = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: at,
+      at
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: at,
+      kills: [
+        mythicKill({ raidId: "42", killedAt: "2026-08-04T12:00:00.000Z" })
+      ],
+      wipes: [
+        mythicWipe({ raidId: "43", attemptedAt: "2026-03-01T11:00:00.000Z" })
+      ]
+    });
+
+    await expect(
+      repositories.evidence.storedEvidenceTiers(key)
+    ).resolves.toEqual({
+      kills: [
+        expect.objectContaining({
+          raidId: "42",
+          killedAt: "2026-08-04T12:00:00.000Z"
+        })
+      ],
+      wipes: [{ raidId: "43", attemptedAt: "2026-03-01T11:00:00.000Z" }]
+    });
+  });
+
   it("stores terminal tiers per character and returns them until cleared", async () => {
     const key = {
       region: "eu",

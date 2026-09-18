@@ -436,8 +436,8 @@ function createMemoryRepositories(): Repositories {
       async collectedTierZones() {
         return [];
       },
-      async storedKillTiers() {
-        return [];
+      async storedEvidenceTiers() {
+        return { kills: [], wipes: [] };
       },
       async terminalTiers() {
         return [];
