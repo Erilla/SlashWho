@@ -8,6 +8,7 @@ export type WorkerConfig = {
   healthHost: "127.0.0.1" | "0.0.0.0";
   port: number;
   workerDrainTimeoutMs: number;
+  workerAbortGraceMs: number;
   databaseStartupAttempts: number;
   databaseStartupRetryMs: number;
   discoveryRequestCap: number;
@@ -142,6 +143,18 @@ export function loadWorkerConfig(
       environment.WORKER_DRAIN_TIMEOUT_MS,
       30_000,
       "invalid_worker_drain_timeout"
+    ),
+    // How much of the drain budget a still-running job may spend finishing
+    // before its signal is aborted (#306). Observed evidence runs take 199-591
+    // seconds, so almost nothing falls in the band this cuts short, and the
+    // handler's abort path needs only the one write that releases the run. This
+    // is the tuning knob if run durations ever shorten.
+    workerAbortGraceMs: integerInRange(
+      environment.WORKER_ABORT_GRACE_MS,
+      5_000,
+      0,
+      600_000,
+      "invalid_worker_abort_grace"
     ),
     databaseStartupAttempts: positiveInteger(
       environment.DATABASE_STARTUP_ATTEMPTS,
