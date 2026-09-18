@@ -113,6 +113,8 @@ subset of tests you happened to run while implementing.
 
 ### Review the work
 
+#### Claude Code
+
 When Claude Code finished the task, review it in the same session before it
 leaves your machine:
 
@@ -136,6 +138,20 @@ This runs in your session rather than on the API, so it costs nothing per run.
 Prefer it to the automated review on the pull request, which is billed and
 deliberately shallow — the point of reviewing here is that problems are cheaper
 to fix before anyone else has read the branch.
+
+#### Codex
+
+When Codex finishes the task, review it in the same session before it leaves
+your machine:
+
+```
+/review
+```
+
+Review against `origin/main` with low reasoning effort. The review reports
+prioritized findings without modifying the working tree, so read each finding
+and act on it: fix it, or be able to say why it is wrong. If you change code in
+response, **run the gate again** — the review is not a substitute for it.
 
 ### Merge `origin/main` back in
 
@@ -260,4 +276,4 @@ Run `git worktree list` from the shared checkout to audit what is still open.
 | CI fails on a suite you never ran             | Opened the pull request on a subset of the gate            |
 | Conflicts surface in the pull request         | `origin/main` was not merged in before opening             |
 | Pull request sits open and unmerged           | Auto-merge set, then nobody watched the checks or comments |
-| A bug the author could have caught cheaply    | `/code-review low` was skipped before opening              |
+| A bug the author could have caught cheaply    | `/code-review low` or `/review` was skipped before opening |
