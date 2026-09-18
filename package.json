@@ -10,6 +10,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
+    "ops:rebuild": "tsx scripts/rebuild-character.mts",
     "ops:removals": "tsx scripts/removals.mts",
     "analyze:performance": "tsx scripts/analyze-performance-logs.mts",
     "prototype:fingerprint-sweep": "tsx scripts/prototypes/fingerprint-sweep-measurement.ts",
@@ -25,6 +26,7 @@
   "packageManager": "pnpm@11.20.0",
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@slashwho/application": "workspace:*",
     "@slashwho/contracts": "workspace:*",
     "@slashwho/database": "workspace:*",
     "@slashwho/domain": "workspace:*",

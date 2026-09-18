@@ -119,6 +119,13 @@ export type WarcraftLogsReportResult =
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
+      /**
+       * Raids a limitation was attributed to during this read. A caller storing
+       * evidence indefinitely must not mark these terminal: the tier was read,
+       * but not cleanly. Kept per raid rather than per run so one zone's drift
+       * does not stop every other zone settling.
+       */
+      troubledRaidIds: readonly string[];
       limitation?: WarcraftLogsLimitation;
       parseLimitation?: WarcraftLogsLimitation;
     }>
@@ -150,6 +157,31 @@ export interface WarcraftLogsGateway {
        * raises `parse_request_cap` forever, however saturated it is.
        */
       collectedTierZones?: ReadonlyMap<string, string>;
+      /**
+       * Raids this character is finished with, per collection domain. A
+       * terminal raid costs no request: its zone is dropped before the zone
+       * budget is measured, and its kills are never grouped for hydration.
+       *
+       * Whether a raid is terminal is entirely the caller's policy -- the
+       * content window, the settling period and the clean-read rule all live
+       * with them. The gateway only spends, or does not spend, requests.
+       */
+      terminalRaidIds?: Readonly<{
+        kills: ReadonlySet<string>;
+        parses: ReadonlySet<string>;
+        tierBests: ReadonlySet<string>;
+      }>;
+      /**
+       * The instant below which the report scan may stop, as an ISO string.
+       * Set when every tier that closed before it is terminal for kills, so
+       * pages older than it can only re-find evidence already stored.
+       *
+       * Reports arrive newest first, so a page whose fights all predate this
+       * ends the scan -- cleanly, raising no limitation. A cap here would mark
+       * the run partial and, under the clean-read rule, block the very marks
+       * that allowed the stop, so the character would never settle.
+       */
+      killScanFloor?: string;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

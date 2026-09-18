@@ -9,6 +9,11 @@ export type {
   EvidenceRunNotifier
 } from "./applicant-evidence-job-handler";
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
+export { refreshCharacter } from "./refresh-character";
+export type { RefreshCharacterResult } from "./refresh-character";
+export type { RefreshMode } from "./refresh-mode";
+export { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
+export type { TerminalTierInput, TerminalTierKill } from "./terminal-tiers";
 export type {
   DiscoveryExecutionContext,
   DiscoveryJobHandler,

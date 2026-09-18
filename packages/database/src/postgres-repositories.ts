@@ -12,6 +12,7 @@ import type {
   EvidenceReservationResult,
   CreateSnapshotInput,
   DiscoveryRun,
+  EvidenceCollectionDomain,
   FingerprintAdmission,
   Repositories,
   SnapshotHistoryItem,
@@ -184,6 +185,27 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
 const CURRENT_EVIDENCE_VERSION = 13;
+
+/**
+ * Per-domain collection versions, for evidence stored indefinitely.
+ *
+ * Bump one when a collection fix changes what that domain stores: terminal
+ * tiers below the new version drop out of `terminalTiers`, re-collect once and
+ * settle again, while the other domains stay terminal. `CURRENT_EVIDENCE_VERSION`
+ * cannot serve this -- it invalidates everything, which is affordable while
+ * nothing is terminal and ruinous when the whole point is to stop re-querying.
+ *
+ * Whoever writes the next collection fix has to bump the right one. If that
+ * habit does not stick, this degrades to the blunt global bump it replaced.
+ */
+const CURRENT_COLLECTION_VERSIONS: Readonly<
+  Record<EvidenceCollectionDomain, number>
+> = {
+  kills: 1,
+  parses: 1,
+  tier_bests: 1
+};
+
 const activeRunSql = "('queued', 'running', 'retrying')";
 
 async function lockRoot(client: Queryable, key: CharacterKey): Promise<void> {
@@ -2795,30 +2817,83 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             throw new Error("character_evidence_run_not_active");
           }
           const activeRun = active.rows[0]!;
+          const activeKey = {
+            region: activeRun.region,
+            realm: activeRun.realm_slug,
+            name: activeRun.normalized_name
+          };
+          // Raids this character is finished with. Collection no longer pages
+          // into them, so for these raids "the run did not find it" no longer
+          // means "it is gone" -- it means we deliberately did not look.
+          const terminalKillRaidIds = new Set(
+            (
+              await client.query<{ raid_id: string }>(
+                `SELECT raid_id
+                   FROM character_terminal_tiers
+                  WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                    AND domain = 'kills'
+                    AND collection_version >= $4::integer`,
+                [
+                  activeKey.region,
+                  activeKey.realm,
+                  activeKey.name,
+                  CURRENT_COLLECTION_VERSIONS.kills
+                ]
+              )
+            ).rows.map((row) => row.raid_id)
+          );
+          const stored = await loadPositiveEvidenceForPartial(
+            client,
+            activeKey
+          );
+          // A partial publish carries everything forward, as it always has. A
+          // complete one carries forward the terminal raids only: every other
+          // raid keeps the existing contract, where a kill a complete run
+          // stopped finding stops being claimed.
           const previous =
             input.state === "partial"
-              ? await loadPositiveEvidenceForPartial(client, {
-                  region: activeRun.region,
-                  realm: activeRun.realm_slug,
-                  name: activeRun.normalized_name
-                })
-              : null;
+              ? stored
+              : {
+                  kills: stored.kills.filter((kill) =>
+                    terminalKillRaidIds.has(kill.raidId)
+                  ),
+                  wipes: stored.wipes.filter((wipe) =>
+                    terminalKillRaidIds.has(wipe.raidId)
+                  )
+                };
           // A complete publish must not resurrect kills the run no longer
           // found, but it must still carry forward parses for kills it did,
           // because collection skips fights it has already hydrated.
           const storedPerformance = await loadStoredPerformanceByFightUrl(
             client,
-            {
-              region: activeRun.region,
-              realm: activeRun.realm_slug,
-              name: activeRun.normalized_name
-            }
+            activeKey
+          );
+          // When each fight's parses were actually read, so a fight this run
+          // skipped keeps the time it was observed rather than being restamped
+          // with this run's completion. A restamp would say every untouched
+          // percentile was just re-checked, and make drift unmeasurable.
+          const storedCollectedAt = new Map(
+            (
+              await client.query<{ fight_url: string; collected_at: Date }>(
+                `SELECT k.fight_url, max(k.collected_at) AS collected_at
+                   FROM character_mythic_kills k
+                   JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+                  WHERE r.region = $1 AND r.realm_slug = $2
+                    AND r.normalized_name = $3
+                    AND r.status IN ('complete', 'partial')
+                  GROUP BY k.fight_url`,
+                [activeKey.region, activeKey.realm, activeKey.name]
+              )
+            ).rows.map((row) => [row.fight_url, row.collected_at] as const)
+          );
+          const incomingFightUrls = new Set(
+            input.kills.map((kill) => kill.fightUrl)
           );
           const kills = new Map<string, (typeof incomingKills)[number]>(
-            previous?.kills.map((kill) => [
+            previous.kills.map((kill) => [
               kill.fightUrl,
               { kill, performance: parsePerformanceValues(kill.performance) }
-            ]) ?? []
+            ])
           );
           for (const kill of incomingKills) {
             const stored =
@@ -2843,7 +2918,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             );
           }
           const wipes = new Map<string, (typeof input.wipes)[number]>();
-          for (const wipe of [...(previous?.wipes ?? []), ...input.wipes]) {
+          for (const wipe of [...previous.wipes, ...input.wipes]) {
             wipes.set(wipe.fightUrl, wipe);
           }
           const tierBests = await loadStoredTierBestParses(client, {
@@ -2876,8 +2951,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                  boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
                  report_url, fight_url, guild_name, guild_realm, historic_world_rank,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
-                 healing_percentile, boss_damage_parse_state, boss_damage_percentile)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+                 healing_percentile, boss_damage_parse_state, boss_damage_percentile,
+                 collected_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
               [
                 runId,
                 kill.fightUrl,
@@ -2901,7 +2977,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 performance.healing.state,
                 performance.healing.percentile,
                 performance.bossDamage.state,
-                performance.bossDamage.percentile
+                performance.bossDamage.percentile,
+                // This run observed the fight only if it came back with it. A
+                // fight carried forward keeps the time it was actually read,
+                // so a percentile's age stays honest.
+                incomingFightUrls.has(kill.fightUrl)
+                  ? input.completedAt
+                  : (storedCollectedAt.get(kill.fightUrl) ?? input.completedAt)
               ]
             );
           }
@@ -3004,7 +3086,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return loadCompletedEvidence(pool, key);
       },
 
-      async hydratedFightUrls(key) {
+      async hydratedFightUrls(key, settledBefore) {
+        const settledBeforeIso = settledBefore.toISOString();
         // Read through the same loader a dossier does, rather than restating
         // its scope in SQL. An earlier restatement matched every run ever, so
         // a parse surviving only on a superseded run suppressed collection of
@@ -3014,9 +3097,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           (completed?.kills ?? [])
             .filter(
               (kill) =>
-                kill.performance.damage.state === "available" ||
-                kill.performance.healing.state === "available" ||
-                kill.performance.bossDamage.state === "available"
+                // A kill whose rankings have not settled is re-read rather
+                // than left frozen at whatever it showed on the night. Its
+                // percentile is still moving, so skipping it would freeze a
+                // value we have reason to believe is wrong.
+                kill.killedAt < settledBeforeIso &&
+                (kill.performance.damage.state === "available" ||
+                  kill.performance.healing.state === "available" ||
+                  kill.performance.bossDamage.state === "available")
             )
             .map((kill) => kill.fightUrl)
         );
@@ -3043,6 +3131,93 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows
           .map((row) => [row.raid_id, row.collected_at.toISOString()] as const)
           .sort((a, b) => a[0].localeCompare(b[0]));
+      },
+
+      async storedKillTiers(key) {
+        // Read through the same loader a dossier does, so the scan can never
+        // stop above a kill the dossier still shows.
+        const completed = await loadCompletedEvidence(pool, key);
+        return (completed?.kills ?? []).map((kill) => ({
+          raidId: kill.raidId,
+          raidName: kill.raidName,
+          killedAt: kill.killedAt
+        }));
+      },
+
+      async terminalTiers(key) {
+        const result = await pool.query<{
+          raid_id: string;
+          domain: EvidenceCollectionDomain;
+        }>(
+          `SELECT raid_id, domain
+             FROM character_terminal_tiers
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND collection_version >= CASE domain
+                    WHEN 'kills' THEN $4::integer
+                    WHEN 'parses' THEN $5::integer
+                    ELSE $6::integer
+                  END
+            ORDER BY raid_id, domain`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            CURRENT_COLLECTION_VERSIONS.kills,
+            CURRENT_COLLECTION_VERSIONS.parses,
+            CURRENT_COLLECTION_VERSIONS.tier_bests
+          ]
+        );
+        return result.rows.map((row) => ({
+          raidId: row.raid_id,
+          domain: row.domain
+        }));
+      },
+
+      async markTerminalTiers(key, tiers, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_terminal_tier_time_invalid");
+        }
+        if (tiers.length === 0) return;
+        await pool.query(
+          `INSERT INTO character_terminal_tiers
+             (region, realm_slug, normalized_name, raid_id, domain,
+              collection_version, marked_at)
+           SELECT $1, $2, $3, entry.raid_id,
+                  entry.domain::evidence_collection_domain,
+                  CASE entry.domain
+                    WHEN 'kills' THEN $6::integer
+                    WHEN 'parses' THEN $7::integer
+                    ELSE $8::integer
+                  END,
+                  $9
+             FROM unnest($4::text[], $5::text[]) AS entry(raid_id, domain)
+           ON CONFLICT (region, realm_slug, normalized_name, raid_id, domain)
+           DO UPDATE SET collection_version = EXCLUDED.collection_version,
+                         marked_at = EXCLUDED.marked_at`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            tiers.map((tier) => tier.raidId),
+            tiers.map((tier) => tier.domain),
+            CURRENT_COLLECTION_VERSIONS.kills,
+            CURRENT_COLLECTION_VERSIONS.parses,
+            CURRENT_COLLECTION_VERSIONS.tier_bests,
+            at
+          ]
+        );
+      },
+
+      async clearTerminalTiers(key) {
+        // Marks only. The stored kills, wipes and tier bests stay exactly where
+        // they are: a rebuild must not leave a dossier empty while it waits for
+        // the replacement evidence to arrive.
+        const result = await pool.query(
+          `DELETE FROM character_terminal_tiers
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rowCount ?? 0;
       },
 
       async listStatus(keys) {

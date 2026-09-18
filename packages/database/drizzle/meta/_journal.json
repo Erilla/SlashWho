@@ -155,6 +155,13 @@
       "when": 1790164800000,
       "tag": "0022_partial_parse_limitation",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790251200000,
+      "tag": "0023_concluded_tier_retention",
+      "breakpoints": true
     }
   ]
 }

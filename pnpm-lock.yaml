@@ -11,6 +11,9 @@ importers:
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.8.0)
+      '@slashwho/application':
+        specifier: workspace:*
+        version: link:packages/application
       '@slashwho/contracts':
         specifier: workspace:*
         version: link:packages/contracts

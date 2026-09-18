@@ -420,6 +420,7 @@ export async function createWorkerRuntime(
       parseRequestCap: config.evidenceParseRequestCap,
       parseCapRetryMs: config.evidenceParseCapRetryMs,
       pointsReserve: config.evidencePointsReserve,
+      killSettleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
       ...(evidenceRunNotifier ? { evidenceRunNotifier } : {}),
       ...(logger ? { logger } : {})
     });

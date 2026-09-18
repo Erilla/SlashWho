@@ -9,6 +9,8 @@ export type RefreshCharacterResult = Readonly<{
   mode: RefreshMode;
   /** The collection this refresh was measured against, null if never collected. */
   lastCollectedAt: Date | null;
+  /** Terminal marks a rebuild forgot; 0 on an ordinary refresh. */
+  clearedTiers: number;
 }>;
 
 /**
@@ -32,6 +34,12 @@ export async function refreshCharacter(options: {
    * the load it causes invisible in the logs.
    */
   scope?: MeasurementScope;
+  /**
+   * Forget every terminal mark first, so the character's whole history is
+   * collected again. Operator-only: deliberately unreachable from the
+   * unauthenticated dossier refresh route.
+   */
+  rebuild?: boolean;
 }): Promise<RefreshCharacterResult> {
   const evidence = options.scope
     ? measuredRepositories(
@@ -41,7 +49,19 @@ export async function refreshCharacter(options: {
     : options.repositories.evidence;
   const completed = await evidence.getCompleted(options.key);
   const lastCollectedAt = completed?.run.completedAt ?? null;
-  const mode = refreshMode(lastCollectedAt, options.at, options.cooldownMs);
+  const mode: RefreshMode = options.rebuild
+    ? "rebuild"
+    : refreshMode(lastCollectedAt, options.at, options.cooldownMs);
+
+  // Clearing the marks *is* the rebuild. Nothing stored is deleted: the
+  // existing kills, wipes and tier bests stay readable until their
+  // replacements arrive, and the ordinary run, retry and budget machinery
+  // drains the backlog across as many hourly windows as it takes. Doing the
+  // work synchronously would exhaust the allowance and abandon the character
+  // part-way, which is precisely the failure of 2026-09-17.
+  const clearedTiers = options.rebuild
+    ? await evidence.clearTerminalTiers(options.key)
+    : 0;
 
   const reservation = await evidence.reserve({
     key: options.key,
@@ -51,9 +71,15 @@ export async function refreshCharacter(options: {
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
       reservation.run.id,
-      { enqueuedAt: options.at.toISOString(), mode }
+      {
+        enqueuedAt: options.at.toISOString(),
+        // The queue knows `full` and `light` only. A rebuild is an ordinary
+        // full run over cleared marks -- what it adds is what it no longer
+        // skips, not extra work in this run.
+        mode: mode === "light" ? "light" : "full"
+      }
     );
     await evidence.markEnqueued(reservation.run.id, queueJobId);
   }
-  return { mode, lastCollectedAt };
+  return { mode, lastCollectedAt, clearedTiers };
 }

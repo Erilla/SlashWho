@@ -239,6 +239,16 @@ function policyFixture(
       async collectedTierZones() {
         return [];
       },
+      async storedKillTiers() {
+        return [];
+      },
+      async terminalTiers() {
+        return [];
+      },
+      async markTerminalTiers() {},
+      async clearTerminalTiers() {
+        return 0;
+      },
       async recordLimitation() {},
       async clearStaleCredentials() {
         return 0;

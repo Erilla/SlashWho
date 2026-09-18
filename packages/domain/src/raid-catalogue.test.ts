@@ -6,6 +6,7 @@ import {
   lookupRaiderIoBoss,
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
+  raidTierConclusion,
   raidsWithoutCurrentContentWindow,
   supportedRaidCatalogue
 } from "./raid-catalogue";
@@ -210,4 +211,52 @@ it("catalogues artwork for every raid and boss", () => {
       .map((encounter) => `${raid.raidName} / ${encounter.bossName}`)
   ]);
   expect(withoutArtwork).toEqual([]);
+});
+
+it("reports a raid whose current-content window has closed as concluded", () => {
+  expect(
+    raidTierConclusion("The Dreamrift", new Date("2026-09-18T00:00:00.000Z"))
+  ).toBe("concluded");
+});
+
+it("reports a raid still inside its window as current", () => {
+  expect(
+    raidTierConclusion("The Dreamrift", new Date("2026-06-01T00:00:00.000Z"))
+  ).toBe("current");
+});
+
+it("reports an open-ended window as current however late it is read", () => {
+  expect(
+    raidTierConclusion(
+      "The Venomous Abyss",
+      new Date("2099-01-01T00:00:00.000Z")
+    )
+  ).toBe("current");
+});
+
+// Break caught: `current_content_window_unknown` is live on five characters of
+// one dossier today. An undatable raid must keep being re-queried, because
+// freezing evidence we cannot place in time is worse than re-reading it.
+it("reports a raid the catalogue cannot place in time as unknown", () => {
+  expect(
+    raidTierConclusion("Not A Raid", new Date("2026-09-18T00:00:00.000Z"))
+  ).toBe("unknown");
+  expect(
+    raidTierConclusion("VS / DR / MQD", new Date("2026-09-18T00:00:00.000Z"))
+  ).toBe("unknown");
+});
+
+it("reports an unreadable instant as unknown rather than concluded", () => {
+  expect(raidTierConclusion("The Dreamrift", new Date(Number.NaN))).toBe(
+    "unknown"
+  );
+});
+
+it("concludes a tier at its boundary, not after a further delay", () => {
+  expect(
+    raidTierConclusion("The Dreamrift", new Date("2026-08-19T23:00:00.000Z"))
+  ).toBe("concluded");
+  expect(
+    raidTierConclusion("The Dreamrift", new Date("2026-08-19T22:59:59.999Z"))
+  ).toBe("current");
 });

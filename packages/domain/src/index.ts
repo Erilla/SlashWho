@@ -10,8 +10,10 @@ export { formatCharacterDisplayName } from "./display-name";
 export {
   currentContentEligibility,
   lookupRaiderIoBoss,
+  raidTierConclusion,
   supportedRaidCatalogue
 } from "./raid-catalogue";
+export type { RaidTierConclusion } from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,

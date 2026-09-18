@@ -67,3 +67,28 @@ limitation, and spends no character-cap slot. It is scoped to the dossier it
 was made on, and it does not disturb the characters that connection's own
 discovery run found.
 _Avoid_: Removal request, suppression, blacklisted alt
+
+**Terminal tier**:
+A raid tier whose evidence for one character is stored indefinitely and never
+re-queried. A tier becomes terminal only when its current-content window has
+closed, the run that read it reported no limitation for it, and every kill in
+it has settled. A raid with no catalogued window is never terminal. It is
+recorded per collection domain, so a fix to one kind of evidence re-collects
+that kind alone. The percentiles it freezes are treated as final by policy,
+not because a ranking cannot move.
+_Avoid_: Archived tier, frozen evidence, cached tier
+
+**Settled kill**:
+A kill old enough that its rankings are taken to have stopped moving, meaning
+older than `EVIDENCE_KILL_SETTLE_DAYS`. Until then the fight is re-read on
+every run and its tier cannot go terminal. The threshold is an admitted guess
+rather than a measured property of the upstream.
+_Avoid_: Final parse, confirmed percentile
+
+**Rebuild**:
+Forgetting every terminal mark for one character so its history is collected
+again. It is a flag rather than an action: it marks work as outstanding and
+lets the ordinary run, retry and budget machinery drain it across many hourly
+windows. It deletes no stored evidence, and it is never reachable from the
+reader-facing refresh control.
+_Avoid_: Full refresh, hard refresh, re-scan

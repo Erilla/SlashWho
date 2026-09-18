@@ -9,7 +9,17 @@
  * The cooldown is deliberately invisible to the reader: pressing refresh
  * during it still does something honest rather than refusing.
  */
-export type RefreshMode = "full" | "light";
+/**
+ * `rebuild` additionally forgets every terminal mark, so the character's whole
+ * history is collected again across as many runs as the points allowance
+ * allows. `refreshMode` never returns it: unlike the other two it is chosen by
+ * the caller, and only by an operator running a script with credentials.
+ *
+ * That is a hard requirement rather than a preference. `/api/dossiers/.../refresh`
+ * is unauthenticated, which is tolerable at one run per press and would not be
+ * if a press could re-collect a character's entire history on demand.
+ */
+export type RefreshMode = "full" | "light" | "rebuild";
 
 export function refreshMode(
   lastCompletedAt: Date | null,

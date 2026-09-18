@@ -352,6 +352,30 @@ export function currentContentEligibility(
     : currentContentEligibilityByRaidId(killedAt, raid.raidId);
 }
 
+/**
+ * Whether a raid's current-content window has closed.
+ *
+ * `"unknown"` is not a weaker `"current"`. A raid the catalogue cannot place in
+ * time must never be treated as terminal, because freezing undated evidence is
+ * worse than re-querying it. Callers that store evidence indefinitely must act
+ * on `"concluded"` alone.
+ */
+export type RaidTierConclusion = "concluded" | "current" | "unknown";
+
+export function raidTierConclusion(
+  raidName: string,
+  at: Date
+): RaidTierConclusion {
+  const raid = lookupRaidByName(raidName);
+  if (raid === null) return "unknown";
+  const window = lookupRaidCurrentContentWindow(raid.raidId);
+  if (!window) return "unknown";
+  if (window.endsAt === null) return "current";
+  const endsAt = Date.parse(window.endsAt);
+  if (Number.isNaN(endsAt) || Number.isNaN(at.valueOf())) return "unknown";
+  return endsAt <= at.getTime() ? "concluded" : "current";
+}
+
 /** The same rule keyed by journal raid id, for callers that already hold one. */
 export function currentContentEligibilityByRaidId(
   killedAt: string,

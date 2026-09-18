@@ -348,6 +348,26 @@ export type EvidenceReservationResult =
       active: CharacterEvidenceRun;
     };
 
+/**
+ * The parts of a character's Warcraft Logs evidence that settle independently,
+ * so a collection fix can re-collect one without disturbing the others.
+ */
+export type EvidenceCollectionDomain = "kills" | "parses" | "tier_bests";
+
+/** Where and when one stored kill happened, without its evidence. */
+export type StoredKillTier = Readonly<{
+  raidId: string;
+  raidName: string;
+  killedAt: string;
+}>;
+
+/** One raid a character is finished collecting one domain of evidence for. */
+export type TerminalTier = Readonly<{
+  /** The Warcraft Logs zone id, as carried on the character's stored kills. */
+  raidId: string;
+  domain: EvidenceCollectionDomain;
+}>;
+
 export interface EvidenceRepository {
   reserve(input: {
     key: CharacterKey;
@@ -386,10 +406,17 @@ export interface EvidenceRepository {
    * budget-limited collection run can spend its requests on what is missing
    * instead of redoing the same reports every time.
    *
+   * A fight killed at or after `settledBefore` is excluded however well
+   * hydrated it is: its rankings are still moving, so treating it as done
+   * would freeze a percentile we have reason to believe is not final yet.
+   *
    * Scoped to the evidence `getCompleted` returns, so this can never skip a
    * fight the dossier shows blank.
    */
-  hydratedFightUrls(key: CharacterKey): Promise<readonly string[]>;
+  hydratedFightUrls(
+    key: CharacterKey,
+    settledBefore: Date
+  ): Promise<readonly string[]>;
   /**
    * When each zone's tier best parses were last collected, as
    * `[raidId, completedAt]` pairs. A collection run drops a zone collected
@@ -402,6 +429,38 @@ export interface EvidenceRepository {
   collectedTierZones(
     key: CharacterKey
   ): Promise<readonly (readonly [string, string])[]>;
+  /**
+   * The raid tiers this character is finished with, at or above the current
+   * collection version for their own domain. A mark below it is omitted, which
+   * is how bumping one domain's version re-collects that domain and leaves the
+   * rest settled.
+   */
+  /**
+   * The raid, name and kill time of every stored kill. This is what turns a
+   * terminal raid id into a date the report scan can stop at: the marks carry
+   * Warcraft Logs zone ids, and only the kills say when that zone was raided.
+   *
+   * Scoped like `hydratedFightUrls`, to the evidence `getCompleted` returns.
+   */
+  storedKillTiers(key: CharacterKey): Promise<readonly StoredKillTier[]>;
+  terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
+  /**
+   * Records tiers as terminal, stamping each with its domain's current
+   * collection version. Idempotent: a run that re-reads an already-settled
+   * tier refreshes the mark rather than failing on the primary key.
+   */
+  markTerminalTiers(
+    key: CharacterKey,
+    tiers: readonly TerminalTier[],
+    at: Date
+  ): Promise<void>;
+  /**
+   * Forgets every terminal mark for one character, so its history is collected
+   * again over as many runs as the budget allows. Deletes no evidence: the
+   * stored kills, wipes and tier bests stay readable until their replacements
+   * arrive. Returns the number of marks forgotten.
+   */
+  clearTerminalTiers(key: CharacterKey): Promise<number>;
   listStatus(keys: readonly CharacterKey[]): Promise<CharacterEvidenceRun[]>;
   /**
    * Records a limitation on a run that is still active, without publishing

@@ -55,6 +55,88 @@ Such a run carries its shortfall in `parse_limitation_code` alone:
 conclusions resting on it stand. A `partial` publication must name a shortfall
 in one of the two channels, and either one satisfies that.
 
+## Concluded tiers are stored once
+
+A concluded raid tier cannot change, so its evidence is stored once and never
+re-queried. Only the current tier keeps costing upstream requests. A tier is
+recorded as **terminal** in `character_terminal_tiers`, per character, per
+raid, per collection domain (`kills`, `parses`, `tier_bests`), and only when
+all three of the following hold:
+
+1. **The raid's current-content window has closed**, as
+   `raid-current-content-windows.generated.json` records it. A raid the
+   catalogue cannot place in time is never terminal: freezing undated evidence
+   is worse than re-querying it, and such a raid keeps reporting
+   `current_content_window_unknown`.
+2. **The run read the tier without incident.** A limitation attributed to a
+   raid leaves that raid re-queryable however old it is, and a limitation on
+   the history scan leaves every raid re-queryable, because a truncated or
+   drifted scan may be missing reports from any tier — kills and wipes, not
+   merely parses. Whether collection is good enough is therefore not a
+   judgement call but an invariant enforced per tier.
+3. **Every kill in the tier has settled**, meaning it is older than
+   `EVIDENCE_KILL_SETTLE_DAYS` (7 by default). The same threshold excludes an
+   unsettled fight from `hydratedFightUrls`, so a kill from this week is
+   re-read rather than frozen at whatever it showed on the night. **The 7 is a
+   guess and explicitly unverified**; the `collected_at` now stored with each
+   kill and tier best records when a percentile was observed, which is what
+   should replace it with a measurement.
+
+A terminal tier costs nothing: its zone is dropped before the tier-bests
+budget is measured, its kills are never grouped for hydration, and the report
+scan stops paging once it is below the oldest kill of any tier that is not yet
+terminal. That stop raises no limitation — a cap there would mark the run
+partial and block the very marks that allowed it.
+
+Because the scan stops, a `complete` publication carries forward the stored
+kills and wipes of terminal raids. Every other raid keeps the existing rule,
+where a kill a complete run stops finding stops being claimed.
+
+A dossier therefore converges rather than completing in one pass: clean tiers
+settle and stop costing requests, while tiers that hit trouble keep being
+retried until a run reads them cleanly, so the budget drains towards what is
+actually unfinished.
+
+Two things are frozen by policy rather than because they cannot move. A parse
+is a percentile against a ranking pool and a world rank a position within one;
+the kill is immutable, the number is not. We accept the first settled value as
+final, because a reviewer wants what the applicant achieved rather than a
+figure that quietly re-rates itself for years. Likewise a Warcraft Logs report
+can be deleted or made private, and stored evidence is kept: we recorded what
+was public when we saw it.
+
+Two gaps are known. A decode that succeeds and produces a wrong value raises
+no limitation and would go terminal; storing raw payloads for failed decodes
+would reduce that risk and is not done here. And a kill outside its raid's
+current-content window is skipped from hydration with no limitation, so its
+tier can settle with that fight unhydrated — those kills are never displayed,
+which is why hydration skips them.
+
+### Correcting terminal evidence
+
+Two escape hatches, for different needs.
+
+`CURRENT_COLLECTION_VERSIONS` in the database package holds a version per
+domain. Bumping one drops that domain's marks out of every read, so its tiers
+re-collect once and settle again while the other domains stay terminal. A
+parse fix therefore re-collects parses and not kills, rankings or
+achievements. Whoever writes the next collection fix has to bump the right
+one; if that habit does not stick, this degrades to the blunt global bump that
+`evidence_version` still provides.
+
+`corepack pnpm ops:rebuild <character-url>` forgets every terminal mark for
+one character. It is a flag, not an action: it clears the marks and returns,
+and the ordinary run, retry and budget machinery drains the backlog across as
+many hourly windows as it takes. It deletes nothing, so the stored evidence
+stays readable until its replacement arrives.
+
+The dossier refresh control cannot reach a rebuild. It stays `full` outside the
+cooldown and `light` inside it, one run per press, whatever it is sent.
+`/api/dossiers/.../refresh` is unauthenticated, which is tolerable at one run
+per press and would not be if a press could re-collect a whole history on
+demand; keeping the mode unreachable is a better answer than gating a public
+endpoint. A rebuild is operator-only and run with credentials.
+
 A run also checks the Warcraft Logs hourly points allowance before it starts.
 When fewer than `EVIDENCE_POINTS_RESERVE` points (1500 by default, capped at a
 tenth of whatever allowance the account in use reports, so a visitor's smaller

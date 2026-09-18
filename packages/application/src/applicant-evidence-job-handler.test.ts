@@ -1,3 +1,4 @@
+import type { StoredKillTier, TerminalTier } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -40,6 +41,10 @@ function store(
   }>;
   failed: Array<{ runId: string; code: string }>;
   noted: Array<{ runId: string; code: string }>;
+  marked: Array<{ raidId: string; domain: string }>;
+  settleCutoffs: Date[];
+  stored: TerminalTier[];
+  storedKills: StoredKillTier[];
 } {
   const published: Array<{
     runId: string;
@@ -47,10 +52,27 @@ function store(
   }> = [];
   const failed: Array<{ runId: string; code: string }> = [];
   const noted: Array<{ runId: string; code: string }> = [];
+  const marked: Array<{ raidId: string; domain: string }> = [];
+  const settleCutoffs: Date[] = [];
+  const stored: TerminalTier[] = [];
+  const storedKills: StoredKillTier[] = [];
   return {
     published,
     failed,
     noted,
+    marked,
+    settleCutoffs,
+    stored,
+    storedKills,
+    async storedKillTiers() {
+      return storedKills;
+    },
+    async terminalTiers() {
+      return stored;
+    },
+    async markTerminalTiers(_key, tiers) {
+      marked.push(...tiers);
+    },
     async find(id) {
       return id === activeRun.id ? activeRun : null;
     },
@@ -69,7 +91,8 @@ function store(
     async collectedTierZones() {
       return [];
     },
-    async hydratedFightUrls() {
+    async hydratedFightUrls(_key, settledBefore) {
+      settleCutoffs.push(settledBefore);
       return hydrated;
     }
   };
@@ -82,6 +105,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [
         {
@@ -131,6 +155,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -145,6 +170,11 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       hydratedFightUrls: new Set(),
       collectedTierZones: new Map(),
+      terminalRaidIds: {
+        kills: new Set(),
+        parses: new Set(),
+        tierBests: new Set()
+      },
       signal: expect.any(AbortSignal)
     });
     expect(evidence.published).toEqual([
@@ -193,6 +223,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -230,6 +261,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             parseLimitation: {
               kind: "limitation" as const,
@@ -267,6 +299,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -349,7 +382,10 @@ describe("applicant evidence job handler", () => {
       fail: vi.fn(),
       recordLimitation: vi.fn(),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
-      collectedTierZones: vi.fn().mockResolvedValue([])
+      collectedTierZones: vi.fn().mockResolvedValue([]),
+      storedKillTiers: vi.fn().mockResolvedValue([]),
+      terminalTiers: vi.fn().mockResolvedValue([]),
+      markTerminalTiers: vi.fn().mockResolvedValue(undefined)
     };
     const handler = createApplicantEvidenceJobHandler({
       evidence,
@@ -359,7 +395,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 80,
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await handler.execute("run-1", {
@@ -383,6 +420,7 @@ describe("applicant evidence job handler", () => {
     ]);
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [],
       wipes: []
@@ -397,6 +435,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -423,6 +462,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [],
       wipes: []
@@ -437,6 +477,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -457,6 +498,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store({ ...run, className: "Death Knight" });
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       tierBests: [],
       kills: [],
       wipes: []
@@ -471,6 +513,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 8,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -490,6 +533,7 @@ describe("applicant evidence job handler", () => {
     rateLimit: Awaited<ReturnType<WarcraftLogsGateway["getRateLimit"]>>,
     getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      troubledRaidIds: [],
       kills: [],
       wipes: [],
       tierBests: []
@@ -520,7 +564,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await expect(
@@ -553,7 +598,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await expect(
@@ -584,7 +630,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await expect(
@@ -618,7 +665,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await expect(
@@ -651,7 +699,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     const error = await handler
@@ -682,7 +731,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await handler.execute(run.id);
@@ -709,7 +759,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await handler.execute(run.id);
@@ -734,7 +785,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await expect(
@@ -765,7 +817,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 0
+      pointsReserve: 0,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await handler.execute(run.id);
@@ -795,6 +848,7 @@ describe("applicant evidence job handler", () => {
         getRateLimit,
         getFirstKillReports: vi.fn(async () => ({
           kind: "evidence" as const,
+          troubledRaidIds: [],
           kills: [],
           wipes: [],
           tierBests: []
@@ -806,7 +860,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await handler.execute(run.id);
@@ -828,7 +883,8 @@ describe("applicant evidence job handler", () => {
       requestCap: 500,
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
-      pointsReserve: 1_500
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
     });
 
     await handler.execute(run.id);
@@ -861,6 +917,7 @@ describe("applicant evidence job handler", () => {
         getRateLimit,
         getFirstKillReports: vi.fn(async () => ({
           kind: "evidence" as const,
+          troubledRaidIds: [],
           kills: [],
           wipes: [],
           tierBests: []
@@ -873,6 +930,7 @@ describe("applicant evidence job handler", () => {
       parseRequestCap: 24,
       parseCapRetryMs: 1_800_000,
       pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       logger: { info: (value) => infos.push(value) }
     });
 
@@ -902,6 +960,13 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
+        async storedKillTiers() {
+          return [];
+        },
+        async terminalTiers() {
+          return [];
+        },
+        async markTerminalTiers() {},
         async collectedTierZones() {
           return [];
         },
@@ -919,6 +984,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -927,7 +993,8 @@ describe("applicant evidence job handler", () => {
         requestCap: 500,
         parseRequestCap: 8,
         parseCapRetryMs: 1_800_000,
-        pointsReserve: 1_500
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
       };
     }
 
@@ -1022,6 +1089,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             limitation: {
               kind: "limitation" as const,
@@ -1200,6 +1268,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -1232,6 +1301,13 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
+        async storedKillTiers() {
+          return [];
+        },
+        async terminalTiers() {
+          return [];
+        },
+        async markTerminalTiers() {},
         async collectedTierZones() {
           return [];
         },
@@ -1249,6 +1325,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -1257,7 +1334,8 @@ describe("applicant evidence job handler", () => {
         requestCap: 500,
         parseRequestCap: 8,
         parseCapRetryMs: 1_800_000,
-        pointsReserve: 1_500
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
       };
     }
 
@@ -1351,6 +1429,7 @@ describe("applicant evidence job handler", () => {
           }),
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            troubledRaidIds: [],
             tierBests: [],
             kills: [],
             wipes: []
@@ -1414,6 +1493,236 @@ describe("applicant evidence job handler", () => {
           (entry) => entry.event === "evidence_run_announcement_failed"
         )
       ).toHaveLength(2);
+    });
+  });
+
+  describe("terminal tiers", () => {
+    const concludedKill = {
+      raidId: "42",
+      // Closed 2026-08-19, so concluded when read on 2026-09-18.
+      raidName: "The Dreamrift",
+      bossId: "7",
+      bossName: "Boss",
+      journalBossId: null,
+      bossOrder: 1,
+      isFinalBoss: false as const,
+      killedAt: "2026-06-01T00:00:00.000Z",
+      reportCode: "abc",
+      fightId: 1,
+      difficulty: 5,
+      reportUrl: "https://www.warcraftlogs.com/reports/abc",
+      fightUrl: "https://www.warcraftlogs.com/reports/abc#fight=1",
+      guild: null,
+      historicWorldRank: null,
+      performance: {
+        damage: { state: "unavailable" as const },
+        healing: { state: "unavailable" as const },
+        bossDamage: { state: "unavailable" as const }
+      }
+    };
+
+    function handlerFor(
+      evidence: ReturnType<typeof store>,
+      response: Record<string, unknown>
+    ) {
+      return createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          getFirstKillReports: vi.fn(async () => response),
+          ...openGate
+        } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 0,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        now: () => new Date("2026-09-18T12:00:00.000Z")
+      });
+    }
+
+    it("marks a concluded tier terminal after a run reads it cleanly", async () => {
+      const evidence = store();
+      await handlerFor(evidence, {
+        kind: "evidence" as const,
+        kills: [concludedKill],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }).execute(run.id);
+
+      expect(evidence.marked).toEqual([
+        { raidId: "42", domain: "kills" },
+        { raidId: "42", domain: "parses" },
+        { raidId: "42", domain: "tier_bests" }
+      ]);
+    });
+
+    it("marks nothing when the history scan reported a limitation", async () => {
+      const evidence = store();
+      await handlerFor(evidence, {
+        kind: "evidence" as const,
+        kills: [concludedKill],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: [],
+        limitation: { kind: "limitation", code: "schema_drift" }
+      }).execute(run.id);
+
+      expect(evidence.marked).toEqual([]);
+    });
+
+    it("marks nothing for a raid the run attributed a limitation to", async () => {
+      const evidence = store();
+      await handlerFor(evidence, {
+        kind: "evidence" as const,
+        kills: [concludedKill],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: ["42"]
+      }).execute(run.id);
+
+      expect(evidence.marked).toEqual([]);
+    });
+
+    it("hands the gateway the tiers it may skip", async () => {
+      const evidence = store();
+      evidence.stored.push(
+        { raidId: "42", domain: "kills" },
+        { raidId: "42", domain: "tier_bests" }
+      );
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 0,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({
+          terminalRaidIds: {
+            kills: new Set(["42"]),
+            parses: new Set(),
+            tierBests: new Set(["42"])
+          }
+        })
+      );
+    });
+
+    it("tells the gateway how far back it still needs to page", async () => {
+      const evidence = store();
+      evidence.stored.push({ raidId: "42", domain: "kills" });
+      evidence.storedKills.push(
+        {
+          raidId: "42",
+          raidName: "The Dreamrift",
+          killedAt: "2026-06-01T00:00:00.000Z"
+        },
+        {
+          raidId: "43",
+          raidName: "The Venomous Abyss",
+          killedAt: "2026-09-01T00:00:00.000Z"
+        }
+      );
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 0,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      // Raid 43 is not terminal, so the scan must still reach its oldest kill.
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({
+          killScanFloor: "2026-09-01T00:00:00.000Z"
+        })
+      );
+    });
+
+    it("pages the whole history when no tier is terminal for kills", async () => {
+      const evidence = store();
+      evidence.storedKills.push({
+        raidId: "42",
+        raidName: "The Dreamrift",
+        killedAt: "2026-06-01T00:00:00.000Z"
+      });
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        parseCapRetryMs: 1_800_000,
+        pointsReserve: 0,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.not.objectContaining({ killScanFloor: expect.anything() })
+      );
+    });
+
+    it("asks for hydrated fights only as far back as the settle threshold", async () => {
+      const evidence = store();
+      await handlerFor(evidence, {
+        kind: "evidence" as const,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: []
+      }).execute(run.id);
+
+      // Seven days before the run's own clock, so a fight killed this week is
+      // re-read rather than treated as done.
+      expect(evidence.settleCutoffs).toEqual([
+        new Date("2026-09-11T12:00:00.000Z")
+      ]);
     });
   });
 });

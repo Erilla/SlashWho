@@ -127,6 +127,18 @@ export interface ApplicantDossierService {
     key: CharacterKey,
     scope?: MeasurementScope
   ): Promise<RefreshCharacterResult>;
+  /**
+   * Forgets every terminal mark for one character, so its history is collected
+   * again over as many runs as the points allowance allows.
+   *
+   * Operator-only, and deliberately not reachable from the unauthenticated
+   * dossier refresh route: one press there costs one run, and a rebuild costs
+   * a whole history.
+   */
+  rebuildCharacter(
+    key: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<RefreshCharacterResult>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -1154,10 +1166,25 @@ export function createApplicantDossierService(options: {
     },
 
     async refreshCharacter(key, scope) {
+      // Deliberately takes no mode. The reader-facing control is `full` outside
+      // the cooldown and `light` inside it, one run either way, and there is no
+      // argument a caller could pass to turn it into a rebuild.
       return refreshCharacter({
         key,
         at: new Date(),
         cooldownMs: REFRESH_COOLDOWN_MS,
+        repositories: options.repositories,
+        queue: options.queue,
+        ...(scope ? { scope } : {})
+      });
+    },
+
+    async rebuildCharacter(key, scope) {
+      return refreshCharacter({
+        key,
+        at: new Date(),
+        cooldownMs: REFRESH_COOLDOWN_MS,
+        rebuild: true,
         repositories: options.repositories,
         queue: options.queue,
         ...(scope ? { scope } : {})

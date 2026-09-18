@@ -6,6 +6,17 @@ const cooldownMs = 15 * 60 * 1000;
 const at = new Date("2026-09-16T12:00:00.000Z");
 
 describe("refreshMode", () => {
+  it("never derives a rebuild from the cooldown", () => {
+    // `rebuild` is chosen by the caller, and only by an operator. A reader
+    // pressing Refresh asks for current information, not for a character's
+    // entire history to be re-collected.
+    expect([
+      refreshMode(null, at, cooldownMs),
+      refreshMode(new Date("2026-09-16T11:59:00.000Z"), at, cooldownMs),
+      refreshMode(new Date("2020-01-01T00:00:00.000Z"), at, cooldownMs)
+    ]).not.toContain("rebuild");
+  });
+
   it("collects everything when nothing has been collected yet", () => {
     expect(refreshMode(null, at, cooldownMs)).toBe("full");
   });
