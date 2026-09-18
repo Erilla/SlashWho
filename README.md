@@ -97,6 +97,7 @@ Railway setup, variables, health checks, backups, and validation are documented 
 
 - Agent instructions: [`AGENTS.md`](AGENTS.md)
 - Contribution and branch workflow: [`docs/contributing.md`](docs/contributing.md)
+- Implementation and worktree workflow: [`docs/agents/implementation-workflow.md`](docs/agents/implementation-workflow.md)
 - Issue-tracker conventions: [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)
 - Triage labels: [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)
 - Domain-document conventions: [`docs/agents/domain.md`](docs/agents/domain.md)

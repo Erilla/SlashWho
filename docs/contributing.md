@@ -12,7 +12,7 @@ Branches should be short-lived and contain one coherent change. There is no `dev
 
 ## Pull-request flow
 
-1. Create a branch from the latest `main`.
+1. Create an isolated worktree, branched from `origin/main`, as described in [`docs/agents/implementation-workflow.md`](agents/implementation-workflow.md).
 2. Make and verify one coherent change.
 3. Open a pull request targeting `main`.
 4. Resolve review conversations and ensure all required checks pass.
