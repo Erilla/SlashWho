@@ -23,6 +23,45 @@ import type { WarcraftLogsLimitationCode } from "@slashwho/warcraftlogs";
  * added without a decision here should be a type error, not another character
  * quietly stranded.
  */
+/**
+ * Which of the parse limitations one run raised drives its retry, and so is
+ * the code the run records.
+ *
+ * A run can raise several and the record holds one, so something has to
+ * choose. Until #349 nothing did: whichever assignment ran last won, and a
+ * parse budget running out late in the hydration loop overwrote a more
+ * informative failure raised earlier. That is how an unmatched ranking
+ * identity hid behind `parse_request_cap` for weeks.
+ *
+ * The obvious repair -- keep the first, as the sibling `??=` did -- is worse,
+ * because it lets a code with no retry suppress one that has a retry and
+ * strand the character until its evidence goes stale. So neither "first" nor
+ * "last" is the rule:
+ *
+ * **A limitation that earns a retry wins.** A character is never left
+ * uncollectable by one limitation when another one the same run raised would
+ * have rescheduled it. Among equals, the first raised wins, being the earlier
+ * and more specific failure. Nothing is discarded either way -- the rest are
+ * recorded on the run, which is the point.
+ */
+export function drivingParseLimitation<
+  T extends Readonly<{
+    code: WarcraftLogsLimitationCode;
+    retryAfterMs?: number;
+  }>
+>(
+  limitations: readonly T[],
+  options: Readonly<{ transientRetryMs: number; capRetryMs: number }>
+): T | undefined {
+  return (
+    limitations.find(
+      (limitation) =>
+        (limitation.retryAfterMs ??
+          retryDelayMsFor(limitation.code, options)) !== null
+    ) ?? limitations[0]
+  );
+}
+
 export function retryDelayMsFor(
   code: WarcraftLogsLimitationCode,
   options: Readonly<{ transientRetryMs: number; capRetryMs: number }>
@@ -56,6 +95,16 @@ export function retryDelayMsFor(
     case "schema_drift":
     case "parse_schema_drift":
       return null;
+
+    // Not a decoding bug, despite having been filed as one until #349. The
+    // report's ranking rows could not be matched to this character, which is
+    // usually a character who was in the fight and simply unranked -- benign,
+    // and reached often enough that leaving it unretryable stalled 7 of 10
+    // characters for a day the moment #346 stopped the parse budget masking
+    // it. A later run may also find the fight ranked, which retrying is
+    // exactly the way to discover.
+    case "parse_identity_unmatched":
+      return options.transientRetryMs;
 
     // Never reaches a publish: a budget refusal is recorded on the still-active
     // run and deferred by the queue, and on terminal refusal the run is failed

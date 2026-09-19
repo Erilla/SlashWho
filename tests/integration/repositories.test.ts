@@ -1651,6 +1651,84 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("records every parse limitation a run raised, not only the one it is judged by", async () => {
+    // Break caught: a run can raise several and the record holds one, so the
+    // rest were discarded by whichever assignment ran last. That is how an
+    // unmatched ranking identity hid behind `parse_request_cap` for weeks
+    // (#349). The judged code still drives retry; the others are kept so a
+    // masked failure is still visible afterwards.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "parselimitations"
+    } as const;
+    const reserved = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
+      at: new Date("2026-09-19T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "partial",
+      limitationCode: null,
+      parseLimitationCode: "parse_request_cap",
+      parseLimitationCodesSeen: [
+        "parse_identity_unmatched",
+        "parse_request_cap"
+      ],
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-19T00:00:00.000Z")
+    });
+
+    await expect(
+      pool
+        .query<{ parse_limitation_codes_seen: string[] | null }>(
+          `SELECT parse_limitation_codes_seen
+             FROM character_evidence_runs
+            WHERE id = $1`,
+          [reserved.run.id]
+        )
+        .then((result) => result.rows[0]?.parse_limitation_codes_seen)
+    ).resolves.toEqual(["parse_identity_unmatched", "parse_request_cap"]);
+  });
+
+  it("records an empty list for a run that raised no parse limitation", async () => {
+    // Empty is not null: "raised none" and "written before the column
+    // existed" are different facts and must stay distinguishable.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "noparselimitation"
+    } as const;
+    const reserved = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
+      at: new Date("2026-09-19T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      parseLimitationCodesSeen: [],
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-19T00:00:00.000Z")
+    });
+
+    await expect(
+      pool
+        .query<{ parse_limitation_codes_seen: string[] | null }>(
+          `SELECT parse_limitation_codes_seen
+             FROM character_evidence_runs
+            WHERE id = $1`,
+          [reserved.run.id]
+        )
+        .then((result) => result.rows[0]?.parse_limitation_codes_seen)
+    ).resolves.toEqual([]);
+  });
+
   it("validates independent history and parse limitation publication states", async () => {
     // Break caught: adding a second limitation channel could reject valid
     // complete/partial states or permit an ambiguous partial publication.

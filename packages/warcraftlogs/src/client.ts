@@ -11,6 +11,7 @@ import type {
   WarcraftLogsGateway,
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
+  WarcraftLogsLimitationCode,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
   WarcraftLogsQueryType,
@@ -845,12 +846,18 @@ function decodeRankingRows(
   // hand and the decoder still could not connect them, which is what a change
   // to how ranking rows carry identity looks like. Left silent, that reads
   // exactly like a character who has no parses.
+  //
+  // Its own code rather than `parse_schema_drift` (#349). #319 named the
+  // trade: a character genuinely in the fight and genuinely unranked lands
+  // here too. That makes this common and mostly benign, where structural
+  // drift is rare and alarming, and the two cannot share an unretryable
+  // classification without stranding ordinary characters for a day.
   if (
     requestedIdentities.length === 0 &&
     identities.size > 0 &&
     actorsIncludeKey(actors, requestedKey)
   ) {
-    return { kind: "limitation", code: "parse_schema_drift" };
+    return { kind: "limitation", code: "parse_identity_unmatched" };
   }
   const requestedIds = new Set(
     requestedIdentities.map((identity) => identity.id)
@@ -1591,6 +1598,35 @@ export function createWarcraftLogsClient(
     }
 
     let parseLimitation: WarcraftLogsLimitation | undefined;
+    // Every distinct parse limitation raised, first occurrence wins, insertion
+    // ordered. One run can hit several and the run record holds one code, so
+    // until #349 the rest were lost to whichever assignment ran last -- which
+    // is how an attribution failure hid behind `parse_request_cap` for weeks.
+    // The gateway ranks none of them: choosing which drives `retry_after_at`
+    // needs the retry policy, which lives in the caller.
+    const parseLimitationsSeen = new Map<
+      WarcraftLogsLimitationCode,
+      WarcraftLogsLimitation
+    >();
+    /**
+     * Records a parse limitation, and makes it the reported one.
+     *
+     * `preferExisting` keeps an earlier limitation as the reported value while
+     * still recording this one, which is what the old `??=` meant: the budget
+     * running out after something else already went wrong is worth recording,
+     * but it is not the more informative answer.
+     */
+    const raiseParse = (
+      limitation: WarcraftLogsLimitation,
+      options?: Readonly<{ preferExisting?: boolean }>
+    ): void => {
+      if (!parseLimitationsSeen.has(limitation.code)) {
+        parseLimitationsSeen.set(limitation.code, limitation);
+      }
+      if (!options?.preferExisting || parseLimitation === undefined) {
+        parseLimitation = limitation;
+      }
+    };
     let parseRequests = 0;
     // Raids this read had trouble with, split by the collection domain the
     // trouble belongs to. Kept per raid rather than per run so one zone's
@@ -1826,7 +1862,7 @@ export function createWarcraftLogsClient(
       // Reserve one request for the shared canonical identity lookup, so a cap
       // of N spends N-1 requests on rankings and one on identities.
       if (parseRequests + 1 >= options.parseRequestCap) {
-        parseLimitation = { kind: "limitation", code: "parse_request_cap" };
+        raiseParse({ kind: "limitation", code: "parse_request_cap" });
         // Everything from here on was read by nobody, so none of the tiers
         // those reports belong to may settle on this run.
         troubleGroups(orderedGroups.slice(index));
@@ -1845,17 +1881,24 @@ export function createWarcraftLogsClient(
         })
       );
       if (rankings.kind !== "success") {
-        parseLimitation = toParseLimitation(rankings);
+        raiseParse(toParseLimitation(rankings));
         troubleGroups(orderedGroups.slice(index));
         break;
       }
       const decoded = decodeRankingRows(rankings.value, group, key);
       if (isLimitation(decoded)) {
-        parseLimitation = decoded;
+        raiseParse(decoded);
         // One report's rankings being unreadable says nothing about the next
         // report's, so the remaining budget hydrates the groups it can rather
         // than stopping the run at the first response the decoder rejects.
-        if (decoded.code === "parse_schema_drift") {
+        // An unmatched identity is the same shape of answer and costs the
+        // same one group -- it was `parse_schema_drift` until #349 split it,
+        // and leaving it out here would abandon the rest of the budget over
+        // a character who was merely unranked.
+        if (
+          decoded.code === "parse_schema_drift" ||
+          decoded.code === "parse_identity_unmatched"
+        ) {
           troubleGroups([group]);
           continue;
         }
@@ -1869,7 +1912,10 @@ export function createWarcraftLogsClient(
 
     if (identities.size > 0) {
       if (parseRequests >= options.parseRequestCap) {
-        parseLimitation ??= { kind: "limitation", code: "parse_request_cap" };
+        raiseParse(
+          { kind: "limitation", code: "parse_request_cap" },
+          { preferExisting: true }
+        );
         // The identity lookup is shared, so without it no decoded group gets
         // its performance applied: every tier they cover was read incompletely.
         troubleGroups(decodedGroups.map(({ group }) => group));
@@ -1895,7 +1941,7 @@ export function createWarcraftLogsClient(
           })
         );
         if (canonical.kind !== "success") {
-          parseLimitation = toParseLimitation(canonical);
+          raiseParse(toParseLimitation(canonical));
           troubleGroups(decodedGroups.map(({ group }) => group));
         } else {
           const canonicalIds = decodeCanonicalIdentityIds(
@@ -1903,7 +1949,7 @@ export function createWarcraftLogsClient(
             canonicalIdentities
           );
           if (isLimitation(canonicalIds)) {
-            parseLimitation = canonicalIds;
+            raiseParse(canonicalIds);
             troubleGroups(decodedGroups.map(({ group }) => group));
           } else
             for (const { group, decoded } of decodedGroups) {
@@ -1914,7 +1960,7 @@ export function createWarcraftLogsClient(
                 key
               );
               if (isLimitation(requestedIds)) {
-                parseLimitation = requestedIds;
+                raiseParse(requestedIds);
                 troubleGroups([group]);
                 continue;
               }
@@ -1929,7 +1975,7 @@ export function createWarcraftLogsClient(
                 options.className
               );
               if (isLimitation(performance)) {
-                parseLimitation = performance;
+                raiseParse(performance);
                 troubleGroups(
                   decodedGroups
                     .slice(decodedGroups.findIndex((it) => it.group === group))
@@ -1967,6 +2013,16 @@ export function createWarcraftLogsClient(
         a.fightUrl.localeCompare(b.fightUrl)
     );
     const reportedParseLimitation = parseLimitation ?? tierParseLimitation;
+    // The zone-rankings limitation is kept apart from the report-group one all
+    // the way to here, but it is still something this read hit, so it belongs
+    // in the record of what happened rather than only in what got reported.
+    if (
+      tierParseLimitation &&
+      !parseLimitationsSeen.has(tierParseLimitation.code)
+    ) {
+      parseLimitationsSeen.set(tierParseLimitation.code, tierParseLimitation);
+    }
+    const parseLimitations = [...parseLimitationsSeen.values()];
     const troubled = {
       parses: [...troubledParseRaidIds].sort(),
       tierBests: [...troubledTierBestRaidIds].sort()
@@ -1981,7 +2037,8 @@ export function createWarcraftLogsClient(
           ...(scanLimitation ? { limitation: scanLimitation } : {}),
           ...(reportedParseLimitation
             ? { parseLimitation: reportedParseLimitation }
-            : {})
+            : {}),
+          ...(parseLimitations.length > 0 ? { parseLimitations } : {})
         }
       : (scanLimitation ??
           reportedParseLimitation ?? {

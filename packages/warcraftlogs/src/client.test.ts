@@ -2088,6 +2088,58 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("records a drift the parse budget went on to overwrite", async () => {
+    // Break caught, and the reason this went unseen for weeks: a drift raised
+    // early in the hydration loop was plainly assigned over by
+    // `parse_request_cap` when the budget ran out later in the same loop, so
+    // the run published the cap and the drift was simply lost. The reported
+    // code still tracks the budget -- it is the one that earns a retry -- but
+    // the run now says both things happened (#349).
+    const reports = twoKillReports();
+
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        const code = body.variables?.code ?? "early-report";
+        const malformed = performanceRankings(
+          { damage: 40, healing: 41, bossDamage: 42 },
+          { code }
+        ) as {
+          data: {
+            reportData: { report: { damage: { data: { roles?: unknown }[] } } };
+          };
+        };
+        delete malformed.data.reportData.report.damage.data[0]!.roles;
+        return jsonResponse(malformed);
+      }
+      if (body.query.includes("RankingCharacterIdentities")) {
+        return canonicalIdentityResponse();
+      }
+      return jsonResponse(reports);
+    });
+
+    // Two groups, and a cap that reserves one request for identities: the
+    // first group drifts, the second trips the cap.
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 2
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      parseLimitation: { kind: "limitation", code: "parse_request_cap" }
+    });
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parseLimitations?.map((entry) => entry.code)).toEqual([
+      "parse_schema_drift",
+      "parse_request_cap"
+    ]);
+  });
+
   it("hydrates later report groups when an earlier report ranks nobody", async () => {
     // Break caught: a report whose rankings name no ranked character is an
     // ordinary gap, not drift, and treating it as drift abandoned the parses
@@ -2187,7 +2239,13 @@ describe("Warcraft Logs gateway", () => {
           performance: { damage: { state: "available", percentile: 50 } }
         }
       ],
-      parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
+      // Its own code since #349. It shares this path with a character who was
+      // in the fight and simply unranked, so classifying it as drift left it
+      // unretryable and stalled ordinary characters for a day.
+      parseLimitation: {
+        kind: "limitation",
+        code: "parse_identity_unmatched"
+      }
     });
     if (result.kind !== "evidence") throw new Error("expected evidence");
     expect(result.troubledRaidIds).toEqual({ parses: ["1047"], tierBests: [] });

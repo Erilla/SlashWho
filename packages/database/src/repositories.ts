@@ -401,6 +401,11 @@ export interface StagedEvidenceCollection {
   state: "complete" | "partial";
   limitationCode: string | null;
   parseLimitationCode: string | null;
+  /**
+   * Every distinct parse limitation the run raised. Optional because a stage
+   * written before #349 does not carry it.
+   */
+  parseLimitationCodesSeen?: readonly string[];
   /** ISO 8601, or null when the publication carries no retry hint. */
   retryAfterAt: string | null;
   kills: readonly CharacterMythicKillInput[];
@@ -445,7 +450,16 @@ export interface EvidenceRepository {
     input: {
       state: "complete" | "partial";
       limitationCode: string | null;
+      /** The parse limitation the run is judged by: retry, and the dossier. */
       parseLimitationCode: string | null;
+      /**
+       * Every distinct parse limitation the run raised, recorded so one that
+       * lost the judgement is still visible afterwards (#349). Optional here
+       * and required on `EvidencePublication`: the handler that knows the
+       * whole list must not forget it, while a caller that only ever had the
+       * one code should not have to restate it.
+       */
+      parseLimitationCodesSeen?: readonly string[];
       retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly CharacterMythicWipeInput[];

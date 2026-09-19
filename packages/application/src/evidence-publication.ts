@@ -26,7 +26,21 @@ export type EvidenceLimitationCode =
 export type EvidencePublication = Readonly<{
   state: "complete" | "partial";
   limitationCode: EvidenceLimitationCode | null;
+  /**
+   * The parse limitation this run is judged by: the one that decides whether
+   * it retries, and the one a dossier shows.
+   */
   parseLimitationCode: EvidenceLimitationCode | null;
+  /**
+   * Every distinct parse limitation the run raised, including the one above.
+   *
+   * A run can hit several and only one can be judged by, so the others used
+   * to be discarded -- which is how an unmatched ranking identity hid behind
+   * `parse_request_cap` until #349. Recorded rather than reported: nothing
+   * reads this to make a decision, and that is deliberate, because the moment
+   * something does the choice above stops being the single answer.
+   */
+  parseLimitationCodesSeen: readonly EvidenceLimitationCode[];
   retryAfterAt?: Date | null;
   kills: readonly CharacterMythicKillInput[];
   wipes: readonly WarcraftLogsWipeEvidence[];
@@ -52,6 +66,7 @@ export function toStagedCollection(
     state: publication.state,
     limitationCode: publication.limitationCode,
     parseLimitationCode: publication.parseLimitationCode,
+    parseLimitationCodesSeen: publication.parseLimitationCodesSeen,
     retryAfterAt: publication.retryAfterAt
       ? publication.retryAfterAt.toISOString()
       : null,
@@ -71,6 +86,12 @@ export function fromStagedCollection(
     limitationCode: staged.limitationCode as EvidenceLimitationCode | null,
     parseLimitationCode:
       staged.parseLimitationCode as EvidenceLimitationCode | null,
+    // A stage written before #349 carries no list; the code it was judged by
+    // is the whole of what that run recorded, so it stands in for itself.
+    parseLimitationCodesSeen: (staged.parseLimitationCodesSeen ??
+      (staged.parseLimitationCode
+        ? [staged.parseLimitationCode]
+        : [])) as readonly EvidenceLimitationCode[],
     ...(staged.retryAfterAt
       ? { retryAfterAt: new Date(staged.retryAfterAt) }
       : {}),

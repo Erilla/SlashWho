@@ -344,6 +344,9 @@ describe("recoverAbandonedEvidenceRuns", () => {
       state: "complete",
       limitationCode: null,
       parseLimitationCode: null,
+      // A stage written before #349 carries no list, and the code it was
+      // judged by stands in for itself -- here, nothing went wrong at all.
+      parseLimitationCodesSeen: [],
       kills: [],
       wipes: [],
       tierBests: [],

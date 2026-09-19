@@ -169,6 +169,20 @@
       "when": 1790337600000,
       "tag": "0024_evidence_collection_stage",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790424000000,
+      "tag": "0025_parse_limitations_seen",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790424060000,
+      "tag": "0026_unstick_parse_drift_runs",
+      "breakpoints": true
     }
   ]
 }
