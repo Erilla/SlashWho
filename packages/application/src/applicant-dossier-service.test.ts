@@ -109,6 +109,7 @@ function fixture(
       reportUrl: "https://www.warcraftlogs.com/reports/example",
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9",
       guild: { name: "Example Guild", realm: "silvermoon" },
+      parsesReadAt: null,
       historicWorldRank: null,
       performance: {
         damage: { state: "unavailable" },
@@ -1173,6 +1174,7 @@ describe("applicant dossier service", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/court",
           fightUrl: "https://www.warcraftlogs.com/reports/court#fight=1",
           guild: { name: "Example Guild", realm: "silvermoon" },
+          parsesReadAt: null,
           historicWorldRank: null,
           performance: {
             damage: { state: "unavailable" },
@@ -1193,6 +1195,7 @@ describe("applicant dossier service", () => {
           reportUrl: "https://www.warcraftlogs.com/reports/ulgrax",
           fightUrl: "https://www.warcraftlogs.com/reports/ulgrax#fight=1",
           guild: { name: "Other Guild", realm: "silvermoon" },
+          parsesReadAt: null,
           historicWorldRank: null,
           performance: {
             damage: { state: "unavailable" },
@@ -1471,6 +1474,23 @@ describe("applicant dossier service", () => {
       expect(limitation!.message).not.toContain("history is incomplete");
     }
   );
+
+  it("describes the parse request cap as in progress rather than finished", async () => {
+    // Break caught: the notice read as a verdict. Since #280 a capped run
+    // sets a retry and resumes, so telling the reader the cap was reached and
+    // stopping there described the opposite of what happens next (#297).
+    const { dossiers } = fixture({
+      evidenceLimitationCode: "parse_request_cap"
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    const limitation = result.dossier.limitations.find(
+      (item) => item.code === "parse_request_cap"
+    );
+    expect(limitation?.message).toContain("resumes automatically");
+    expect(limitation?.message).toContain("verified kill evidence");
+  });
 
   it("describes points_budget_low as a deferral, not a parse failure", async () => {
     // Break caught: points_budget_low does not start with "parse_", so without an

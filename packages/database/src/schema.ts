@@ -538,7 +538,19 @@ export const characterMythicKills = pgTable(
      */
     collectedAt: timestamp("collected_at", { withTimezone: true })
       .defaultNow()
-      .notNull()
+      .notNull(),
+    /**
+     * When this fight's rankings were last asked about and answered, whatever
+     * the answer was. NULL means never asked.
+     *
+     * Deliberately not implied by the parse states. Roughly half of hydrated
+     * fights come back with no ranking at all, and stored as three
+     * `unavailable` metrics they are indistinguishable from a fight nothing
+     * has ever requested -- so collection re-requested them every run, and
+     * since #350 raised a retryable limitation each time, never settled
+     * (#297). Carried forward unchanged when a later run skips the fight.
+     */
+    parsesReadAt: timestamp("parses_read_at", { withTimezone: true })
   },
   (table) => [
     uniqueIndex("character_mythic_kills_source_fight_idx").on(

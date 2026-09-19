@@ -179,22 +179,31 @@ function limitationMessage(
   code: ContractDossierLimitation["code"]
 ): string {
   if (source === "warcraft_logs" && code.startsWith("parse_")) {
+    // The cap is not a verdict. Since #280 a capped run sets a retry and
+    // resumes, so wording that read as terminal described the opposite of
+    // what happens next; it clears itself once a later run publishes without
+    // the code (#297).
+    if (code === "parse_request_cap") {
+      return (
+        "Parse availability is partial because this dossier reached its " +
+        "parse request cap. Collection resumes automatically and fills in " +
+        "the rest; verified kill evidence is still shown."
+      );
+    }
     const reason =
       code === "parse_private"
         ? "the supporting reports are private"
         : code === "parse_rate_limited"
           ? "Warcraft Logs is temporarily rate limited"
-          : code === "parse_request_cap"
-            ? "this dossier reached its parse request cap"
-            : code === "parse_schema_drift"
-              ? "Warcraft Logs returned an unexpected ranking response"
-              : // Not a fault, most of the time: the usual way here is a
-                // character who was in the fight and simply not ranked in it.
-                // Saying "unexpected response" of that would be alarming and
-                // wrong, which is half of why #349 split the two codes.
-                code === "parse_identity_unmatched"
-                ? "Warcraft Logs ranked nobody matching this character in those reports"
-                : "Warcraft Logs could not load the rankings";
+          : code === "parse_schema_drift"
+            ? "Warcraft Logs returned an unexpected ranking response"
+            : // Not a fault, most of the time: the usual way here is a
+              // character who was in the fight and simply not ranked in it.
+              // Saying "unexpected response" of that would be alarming and
+              // wrong, which is half of why #349 split the two codes.
+              code === "parse_identity_unmatched"
+              ? "Warcraft Logs ranked nobody matching this character in those reports"
+              : "Warcraft Logs could not load the rankings";
     return `Parse availability is partial because ${reason}. Verified kill evidence is still shown.`;
   }
   if (source === "raiderio") {

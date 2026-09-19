@@ -619,6 +619,96 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("reports a fight asked about and answered with nothing as needing nothing further", async () => {
+    // Half of hydrated fights come back with no ranking at all. Stored as
+    // three `unavailable` metrics they are indistinguishable from a fight
+    // never requested, so every run re-read them -- and the hydration order
+    // sorts exactly those to the front (#297).
+    const answered = mythicKill({
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=answered"
+    });
+    const unasked = mythicKill({
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=unasked"
+    });
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [answered, unasked],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [answered.fightUrl],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    // Neither carries a percentile; only one has been asked about.
+    await expect(
+      repositories.evidence.hydratedFightUrls(
+        rootKey,
+        new Date("2026-09-18T00:00:00.000Z")
+      )
+    ).resolves.toEqual([answered.fightUrl]);
+  });
+
+  it("keeps a fight's read time when a later run skips it", async () => {
+    // Collection skips a fight precisely because it has already been
+    // answered, so a publish that restamped every kill would claim the run
+    // re-read what it deliberately did not fetch.
+    const answered = mythicKill({
+      fightUrl: "https://www.warcraftlogs.com/reports/example#fight=answered"
+    });
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [answered],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [answered.fightUrl],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    const second = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-05T11:00:00.000Z"),
+      at: new Date("2026-08-05T12:00:00.000Z")
+    });
+    if (second.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(second.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [answered],
+      wipes: [],
+      tierBests: [],
+      // The run found the fight again and skipped asking about it.
+      parsedFightUrls: [],
+      completedAt: new Date("2026-08-05T12:05:00.000Z")
+    });
+
+    const stored = await repositories.evidence.getCompleted(rootKey);
+    expect(stored?.kills[0]?.parsesReadAt).toBe("2026-08-04T12:05:00.000Z");
+    await expect(
+      repositories.evidence.hydratedFightUrls(
+        rootKey,
+        new Date("2026-09-18T00:00:00.000Z")
+      )
+    ).resolves.toEqual([answered.fightUrl]);
+  });
+
   it("keeps a staged collection until its publication stores it", async () => {
     // Break caught: the stage is what stops a transient publication failure
     // from costing a second full collection (#292). A stage that outlived its
@@ -1871,11 +1961,16 @@ describe("PostgreSQL repositories", () => {
       throw new Error("replacement_not_reserved");
     }
 
-    const withoutIds = (kills: readonly { id: string }[]) =>
+    // Back to the shape that was published: the identifier and the read time
+    // are storage's own, and neither was part of the input.
+    const asPublished = (
+      kills: readonly { id: string; parsesReadAt: string | null }[]
+    ) =>
       kills.map((kill) => {
-        const { id, ...withoutId } = kill;
+        const { id, parsesReadAt, ...rest } = kill;
         void id;
-        return withoutId;
+        void parsesReadAt;
+        return rest;
       });
     await expect(
       repositories.evidence.getCompleted(rootKey)
@@ -1884,7 +1979,7 @@ describe("PostgreSQL repositories", () => {
       kills: initialKills
     });
     expect(
-      withoutIds((await repositories.evidence.getCompleted(rootKey))!.kills)
+      asPublished((await repositories.evidence.getCompleted(rootKey))!.kills)
     ).toEqual(initialKills);
 
     const replacementKills = [
@@ -1912,7 +2007,7 @@ describe("PostgreSQL repositories", () => {
 
     const completed = await repositories.evidence.getCompleted(rootKey);
     expect(completed?.run.id).toBe(replacement.run.id);
-    expect(withoutIds(completed!.kills)).toEqual(replacementKills);
+    expect(asPublished(completed!.kills)).toEqual(replacementKills);
   });
 
   it("rejects an invalid normalized parse before publication", async () => {

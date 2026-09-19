@@ -171,6 +171,24 @@ export type WarcraftLogsReportResult =
        * reports itself through `limitation` instead. A caller may therefore
        * treat a raid listed here as complete for kills (#304).
        */
+      /**
+       * Fight URLs this read asked about and got an answer for, whatever the
+       * answer was. A fight is listed once the rankings behind it were
+       * fetched and resolved -- including when they resolved to no ranking at
+       * all, or to a ranked report that matched nobody.
+       *
+       * It is deliberately not "fights that gained a percentile". Roughly half
+       * of hydrated fights come back with nothing, and a caller that records
+       * only the successes cannot tell those from fights it has never asked
+       * about, so it asks again every run and never terminates (#297). A fight
+       * whose read was cut short -- by the budget, by rate limiting, by a
+       * response the decoder rejected -- is absent, because nothing was
+       * learned about it.
+       *
+       * Fights skipped through `hydratedFightUrls` are absent too: this read
+       * did not ask about them, and what is already stored for them stands.
+       */
+      parsedFightUrls: readonly string[];
       troubledRaidIds: Readonly<{
         /** `ReportFightParses` and the identity lookup behind it. */
         parses: readonly string[];

@@ -45,6 +45,17 @@ export type EvidencePublication = Readonly<{
   kills: readonly CharacterMythicKillInput[];
   wipes: readonly WarcraftLogsWipeEvidence[];
   tierBests: readonly CharacterTierBestParseInput[];
+  /**
+   * Fight URLs this run asked Warcraft Logs about and got an answer for,
+   * whatever the answer was. Storage stamps those kills so a later run can
+   * tell them from fights nothing has ever asked about -- which is what stops
+   * half the parse budget going on reports that have already said no (#297).
+   *
+   * Required here, unlike on `publish`, for the same reason
+   * `parseLimitationCodesSeen` is: the run that knows what it read must not
+   * quietly forget it. A run that read nothing publishes an empty list.
+   */
+  parsedFightUrls: readonly string[];
   completedAt: Date;
 }>;
 
@@ -73,6 +84,7 @@ export function toStagedCollection(
     kills: publication.kills,
     wipes: publication.wipes,
     tierBests: publication.tierBests,
+    parsedFightUrls: publication.parsedFightUrls,
     completedAt: publication.completedAt.toISOString(),
     ...(troubledRaidIds ? { troubledRaidIds } : {})
   };
@@ -98,6 +110,12 @@ export function fromStagedCollection(
     kills: staged.kills,
     wipes: staged.wipes,
     tierBests: staged.tierBests,
+    // A stage written before this field existed recorded no attempts. Absent
+    // is read as empty, which costs the republished run a re-request of the
+    // fights it had already answered and nothing else -- unlike
+    // `troubledRaidIds` above, where the same reading would settle a tier
+    // that was never cleanly read.
+    parsedFightUrls: staged.parsedFightUrls ?? [],
     completedAt: new Date(staged.completedAt)
   };
 }

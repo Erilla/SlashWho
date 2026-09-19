@@ -63,6 +63,13 @@ export type ApplicantEvidenceStore = {
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly CharacterTierBestParseInput[];
+      /**
+       * Fight URLs this run asked about and got an answer for. Named here
+       * rather than left to structural typing so an implementation cannot
+       * quietly drop it: unrecorded, a fight answered with no ranking is
+       * re-requested on every later run (#297).
+       */
+      parsedFightUrls?: readonly string[];
       completedAt: Date;
     }>
   ): Promise<void>;
@@ -951,6 +958,9 @@ export function createApplicantEvidenceJobHandler(
               kills: [],
               wipes: [],
               tierBests: [],
+              // The scan stopped before any parse work, so no fight was
+              // asked about.
+              parsedFightUrls: [],
               completedAt: now()
             },
             { parses: [], tierBests: [] }
@@ -1002,6 +1012,7 @@ export function createApplicantEvidenceJobHandler(
             kills: response.kills.map(toCharacterMythicKillInput),
             wipes: response.wipes,
             tierBests: response.tierBests,
+            parsedFightUrls: response.parsedFightUrls,
             completedAt: now()
           },
           response.troubledRaidIds
@@ -1076,6 +1087,10 @@ export function createApplicantEvidenceJobHandler(
           kills: [],
           wipes: [],
           tierBests: [],
+          // Whatever this attempt read is lost with the error that stopped
+          // it: the fights it answered are not in hand to be recorded, so
+          // they stay eligible and the next attempt asks again.
+          parsedFightUrls: [],
           completedAt: now()
         };
         try {
