@@ -88,7 +88,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-7).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-8).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
@@ -96,7 +96,8 @@ describe("database migrations", () => {
       { idx: 26, tag: "0027_kill_parses_read_at" },
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
-      { idx: 29, tag: "0030_unstick_schema_drift_runs" }
+      { idx: 29, tag: "0030_unstick_schema_drift_runs" },
+      { idx: 30, tag: "0031_partial_scan_skipped" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
