@@ -288,6 +288,11 @@ export interface WarcraftLogsGateway {
        * measures.
        */
       onRequest?(event: WarcraftLogsRequestEvent): void;
+      /** Called when decoding a successful request raises a limitation. */
+      onLimitation?(
+        query: WarcraftLogsQueryType,
+        code: WarcraftLogsLimitationCode
+      ): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

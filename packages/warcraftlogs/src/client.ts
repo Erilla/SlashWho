@@ -1526,6 +1526,10 @@ export function createWarcraftLogsClient(
        * query. Scoped to the call so the counts attribute to one run.
        */
       onRequest?(event: WarcraftLogsRequestEvent): void;
+      onLimitation?(
+        query: WarcraftLogsQueryType,
+        code: WarcraftLogsLimitationCode
+      ): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult> {
@@ -1585,6 +1589,7 @@ export function createWarcraftLogsClient(
 
       const normalized = firstKillReports(result.value, key);
       if (normalized.kind === "limitation") {
+        options.onLimitation?.("history_scan", normalized.code);
         scanLimitation = normalized;
         break;
       }
@@ -1595,6 +1600,7 @@ export function createWarcraftLogsClient(
         wipes.set(wipe.fightUrl, wipe);
       }
       if (normalized.limitation) {
+        options.onLimitation?.("history_scan", normalized.limitation.code);
         scanLimitation = normalized.limitation;
         break;
       }
@@ -1612,6 +1618,7 @@ export function createWarcraftLogsClient(
 
       const hasMorePages = hasMoreReportPages(result.value);
       if (hasMorePages === null) {
+        options.onLimitation?.("history_scan", "schema_drift");
         scanLimitation = { kind: "limitation", code: "schema_drift" };
         break;
       }

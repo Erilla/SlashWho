@@ -938,6 +938,9 @@ export function createApplicantEvidenceJobHandler(
                 record.limitationQuery = event.query;
               }
             },
+            onLimitation: (query, code) => {
+              if (code === "schema_drift") record.limitationQuery = query;
+            },
             signal: activeContext.signal
           })
         );
