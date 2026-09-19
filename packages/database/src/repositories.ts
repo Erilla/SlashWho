@@ -387,6 +387,8 @@ export type StoredWipeTier = Readonly<{
 export type StoredEvidenceTiers = Readonly<{
   kills: readonly StoredKillTier[];
   wipes: readonly StoredWipeTier[];
+  /** When the last complete history scan was published, if known. */
+  lastCleanKillScanAt?: string;
 }>;
 
 /** One raid a character is finished collecting one domain of evidence for. */
@@ -405,6 +407,7 @@ export type TerminalTier = Readonly<{
  */
 export interface StagedEvidenceCollection {
   state: "complete" | "partial";
+  scanSkipped?: boolean;
   limitationCode: string | null;
   parseLimitationCode: string | null;
   /**
@@ -497,6 +500,7 @@ export interface EvidenceRepository {
   publish(
     runId: string,
     input: {
+      scanSkipped?: boolean;
       state: "complete" | "partial";
       limitationCode: string | null;
       /** The parse limitation the run is judged by: retry, and the dossier. */

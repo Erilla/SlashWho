@@ -155,6 +155,8 @@ export type WarcraftLogsWipeEvidence = Readonly<{
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
+      /** True when history was intentionally omitted and only parses ran. */
+      scanSkipped?: boolean;
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];

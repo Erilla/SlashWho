@@ -499,6 +499,9 @@ const MEASURED_HISTORY_SCAN_POINTS_PER_REQUEST = 20;
  * per-query-type counters. Only the flat parse term uses it.
  */
 const FIGHT_PARSE_POINTS_PER_REQUEST = 13.2;
+/** Conservative upper estimate used when deriving a new parse-only cap. */
+const FIGHT_PARSE_POINT_BOUND = 14;
+const KILL_SCAN_FRESHNESS_MS = 24 * 60 * 60 * 1000;
 
 export type EvidenceRunBudget = Readonly<{
   /** Pages of report history this run may scan. */
@@ -548,13 +551,16 @@ export function evidenceRunBudget(
     requestCap: number;
     parseRequestCap: number;
     pointsReserve: number;
+    scanPages?: number;
   }>
 ): EvidenceRunBudget {
-  const scanPages = effectiveRequestCap(
-    input.limitPerHour,
-    input.requestCap,
-    input.credentials
-  );
+  const scanPages =
+    input.scanPages ??
+    effectiveRequestCap(
+      input.limitPerHour,
+      input.requestCap,
+      input.credentials
+    );
   const reservedPoints = effectiveReserve(
     input.limitPerHour,
     input.pointsReserve
@@ -571,6 +577,19 @@ export function evidenceRunBudget(
     worstCaseAtAssumedCost,
     closes: worstCaseAtAssumedCost <= reservedPoints
   };
+}
+
+export function parseOnlyRequestCap(
+  input: Readonly<{
+    limitPerHour: number;
+    pointsReserve: number;
+  }>
+): number {
+  const reservedPoints = effectiveReserve(
+    input.limitPerHour,
+    input.pointsReserve
+  );
+  return Math.max(1, Math.floor(reservedPoints / FIGHT_PARSE_POINT_BOUND));
 }
 
 /**
@@ -898,25 +917,40 @@ export function createApplicantEvidenceJobHandler(
         // A budget that could not be read falls back to the configured cap:
         // the gate above is allowed to fail open, and this has to inherit that
         // rather than scale off a limit it never saw.
-        const scanCap = openingBudget
-          ? evidenceRunBudget({
-              limitPerHour: openingBudget.limitPerHour,
-              credentials: usesVisitorCredentials ? "visitor" : "own",
-              requestCap: options.requestCap,
-              parseRequestCap: options.parseRequestCap,
-              pointsReserve: options.pointsReserve
-            }).scanPages
-          : options.requestCap;
+        const scanFresh =
+          storedEvidence.lastCleanKillScanAt !== undefined &&
+          now().getTime() -
+            new Date(storedEvidence.lastCleanKillScanAt).getTime() <
+            KILL_SCAN_FRESHNESS_MS;
+        const scanCap = scanFresh
+          ? 0
+          : openingBudget
+            ? evidenceRunBudget({
+                limitPerHour: openingBudget.limitPerHour,
+                credentials: usesVisitorCredentials ? "visitor" : "own",
+                requestCap: options.requestCap,
+                parseRequestCap: options.parseRequestCap,
+                pointsReserve: options.pointsReserve
+              }).scanPages
+            : options.requestCap;
         const requestCap = job.mode === "light" ? 1 : scanCap;
+        const parseRequestCap =
+          scanFresh && openingBudget
+            ? parseOnlyRequestCap({
+                limitPerHour: openingBudget.limitPerHour,
+                pointsReserve: options.pointsReserve
+              })
+            : options.parseRequestCap;
         // What the run was actually given, not what was configured. The two
         // were the same field until #320, and every record for a day named a
         // 500 that a run may never have been allowed to reach.
         record.requestCapUsed = requestCap;
+        record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap,
-            parseRequestCap: options.parseRequestCap,
+            parseRequestCap,
             ...(run.className ? { className: run.className } : {}),
             hydratedFightUrls,
             collectedTierZones,
@@ -1008,7 +1042,9 @@ export function createApplicantEvidenceJobHandler(
         // Honest about the run, not just about its history scan: a run that
         // spent its whole parse budget did not finish, and reporting it
         // `complete` was the other half of why the character looked settled.
-        const incomplete = Boolean(response.limitation ?? drivingParse);
+        const incomplete = Boolean(
+          response.limitation ?? drivingParse ?? response.scanSkipped
+        );
         record.outcome = incomplete ? "partial" : "complete";
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = drivingParse?.code ?? null;
@@ -1016,6 +1052,7 @@ export function createApplicantEvidenceJobHandler(
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
+            scanSkipped: response.scanSkipped,
             limitationCode: response.limitation?.code ?? null,
             parseLimitationCode: drivingParse?.code ?? null,
             parseLimitationCodesSeen: parseLimitationsSeen.map(

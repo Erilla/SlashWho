@@ -3129,6 +3129,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
                  parse_limitation_codes_seen = $8,
                  retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
+                 kill_scan_skipped = $9,
+                 kill_scan_completed_at = CASE WHEN $9 THEN kill_scan_completed_at ELSE $6 END,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -3144,7 +3146,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               // that named only the code it was judged by recorded exactly
               // that, so it stands in for the list.
               input.parseLimitationCodesSeen ??
-                (input.parseLimitationCode ? [input.parseLimitationCode] : [])
+                (input.parseLimitationCode ? [input.parseLimitationCode] : []),
+              input.scanSkipped ?? false
             ]
           );
           if (publication.rowCount !== 1) {
@@ -3278,6 +3281,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         // Read through the same loader a dossier does, so the scan can never
         // stop above evidence the dossier still shows.
         const completed = await loadCompletedEvidence(pool, key);
+        const scan = await pool.query<{ completed_at: Date }>(
+          `SELECT completed_at
+             FROM character_evidence_runs
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND kill_scan_skipped = false
+              AND kill_scan_completed_at IS NOT NULL
+            ORDER BY kill_scan_completed_at DESC
+            LIMIT 1`,
+          [key.region, key.realm, key.name]
+        );
         return {
           kills: (completed?.kills ?? []).map((kill) => ({
             raidId: kill.raidId,
@@ -3288,7 +3301,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             raidId: wipe.raidId,
             raidName: wipe.raidName,
             attemptedAt: wipe.attemptedAt
-          }))
+          })),
+          ...(scan.rows[0]?.completed_at
+            ? { lastCleanKillScanAt: scan.rows[0].completed_at.toISOString() }
+            : {})
         };
       },
 

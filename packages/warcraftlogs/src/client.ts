@@ -1530,7 +1530,7 @@ export function createWarcraftLogsClient(
     }>
   ): Promise<WarcraftLogsReportResult> {
     const key = validCharacterKey(requestedKey);
-    if (!Number.isSafeInteger(options.requestCap) || options.requestCap <= 0) {
+    if (!Number.isSafeInteger(options.requestCap) || options.requestCap < 0) {
       return { kind: "limitation", code: "request_cap" };
     }
     if (
@@ -1560,6 +1560,7 @@ export function createWarcraftLogsClient(
     const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
+    const scanSkipped = options.requestCap === 0;
     for (let page = 1; page <= options.requestCap; page++) {
       const result = counted(
         "history_scan",
@@ -2094,6 +2095,7 @@ export function createWarcraftLogsClient(
     return sortedKills.length || sortedWipes.length
       ? {
           kind: "evidence",
+          scanSkipped,
           kills: sortedKills,
           wipes: sortedWipes,
           tierBests,
@@ -2108,6 +2110,7 @@ export function createWarcraftLogsClient(
       : (scanLimitation ??
           reportedParseLimitation ?? {
             kind: "evidence",
+            scanSkipped,
             kills: [],
             wipes: [],
             tierBests: [],
