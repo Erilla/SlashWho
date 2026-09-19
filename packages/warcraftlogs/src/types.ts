@@ -58,6 +58,8 @@ export type WarcraftLogsRequestEvent = Readonly<{
    * request was issued and paid for either way, so it is counted either way.
    */
   limited: boolean;
+  /** The limitation returned by this request, when one was returned. */
+  limitationCode?: WarcraftLogsLimitationCode;
 }>;
 
 export type WarcraftLogsIdentity = Readonly<{

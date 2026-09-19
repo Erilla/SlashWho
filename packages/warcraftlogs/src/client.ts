@@ -1550,7 +1550,13 @@ export function createWarcraftLogsClient(
       result: T
     ): T => {
       try {
-        options.onRequest?.({ query, limited: result.kind !== "success" });
+        options.onRequest?.({
+          query,
+          limited: result.kind !== "success",
+          ...(result.kind === "limitation"
+            ? { limitationCode: result.code }
+            : {})
+        });
       } catch {
         // A counter must never cost the collection it is measuring.
       }

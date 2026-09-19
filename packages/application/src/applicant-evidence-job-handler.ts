@@ -656,6 +656,7 @@ export function createApplicantEvidenceJobHandler(
         // because the publication was itself what broke. `outcome` keeps
         // naming the fault, so neither answer displaces the other.
         stopDisposition: null,
+        limitationQuery: null,
         durationMs: 0
       };
       // Set once the run is claimed, and the sole gate on announcing: a run
@@ -932,6 +933,9 @@ export function createApplicantEvidenceJobHandler(
                 scope.increment(
                   `${REQUEST_COUNTER_PREFIX[event.query]}Limited`
                 );
+              }
+              if (event.limitationCode === "schema_drift") {
+                record.limitationQuery = event.query;
               }
             },
             signal: activeContext.signal
