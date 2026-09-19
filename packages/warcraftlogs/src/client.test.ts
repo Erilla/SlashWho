@@ -185,7 +185,7 @@ function performanceReport(
                 startTime,
                 zone: {
                   id: 1047,
-                  name: "Fixture",
+                  name: "Nerub-ar Palace",
                   encounters: [{ id: encounterId, journalID: encounterId }]
                 },
                 masterData: {
@@ -216,6 +216,52 @@ function performanceReport(
       }
     }
   };
+}
+
+/**
+ * Synthetic Warcraft Logs zone ids, each standing for a real windowed tier.
+ *
+ * A zone is asked for Mythic rankings only when the catalogue can place it in
+ * a content window that reaches the Mythic era, so a made-up zone name is no
+ * longer a neutral stand-in: the run would skip it before spending a request
+ * (#351). The kill dates sit inside each tier's own window.
+ */
+const windowedZones = {
+  101: { raidName: "Nerub-ar Palace", killedAt: "2024-10-01T00:00:00.000Z" },
+  102: {
+    raidName: "Liberation of Undermine",
+    killedAt: "2025-04-01T00:00:00.000Z"
+  },
+  103: { raidName: "Manaforge Omega", killedAt: "2025-09-01T00:00:00.000Z" }
+} as const;
+
+type WindowedZoneId = keyof typeof windowedZones;
+
+function windowedZoneReport(
+  zoneId: WindowedZoneId,
+  hasMorePages = false
+): unknown {
+  const zone = windowedZones[zoneId];
+  const report = performanceReport(
+    [26],
+    hasMorePages,
+    `report-${zoneId}`,
+    3300 + zoneId,
+    Date.parse(zone.killedAt)
+  ) as {
+    data: {
+      characterData: {
+        character: {
+          recentReports: { data: { zone: { id: number; name: string } }[] };
+        };
+      };
+    };
+  };
+  const reported =
+    report.data.characterData.character.recentReports.data[0]!.zone;
+  reported.id = zoneId;
+  reported.name = zone.raidName;
+  return report;
 }
 
 function performanceRankings(
@@ -876,7 +922,9 @@ describe("Warcraft Logs gateway", () => {
     };
     recent.data.characterData.character.recentReports.data[0] = {
       ...(recent.data.characterData.character.recentReports.data[0] as object),
-      startTime: 2
+      // Both nights sit inside the fixture zone's content window, which is
+      // what lets either be hydrated at all.
+      startTime: Date.parse("2024-10-06T00:00:00.000Z")
     };
     (
       recent.data.characterData.character.recentReports as unknown as {
@@ -886,7 +934,7 @@ describe("Warcraft Logs gateway", () => {
     firstKill.data.characterData.character.recentReports.data[0] = {
       ...(firstKill.data.characterData.character.recentReports
         .data[0] as object),
-      startTime: 1
+      startTime: Date.parse("2024-10-05T00:00:00.000Z")
     };
     const parseOrder: string[] = [];
     let reportPage = 0;
@@ -1170,7 +1218,7 @@ describe("Warcraft Logs gateway", () => {
     expect(result.tierBests).toEqual([
       {
         raidId: "1047",
-        raidName: "Fixture",
+        raidName: "Nerub-ar Palace",
         bossId: "3306",
         bossName: "Plexus Sentinel",
         rankingsUrl:
@@ -1188,7 +1236,7 @@ describe("Warcraft Logs gateway", () => {
       },
       {
         raidId: "1047",
-        raidName: "Fixture",
+        raidName: "Nerub-ar Palace",
         bossId: "3307",
         bossName: "Loom'ithar",
         rankingsUrl:
@@ -1254,31 +1302,9 @@ describe("Warcraft Logs gateway", () => {
     // per-fight hydration the first-kill row depends on.
     const zoneIds: number[] = [];
     const reportCodes: string[] = [];
-    const zones = [
-      { zoneId: 101, killedAt: "2024-01-01T00:00:00.000Z" },
-      { zoneId: 102, killedAt: "2025-01-01T00:00:00.000Z" },
-      { zoneId: 103, killedAt: "2026-01-01T00:00:00.000Z" }
-    ];
-    const reports = zones.map(({ zoneId, killedAt }) => {
-      const report = performanceReport(
-        [26],
-        zoneId !== 103,
-        `report-${zoneId}`,
-        3300 + zoneId,
-        Date.parse(killedAt)
-      ) as {
-        data: {
-          characterData: {
-            character: {
-              recentReports: { data: { zone: { id: number } }[] };
-            };
-          };
-        };
-      };
-      report.data.characterData.character.recentReports.data[0]!.zone.id =
-        zoneId;
-      return report;
-    });
+    const reports = ([101, 102, 103] as const).map((zoneId) =>
+      windowedZoneReport(zoneId, zoneId !== 103)
+    );
     let page = 0;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -1318,31 +1344,9 @@ describe("Warcraft Logs gateway", () => {
     // displaced never landed, and the run raised `parse_request_cap` however
     // saturated it was -- a cap that can never clear cannot schedule a retry.
     const zoneIds: number[] = [];
-    const zones = [
-      { zoneId: 101, killedAt: "2024-01-01T00:00:00.000Z" },
-      { zoneId: 102, killedAt: "2025-01-01T00:00:00.000Z" },
-      { zoneId: 103, killedAt: "2026-01-01T00:00:00.000Z" }
-    ];
-    const reports = zones.map(({ zoneId, killedAt }) => {
-      const report = performanceReport(
-        [26],
-        zoneId !== 103,
-        `report-${zoneId}`,
-        3300 + zoneId,
-        Date.parse(killedAt)
-      ) as {
-        data: {
-          characterData: {
-            character: {
-              recentReports: { data: { zone: { id: number } }[] };
-            };
-          };
-        };
-      };
-      report.data.characterData.character.recentReports.data[0]!.zone.id =
-        zoneId;
-      return report;
-    });
+    const reports = ([101, 102, 103] as const).map((zoneId) =>
+      windowedZoneReport(zoneId, zoneId !== 103)
+    );
     let page = 0;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -1487,7 +1491,7 @@ describe("Warcraft Logs gateway", () => {
     // And the dungeon never became evidence.
     expect(result).toMatchObject({
       kind: "evidence",
-      kills: [{ raidName: "Fixture" }]
+      kills: [{ raidName: "Nerub-ar Palace" }]
     });
   });
 
@@ -1599,30 +1603,9 @@ describe("Warcraft Logs gateway", () => {
     // A concluded tier read cleanly cannot change, so re-reading its bests
     // spends a rate-limited request on an answer we already hold.
     const zoneIds: number[] = [];
-    const zones = [
-      { zoneId: 102, killedAt: "2025-01-01T00:00:00.000Z" },
-      { zoneId: 103, killedAt: "2026-01-01T00:00:00.000Z" }
-    ];
-    const reports = zones.map(({ zoneId, killedAt }) => {
-      const report = performanceReport(
-        [26],
-        zoneId !== 103,
-        `report-${zoneId}`,
-        3300 + zoneId,
-        Date.parse(killedAt)
-      ) as {
-        data: {
-          characterData: {
-            character: {
-              recentReports: { data: { zone: { id: number } }[] };
-            };
-          };
-        };
-      };
-      report.data.characterData.character.recentReports.data[0]!.zone.id =
-        zoneId;
-      return report;
-    });
+    const reports = ([102, 103] as const).map((zoneId) =>
+      windowedZoneReport(zoneId, zoneId !== 103)
+    );
     let page = 0;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -1692,30 +1675,9 @@ describe("Warcraft Logs gateway", () => {
   it("names the raids a zone failure touched so the rest can still settle", async () => {
     // A tier only goes terminal if the run that read it reported no limitation
     // for *it*. One zone's drift must neither freeze the others nor block them.
-    const zones = [
-      { zoneId: 102, killedAt: "2025-01-01T00:00:00.000Z" },
-      { zoneId: 103, killedAt: "2026-01-01T00:00:00.000Z" }
-    ];
-    const reports = zones.map(({ zoneId, killedAt }) => {
-      const report = performanceReport(
-        [26],
-        zoneId !== 103,
-        `report-${zoneId}`,
-        3300 + zoneId,
-        Date.parse(killedAt)
-      ) as {
-        data: {
-          characterData: {
-            character: {
-              recentReports: { data: { zone: { id: number } }[] };
-            };
-          };
-        };
-      };
-      report.data.characterData.character.recentReports.data[0]!.zone.id =
-        zoneId;
-      return report;
-    });
+    const reports = ([102, 103] as const).map((zoneId) =>
+      windowedZoneReport(zoneId, zoneId !== 103)
+    );
     let page = 0;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -1876,20 +1838,7 @@ describe("Warcraft Logs gateway", () => {
     // that tier can beat it, so "collected" has to mean collected since the
     // newest kill, not collected once.
     const zoneIds: number[] = [];
-    const report = performanceReport(
-      [26],
-      false,
-      "report-103",
-      3403,
-      Date.parse("2026-01-01T00:00:00.000Z")
-    ) as {
-      data: {
-        characterData: {
-          character: { recentReports: { data: { zone: { id: number } }[] } };
-        };
-      };
-    };
-    report.data.characterData.character.recentReports.data[0]!.zone.id = 103;
+    const report = windowedZoneReport(103);
     let page = 0;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -1911,8 +1860,8 @@ describe("Warcraft Logs gateway", () => {
     await client.getFirstKillReports(key, {
       requestCap: 3,
       parseRequestCap: 5,
-      // Collected before the 2026-01-01 kill, so the zone is still pending.
-      collectedTierZones: new Map([["103", "2025-06-01T00:00:00.000Z"]])
+      // Collected before the 2025-09-01 kill, so the zone is still pending.
+      collectedTierZones: new Map([["103", "2025-04-01T00:00:00.000Z"]])
     });
 
     expect(zoneIds).toEqual([103]);
@@ -1952,6 +1901,101 @@ describe("Warcraft Logs gateway", () => {
       tierBests: [],
       parseLimitation: { kind: "limitation", code: "parse_schema_drift" }
     });
+  });
+
+  it("never asks for Mythic rankings in a zone that predates Mythic", async () => {
+    // Break caught: Throne of Thunder is a Mists tier whose top difficulty was
+    // Heroic, so `zoneRankings(difficulty: 5)` there is a malformed question.
+    // Warcraft Logs refused it with an error envelope, the decoder read that as
+    // schema drift, and a troubled raid never goes terminal -- so a veteran
+    // re-paid the request and the limitation on every run, forever (#351).
+    const zoneIds: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { zoneID?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        zoneIds.push(body.variables?.zoneID ?? -1);
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const report = performanceReport([26]) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: { data: { zone: { id: number; name: string } }[] };
+            };
+          };
+        };
+      };
+      const zone =
+        report.data.characterData.character.recentReports.data[0]!.zone;
+      zone.id = 4;
+      zone.name = "Throne of Thunder";
+      return jsonResponse(report);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(zoneIds).toEqual([]);
+    // The kill itself is untouched: a zone nobody can rank is still a kill.
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [{ raidName: "Throne of Thunder" }],
+      tierBests: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    });
+    expect(result).not.toHaveProperty("parseLimitation");
+  });
+
+  it("reads a refused zone-rankings difficulty as inapplicable, not drift", async () => {
+    // Break caught: `{ error }` is Warcraft Logs declining a question, not a
+    // changed schema. Reported as drift it raised a limitation, and a troubled
+    // raid cannot settle (#351).
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        const refusal = { error: "Invalid difficulty/size specified." };
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                damage: refusal,
+                healing: refusal,
+                bossDamage: refusal
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      return jsonResponse(performanceReport([26]));
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      tierBests: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    });
+    expect(result).not.toHaveProperty("parseLimitation");
   });
 
   it("keeps reading later zones after one zone-rankings response is malformed", async () => {
@@ -2401,7 +2445,7 @@ describe("Warcraft Logs gateway", () => {
                   startTime: 1_728_086_400_000,
                   zone: {
                     id: 1047,
-                    name: "Fixture",
+                    name: "Nerub-ar Palace",
                     encounters: [
                       { id: 3306, journalID: 3306 },
                       { id: 3307, journalID: 3307 }

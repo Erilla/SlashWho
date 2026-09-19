@@ -10,6 +10,7 @@ export { formatCharacterDisplayName } from "./display-name";
 export {
   currentContentEligibility,
   lookupRaiderIoBoss,
+  raidOffersMythicRankings,
   raidTierConclusion,
   raidTierConclusionForEvidence,
   supportedRaidCatalogue

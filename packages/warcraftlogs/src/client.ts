@@ -1,6 +1,7 @@
 import {
   currentContentEligibility,
   isNonRaidZone,
+  raidOffersMythicRankings,
   supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
@@ -1204,6 +1205,19 @@ function decodeZoneRankings(
     const metricValue = record(entry[metric]);
     const rankings = metricValue && metricValue.rankings;
     if (!Array.isArray(rankings)) {
+      // `{ error }` is Warcraft Logs declining a question rather than
+      // answering one -- a difficulty that zone never had, say. It is a
+      // legitimate response meaning "this does not apply here", so it leaves
+      // the metric with no rankings rather than raising a limitation that
+      // would stop the tier settling (#351). Recognised positively: a payload
+      // carrying neither an error nor rankings is still drift.
+      if (
+        metricValue &&
+        !("rankings" in metricValue) &&
+        nonEmptyString(metricValue.error) !== null
+      ) {
+        continue;
+      }
       return { kind: "limitation", code: "parse_schema_drift" };
     }
     for (const rankingValue of rankings) {
@@ -1647,6 +1661,12 @@ export function createWarcraftLogsClient(
       if (currentContentEligibility(kill.killedAt, kill.raidName) === false) {
         continue;
       }
+      // A zone that cannot be placed as a raid from after Mythic difficulty
+      // existed can never answer a Mythic rankings request. Warcraft Logs
+      // refuses it with an error envelope, which carries no rankings array and
+      // so read as schema drift -- and a troubled raid never goes terminal, so
+      // the wasted request was re-paid on every run, forever (#351).
+      if (!raidOffersMythicRankings(kill)) continue;
       const zoneId = Number(kill.raidId);
       if (!Number.isSafeInteger(zoneId) || zoneId <= 0) continue;
       const seen = zones.get(kill.raidId);

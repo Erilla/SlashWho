@@ -125,6 +125,18 @@ The two are now strictly separate, and nothing crosses between them:
   what a kill's `raidId` carries before the raid catalogue overwrites it. The
   collector therefore derives the zones to read from the kills it already found
   rather than spending a request discovering them.
+- **A zone is asked only when the catalogue can place it after Mythic
+  existed.** Mythic difficulty arrived with the Warlords pre-patch, so a zone
+  from before it — Throne of Thunder, say — can never return Mythic rankings,
+  and Warcraft Logs answers `difficulty: 5` there with `{ error: "Invalid
+difficulty/size specified." }` rather than a payload. The discriminator is
+  positive: the zone resolves to a catalogued raid whose content window reaches
+  the Mythic era. "Returned an error once" is not a durable property of a zone
+  (#351).
+- **An error envelope is a refusal, not drift.** `{ error }` has no `rankings`
+  array, so it used to be read as `parse_schema_drift` — and a troubled raid
+  never goes terminal (#314), so the wasted request was re-paid on every run,
+  forever. It now leaves the metric with no rankings and raises nothing.
 - **A null `rankPercent` is ordinary.** A specialisation not ranked under a
   metric returns the encounter with no percentile. It must stay `unavailable`
   rather than being read as a zero parse.
