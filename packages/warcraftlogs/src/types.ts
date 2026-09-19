@@ -109,7 +109,7 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   /** Warcraft Logs does not expose encounter ordering in report lists. */
   bossOrder: number;
   /** The public report schema does not declare final-boss status. */
-  isFinalBoss: false;
+  isFinalBoss: boolean;
   killedAt: string;
   reportCode: string;
   fightId: number;
@@ -122,7 +122,7 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
     region: CharacterKey["region"];
     realm: string;
   }> | null;
-  historicWorldRank: null;
+  historicWorldRank: number | null;
 }>;
 
 /**
@@ -157,6 +157,8 @@ export type WarcraftLogsWipeEvidence = Readonly<{
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
+      /** True when history was intentionally omitted and only parses ran. */
+      scanSkipped?: boolean;
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
@@ -238,6 +240,7 @@ export interface WarcraftLogsGateway {
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       /** The character's known class, used to settle shared specialisation names. */
       className?: string;
       /**

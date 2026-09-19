@@ -25,6 +25,7 @@ export type EvidenceLimitationCode =
 /** What one run hands to storage when its collection is done. */
 export type EvidencePublication = Readonly<{
   state: "complete" | "partial";
+  scanSkipped?: boolean;
   limitationCode: EvidenceLimitationCode | null;
   /**
    * The parse limitation this run is judged by: the one that decides whether
@@ -75,6 +76,7 @@ export function toStagedCollection(
 ): StagedEvidenceCollection {
   return {
     state: publication.state,
+    ...(publication.scanSkipped ? { scanSkipped: true } : {}),
     limitationCode: publication.limitationCode,
     parseLimitationCode: publication.parseLimitationCode,
     parseLimitationCodesSeen: publication.parseLimitationCodesSeen,
@@ -95,6 +97,7 @@ export function fromStagedCollection(
 ): EvidencePublication {
   return {
     state: staged.state,
+    ...(staged.scanSkipped ? { scanSkipped: true } : {}),
     limitationCode: staged.limitationCode as EvidenceLimitationCode | null,
     parseLimitationCode:
       staged.parseLimitationCode as EvidenceLimitationCode | null,

@@ -1515,21 +1515,23 @@ describe("PostgreSQL repositories", () => {
 
     await expect(
       repositories.evidence.storedEvidenceTiers(key)
-    ).resolves.toEqual({
-      kills: [
-        expect.objectContaining({
-          raidId: "42",
-          killedAt: "2026-08-04T12:00:00.000Z"
-        })
-      ],
-      wipes: [
-        {
-          raidId: "43",
-          raidName: "Nerub-ar Palace",
-          attemptedAt: "2026-03-01T11:00:00.000Z"
-        }
-      ]
-    });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kills: [
+          expect.objectContaining({
+            raidId: "42",
+            killedAt: "2026-08-04T12:00:00.000Z"
+          })
+        ],
+        wipes: [
+          {
+            raidId: "43",
+            raidName: "Nerub-ar Palace",
+            attemptedAt: "2026-03-01T11:00:00.000Z"
+          }
+        ]
+      })
+    );
   });
 
   it("stores terminal tiers per character and returns them until cleared", async () => {
