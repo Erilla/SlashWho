@@ -3156,6 +3156,20 @@ describe("Warcraft Logs gateway", () => {
                         },
                         fights: [
                           {
+                            id: 6,
+                            encounterID: 112442,
+                            name: "",
+                            startTime: 1_800_000,
+                            endTime: 1_800_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: {
+                              id: 2441,
+                              name: "Tazavesh, the Veiled Market"
+                            }
+                          },
+                          {
                             id: 3,
                             encounterID: 1234,
                             name: "Queen Ansurek",
