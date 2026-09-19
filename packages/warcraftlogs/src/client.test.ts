@@ -2366,6 +2366,28 @@ describe("Warcraft Logs gateway", () => {
     expect(result.parsedFightUrls).toEqual([]);
   });
 
+  it("leaves a fight unread when the decoder rejected the only response", async () => {
+    // Nothing ranked means no identity to canonicalise, and the read then
+    // ends early. That exit must not sweep up a group the decoder refused:
+    // a fight nothing could be read about is not a fight that was answered.
+    const rankings = performanceRankings({
+      damage: 50,
+      healing: 51,
+      bossDamage: 52
+    }) as { data: { reportData: { report: Record<string, unknown> } } };
+    delete rankings.data.reportData.report.masterData;
+    const { client } = performanceClient(rankings);
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parseLimitation?.code).toBe("parse_schema_drift");
+    expect(result.parsedFightUrls).toEqual([]);
+  });
+
   it("leaves a fight unread when the parse budget never reached its report", async () => {
     const { client } = performanceClient(
       performanceRankings({ damage: 50, healing: 51, bossDamage: 52 })
