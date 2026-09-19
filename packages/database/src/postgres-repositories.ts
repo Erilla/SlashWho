@@ -3131,7 +3131,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                  retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
                  kill_scan_skipped = $9,
                  kill_scan_completed_at = CASE
-                   WHEN $9 OR $3 IS NOT NULL THEN kill_scan_completed_at
+                   WHEN $9 OR $3::text IS NOT NULL THEN kill_scan_completed_at
                    ELSE $6
                  END,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
