@@ -485,6 +485,33 @@ function effectiveRequestCap(
   );
 }
 
+function storedKillForParse(
+  kill: NonNullable<StoredEvidenceTiers["parseOnlyKills"]>[number],
+  region: CharacterKey["region"]
+): WarcraftLogsFirstKillEvidence | null {
+  const reportCode = /\/reports\/([^/?#]+)/i.exec(kill.reportUrl)?.[1];
+  const fightId = /[#?&]fight=(\d+)/i.exec(kill.fightUrl)?.[1];
+  if (!reportCode || !fightId) return null;
+  return {
+    raidId: kill.raidId,
+    raidName: kill.raidName,
+    bossId: kill.bossId,
+    bossName: kill.bossName,
+    journalBossId: kill.journalBossId,
+    bossOrder: kill.bossOrder,
+    isFinalBoss: false,
+    killedAt: kill.killedAt,
+    reportCode,
+    fightId: Number(fightId),
+    difficulty: 5,
+    performance: kill.performance,
+    reportUrl: kill.reportUrl,
+    fightUrl: kill.fightUrl,
+    guild: kill.guild ? { ...kill.guild, region } : null,
+    historicWorldRank: null
+  };
+}
+
 /**
  * What a page of report history actually cost, as opposed to what the cap
  * assumes. Solved directly from a matched pair on 2026-09-18: two runs with
@@ -957,6 +984,16 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            ...(scanFresh
+              ? {
+                  storedKills: (storedEvidence.parseOnlyKills ?? [])
+                    .map((kill) => storedKillForParse(kill, run.key.region))
+                    .filter(
+                      (kill): kill is WarcraftLogsFirstKillEvidence =>
+                        kill !== null
+                    )
+                }
+              : {}),
             // `warcraftLogsCalls` counts gateway invocations; one of those is
             // four classes of upstream request. Counting them apart is what
             // makes a run's points attributable to the history scan or to

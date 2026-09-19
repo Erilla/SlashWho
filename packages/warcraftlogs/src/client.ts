@@ -1492,6 +1492,7 @@ export function createWarcraftLogsClient(
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       className?: string;
       /**
        * Fight URLs whose parses are already stored. The budget is small, so a
@@ -1567,7 +1568,9 @@ export function createWarcraftLogsClient(
       return result;
     };
 
-    const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
+    const kills = new Map<string, WarcraftLogsFirstKillEvidence>(
+      (options.storedKills ?? []).map((kill) => [kill.fightUrl, kill])
+    );
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
     const scanSkipped = options.requestCap === 0;

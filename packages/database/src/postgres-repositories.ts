@@ -3130,7 +3130,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                  parse_limitation_codes_seen = $8,
                  retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
                  kill_scan_skipped = $9,
-                 kill_scan_completed_at = CASE WHEN $9 THEN kill_scan_completed_at ELSE $6 END,
+                 kill_scan_completed_at = CASE
+                   WHEN $9 OR $3 IS NOT NULL THEN kill_scan_completed_at
+                   ELSE $6
+                 END,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -3302,6 +3305,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             raidName: wipe.raidName,
             attemptedAt: wipe.attemptedAt
           })),
+          ...(completed?.kills ? { parseOnlyKills: completed.kills } : {}),
           ...(scan.rows[0]?.completed_at
             ? { lastCleanKillScanAt: scan.rows[0].completed_at.toISOString() }
             : {})

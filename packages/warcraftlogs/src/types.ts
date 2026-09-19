@@ -240,6 +240,7 @@ export interface WarcraftLogsGateway {
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       /** The character's known class, used to settle shared specialisation names. */
       className?: string;
       /**

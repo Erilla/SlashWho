@@ -389,6 +389,7 @@ export type StoredEvidenceTiers = Readonly<{
   wipes: readonly StoredWipeTier[];
   /** When the last complete history scan was published, if known. */
   lastCleanKillScanAt?: string;
+  parseOnlyKills?: readonly CharacterMythicKillInput[];
 }>;
 
 /** One raid a character is finished collecting one domain of evidence for. */
