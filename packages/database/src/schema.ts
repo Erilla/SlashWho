@@ -441,6 +441,16 @@ export const characterEvidenceRuns = pgTable(
     // a run that raised none; a pre-#349 row is null and means "not recorded",
     // which is not the same thing.
     parseLimitationCodesSeen: text("parse_limitation_codes_seen").array(),
+    // Whether this run deliberately skipped the history scan and collected
+    // parses only. It is a third way to be partial, alongside the two
+    // limitation codes, and the completion check below reads it as one.
+    killScanSkipped: boolean("kill_scan_skipped").default(false).notNull(),
+    // When this run's history scan last finished cleanly. Null on a run that
+    // skipped the scan or raised a scan limitation, so the newest non-null
+    // value is the only thing that may license skipping the next scan.
+    killScanCompletedAt: timestamp("kill_scan_completed_at", {
+      withTimezone: true
+    }),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
@@ -461,12 +471,15 @@ export const characterEvidenceRuns = pgTable(
       table.normalizedName,
       table.completedAt
     ),
-    // A partial run must name a shortfall, in either channel: the history
-    // scan's or the parse budget's. Requiring `limitation_code` alone was the
-    // pre-#280 shape, when a parse cap could not stand on its own.
+    // A partial run must name a shortfall, in one of three channels: the
+    // history scan's, the parse budget's, or a scan the run deliberately did
+    // not perform. Requiring `limitation_code` alone was the pre-#280 shape,
+    // when a parse cap could not stand on its own; requiring either code was
+    // the pre-#367 shape, which rejected a parse-only resume whose work fitted
+    // inside its budget.
     check(
       "character_evidence_runs_completion_limitations_check",
-      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
+      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL OR ${table.killScanSkipped})) OR ${table.status} NOT IN ('complete', 'partial')`
     )
   ]
 );

@@ -1865,6 +1865,17 @@ describe("PostgreSQL repositories", () => {
         state: "partial" as const,
         limitationCode: null,
         parseLimitationCode: "parse_request_cap"
+      },
+      // A parse-only resume whose work fitted inside its budget. It skipped
+      // the history scan deliberately, so it is partial with nothing to name
+      // in either code -- and rejecting that shape failed every run a
+      // nearly-finished character made, which is exactly when there is no cap
+      // left to hit (#367). The scan it did not do is the shortfall.
+      {
+        state: "partial" as const,
+        limitationCode: null,
+        parseLimitationCode: null,
+        scanSkipped: true
       }
     ];
     for (const [index, input] of cases.entries()) {
@@ -1897,9 +1908,10 @@ describe("PostgreSQL repositories", () => {
         limitationCode: "request_cap",
         parseLimitationCode: null
       },
-      // Partial with no shortfall of either kind: the state says the run fell
+      // Partial with no shortfall of any kind: the state says the run fell
       // short and nothing says of what, which is the ambiguity the invariant
-      // exists to reject.
+      // exists to reject. A scan the run chose to skip would answer it, so
+      // this case is only invalid while `scanSkipped` is absent.
       {
         state: "partial" as const,
         limitationCode: null,
