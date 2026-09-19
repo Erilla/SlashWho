@@ -621,6 +621,62 @@ function raidTierConclusionForRaidId(
   return endsAt <= at.getTime() ? "concluded" : "current";
 }
 
+/**
+ * When Mythic difficulty began: the Warlords of Draenor pre-patch, 6.0.2.
+ *
+ * Recorded at 00:00:00Z for a reproducible boundary, the same convention the
+ * curated content windows use. Nothing before it can be ranked at Mythic --
+ * the tiers current at the time had Heroic as their top difficulty, and the
+ * pre-patch renamed it rather than adding a difficulty to older tiers.
+ */
+const MYTHIC_DIFFICULTY_INTRODUCED_AT = Date.parse("2014-10-14T00:00:00.000Z");
+
+/**
+ * Whether Mythic difficulty existed while a raid was current content.
+ *
+ * A window that closed before the pre-patch describes a tier that never had
+ * the difficulty, so no Mythic ranking for it can exist. A window still open,
+ * or one whose close cannot be read, is not evidence of that and so keeps the
+ * raid askable -- the rule only ever excludes a raid it can positively place
+ * before the difficulty existed.
+ */
+export function mythicDifficultyExistedDuring(
+  window: RaidCurrentContentWindow
+): boolean {
+  if (window.endsAt === null) return true;
+  const endsAt = Date.parse(window.endsAt);
+  return Number.isNaN(endsAt) || endsAt > MYTHIC_DIFFICULTY_INTRODUCED_AT;
+}
+
+/**
+ * Whether asking Warcraft Logs for a raid's Mythic rankings is a question that
+ * can have an answer.
+ *
+ * Warcraft Logs answers `zoneRankings(difficulty: 5)` for a zone that never had
+ * Mythic difficulty with an error envelope rather than a rankings payload, and
+ * an envelope has no `rankings` array -- so a legitimate refusal was read as
+ * schema drift, which is a limitation, which stops the tier ever settling. The
+ * request is therefore re-paid on every run, forever (#351).
+ *
+ * This is deliberately a **positive** identification, the same move the dungeon
+ * catalogue makes one layer down: a zone is asked about only when it resolves
+ * to a catalogued raid whose content window reaches the Mythic era. "Returned
+ * an error once" is not a durable property of a zone, so it is never the
+ * discriminator.
+ *
+ * Unlike the kill evidence itself, a zone nobody can place costs nothing to
+ * leave out: the best-parse row stays unavailable, which is honest, and it
+ * fills itself in as soon as the catalogue names the raid.
+ */
+export function raidOffersMythicRankings(
+  evidence: RaidEvidenceIdentity
+): boolean {
+  const raid = lookupRaidForEvidence(evidence);
+  if (raid === null) return false;
+  const window = lookupRaidCurrentContentWindow(raid.raidId);
+  return window === null ? false : mythicDifficultyExistedDuring(window);
+}
+
 /** The same rule keyed by journal raid id, for callers that already hold one. */
 export function currentContentEligibilityByRaidId(
   killedAt: string,

@@ -42,9 +42,13 @@ export function isKnownDungeonZone(zoneName: string): boolean {
  * and a report of a Mythic+ night is filed under the dungeon season rather
  * than under any instance. These names are Warcraft Logs' groupings, not
  * Journal instances, so no catalogue holds them.
+ *
+ * `Challenge Modes` is the Mists-era member of that family: it groups timed
+ * dungeon runs, so it is not a raid on those grounds rather than on anything
+ * to do with difficulty (#351).
  */
 function isNonRaidWclZoneLabel(zoneName: string): boolean {
-  return /^(?:mythic\+\s+seasons?|(?:normal|heroic|mythic)\s+dungeons)\b/i.test(
+  return /^(?:mythic\+\s+seasons?|challenge\s+modes?|(?:normal|heroic|mythic)\s+dungeons)\b/i.test(
     zoneName.trim()
   );
 }
