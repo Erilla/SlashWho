@@ -58,6 +58,8 @@ export type WarcraftLogsRequestEvent = Readonly<{
    * request was issued and paid for either way, so it is counted either way.
    */
   limited: boolean;
+  /** The limitation returned by this request, when one was returned. */
+  limitationCode?: WarcraftLogsLimitationCode;
 }>;
 
 export type WarcraftLogsIdentity = Readonly<{
@@ -288,6 +290,11 @@ export interface WarcraftLogsGateway {
        * measures.
        */
       onRequest?(event: WarcraftLogsRequestEvent): void;
+      /** Called when decoding a successful request raises a limitation. */
+      onLimitation?(
+        query: WarcraftLogsQueryType,
+        code: WarcraftLogsLimitationCode
+      ): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsReportResult>;

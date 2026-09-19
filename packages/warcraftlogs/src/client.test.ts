@@ -4414,7 +4414,11 @@ describe("Warcraft Logs gateway", () => {
       onRequest: (event) => requests.push(event)
     });
 
-    expect(requests).toContainEqual({ query: "zone_rankings", limited: true });
+    expect(requests).toContainEqual({
+      query: "zone_rankings",
+      limited: true,
+      limitationCode: "unavailable"
+    });
     expect(
       requests.filter((event) => event.query === "zone_rankings")
     ).toHaveLength(1);
@@ -4437,7 +4441,9 @@ describe("Warcraft Logs gateway", () => {
     });
 
     expect(result).toMatchObject({ kind: "limitation", code: "rate_limited" });
-    expect(requests).toEqual([{ query: "history_scan", limited: true }]);
+    expect(requests).toEqual([
+      { query: "history_scan", limited: true, limitationCode: "rate_limited" }
+    ]);
   });
 
   it("counts one history-scan request per page of a paginated scan", async () => {

@@ -208,6 +208,7 @@ describe("applicant evidence job handler", () => {
         parses: new Set(),
         tierBests: new Set()
       },
+      onLimitation: expect.any(Function),
       onRequest: expect.any(Function),
       signal: expect.any(AbortSignal)
     });
