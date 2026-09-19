@@ -390,6 +390,26 @@ function normalizedName(value: string): string {
     .toLocaleLowerCase("en-US");
 }
 
+/**
+ * The comparison key for an instance name, shared with the dungeon catalogue
+ * so the two are keyed alike and a name cannot be a raid under one spelling
+ * and a dungeon under another.
+ */
+export function normalizedZoneName(value: string): string {
+  return normalizedName(value);
+}
+
+/**
+ * Whether the raid catalogue claims this name at all.
+ *
+ * Deliberately not `lookupRaidByName(...) !== null`: an ambiguous name is
+ * stored as `null` and still belongs to a raid, so it must not be available
+ * for anything else to claim.
+ */
+export function isCataloguedRaidName(raidName: string): boolean {
+  return raidsByName.has(normalizedName(raidName));
+}
+
 const encountersByName = new Map<string, RaidCatalogueEncounter | null>();
 const encountersByBossName = new Map<string, RaidCatalogueEncounter | null>();
 for (const encounter of encounters.values()) {
@@ -532,13 +552,68 @@ export function currentContentEligibility(
  */
 export type RaidTierConclusion = "concluded" | "current" | "unknown";
 
+/**
+ * One piece of Warcraft Logs evidence, as much of it as identifies its raid.
+ */
+export type RaidEvidenceIdentity = Readonly<{
+  raidName: string;
+  bossName: string;
+  journalBossId: string | null;
+}>;
+
+/**
+ * The raid a kill belongs to, by whatever names it.
+ *
+ * The zone name is tried first and answers for almost everything. The two
+ * fallbacks exist because Warcraft Logs does not always give a name the
+ * Journal shares: journal raid 1308 is reported under its in-game zone name
+ * `Isle of Quel'Danas`, in a combined `VS / DR / MQD` report zone that serves
+ * `journalID: 0` for every encounter in it, so only the boss identifies it.
+ *
+ * The dossier has always resolved kills this way, which is why those kills are
+ * displayed. Marking a tier terminal did not, so a raid the dossier could name
+ * was one the scan could never conclude -- it pinned the scan floor for good
+ * while appearing perfectly healthy on the page (#346). The two must agree,
+ * which is why this is one function rather than two rules.
+ */
+export function lookupRaidForEvidence(
+  evidence: RaidEvidenceIdentity
+): RaidCatalogueRaid | null {
+  const named = lookupRaidByName(evidence.raidName);
+  if (named !== null) return named;
+  const encounter =
+    (evidence.journalBossId === null
+      ? null
+      : lookupJournalEncounter(evidence.journalBossId)) ??
+    lookupUniqueRaidBossByName(evidence.bossName);
+  return encounter === null ? null : lookupRaidByName(encounter.raidName);
+}
+
+/** The conclusion of the raid a kill belongs to, however it is named. */
+export function raidTierConclusionForEvidence(
+  evidence: RaidEvidenceIdentity,
+  at: Date
+): RaidTierConclusion {
+  const raid = lookupRaidForEvidence(evidence);
+  return raid === null
+    ? "unknown"
+    : raidTierConclusionForRaidId(raid.raidId, at);
+}
+
 export function raidTierConclusion(
   raidName: string,
   at: Date
 ): RaidTierConclusion {
   const raid = lookupRaidByName(raidName);
   if (raid === null) return "unknown";
-  const window = lookupRaidCurrentContentWindow(raid.raidId);
+  return raidTierConclusionForRaidId(raid.raidId, at);
+}
+
+function raidTierConclusionForRaidId(
+  raidId: string,
+  at: Date
+): RaidTierConclusion {
+  const window = lookupRaidCurrentContentWindow(raidId);
   if (!window) return "unknown";
   if (window.endsAt === null) return "current";
   const endsAt = Date.parse(window.endsAt);

@@ -1255,6 +1255,65 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toEqual([]);
   });
 
+  it("drains a stored Mythic dungeon kill through a partial publish", async () => {
+    // Break caught: a partial publish carries every stored row forward, and a
+    // veteran that exhausts its parse budget publishes partial on every run --
+    // so stored dungeon kills would never age out on their own, and the floor
+    // they pinned would stay pinned long after collection stopped producing
+    // them (#346).
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "dungeondrain"
+    } as const;
+    const first = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-18T00:00:00.000Z"),
+      at: new Date("2026-09-18T00:00:00.000Z")
+    });
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      tierBests: [],
+      completedAt: new Date("2026-09-18T00:00:00.000Z"),
+      kills: [
+        mythicKill({ raidId: "42" }),
+        mythicKill({
+          raidId: "2290",
+          raidName: "Mists of Tirna Scithe",
+          bossId: "2419",
+          bossName: "Ingra Maloch",
+          fightUrl: "https://www.warcraftlogs.com/reports/dungeon#fight=1"
+        })
+      ],
+      wipes: []
+    });
+
+    const second = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
+      at: new Date("2026-09-19T00:00:00.000Z")
+    });
+    // Partial: the publish that carries everything forward, which is the one
+    // that used to keep the dungeon alive.
+    await repositories.evidence.publish(second.run.id, {
+      state: "partial",
+      limitationCode: null,
+      parseLimitationCode: "parse_request_cap",
+      tierBests: [],
+      completedAt: new Date("2026-09-19T00:00:00.000Z"),
+      kills: [],
+      wipes: []
+    });
+
+    await expect(
+      repositories.evidence
+        .getCompleted(key)
+        .then((completed) => completed?.kills.map((kill) => kill.raidId))
+    ).resolves.toEqual(["42"]);
+  });
+
   it("keeps a carried kill's observation time rather than restamping it", async () => {
     // A restamp would say every untouched fight was just re-read, which
     // destroys the drift measurement the column exists for.
@@ -1362,7 +1421,13 @@ describe("PostgreSQL repositories", () => {
           killedAt: "2026-08-04T12:00:00.000Z"
         })
       ],
-      wipes: [{ raidId: "43", attemptedAt: "2026-03-01T11:00:00.000Z" }]
+      wipes: [
+        {
+          raidId: "43",
+          raidName: "Nerub-ar Palace",
+          attemptedAt: "2026-03-01T11:00:00.000Z"
+        }
+      ]
     });
   });
 

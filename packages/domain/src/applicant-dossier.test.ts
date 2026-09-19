@@ -133,6 +133,35 @@ describe("applicant dossier", () => {
     );
   });
 
+  it("stays silent about a Mythic dungeon it already knows is not a raid", () => {
+    // Break caught: `unmatched_encounter` was live on all eight collected
+    // characters, and it was Mythic dungeons raising it -- a dungeon boss
+    // shares a difficulty with a raid boss, so the scan stored them. The
+    // limitation is for evidence going missing, and a dungeon is not missing
+    // raid evidence (#346).
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "2290",
+          raidName: "Mists of Tirna Scithe",
+          bossId: "2419",
+          bossName: "Ingra Maloch",
+          journalBossId: null,
+          killedAt: "2024-10-18T21:18:31.270Z"
+        })
+      ],
+      wipes: [],
+      completeWarcraftLogsCharacters: [root],
+      limitations: []
+    });
+
+    expect(dossier.limitations).not.toContainEqual(
+      expect.objectContaining({ code: "unmatched_encounter" })
+    );
+  });
+
   it("retains Mythic Tidebound Grotto kills inside its reviewed content window", () => {
     const dossier = buildApplicantDossier({
       root,

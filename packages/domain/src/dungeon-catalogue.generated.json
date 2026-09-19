@@ -1,0 +1,580 @@
+{
+  "source": "blizzard-journal",
+  "generatedAt": "2026-09-19T00:59:14.519Z",
+  "region": "eu",
+  "locale": "en_GB",
+  "dungeons": [
+    {
+      "journalDungeonId": "63",
+      "dungeonName": "Deadmines"
+    },
+    {
+      "journalDungeonId": "64",
+      "dungeonName": "Shadowfang Keep"
+    },
+    {
+      "journalDungeonId": "65",
+      "dungeonName": "Throne of the Tides"
+    },
+    {
+      "journalDungeonId": "66",
+      "dungeonName": "Blackrock Caverns"
+    },
+    {
+      "journalDungeonId": "67",
+      "dungeonName": "The Stonecore"
+    },
+    {
+      "journalDungeonId": "68",
+      "dungeonName": "The Vortex Pinnacle"
+    },
+    {
+      "journalDungeonId": "69",
+      "dungeonName": "Lost City of the Tol'vir"
+    },
+    {
+      "journalDungeonId": "70",
+      "dungeonName": "Halls of Origination"
+    },
+    {
+      "journalDungeonId": "71",
+      "dungeonName": "Grim Batol"
+    },
+    {
+      "journalDungeonId": "76",
+      "dungeonName": "Zul'Gurub"
+    },
+    {
+      "journalDungeonId": "77",
+      "dungeonName": "Zul'Aman"
+    },
+    {
+      "journalDungeonId": "184",
+      "dungeonName": "End Time"
+    },
+    {
+      "journalDungeonId": "185",
+      "dungeonName": "Well of Eternity"
+    },
+    {
+      "journalDungeonId": "186",
+      "dungeonName": "Hour of Twilight"
+    },
+    {
+      "journalDungeonId": "226",
+      "dungeonName": "Ragefire Chasm"
+    },
+    {
+      "journalDungeonId": "227",
+      "dungeonName": "Blackfathom Deeps"
+    },
+    {
+      "journalDungeonId": "228",
+      "dungeonName": "Blackrock Depths"
+    },
+    {
+      "journalDungeonId": "229",
+      "dungeonName": "Lower Blackrock Spire"
+    },
+    {
+      "journalDungeonId": "230",
+      "dungeonName": "Dire Maul - Capital Gardens"
+    },
+    {
+      "journalDungeonId": "231",
+      "dungeonName": "Gnomeregan"
+    },
+    {
+      "journalDungeonId": "232",
+      "dungeonName": "Maraudon"
+    },
+    {
+      "journalDungeonId": "233",
+      "dungeonName": "Razorfen Downs"
+    },
+    {
+      "journalDungeonId": "234",
+      "dungeonName": "Razorfen Kraul"
+    },
+    {
+      "journalDungeonId": "236",
+      "dungeonName": "Stratholme - Main Gate"
+    },
+    {
+      "journalDungeonId": "237",
+      "dungeonName": "The Temple of Atal'hakkar"
+    },
+    {
+      "journalDungeonId": "238",
+      "dungeonName": "The Stockade"
+    },
+    {
+      "journalDungeonId": "239",
+      "dungeonName": "Uldaman"
+    },
+    {
+      "journalDungeonId": "240",
+      "dungeonName": "Wailing Caverns"
+    },
+    {
+      "journalDungeonId": "241",
+      "dungeonName": "Zul'Farrak"
+    },
+    {
+      "journalDungeonId": "246",
+      "dungeonName": "Scholomance"
+    },
+    {
+      "journalDungeonId": "247",
+      "dungeonName": "Auchenai Crypts"
+    },
+    {
+      "journalDungeonId": "248",
+      "dungeonName": "Hellfire Ramparts"
+    },
+    {
+      "journalDungeonId": "249",
+      "dungeonName": "Magisters' Terrace"
+    },
+    {
+      "journalDungeonId": "250",
+      "dungeonName": "Mana-Tombs"
+    },
+    {
+      "journalDungeonId": "251",
+      "dungeonName": "Old Hillsbrad Foothills"
+    },
+    {
+      "journalDungeonId": "252",
+      "dungeonName": "Sethekk Halls"
+    },
+    {
+      "journalDungeonId": "253",
+      "dungeonName": "Shadow Labyrinth"
+    },
+    {
+      "journalDungeonId": "254",
+      "dungeonName": "The Arcatraz"
+    },
+    {
+      "journalDungeonId": "255",
+      "dungeonName": "The Black Morass"
+    },
+    {
+      "journalDungeonId": "256",
+      "dungeonName": "The Blood Furnace"
+    },
+    {
+      "journalDungeonId": "257",
+      "dungeonName": "The Botanica"
+    },
+    {
+      "journalDungeonId": "258",
+      "dungeonName": "The Mechanar"
+    },
+    {
+      "journalDungeonId": "259",
+      "dungeonName": "The Shattered Halls"
+    },
+    {
+      "journalDungeonId": "260",
+      "dungeonName": "The Slave Pens"
+    },
+    {
+      "journalDungeonId": "261",
+      "dungeonName": "The Steamvault"
+    },
+    {
+      "journalDungeonId": "262",
+      "dungeonName": "The Underbog"
+    },
+    {
+      "journalDungeonId": "271",
+      "dungeonName": "Ahn'kahet: The Old Kingdom"
+    },
+    {
+      "journalDungeonId": "272",
+      "dungeonName": "Azjol-Nerub"
+    },
+    {
+      "journalDungeonId": "273",
+      "dungeonName": "Drak'Tharon Keep"
+    },
+    {
+      "journalDungeonId": "274",
+      "dungeonName": "Gundrak"
+    },
+    {
+      "journalDungeonId": "275",
+      "dungeonName": "Halls of Lightning"
+    },
+    {
+      "journalDungeonId": "276",
+      "dungeonName": "Halls of Reflection"
+    },
+    {
+      "journalDungeonId": "277",
+      "dungeonName": "Halls of Stone"
+    },
+    {
+      "journalDungeonId": "278",
+      "dungeonName": "Pit of Saron"
+    },
+    {
+      "journalDungeonId": "279",
+      "dungeonName": "The Culling of Stratholme"
+    },
+    {
+      "journalDungeonId": "280",
+      "dungeonName": "The Forge of Souls"
+    },
+    {
+      "journalDungeonId": "281",
+      "dungeonName": "The Nexus"
+    },
+    {
+      "journalDungeonId": "282",
+      "dungeonName": "The Oculus"
+    },
+    {
+      "journalDungeonId": "283",
+      "dungeonName": "The Violet Hold"
+    },
+    {
+      "journalDungeonId": "284",
+      "dungeonName": "Trial of the Champion"
+    },
+    {
+      "journalDungeonId": "285",
+      "dungeonName": "Utgarde Keep"
+    },
+    {
+      "journalDungeonId": "286",
+      "dungeonName": "Utgarde Pinnacle"
+    },
+    {
+      "journalDungeonId": "302",
+      "dungeonName": "Stormstout Brewery"
+    },
+    {
+      "journalDungeonId": "303",
+      "dungeonName": "Gate of the Setting Sun"
+    },
+    {
+      "journalDungeonId": "311",
+      "dungeonName": "Scarlet Halls"
+    },
+    {
+      "journalDungeonId": "312",
+      "dungeonName": "Shado-Pan Monastery"
+    },
+    {
+      "journalDungeonId": "313",
+      "dungeonName": "Temple of the Jade Serpent"
+    },
+    {
+      "journalDungeonId": "316",
+      "dungeonName": "Scarlet Monastery"
+    },
+    {
+      "journalDungeonId": "321",
+      "dungeonName": "Mogu'shan Palace"
+    },
+    {
+      "journalDungeonId": "324",
+      "dungeonName": "Siege of Niuzao Temple"
+    },
+    {
+      "journalDungeonId": "385",
+      "dungeonName": "Bloodmaul Slag Mines"
+    },
+    {
+      "journalDungeonId": "476",
+      "dungeonName": "Skyreach"
+    },
+    {
+      "journalDungeonId": "536",
+      "dungeonName": "Grimrail Depot"
+    },
+    {
+      "journalDungeonId": "537",
+      "dungeonName": "Shadowmoon Burial Grounds"
+    },
+    {
+      "journalDungeonId": "547",
+      "dungeonName": "Auchindoun"
+    },
+    {
+      "journalDungeonId": "556",
+      "dungeonName": "The Everbloom"
+    },
+    {
+      "journalDungeonId": "558",
+      "dungeonName": "Iron Docks"
+    },
+    {
+      "journalDungeonId": "559",
+      "dungeonName": "Upper Blackrock Spire"
+    },
+    {
+      "journalDungeonId": "707",
+      "dungeonName": "Vault of the Wardens"
+    },
+    {
+      "journalDungeonId": "716",
+      "dungeonName": "Eye of Azshara"
+    },
+    {
+      "journalDungeonId": "721",
+      "dungeonName": "Halls of Valor"
+    },
+    {
+      "journalDungeonId": "726",
+      "dungeonName": "The Arcway"
+    },
+    {
+      "journalDungeonId": "727",
+      "dungeonName": "Maw of Souls"
+    },
+    {
+      "journalDungeonId": "740",
+      "dungeonName": "Black Rook Hold"
+    },
+    {
+      "journalDungeonId": "762",
+      "dungeonName": "Darkheart Thicket"
+    },
+    {
+      "journalDungeonId": "767",
+      "dungeonName": "Neltharion's Lair"
+    },
+    {
+      "journalDungeonId": "777",
+      "dungeonName": "Assault on Violet Hold"
+    },
+    {
+      "journalDungeonId": "800",
+      "dungeonName": "Court of Stars"
+    },
+    {
+      "journalDungeonId": "860",
+      "dungeonName": "Return to Karazhan"
+    },
+    {
+      "journalDungeonId": "900",
+      "dungeonName": "Cathedral of Eternal Night"
+    },
+    {
+      "journalDungeonId": "945",
+      "dungeonName": "Seat of the Triumvirate"
+    },
+    {
+      "journalDungeonId": "968",
+      "dungeonName": "Atal'Dazar"
+    },
+    {
+      "journalDungeonId": "1001",
+      "dungeonName": "Freehold"
+    },
+    {
+      "journalDungeonId": "1002",
+      "dungeonName": "Tol Dagor"
+    },
+    {
+      "journalDungeonId": "1012",
+      "dungeonName": "The MOTHERLODE!!"
+    },
+    {
+      "journalDungeonId": "1021",
+      "dungeonName": "Waycrest Manor"
+    },
+    {
+      "journalDungeonId": "1022",
+      "dungeonName": "The Underrot"
+    },
+    {
+      "journalDungeonId": "1023",
+      "dungeonName": "Siege of Boralus"
+    },
+    {
+      "journalDungeonId": "1030",
+      "dungeonName": "Temple of Sethraliss"
+    },
+    {
+      "journalDungeonId": "1036",
+      "dungeonName": "Shrine of the Storm"
+    },
+    {
+      "journalDungeonId": "1041",
+      "dungeonName": "Kings' Rest"
+    },
+    {
+      "journalDungeonId": "1178",
+      "dungeonName": "Operation: Mechagon"
+    },
+    {
+      "journalDungeonId": "1182",
+      "dungeonName": "The Necrotic Wake"
+    },
+    {
+      "journalDungeonId": "1183",
+      "dungeonName": "Plaguefall"
+    },
+    {
+      "journalDungeonId": "1184",
+      "dungeonName": "Mists of Tirna Scithe"
+    },
+    {
+      "journalDungeonId": "1185",
+      "dungeonName": "Halls of Atonement"
+    },
+    {
+      "journalDungeonId": "1186",
+      "dungeonName": "Spires of Ascension"
+    },
+    {
+      "journalDungeonId": "1187",
+      "dungeonName": "Theater of Pain"
+    },
+    {
+      "journalDungeonId": "1188",
+      "dungeonName": "De Other Side"
+    },
+    {
+      "journalDungeonId": "1189",
+      "dungeonName": "Sanguine Depths"
+    },
+    {
+      "journalDungeonId": "1194",
+      "dungeonName": "Tazavesh, the Veiled Market"
+    },
+    {
+      "journalDungeonId": "1196",
+      "dungeonName": "Brackenhide Hollow"
+    },
+    {
+      "journalDungeonId": "1197",
+      "dungeonName": "Uldaman: Legacy of Tyr"
+    },
+    {
+      "journalDungeonId": "1198",
+      "dungeonName": "The Nokhud Offensive"
+    },
+    {
+      "journalDungeonId": "1199",
+      "dungeonName": "Neltharus"
+    },
+    {
+      "journalDungeonId": "1201",
+      "dungeonName": "Algeth'ar Academy"
+    },
+    {
+      "journalDungeonId": "1202",
+      "dungeonName": "Ruby Life Pools"
+    },
+    {
+      "journalDungeonId": "1203",
+      "dungeonName": "The Azure Vault"
+    },
+    {
+      "journalDungeonId": "1204",
+      "dungeonName": "Halls of Infusion"
+    },
+    {
+      "journalDungeonId": "1209",
+      "dungeonName": "Dawn of the Infinite"
+    },
+    {
+      "journalDungeonId": "1210",
+      "dungeonName": "Darkflame Cleft"
+    },
+    {
+      "journalDungeonId": "1267",
+      "dungeonName": "Priory of the Sacred Flame"
+    },
+    {
+      "journalDungeonId": "1268",
+      "dungeonName": "The Rookery"
+    },
+    {
+      "journalDungeonId": "1269",
+      "dungeonName": "The Stonevault"
+    },
+    {
+      "journalDungeonId": "1270",
+      "dungeonName": "The Dawnbreaker"
+    },
+    {
+      "journalDungeonId": "1271",
+      "dungeonName": "Ara-Kara, City of Echoes"
+    },
+    {
+      "journalDungeonId": "1272",
+      "dungeonName": "Cinderbrew Meadery"
+    },
+    {
+      "journalDungeonId": "1274",
+      "dungeonName": "City of Threads"
+    },
+    {
+      "journalDungeonId": "1276",
+      "dungeonName": "Dire Maul - Warpwood Quarter"
+    },
+    {
+      "journalDungeonId": "1277",
+      "dungeonName": "Dire Maul - Gordok Commons"
+    },
+    {
+      "journalDungeonId": "1292",
+      "dungeonName": "Stratholme - Service Entrance"
+    },
+    {
+      "journalDungeonId": "1298",
+      "dungeonName": "Operation: Floodgate"
+    },
+    {
+      "journalDungeonId": "1299",
+      "dungeonName": "Windrunner Spire"
+    },
+    {
+      "journalDungeonId": "1300",
+      "dungeonName": "Magisters' Terrace"
+    },
+    {
+      "journalDungeonId": "1303",
+      "dungeonName": "Eco-Dome Al'dani"
+    },
+    {
+      "journalDungeonId": "1304",
+      "dungeonName": "Murder Row"
+    },
+    {
+      "journalDungeonId": "1309",
+      "dungeonName": "The Blinding Vale"
+    },
+    {
+      "journalDungeonId": "1311",
+      "dungeonName": "Den of Nalorakk"
+    },
+    {
+      "journalDungeonId": "1313",
+      "dungeonName": "Voidscar Arena"
+    },
+    {
+      "journalDungeonId": "1315",
+      "dungeonName": "Maisara Caverns"
+    },
+    {
+      "journalDungeonId": "1316",
+      "dungeonName": "Nexus-Point Xenas"
+    },
+    {
+      "journalDungeonId": "1319",
+      "dungeonName": "Keystone Dungeons"
+    },
+    {
+      "journalDungeonId": "1322",
+      "dungeonName": "Altar of Fangs"
+    }
+  ]
+}

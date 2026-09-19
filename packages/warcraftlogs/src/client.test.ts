@@ -1422,6 +1422,75 @@ describe("Warcraft Logs gateway", () => {
     expect(result).not.toHaveProperty("limitation");
   });
 
+  it("stops on a page of nothing but dungeons below the floor", async () => {
+    // Break caught: dropping Mythic dungeon fights from the evidence left a
+    // dungeon-only page carrying no dates, so it could no longer end the scan
+    // and a history full of Mythic+ paged straight past its floor. How far a
+    // page reached is a property of the reports on it, not of what they
+    // contributed (#346).
+    const pages: number[] = [];
+    const startTimes = [
+      Date.parse("2026-09-10T00:00:00.000Z"),
+      Date.parse("2023-01-01T00:00:00.000Z"),
+      Date.parse("2022-01-01T00:00:00.000Z")
+    ];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { page?: number; code?: string };
+      };
+      if (body.query.includes("CharacterZoneParses")) {
+        return zoneRankingsResponse([]);
+      }
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      const page = body.variables?.page ?? 1;
+      pages.push(page);
+      const startTime = startTimes[page - 1];
+      if (startTime === undefined) throw new Error("unexpected_report_page");
+      const report = performanceReport(
+        [26],
+        true,
+        `report-${page}`,
+        3306,
+        startTime
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: {
+                data: { fights: { gameZone?: unknown }[] }[];
+              };
+            };
+          };
+        };
+      };
+      if (page > 1) {
+        for (const fight of report.data.characterData.character.recentReports
+          .data[0]!.fights) {
+          fight.gameZone = { id: 2290, name: "Mists of Tirna Scithe" };
+        }
+      }
+      return jsonResponse(report);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 10,
+      parseRequestCap: 9,
+      killScanFloor: "2024-01-01T00:00:00.000Z"
+    });
+
+    expect(pages).toEqual([1, 2]);
+    expect(result).not.toHaveProperty("limitation");
+    // And the dungeon never became evidence.
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [{ raidName: "Fixture" }]
+    });
+  });
+
   it("keeps paging when a page below the floor still carries a newer fight", async () => {
     const pages: number[] = [];
     const { client } = clientFor((url, init) => {
@@ -3007,6 +3076,129 @@ describe("Warcraft Logs gateway", () => {
           bossId: "3470",
           bossName: "Nek'zali the Soulcoiler",
           fightUrl: "https://www.warcraftlogs.com/reports/mixedReport#fight=25"
+        }
+      ]
+    });
+  });
+
+  it("drops a Mythic dungeon fight and keeps the raid fights beside it", async () => {
+    // Break caught: a Mythic dungeon boss and a Mythic raid boss share a
+    // difficulty, so the scan stored dungeon kills as raid evidence in a zone
+    // no raid catalogue holds. Unplaceable, they could never go terminal, and
+    // the oldest of them pinned the scan floor to the bottom of a veteran's
+    // history (#346). Dropped per fight, never per report: a raid night that
+    // also ran a dungeon must keep every raid fight in it.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  server: { normalizedName: "Silvermoon" },
+                  recentReports: {
+                    data: [
+                      {
+                        code: "dungeonNightReport",
+                        startTime: 1_728_086_400_000,
+                        guild: null,
+                        zone: {
+                          id: 42,
+                          name: "Nerub-ar Palace",
+                          encounters: [{ id: 1234, journalID: 2345 }]
+                        },
+                        masterData: {
+                          actors: [
+                            {
+                              id: 7,
+                              name: "Sentinel",
+                              server: "Silvermoon",
+                              type: "Player"
+                            }
+                          ]
+                        },
+                        fights: [
+                          {
+                            id: 3,
+                            encounterID: 1234,
+                            name: "Queen Ansurek",
+                            startTime: 3_600_000,
+                            endTime: 3_600_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 2657, name: "Nerub-ar Palace" }
+                          },
+                          {
+                            id: 4,
+                            encounterID: 2419,
+                            name: "Ingra Maloch",
+                            startTime: 7_200_000,
+                            endTime: 7_200_000,
+                            kill: true,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: {
+                              id: 2290,
+                              name: "Mists of Tirna Scithe"
+                            }
+                          },
+                          {
+                            id: 5,
+                            encounterID: 2426,
+                            name: "Amarth",
+                            startTime: 10_800_000,
+                            endTime: 10_800_000,
+                            kill: false,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 2286, name: "The Necrotic Wake" }
+                          },
+                          {
+                            id: 6,
+                            encounterID: 4321,
+                            name: "The Silken Court",
+                            startTime: 14_400_000,
+                            endTime: 14_400_000,
+                            kill: false,
+                            difficulty: 5,
+                            friendlyPlayers: [7],
+                            gameZone: { id: 2657, name: "Nerub-ar Palace" }
+                          }
+                        ]
+                      }
+                    ],
+                    has_more_pages: false
+                  }
+                }
+              }
+            }
+          })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          raidId: "2657",
+          raidName: "Nerub-ar Palace",
+          bossName: "Queen Ansurek",
+          fightUrl:
+            "https://www.warcraftlogs.com/reports/dungeonNightReport#fight=3"
+        }
+      ],
+      wipes: [
+        {
+          raidId: "2657",
+          raidName: "Nerub-ar Palace",
+          bossName: "The Silken Court",
+          fightUrl:
+            "https://www.warcraftlogs.com/reports/dungeonNightReport#fight=6"
         }
       ]
     });
