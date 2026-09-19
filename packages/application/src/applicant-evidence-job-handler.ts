@@ -499,16 +499,18 @@ function storedKillForParse(
     bossName: kill.bossName,
     journalBossId: kill.journalBossId,
     bossOrder: kill.bossOrder,
-    isFinalBoss: false,
+    isFinalBoss: kill.isFinalBoss,
     killedAt: kill.killedAt,
     reportCode,
     fightId: Number(fightId),
+    // character_mythic_kills contains Mythic-only evidence, so the gateway's
+    // Mythic difficulty constant is the only difficulty value available here.
     difficulty: 5,
     performance: kill.performance,
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild ? { ...kill.guild, region } : null,
-    historicWorldRank: null
+    historicWorldRank: kill.historicWorldRank ?? null
   };
 }
 
