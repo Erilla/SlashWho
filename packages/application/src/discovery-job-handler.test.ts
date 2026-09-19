@@ -453,6 +453,10 @@ function createMemoryRepositories(): Repositories {
       async releaseAbandoned() {
         return 0;
       },
+      async recordRunCost() {},
+      async clearExpiredRunCosts() {
+        return 0;
+      },
       async clearStaleCredentials() {
         return 0;
       }

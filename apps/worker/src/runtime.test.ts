@@ -159,6 +159,10 @@ function runtimeFakes() {
     evidence: vi.fn(async (cutoffs: { settled: Date; active: Date }) => {
       void cutoffs;
       return 6;
+    }),
+    evidenceRunCosts: vi.fn(async (cutoff: Date) => {
+      void cutoff;
+      return 7;
     })
   };
   // The resume sweep's three calls, kept addressable so a test can say what is
@@ -204,6 +208,7 @@ function runtimeFakes() {
   const repositories = {
     evidence: {
       clearStaleCredentials: cleanup.evidence,
+      clearExpiredRunCosts: cleanup.evidenceRunCosts,
       async clearSettledCollectionStages() {
         return 0;
       },
@@ -988,6 +993,33 @@ describe("worker runtime", () => {
     // chain by a clear margin.
     const activeAgeMs = Date.now() - cutoffs.active.getTime();
     expect(activeAgeMs).toBeGreaterThan(5 * 1_800_000);
+    await runtime.stop();
+  });
+
+  it("expires recorded run costs at four weeks", async () => {
+    // Retention is weeks rather than years on purpose (#342): an older row
+    // describes a configuration that no longer runs, and a budget re-derived
+    // from one is the trap the table was built to close.
+    const fakes = runtimeFakes();
+    const logged: Array<Record<string, unknown>> = [];
+    const runtime = await createWorkerRuntime(config, fakes.dependencies, {
+      info: (record) => logged.push(record)
+    });
+
+    await fakes.maintenanceHandler?.();
+
+    expect(fakes.cleanup.evidenceRunCosts).toHaveBeenCalledOnce();
+    const [cutoff] = fakes.cleanup.evidenceRunCosts.mock.calls[0]!;
+    const ageMs = Date.now() - cutoff.getTime();
+    expect(ageMs).toBeGreaterThanOrEqual(28 * 24 * 60 * 60_000 - 5_000);
+    expect(ageMs).toBeLessThan(28 * 24 * 60 * 60_000 + 5_000);
+    // A count, never a run id or a character key, like the two beside it.
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        event: "evidence_cache_cleanup",
+        removedRunCosts: 7
+      })
+    );
     await runtime.stop();
   });
 

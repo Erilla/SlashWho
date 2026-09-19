@@ -60,6 +60,15 @@ const STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS = 6 * 60 * 60_000;
  */
 const ABANDONED_EVIDENCE_RUN_RETENTION_MS = 8 * 60 * 60_000;
 /**
+ * How long a run's recorded points spend is kept (#342). Four weeks, and
+ * deliberately weeks rather than years: the question this table answers is
+ * always "what does a run cost *now*", and a row older than this describes a
+ * configuration that no longer runs. Keeping those would re-open the trap the
+ * table was built to close -- a budget re-derived from measurements of a
+ * deployment nobody is running any more.
+ */
+const EVIDENCE_RUN_COST_RETENTION_MS = 28 * 24 * 60 * 60_000;
+/**
  * How long a run nothing has ever touched -- no job id, never claimed -- may
  * stay active before recovery releases it. `reserve` inserts the row and
  * `markEnqueued` follows within milliseconds, so a run still in that gap after
@@ -609,10 +618,15 @@ export async function createWorkerRuntime(
       // hold a copy of the evidence indefinitely.
       const removedCollectionStages =
         await repositories.evidence.clearSettledCollectionStages();
+      // Counts only, like the two above it.
+      const removedRunCosts = await repositories.evidence.clearExpiredRunCosts(
+        new Date(Date.now() - EVIDENCE_RUN_COST_RETENTION_MS)
+      );
       logger?.info({
         event: "evidence_cache_cleanup",
         removedEvidenceRuns,
-        removedCollectionStages
+        removedCollectionStages,
+        removedRunCosts
       });
       await recoverPendingSearches(repositories, initializedQueue);
     });

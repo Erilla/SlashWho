@@ -1,4 +1,5 @@
 import type {
+  EvidenceRunCost,
   StagedEvidenceCollection,
   StoredKillTier,
   StoredWipeTier,
@@ -52,6 +53,7 @@ function store(
   storedKills: StoredKillTier[];
   storedWipes: StoredWipeTier[];
   staged: Map<string, StagedEvidenceCollection>;
+  costs: EvidenceRunCost[];
 } {
   const published: Array<{
     runId: string;
@@ -65,8 +67,10 @@ function store(
   const storedKills: StoredKillTier[] = [];
   const storedWipes: StoredWipeTier[] = [];
   const staged = new Map<string, StagedEvidenceCollection>();
+  const costs: EvidenceRunCost[] = [];
   return {
     published,
+    costs,
     failed,
     noted,
     marked,
@@ -98,6 +102,9 @@ function store(
     },
     async recordLimitation(runId, code) {
       noted.push({ runId, code });
+    },
+    async recordRunCost(cost) {
+      costs.push(cost);
     },
     async stageCollection(runId, payload) {
       staged.set(runId, payload);
@@ -683,6 +690,7 @@ describe("applicant evidence job handler", () => {
       stagedCollection: vi.fn().mockResolvedValue(null),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([]),
+      recordRunCost: vi.fn().mockResolvedValue(undefined),
       storedEvidenceTiers: vi.fn().mockResolvedValue({ kills: [], wipes: [] }),
       terminalTiers: vi.fn().mockResolvedValue([]),
       markTerminalTiers: vi.fn().mockResolvedValue(undefined)
@@ -1889,6 +1897,7 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
+        async recordRunCost() {},
         async storedEvidenceTiers() {
           return { kills: [], wipes: [] };
         },
@@ -2277,6 +2286,305 @@ describe("applicant evidence job handler", () => {
       expect(serialized).not.toContain("user-secret");
       expect(serialized).not.toContain("wclClient");
     });
+
+    describe("the persisted cost row", () => {
+      // The same record the log line is built from, written where a query can
+      // reach it. `railway logs` serves the current deployment alone, so every
+      // re-derivation of the points budget was archaeology (#342).
+      function recordingStore(overrides: Partial<ApplicantEvidenceStore> = {}) {
+        const costs: EvidenceRunCost[] = [];
+        return {
+          costs,
+          store: evidenceStore({
+            async recordRunCost(cost) {
+              costs.push(cost);
+            },
+            ...overrides
+          })
+        };
+      }
+
+      it("records the spend, the caps in force and the requests it issued", async () => {
+        const { costs, store: evidence } = recordingStore();
+        const getRateLimit = vi
+          .fn()
+          .mockResolvedValueOnce({
+            kind: "rate_limit",
+            limitPerHour: 18_000,
+            pointsSpentThisHour: 1_000.25,
+            pointsResetInSeconds: 949
+          })
+          .mockResolvedValueOnce({
+            kind: "rate_limit",
+            limitPerHour: 18_000,
+            pointsSpentThisHour: 1_950.75,
+            pointsResetInSeconds: 900
+          });
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          warcraftLogs: {
+            getRateLimit,
+            getFirstKillReports: async (
+              _key: unknown,
+              options: {
+                onRequest?: (event: {
+                  query: string;
+                  limited: boolean;
+                }) => void;
+              }
+            ) => {
+              options.onRequest?.({ query: "history_scan", limited: false });
+              options.onRequest?.({ query: "history_scan", limited: false });
+              options.onRequest?.({ query: "zone_rankings", limited: false });
+              options.onRequest?.({ query: "fight_parses", limited: false });
+              options.onRequest?.({
+                query: "ranking_identities",
+                limited: false
+              });
+              return {
+                kind: "evidence" as const,
+                troubledRaidIds: { parses: [], tierBests: [] },
+                tierBests: [],
+                kills: [],
+                wipes: []
+              };
+            }
+          } as unknown as Pick<
+            WarcraftLogsGateway,
+            "getFirstKillReports" | "getRateLimit"
+          >
+        });
+
+        await handler.execute("run-cost-1", {
+          attempt: 2,
+          maxAttempts: 3,
+          signal: new AbortController().signal
+        });
+
+        expect(costs).toEqual([
+          {
+            runId: "run-cost-1",
+            attempt: 2,
+            outcome: "complete",
+            credentials: "own",
+            limitationCode: null,
+            parseLimitationCode: null,
+            pointsSpent: 950.5,
+            pointsLimitPerHour: 18_000,
+            pointsRemainingBefore: 16_999.75,
+            pointsRemainingAfter: 16_049.25,
+            // The cap the run was given, not the configured 500: since #320
+            // the scan scales to the reported allowance.
+            requestCapUsed: 300,
+            parseRequestCapUsed: 8,
+            requests: {
+              historyScan: 2,
+              zoneRankings: 1,
+              fightParses: 1,
+              rankingIdentities: 1
+            }
+          }
+        ]);
+      });
+
+      it("says why a run fell short, not merely that it did", async () => {
+        // Correlating a limitation against its spend by hand was the thing
+        // asked for most often while settling the budget: what a run that hit
+        // drift costs is not what a clean one costs.
+        const { costs, store: evidence } = recordingStore();
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          warcraftLogs: {
+            ...openGate,
+            getFirstKillReports: async () => ({
+              kind: "limitation" as const,
+              code: "rate_limited" as const
+            })
+          }
+        });
+
+        await handler.execute("run-cost-2");
+
+        expect(costs).toEqual([
+          expect.objectContaining({
+            outcome: "limitation",
+            limitationCode: "rate_limited",
+            parseLimitationCode: null
+          })
+        ]);
+      });
+
+      it("leaves an unmeasured spend null rather than zero", async () => {
+        // An allowance that could not be read is `unavailable`. A zero would
+        // claim the run was free, and a reserve set from a distribution full
+        // of those would be set from runs that were never measured.
+        const { costs, store: evidence } = recordingStore();
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          warcraftLogs: {
+            getRateLimit: async () => ({ kind: "unavailable" as const }),
+            getFirstKillReports: async () => ({
+              kind: "evidence" as const,
+              troubledRaidIds: { parses: [], tierBests: [] },
+              tierBests: [],
+              kills: [],
+              wipes: []
+            })
+          } as unknown as Pick<
+            WarcraftLogsGateway,
+            "getFirstKillReports" | "getRateLimit"
+          >
+        });
+
+        await handler.execute("run-cost-3");
+
+        expect(costs).toEqual([
+          expect.objectContaining({
+            pointsSpent: null,
+            pointsLimitPerHour: null,
+            pointsRemainingBefore: null,
+            pointsRemainingAfter: null
+          })
+        ]);
+      });
+
+      it("names the allowance a visitor's run spent as theirs", async () => {
+        const { costs, store: evidence } = recordingStore({
+          claim: async (id) => ({
+            ...run,
+            id,
+            wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
+            wclClientSecretEncrypted: encryptCredential(
+              "user-secret",
+              encryptionKey
+            )
+          })
+        });
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          createWarcraftLogsGateway: () => ({
+            ...openGate,
+            getFirstKillReports: async () => ({
+              kind: "evidence" as const,
+              troubledRaidIds: { parses: [], tierBests: [] },
+              tierBests: [],
+              kills: [],
+              wipes: []
+            })
+          }),
+          decryptionKey: encryptionKey
+        });
+
+        await handler.execute("run-cost-4");
+
+        expect(costs).toEqual([
+          expect.objectContaining({ credentials: "visitor" })
+        ]);
+        // The class the budget branches on, never an identity: the table's
+        // stated property is that it adds no identifying surface.
+        const serialized = JSON.stringify(costs[0]);
+        expect(serialized).not.toContain("user-id");
+        expect(serialized).not.toContain("user-secret");
+      });
+
+      it("writes nothing for a run this attempt never claimed", async () => {
+        const { costs, store: evidence } = recordingStore({
+          claim: async () => null
+        });
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence
+        });
+
+        await handler.execute("run-cost-5");
+
+        expect(costs).toEqual([]);
+      });
+
+      it("skips the write entirely on an abort, and still propagates it", async () => {
+        // #309 gives a cancelled run a deliberately tight budget to record its
+        // outcome before the container goes, and the catch already spends one
+        // database write inside it. A lost cost row costs a sample; a lost
+        // outcome costs the run.
+        const { costs, store: evidence } = recordingStore();
+        const controller = new AbortController();
+        controller.abort(new Error("aborted"));
+        const records: Array<Record<string, unknown>> = [];
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          logger: { info: (record) => records.push(record) }
+        });
+
+        await expect(
+          handler.execute("run-cost-6", {
+            attempt: 1,
+            maxAttempts: 3,
+            signal: controller.signal
+          })
+        ).rejects.toThrow("aborted");
+
+        expect(costs).toEqual([]);
+        // The outcome record, which is the one that must survive, still went.
+        expect(records).toEqual([
+          expect.objectContaining({ outcome: "cancelled" })
+        ]);
+      });
+
+      it("completes the run when the cost cannot be stored", async () => {
+        // A measurement that could not be written is not a run that failed.
+        const published: string[] = [];
+        const records: Array<Record<string, unknown>> = [];
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence: evidenceStore({
+            async publish(runId) {
+              published.push(runId);
+            },
+            async recordRunCost() {
+              throw new Error("insert failed");
+            }
+          }),
+          logger: { info: (record) => records.push(record) }
+        });
+
+        await expect(handler.execute("run-cost-7")).resolves.toBeUndefined();
+
+        expect(published).toEqual(["run-cost-7"]);
+        expect(records).toEqual([
+          expect.objectContaining({ outcome: "complete" }),
+          expect.objectContaining({ event: "evidence_run_cost_record_failed" })
+        ]);
+      });
+
+      it("records the cost after the outcome has been logged", async () => {
+        // Ordering is load-bearing, not incidental: the log line is what the
+        // shutdown path must not lose, so the extra write goes last on every
+        // path that takes it.
+        const order: string[] = [];
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence: evidenceStore({
+            async recordRunCost() {
+              order.push("cost");
+            }
+          }),
+          logger: {
+            info: (record) => {
+              order.push(record.event === "evidence_job" ? "log" : "other");
+            }
+          }
+        });
+
+        await handler.execute("run-cost-8");
+
+        expect(order).toEqual(["log", "cost"]);
+      });
+    });
   });
   describe("evidence run announcements", () => {
     function announcingStore(
@@ -2292,6 +2600,7 @@ describe("applicant evidence job handler", () => {
         async publish() {},
         async fail() {},
         async recordLimitation() {},
+        async recordRunCost() {},
         async storedEvidenceTiers() {
           return { kills: [], wipes: [] };
         },

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { recoverAbandonedEvidenceRuns } from "../../packages/application/src";
 import type { CharacterKey } from "@slashwho/domain";
 import type { Pool } from "pg";
@@ -8,10 +10,19 @@ import {
   type Repositories,
   type CharacterMythicKillInput,
   type CharacterMythicWipeInput,
+  type EvidenceRunCost,
   type SnapshotCharacterInput,
   type StoredSnapshot
 } from "../../packages/database/src";
 import { startPostgres } from "./postgres";
+
+/**
+ * The fenced SQL blocks in an operations document, in order. The queries in
+ * `docs/operations/evidence-run-cost.md` are run from the document itself so
+ * that a column renamed out from under them fails the suite rather than
+ * leaving a document that quietly stopped being true.
+ */
+const SQL_BLOCK = /```sql\n([\s\S]*?)```/g;
 
 const rootKey = {
   region: "eu",
@@ -2711,6 +2722,406 @@ describe("PostgreSQL repositories", () => {
       await expect(repositories.evidence.find(runId)).resolves.toMatchObject({
         status: "failed",
         errorCode: "abandoned"
+      });
+    });
+  });
+
+  describe("evidence run costs", () => {
+    // What a run spent, and the configuration it spent it under. Before #342
+    // this existed only in the worker's deployment logs, which serve the
+    // current deployment alone, so every re-derivation of the points budget
+    // was an archaeology exercise nobody performed.
+    async function reserveRun(key: CharacterKey, at: Date): Promise<string> {
+      const reservation = await repositories.evidence.reserve({
+        key,
+        freshnessCutoff: at,
+        at
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("evidence_not_reserved");
+      }
+      return reservation.run.id;
+    }
+
+    function cost(
+      runId: string,
+      overrides: Partial<EvidenceRunCost> = {}
+    ): EvidenceRunCost {
+      return {
+        runId,
+        attempt: 1,
+        outcome: "published",
+        credentials: "own",
+        limitationCode: null,
+        parseLimitationCode: null,
+        pointsSpent: 760.25,
+        pointsLimitPerHour: 18_000,
+        pointsRemainingBefore: 17_000,
+        pointsRemainingAfter: 16_239.75,
+        requestCapUsed: 300,
+        parseRequestCapUsed: 24,
+        requests: {
+          historyScan: 12,
+          zoneRankings: 3,
+          fightParses: 24,
+          rankingIdentities: 1
+        },
+        ...overrides
+      };
+    }
+
+    async function rows(): Promise<ReadonlyArray<Record<string, unknown>>> {
+      const result = await pool.query(
+        `SELECT * FROM character_evidence_run_costs
+         ORDER BY recorded_at, run_id, attempt`
+      );
+      return result.rows as ReadonlyArray<Record<string, unknown>>;
+    }
+
+    it("records what an attempt spent, with the caps it was given", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(cost(runId));
+
+      expect(await rows()).toEqual([
+        expect.objectContaining({
+          run_id: runId,
+          attempt: 1,
+          outcome: "published",
+          credentials: "own",
+          points_spent: 760.25,
+          points_limit_per_hour: 18_000,
+          points_remaining_before: 17_000,
+          points_remaining_after: 16_239.75,
+          request_cap_used: 300,
+          parse_request_cap_used: 24,
+          history_scan_requests: 12,
+          zone_rankings_requests: 3,
+          fight_parses_requests: 24,
+          ranking_identities_requests: 1
+        })
+      ]);
+    });
+
+    it("keeps an unmeasured spend null rather than zero", async () => {
+      // The distinction the whole table rests on: null is `unavailable` -- the
+      // allowance could not be read -- and a zero is a run that genuinely
+      // spent nothing. A query that averaged the two together would report a
+      // cost no run ever had.
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(runId, {
+          outcome: "unexpected_error",
+          pointsSpent: null,
+          pointsLimitPerHour: null,
+          pointsRemainingBefore: null,
+          pointsRemainingAfter: null
+        })
+      );
+
+      const [row] = await rows();
+      expect(row?.points_spent).toBeNull();
+      expect(row?.points_remaining_before).toBeNull();
+      expect(row?.points_remaining_after).toBeNull();
+    });
+
+    it("records a spend of zero as zero", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(runId, { pointsSpent: 0, pointsRemainingAfter: 17_000 })
+      );
+
+      const [row] = await rows();
+      expect(row?.points_spent).toBe(0);
+    });
+
+    it("keeps one row per attempt, because a retry pays for its own scan", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(runId, { attempt: 1, pointsSpent: 2_523.24 })
+      );
+      await repositories.evidence.recordRunCost(
+        cost(runId, { attempt: 2, pointsSpent: 1_180.95 })
+      );
+
+      expect((await rows()).map((row) => row.points_spent)).toEqual([
+        2_523.24, 1_180.95
+      ]);
+    });
+
+    it("refreshes an attempt re-entered after a crash rather than failing", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(runId, { outcome: "unknown", pointsSpent: 100 })
+      );
+      await repositories.evidence.recordRunCost(
+        cost(runId, { outcome: "published", pointsSpent: 950.5 })
+      );
+
+      expect(await rows()).toEqual([
+        expect.objectContaining({ outcome: "published", points_spent: 950.5 })
+      ]);
+    });
+
+    it("rejects an attempt number no run could have", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+
+      await expect(
+        repositories.evidence.recordRunCost(cost(runId, { attempt: 0 }))
+      ).rejects.toThrow(RangeError);
+    });
+
+    it("rejects a credentials value outside the two the budget branches on", async () => {
+      // The column is the scan share's input, not free text: `evidenceRunBudget`
+      // branches on exactly these two, and anything narrower would put a
+      // visitor identifier in a table whose stated property is that it holds
+      // none.
+      const runId = await reserveRun(rootKey, new Date());
+
+      await expect(
+        repositories.evidence.recordRunCost(
+          cost(runId, {
+            credentials: "someone" as EvidenceRunCost["credentials"]
+          })
+        )
+      ).rejects.toThrow();
+    });
+
+    it("goes when the run it measures goes", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+      await repositories.evidence.recordRunCost(cost(runId));
+
+      await pool.query(`DELETE FROM character_evidence_runs WHERE id = $1`, [
+        runId
+      ]);
+
+      expect(await rows()).toEqual([]);
+    });
+
+    it("drops rows older than the retention cutoff and keeps the rest", async () => {
+      const oldRun = await reserveRun(rootKey, new Date());
+      const freshRun = await reserveRun(altKey, new Date());
+      await repositories.evidence.recordRunCost(cost(oldRun));
+      await repositories.evidence.recordRunCost(cost(freshRun));
+      await pool.query(
+        `UPDATE character_evidence_run_costs SET recorded_at = $2
+         WHERE run_id = $1`,
+        [oldRun, new Date(Date.now() - 30 * 24 * 60 * 60_000)]
+      );
+
+      const removed = await repositories.evidence.clearExpiredRunCosts(
+        new Date(Date.now() - 28 * 24 * 60 * 60_000)
+      );
+
+      expect(removed).toBe(1);
+      expect((await rows()).map((row) => row.run_id)).toEqual([freshRun]);
+    });
+
+    describe("the documented queries", () => {
+      // Run verbatim from `docs/operations/evidence-run-cost.md`. Doc drift is
+      // what this repository keeps paying for -- a number set once, in one
+      // file, with nothing forcing the second look -- so the document either
+      // still describes these columns or the integration suite is red.
+      const documented = readFileSync(
+        new URL("../../docs/operations/evidence-run-cost.md", import.meta.url),
+        "utf8"
+      );
+      const queries = [...documented.matchAll(SQL_BLOCK)].map(
+        (match) => match[1] as string
+      );
+
+      it("finds exactly the two queries the document describes", () => {
+        expect(queries).toHaveLength(2);
+      });
+
+      it("returns the spend distribution grouped by the caps in force", async () => {
+        const cheap = await reserveRun(rootKey, new Date());
+        const dear = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(cheap, {
+            pointsSpent: 700,
+            pointsRemainingBefore: 17_000,
+            pointsRemainingAfter: 16_300,
+            parseRequestCapUsed: 24
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(cheap, {
+            attempt: 2,
+            pointsSpent: 900,
+            pointsRemainingBefore: 16_300,
+            pointsRemainingAfter: 15_400,
+            parseRequestCapUsed: 24
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(dear, {
+            pointsSpent: 2_400,
+            pointsRemainingBefore: 15_400,
+            pointsRemainingAfter: 13_000,
+            parseRequestCapUsed: 48
+          })
+        );
+
+        const result = await pool.query(queries[0] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            credentials: "own",
+            request_cap_used: 300,
+            parse_request_cap_used: 24,
+            attempts: "2",
+            measured: "2",
+            p50: "800.00",
+            max_spent: "900.00",
+            window_moved: "0"
+          }),
+          expect.objectContaining({
+            parse_request_cap_used: 48,
+            attempts: "1",
+            measured: "1",
+            max_spent: "2400.00"
+          })
+        ]);
+      });
+
+      it("counts an unmeasured attempt without letting it reach the percentiles", async () => {
+        const runId = await reserveRun(rootKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(runId, {
+            pointsSpent: 800,
+            pointsRemainingBefore: 17_000,
+            pointsRemainingAfter: 16_200
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(runId, {
+            attempt: 2,
+            pointsSpent: null,
+            pointsLimitPerHour: null,
+            pointsRemainingBefore: null,
+            pointsRemainingAfter: null
+          })
+        );
+
+        const result = await pool.query(queries[0] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            attempts: "2",
+            measured: "1",
+            p50: "800.00"
+          })
+        ]);
+      });
+
+      it("flags a row whose hourly window moved under it", async () => {
+        // `points_spent` is the delta of the same counter the remaining
+        // readings are derived from, so the two agree by construction -- until
+        // the reported limit changes between them. Then the row is measuring
+        // two different hours and its spend is not a sample of anything.
+        const runId = await reserveRun(rootKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(runId, {
+            pointsSpent: 500,
+            pointsRemainingBefore: 17_000,
+            pointsRemainingAfter: 17_800
+          })
+        );
+
+        const result = await pool.query(queries[0] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({ attempts: "1", window_moved: "1" })
+        ]);
+      });
+
+      it("finds spend by something this table never recorded", async () => {
+        // The contamination that produced three wrong numbers: a second run
+        // against the same hourly counter. It inflates both of a row's own
+        // readings equally, so only the gap between consecutive rows shows it.
+        const first = await reserveRun(rootKey, new Date());
+        const second = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(first, {
+            pointsSpent: 1_000,
+            pointsRemainingBefore: 17_000,
+            pointsRemainingAfter: 16_000
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(second, {
+            pointsSpent: 1_000,
+            // 400 points left the counter between the two runs, and nothing
+            // here paid for them.
+            pointsRemainingBefore: 15_600,
+            pointsRemainingAfter: 14_600
+          })
+        );
+        await pool.query(
+          `UPDATE character_evidence_run_costs SET recorded_at = $2
+           WHERE run_id = $1`,
+          [first, new Date(Date.now() - 60_000)]
+        );
+
+        const result = await pool.query<{
+          unaccounted_spend: string | null;
+        }>(queries[1] as string);
+
+        expect(result.rows.map((row) => row.unaccounted_spend)).toEqual([
+          null,
+          "400.00"
+        ]);
+      });
+
+      it("does not read the hourly reset as unaccounted spend", async () => {
+        const first = await reserveRun(rootKey, new Date());
+        const second = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(first, {
+            pointsSpent: 1_000,
+            pointsRemainingBefore: 3_000,
+            pointsRemainingAfter: 2_000
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(second, {
+            pointsSpent: 1_000,
+            // The window reset: the allowance refilled between the two runs.
+            pointsRemainingBefore: 18_000,
+            pointsRemainingAfter: 17_000
+          })
+        );
+        await pool.query(
+          `UPDATE character_evidence_run_costs SET recorded_at = $2
+           WHERE run_id = $1`,
+          [first, new Date(Date.now() - 60_000)]
+        );
+
+        const result = await pool.query<{
+          unaccounted_spend: string | null;
+        }>(queries[1] as string);
+
+        expect(
+          result.rows.every((row) => Number(row.unaccounted_spend ?? 0) <= 0.01)
+        ).toBe(true);
+      });
+
+      it("leaves a visitor's own counter out of the comparison", async () => {
+        // A visitor's run draws on their account, not the worker's, so its
+        // readings are not comparable to the worker's or to each other's.
+        const runId = await reserveRun(rootKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(runId, { credentials: "visitor" })
+        );
+
+        const result = await pool.query(queries[1] as string);
+
+        expect(result.rows).toEqual([]);
       });
     });
   });
