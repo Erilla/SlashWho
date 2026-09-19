@@ -10,12 +10,23 @@ const concluded = "The Dreamrift";
 /** Open-ended window, so never concluded. */
 const current = "The Venomous Abyss";
 
-function kill(raidId: string, raidName: string, killedAt: string) {
-  return { raidId, raidName, killedAt };
+function kill(
+  raidId: string,
+  raidName: string,
+  killedAt: string,
+  boss: Readonly<{ bossName?: string; journalBossId?: string | null }> = {}
+) {
+  return {
+    raidId,
+    raidName,
+    killedAt,
+    bossName: boss.bossName ?? "Boss",
+    journalBossId: boss.journalBossId ?? null
+  };
 }
 
-function wipe(raidId: string, attemptedAt: string) {
-  return { raidId, attemptedAt };
+function wipe(raidId: string, attemptedAt: string, raidName = concluded) {
+  return { raidId, attemptedAt, raidName };
 }
 
 function input(overrides: Partial<Parameters<typeof terminalTiersFrom>[0]>) {
@@ -227,8 +238,142 @@ describe("terminalTiersFrom", () => {
   });
 });
 
+describe("terminalTiersFrom, for a zone the catalogue cannot name", () => {
+  it("marks a raid only its boss can place", () => {
+    // Break caught: Warcraft Logs calls journal raid 1308 `March on
+    // Quel'Danas` by its in-game zone name, and serves `journalID: 0` for
+    // every encounter in it, so neither the zone name nor the journal id
+    // resolves. The dossier displays these kills anyway, by unique boss name,
+    // and a tier the dossier can name but the marker cannot is a tier that
+    // never concludes and pins the scan floor for good (#346).
+    expect(
+      input({
+        kills: [
+          kill("2913", "Isle of Quel'Danas", "2026-04-23T19:12:06.359Z", {
+            bossName: "Belo'ren, Child of Al'ar"
+          })
+        ]
+      })
+    ).toContainEqual({ raidId: "2913", domain: "kills" });
+  });
+
+  it("never marks a Mythic dungeon", () => {
+    expect(
+      input({
+        kills: [
+          kill("2290", "Mists of Tirna Scithe", "2024-10-18T21:18:31.270Z", {
+            bossName: "Ingra Maloch"
+          })
+        ]
+      })
+    ).toEqual([]);
+  });
+
+  it("holds a combined zone open while any raid in it is still current", () => {
+    // Warcraft Logs files the three opening Midnight raids under one zone,
+    // `VS / DR / MQD`, and a fight with no game zone of its own falls back to
+    // it. Marks are per zone, so concluding the zone on the strength of one
+    // raid in it would freeze the others while they are still current -- the
+    // failure the window rule exists to prevent, arriving through a different
+    // door.
+    expect(
+      input({
+        kills: [
+          kill("46", concluded, "2026-06-01T00:00:00.000Z"),
+          kill("46", current, "2026-06-02T00:00:00.000Z")
+        ]
+      })
+    ).toEqual([]);
+  });
+
+  it("marks a combined zone once every raid in it has concluded", () => {
+    expect(
+      input({
+        kills: [
+          kill("46", concluded, "2026-06-01T00:00:00.000Z"),
+          kill("46", "The Voidspire", "2026-06-02T00:00:00.000Z")
+        ]
+      })
+    ).toContainEqual({ raidId: "46", domain: "kills" });
+  });
+
+  it("still refuses a raid nobody can place at all", () => {
+    // The conservative half. An unplaceable raid-shaped zone must keep holding
+    // the scan open, because freezing evidence we cannot date is worse than
+    // re-reading it.
+    expect(
+      input({
+        kills: [
+          kill("9999", "Some Unreleased Raid", "2024-01-01T00:00:00.000Z", {
+            bossName: "Nobody In The Catalogue"
+          })
+        ]
+      })
+    ).toEqual([]);
+  });
+});
+
 describe("killScanFloorFrom", () => {
   const terminalKills = [{ raidId: "42", domain: "kills" as const }];
+
+  it("is not pinned by a Mythic dungeon kill", () => {
+    // Break caught: a Mythic dungeon boss shares a difficulty with a Mythic
+    // raid boss, so dungeon kills were stored as raid evidence in zones no
+    // raid catalogue holds. Never placeable, never terminal, and the oldest
+    // of them floored the scan at the bottom of a veteran's history -- 88% of
+    // every run's cost, re-paid every twenty minutes (#346).
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [
+          kill("2290", "Mists of Tirna Scithe", "2024-10-18T21:18:31.270Z"),
+          kill("42", concluded, "2026-06-01T00:00:00.000Z")
+        ],
+        []
+      )
+    ).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("is not pinned by a Mythic+ season zone", () => {
+    // The same defect by the other route: a fight whose own game zone is
+    // missing falls back to the report's, and a Mythic+ night is filed under
+    // the dungeon season.
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [
+          kill("43", "Mythic+ Season 3", "2024-10-18T21:18:31.270Z"),
+          kill("42", concluded, "2026-06-01T00:00:00.000Z")
+        ],
+        []
+      )
+    ).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("is not pinned by a wipe in a Mythic dungeon", () => {
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [kill("42", concluded, "2026-06-01T00:00:00.000Z")],
+        [wipe("2286", "2024-10-18T22:14:20.090Z", "The Necrotic Wake")]
+      )
+    ).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("is still pinned by a raid the catalogue cannot place", () => {
+    // Unchanged on purpose: only a positively identified dungeon stops
+    // counting. A raid-shaped zone nobody can name is evidence going missing.
+    expect(
+      killScanFloorFrom(
+        terminalKills,
+        [
+          kill("9999", "Some Unreleased Raid", "2024-10-18T21:18:31.270Z"),
+          kill("42", concluded, "2026-06-01T00:00:00.000Z")
+        ],
+        []
+      )
+    ).toBe("2024-10-18T21:18:31.270Z");
+  });
 
   it("gives no floor when nothing is terminal for kills", () => {
     // Nothing to save, and stored kills may come from a run that never

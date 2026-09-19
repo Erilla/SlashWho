@@ -11,9 +11,13 @@ export {
   currentContentEligibility,
   lookupRaiderIoBoss,
   raidTierConclusion,
+  raidTierConclusionForEvidence,
   supportedRaidCatalogue
 } from "./raid-catalogue";
-export type { RaidTierConclusion } from "./raid-catalogue";
+export type {
+  RaidEvidenceIdentity,
+  RaidTierConclusion
+} from "./raid-catalogue";
 export { buildApplicantDossier } from "./applicant-dossier";
 export type {
   ApplicantDossier,
@@ -35,6 +39,7 @@ export type {
   RaidCatalogueRaid,
   SupportedRaidCatalogueEntry
 } from "./raid-catalogue";
+export { isKnownDungeonZone, isNonRaidZone } from "./dungeon-catalogue";
 export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
 export { isAccountWideCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";

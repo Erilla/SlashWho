@@ -2597,6 +2597,7 @@ describe("applicant evidence job handler", () => {
       });
       evidence.storedWipes.push({
         raidId: "43",
+        raidName: "Sporefall",
         attemptedAt: "2026-03-01T00:00:00.000Z"
       });
       const getFirstKillReports = vi.fn(async () => ({

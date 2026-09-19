@@ -1,5 +1,6 @@
 import {
   currentContentEligibility,
+  isNonRaidZone,
   supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
@@ -531,6 +532,14 @@ function firstKillReports(
       ) {
         continue;
       }
+      // A Mythic dungeon boss carries the same difficulty as a Mythic raid
+      // boss, so difficulty alone cannot say which fights are raid evidence.
+      // Judged per fight rather than per report: a raid night that also ran a
+      // dungeon keeps every raid fight in it. Only a positively identified
+      // dungeon is dropped -- a zone in neither catalogue is a raid nobody can
+      // place, and still collected, because silence there reads as "never
+      // killed it" (#346).
+      if (isNonRaidZone(fightRaidName)) continue;
 
       const evidenceAtMilliseconds = reportStartTime + fightEndTime;
       if (
@@ -1258,6 +1267,51 @@ function decodeZoneRankings(
     .sort((a, b) => Number(a.bossId) - Number(b.bossId));
 }
 
+/**
+ * When every fight on one page of reports happened, whether or not any of it
+ * became evidence.
+ *
+ * This is what the scan floor's early stop needs, and it is deliberately not
+ * the same question as "what did this page contribute". A page reaches as far
+ * back as the oldest fight on it -- a Mythic dungeon, a Normal raid, someone
+ * else's pull -- and reports are paged newest first, so a page whose fights
+ * all predate the floor means every later page does too.
+ *
+ * Deriving it from the emitted evidence instead is what made this its own
+ * function: dropping non-raid fights would leave a dungeon-only page carrying
+ * no dates at all, so it could no longer end the scan, and a history full of
+ * Mythic+ would page straight past its floor (#346).
+ */
+function reportPageReach(value: unknown): readonly string[] {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const characterData = data && record(data.characterData);
+  const character = characterData && record(characterData.character);
+  const recentReports = character && record(character.recentReports);
+  const reports = recentReports && recentReports.data;
+  if (!Array.isArray(reports)) return [];
+
+  const reached: string[] = [];
+  for (const reportValue of reports) {
+    const report = record(reportValue);
+    const reportStartTime =
+      report && validTimestampMilliseconds(report.startTime);
+    if (report === null || reportStartTime === null) continue;
+    if (!Array.isArray(report.fights)) continue;
+    for (const fightValue of report.fights) {
+      const fight = record(fightValue);
+      const fightEndTime = fight && validTimestampMilliseconds(fight.endTime);
+      if (fightEndTime === null) continue;
+      const at = reportStartTime + fightEndTime;
+      // A date the scan cannot trust says nothing about how far it reached, so
+      // it is left out rather than allowed to end the scan early.
+      if (!Number.isSafeInteger(at) || at > MAX_DATE_MILLISECONDS) continue;
+      reached.push(new Date(at).toISOString());
+    }
+  }
+  return reached;
+}
+
 function hasMoreReportPages(value: unknown): boolean | null {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
@@ -1519,13 +1573,10 @@ export function createWarcraftLogsClient(
       // because a partial run would block the marks that allowed it.
       const floor = options.killScanFloor;
       if (floor !== undefined) {
-        const dated = [
-          ...normalized.kills.map((kill) => kill.killedAt),
-          ...normalized.wipes.map((wipe) => wipe.attemptedAt)
-        ];
+        const reached = reportPageReach(result.value);
         // A page with nothing dated says nothing about how far back the scan
         // has reached, so it must not end it.
-        if (dated.length > 0 && dated.every((at) => at < floor)) break;
+        if (reached.length > 0 && reached.every((at) => at < floor)) break;
       }
 
       const hasMorePages = hasMoreReportPages(result.value);

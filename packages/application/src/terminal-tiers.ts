@@ -1,19 +1,29 @@
 import type { TerminalTier } from "@slashwho/database";
-import { raidTierConclusion } from "@slashwho/domain";
+import { isNonRaidZone, raidTierConclusionForEvidence } from "@slashwho/domain";
 
 export type TerminalTierKill = Readonly<{
   raidId: string;
   raidName: string;
   killedAt: string;
+  /**
+   * What identifies the raid when its zone name does not. Optional because
+   * the scan floor never asks a tier's conclusion -- it reads stored evidence
+   * and only needs to know which zone each row belongs to -- while the run
+   * that makes the marks always has both.
+   */
+  bossName?: string;
+  journalBossId?: string | null;
 }>;
 
 /**
- * A stored wipe, as the scan floor weighs it. No raid name: a wipe never
- * settles a tier, it only holds the scan open, so the tier's conclusion is
- * never asked of it.
+ * A stored wipe, as the scan floor weighs it. No boss: a wipe never settles a
+ * tier, it only holds the scan open, so the tier's conclusion is never asked
+ * of it. It carries its zone name all the same, because a wipe in a Mythic
+ * dungeon is no more raid evidence than a kill in one.
  */
 export type TerminalTierWipe = Readonly<{
   raidId: string;
+  raidName: string;
   attemptedAt: string;
 }>;
 
@@ -85,15 +95,33 @@ export function terminalTiersFrom(
   const settledBefore = input.at.getTime() - input.settleMs;
   const troubledParses = new Set(input.troubledRaidIds.parses);
   const troubledTierBests = new Set(input.troubledRaidIds.tierBests);
-  const raids = new Map<string, { raidName: string; settled: boolean }>();
+  const raids = new Map<string, { concluded: boolean; settled: boolean }>();
   for (const kill of input.kills) {
+    // Not raid evidence, so there is no tier here to settle. A Mythic dungeon
+    // boss carries a raid boss's difficulty, so the scan stored these, and
+    // being unplaceable they could never conclude (#346).
+    if (isNonRaidZone(kill.raidName)) continue;
     const killedAt = Date.parse(kill.killedAt);
     // An undatable kill cannot be shown to have settled, so it holds its tier
     // open rather than being waved through.
     const settled = !Number.isNaN(killedAt) && killedAt < settledBefore;
+    // Asked of every kill rather than the first one seen. One stored zone can
+    // carry more than one raid -- a fight with no game zone of its own falls
+    // back to the report's, and Warcraft Logs files the three opening Midnight
+    // raids under a single `VS / DR / MQD` zone -- so the zone concludes only
+    // when everything in it has.
+    const concluded =
+      raidTierConclusionForEvidence(
+        {
+          raidName: kill.raidName,
+          bossName: kill.bossName ?? "",
+          journalBossId: kill.journalBossId ?? null
+        },
+        input.at
+      ) === "concluded";
     const seen = raids.get(kill.raidId);
     raids.set(kill.raidId, {
-      raidName: seen?.raidName ?? kill.raidName,
+      concluded: seen ? seen.concluded && concluded : concluded,
       settled: seen ? seen.settled && settled : settled
     });
   }
@@ -103,7 +131,7 @@ export function terminalTiersFrom(
     a.localeCompare(b)
   )) {
     if (!raid.settled) continue;
-    if (raidTierConclusion(raid.raidName, input.at) !== "concluded") continue;
+    if (!raid.concluded) continue;
     // Kills survive parse-domain trouble: the scan that found them raised no
     // limitation, which is the whole of what this mark rests on.
     marks.push({ raidId, domain: "kills" });
@@ -166,9 +194,26 @@ export function killScanFloorFrom(
   // character has only ever wiped in has no kill to settle, so the mark it
   // would need is unreachable -- and a complete publish then dropped it (#326).
   const held = [
-    ...kills.map((kill) => ({ raidId: kill.raidId, at: kill.killedAt })),
-    ...wipes.map((wipe) => ({ raidId: wipe.raidId, at: wipe.attemptedAt }))
-  ];
+    ...kills.map((kill) => ({
+      raidId: kill.raidId,
+      raidName: kill.raidName,
+      at: kill.killedAt
+    })),
+    ...wipes.map((wipe) => ({
+      raidId: wipe.raidId,
+      raidName: wipe.raidName,
+      at: wipe.attemptedAt
+    }))
+    // Stored rows in a zone that is known not to be a raid. They are not raid
+    // evidence, so there is no tier for them to hold open, and no mark they
+    // could ever be given: a Mythic dungeon has no content window and never
+    // will. Left in, one of them floored the scan at the bottom of every
+    // veteran's history (#346). Filtered here as well as at collection, so a
+    // character whose publishes are partial -- which carry all stored evidence
+    // forward -- stops paying for them on the next run rather than whenever a
+    // run finally comes back complete.
+  ].filter((evidence) => !isNonRaidZone(evidence.raidName));
+  if (held.length === 0) return undefined;
   const outstanding = held.filter(
     (evidence) => !terminalKillRaids.has(evidence.raidId)
   );
