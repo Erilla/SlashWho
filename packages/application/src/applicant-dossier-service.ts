@@ -188,7 +188,13 @@ function limitationMessage(
             ? "this dossier reached its parse request cap"
             : code === "parse_schema_drift"
               ? "Warcraft Logs returned an unexpected ranking response"
-              : "Warcraft Logs could not load the rankings";
+              : // Not a fault, most of the time: the usual way here is a
+                // character who was in the fight and simply not ranked in it.
+                // Saying "unexpected response" of that would be alarming and
+                // wrong, which is half of why #349 split the two codes.
+                code === "parse_identity_unmatched"
+                ? "Warcraft Logs ranked nobody matching this character in those reports"
+                : "Warcraft Logs could not load the rankings";
     return `Parse availability is partial because ${reason}. Verified kill evidence is still shown.`;
   }
   if (source === "raiderio") {

@@ -22,7 +22,10 @@ import {
   classifyEvidenceFailure,
   evidenceRetryDecision
 } from "./evidence-retry-policy";
-import { retryDelayMsFor } from "./limitation-retry-policy";
+import {
+  drivingParseLimitation,
+  retryDelayMsFor
+} from "./limitation-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
@@ -941,6 +944,9 @@ export function createApplicantEvidenceJobHandler(
               state: "partial",
               limitationCode: response.code,
               parseLimitationCode: null,
+              // The scan stopped before any parse work, so there is nothing
+              // to have raised.
+              parseLimitationCodesSeen: [],
               ...(retryAfterAt ? { retryAfterAt } : {}),
               kills: [],
               wipes: [],
@@ -952,29 +958,44 @@ export function createApplicantEvidenceJobHandler(
           return;
         }
 
+        // Every parse limitation the read raised, not only the one it happened
+        // to report last. Older gateways -- and any response that raised none
+        // -- fall back to the single reported code, so this is never empty
+        // when there was something to say.
+        const parseLimitationsSeen =
+          response.parseLimitations ??
+          (response.parseLimitation ? [response.parseLimitation] : []);
+        // Which of them decides the retry, and so which code the run records.
+        // Deliberate policy rather than assignment order: a cap that earns a
+        // retry must not be suppressed by a drift that does not (#349).
+        const drivingParse = drivingParseLimitation(parseLimitationsSeen, {
+          transientRetryMs: options.transientRetryMs,
+          capRetryMs: options.capRetryMs
+        });
         // Whichever limitation asks to wait longest decides, because the run
         // is not collectable again until both are. A limitation with no answer
         // at all contributes nothing rather than forcing a retry the code was
         // deliberately not given.
         const retryAfterMs = Math.max(
           retryDelayMs(response.limitation) ?? 0,
-          retryDelayMs(response.parseLimitation) ?? 0
+          retryDelayMs(drivingParse) ?? 0
         );
         // Honest about the run, not just about its history scan: a run that
         // spent its whole parse budget did not finish, and reporting it
         // `complete` was the other half of why the character looked settled.
-        const incomplete = Boolean(
-          response.limitation ?? response.parseLimitation
-        );
+        const incomplete = Boolean(response.limitation ?? drivingParse);
         record.outcome = incomplete ? "partial" : "complete";
         record.limitationCode = response.limitation?.code ?? null;
-        record.parseLimitationCode = response.parseLimitation?.code ?? null;
+        record.parseLimitationCode = drivingParse?.code ?? null;
         record.killCount = response.kills.length;
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
             limitationCode: response.limitation?.code ?? null,
-            parseLimitationCode: response.parseLimitation?.code ?? null,
+            parseLimitationCode: drivingParse?.code ?? null,
+            parseLimitationCodesSeen: parseLimitationsSeen.map(
+              (limitation) => limitation.code
+            ),
             ...(retryAfterMs > 0
               ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
               : {}),
@@ -1050,6 +1071,7 @@ export function createApplicantEvidenceJobHandler(
           state: "partial",
           limitationCode: "collection_failed",
           parseLimitationCode: null,
+          parseLimitationCodesSeen: [],
           retryAfterAt: new Date(now().getTime() + options.failureCooldownMs),
           kills: [],
           wipes: [],

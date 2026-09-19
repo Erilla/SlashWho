@@ -13,6 +13,21 @@ export type WarcraftLogsLimitationCode =
   | "parse_rate_limited"
   | "parse_request_cap"
   | "parse_unavailable"
+  /**
+   * The decoder could not connect a report's ranking rows to this character
+   * although both sides of the match were in hand: the report ranked somebody
+   * for a fight the character was in, and named the character in
+   * `masterData.actors`.
+   *
+   * Split out of `parse_schema_drift` because the two want opposite handling.
+   * Structural drift is rare, unexplained and unretryable. This is common and
+   * mostly benign -- a character genuinely in a fight and genuinely unranked
+   * reaches it, a trade #319 took knowingly -- so it must not strand the
+   * character for a day. It stayed invisible only because a run that
+   * exhausted its parse budget overwrote it before publishing (#346 stopped
+   * the budget binding, and it surfaced on 7 of 10 characters at once).
+   */
+  | "parse_identity_unmatched"
   | "parse_schema_drift";
 
 export type WarcraftLogsLimitation = Readonly<{
@@ -164,6 +179,22 @@ export type WarcraftLogsReportResult =
       }>;
       limitation?: WarcraftLogsLimitation;
       parseLimitation?: WarcraftLogsLimitation;
+      /**
+       * Every distinct parse limitation this read raised, in the order it
+       * raised them.
+       *
+       * One run can hit more than one, and the record holds a single code, so
+       * the rest used to be discarded by whichever assignment ran last. That
+       * is how an attribution failure hid behind `parse_request_cap` for
+       * weeks: the drift was raised, then overwritten by the budget running
+       * out later in the same loop.
+       *
+       * The gateway reports them all and ranks none, because which one should
+       * drive `retry_after_at` is a retry-policy question and the policy lives
+       * in the caller. `parseLimitation` remains the last one raised, so a
+       * caller that does not care is unaffected.
+       */
+      parseLimitations?: readonly WarcraftLogsLimitation[];
     }>
   | WarcraftLogsLimitation;
 

@@ -210,6 +210,7 @@ describe("applicant evidence job handler", () => {
           state: "complete",
           limitationCode: null,
           parseLimitationCode: null,
+          parseLimitationCodesSeen: [],
           tierBests: [],
           kills: [
             expect.objectContaining({
@@ -269,6 +270,7 @@ describe("applicant evidence job handler", () => {
           state: "partial",
           limitationCode: "rate_limited",
           parseLimitationCode: null,
+          parseLimitationCodesSeen: [],
           retryAfterAt: new Date("2026-09-13T12:02:30.000Z"),
           kills: [],
           wipes: [],
@@ -352,6 +354,7 @@ describe("applicant evidence job handler", () => {
           state: "partial",
           limitationCode: null,
           parseLimitationCode: "parse_request_cap",
+          parseLimitationCodesSeen: ["parse_request_cap"],
           retryAfterAt: new Date("2026-09-13T12:31:00.000Z"),
           tierBests: [],
           kills: [
@@ -445,6 +448,120 @@ describe("applicant evidence job handler", () => {
     });
 
     expect(evidence.published[0]?.result).not.toHaveProperty("retryAfterAt");
+  });
+
+  it("lets the parse cap drive the retry when a drift was raised too", async () => {
+    // Break caught: the two defects #349 had to fix together. The gateway used
+    // to report whichever parse limitation was assigned last, so a drift
+    // raised early was overwritten by the budget running out -- and the
+    // obvious repair, keeping the first, would have let drift's null retry
+    // suppress the cap's and stall the character for a day. Neither order is
+    // the rule: the limitation that earns a retry drives, and the rest are
+    // recorded rather than discarded.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return {
+            kind: "evidence" as const,
+            troubledRaidIds: { parses: [], tierBests: [] },
+            tierBests: [],
+            kills: [],
+            wipes: [],
+            parseLimitation: {
+              kind: "limitation" as const,
+              code: "parse_schema_drift" as const
+            },
+            parseLimitations: [
+              {
+                kind: "limitation" as const,
+                code: "parse_schema_drift" as const
+              },
+              {
+                kind: "limitation" as const,
+                code: "parse_request_cap" as const
+              }
+            ]
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published[0]?.result).toMatchObject({
+      state: "partial",
+      parseLimitationCode: "parse_request_cap",
+      parseLimitationCodesSeen: ["parse_schema_drift", "parse_request_cap"],
+      retryAfterAt: new Date("2026-09-13T12:31:00.000Z")
+    });
+  });
+
+  it("retries an unmatched ranking identity rather than stalling the character", async () => {
+    // The case that surfaced on 7 of 10 characters the moment #346 stopped the
+    // parse budget masking it. Usually a character who was in the fight and
+    // simply unranked, so a day-long stall is the wrong answer.
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return {
+            kind: "evidence" as const,
+            troubledRaidIds: { parses: [], tierBests: [] },
+            tierBests: [],
+            kills: [],
+            wipes: [],
+            parseLimitation: {
+              kind: "limitation" as const,
+              code: "parse_identity_unmatched" as const
+            },
+            parseLimitations: [
+              {
+                kind: "limitation" as const,
+                code: "parse_identity_unmatched" as const
+              }
+            ]
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    expect(evidence.published[0]?.result).toMatchObject({
+      parseLimitationCode: "parse_identity_unmatched",
+      retryAfterAt: new Date("2026-09-13T12:16:00.000Z")
+    });
   });
 
   it("keeps an upstream retry hint rather than replacing it with the default", async () => {

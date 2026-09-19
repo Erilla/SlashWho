@@ -3093,6 +3093,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
+                 parse_limitation_codes_seen = $8,
                  retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
@@ -3103,7 +3104,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.parseLimitationCode,
               input.retryAfterAt ?? null,
               input.completedAt,
-              CURRENT_EVIDENCE_VERSION
+              CURRENT_EVIDENCE_VERSION,
+              // Empty, never null: a run that raised nothing is a different
+              // fact from a run written before the column existed. A caller
+              // that named only the code it was judged by recorded exactly
+              // that, so it stands in for the list.
+              input.parseLimitationCodesSeen ??
+                (input.parseLimitationCode ? [input.parseLimitationCode] : [])
             ]
           );
           if (publication.rowCount !== 1) {

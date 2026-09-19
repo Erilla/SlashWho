@@ -434,6 +434,13 @@ export const characterEvidenceRuns = pgTable(
     attempt: integer("attempt").default(0).notNull(),
     limitationCode: text("limitation_code"),
     parseLimitationCode: text("parse_limitation_code"),
+    // Every parse limitation the run raised, not only the one it is judged
+    // by. A run can hit several, `parse_limitation_code` holds one, and the
+    // rest used to be discarded -- which is how an unmatched ranking identity
+    // hid behind `parse_request_cap` for weeks (#349). Empty, never null, for
+    // a run that raised none; a pre-#349 row is null and means "not recorded",
+    // which is not the same thing.
+    parseLimitationCodesSeen: text("parse_limitation_codes_seen").array(),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),

@@ -167,6 +167,7 @@ export const dossierLimitationSchema = z
       "parse_request_cap",
       "parse_unavailable",
       "parse_schema_drift",
+      "parse_identity_unmatched",
       "current_content_window_unknown",
       "current_content_evidence_withheld",
       "unmatched_encounter"
