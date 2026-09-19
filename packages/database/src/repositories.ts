@@ -271,6 +271,12 @@ export interface CharacterMythicKillInput {
 
 export interface StoredCharacterMythicKill extends CharacterMythicKillInput {
   id: string;
+  /**
+   * ISO 8601 of when this fight's rankings were last asked about and
+   * answered, or null if they never have been. An answer of "no ranking" is
+   * still an answer, so this is not derivable from the parse states.
+   */
+  parsesReadAt: string | null;
 }
 
 /**
@@ -411,6 +417,14 @@ export interface StagedEvidenceCollection {
   kills: readonly CharacterMythicKillInput[];
   wipes: readonly CharacterMythicWipeInput[];
   tierBests: readonly CharacterTierBestParseInput[];
+  /**
+   * Fight URLs the run got a ranking answer about, so a republished stage
+   * records the attempts it paid for rather than making the next run pay
+   * again. Optional because a stage written before this field existed is
+   * still republishable; absent means no attempt is recorded, which costs a
+   * request and nothing else.
+   */
+  parsedFightUrls?: readonly string[];
   /** ISO 8601. */
   completedAt: string;
   /**
@@ -469,6 +483,20 @@ export interface EvidenceRepository {
        * character's previous evidence rather than written back blank.
        */
       tierBests: readonly CharacterTierBestParseInput[];
+      /**
+       * Fight URLs this run asked about and got an answer for, whatever the
+       * answer was. Stamped onto those kills so a later run can tell them
+       * from fights nothing has ever requested (#297); every other kill keeps
+       * whatever it was last stamped with.
+       *
+       * Optional, and absent safely means empty here: a publication that
+       * cannot say what it read simply records no attempt, and the fights are
+       * asked about again. That is the behaviour that predates this field, so
+       * it costs a request rather than correctness -- unlike
+       * `troubledRaidIds`, where reading silence as "none" would settle a
+       * tier that was never cleanly read.
+       */
+      parsedFightUrls?: readonly string[];
       completedAt: Date;
     }
   ): Promise<void>;
@@ -495,9 +523,15 @@ export interface EvidenceRepository {
   clearSettledCollectionStages(): Promise<number>;
   getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
   /**
-   * Fight URLs already carrying at least one available parse metric, so a
-   * budget-limited collection run can spend its requests on what is missing
-   * instead of redoing the same reports every time.
+   * Fight URLs there is nothing left to ask about, so a budget-limited
+   * collection run can spend its requests on what is missing instead of
+   * redoing the same reports every time.
+   *
+   * That is a fight carrying at least one available parse metric, or one
+   * whose rankings were asked about and answered with nothing. The second
+   * half is not decoration: roughly half of hydrated fights return no
+   * ranking, and without the attempt recorded they look exactly like fights
+   * never requested, so every run re-reads them ahead of anything new (#297).
    *
    * A fight killed at or after `settledBefore` is excluded however well
    * hydrated it is: its rankings are still moving, so treating it as done

@@ -150,6 +150,7 @@ interface CharacterMythicKillRow {
   healing_percentile: number | null;
   boss_damage_parse_state: CharacterMythicKillParseMetric["state"];
   boss_damage_percentile: number | null;
+  parses_read_at: Date | null;
 }
 
 interface CharacterTierBestParseRow {
@@ -449,7 +450,8 @@ function mapCharacterMythicKill(
         row.boss_damage_parse_state,
         row.boss_damage_percentile
       )
-    }
+    },
+    parsesReadAt: row.parses_read_at?.toISOString() ?? null
   };
 }
 
@@ -599,7 +601,7 @@ async function loadCompletedEvidence(
             guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
-            boss_damage_parse_state, boss_damage_percentile
+            boss_damage_parse_state, boss_damage_percentile, parses_read_at
      FROM character_mythic_kills
      WHERE evidence_run_id = $1
      ORDER BY killed_at, source_fight_key`,
@@ -815,7 +817,8 @@ async function loadPositiveEvidenceForPartial(
             boss_order, is_final_boss, killed_at, report_url, fight_url,
             guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
-            healing_percentile, boss_damage_parse_state, boss_damage_percentile
+            healing_percentile, boss_damage_parse_state, boss_damage_percentile,
+            parses_read_at
      FROM (
        SELECT DISTINCT ON (k.fight_url)
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
@@ -824,7 +827,8 @@ async function loadPositiveEvidenceForPartial(
               k.guild_realm, k.historic_world_rank, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
-              k.boss_damage_parse_state, k.boss_damage_percentile
+              k.boss_damage_parse_state, k.boss_damage_percentile,
+              k.parses_read_at
          FROM character_mythic_kills k
          JOIN character_evidence_runs r ON r.id = k.evidence_run_id
         WHERE k.evidence_run_id = ANY($1::uuid[])
@@ -2940,6 +2944,30 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const incomingFightUrls = new Set(
             input.kills.map((kill) => kill.fightUrl)
           );
+          // When each fight's rankings were last asked about and answered.
+          // Carried forward exactly like `collected_at`, and for the same
+          // reason: a fight this run skipped was skipped *because* it had
+          // already been answered, so restamping it with this run's
+          // completion would be a claim it was re-read.
+          const storedParsesReadAt = new Map(
+            (
+              await client.query<{ fight_url: string; parses_read_at: Date }>(
+                `SELECT k.fight_url, max(k.parses_read_at) AS parses_read_at
+                   FROM character_mythic_kills k
+                   JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+                  WHERE r.region = $1 AND r.realm_slug = $2
+                    AND r.normalized_name = $3
+                    AND r.status IN ('complete', 'partial')
+                    AND k.parses_read_at IS NOT NULL
+                  GROUP BY k.fight_url`,
+                [activeKey.region, activeKey.realm, activeKey.name]
+              )
+            ).rows.map((row) => [row.fight_url, row.parses_read_at] as const)
+          );
+          // Fights this run got a ranking answer about, whatever the answer
+          // was. A fight answered with nothing is what makes the difference:
+          // recorded, it stops being re-requested every run (#297).
+          const parsedFightUrls = new Set(input.parsedFightUrls ?? []);
           const kills = new Map<string, (typeof incomingKills)[number]>(
             previous.kills.map((kill) => [
               kill.fightUrl,
@@ -3003,8 +3031,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                  report_url, fight_url, guild_name, guild_realm, historic_world_rank,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
-                 collected_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+                 collected_at, parses_read_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
               [
                 runId,
                 kill.fightUrl,
@@ -3034,7 +3062,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 // so a percentile's age stays honest.
                 incomingFightUrls.has(kill.fightUrl)
                   ? input.completedAt
-                  : (storedCollectedAt.get(kill.fightUrl) ?? input.completedAt)
+                  : (storedCollectedAt.get(kill.fightUrl) ?? input.completedAt),
+                // Only a fight this run actually asked about is restamped.
+                // Everything else keeps the answer time it already had, and a
+                // fight never asked about stays null.
+                parsedFightUrls.has(kill.fightUrl)
+                  ? input.completedAt
+                  : (storedParsesReadAt.get(kill.fightUrl) ?? null)
               ]
             );
           }
@@ -3205,7 +3239,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.killedAt < settledBeforeIso &&
                 (kill.performance.damage.state === "available" ||
                   kill.performance.healing.state === "available" ||
-                  kill.performance.bossDamage.state === "available")
+                  kill.performance.bossDamage.state === "available" ||
+                  // Asked and answered with nothing is finished too. Without
+                  // this half the parse budget goes on re-reading reports
+                  // that have already said no -- and the hydration order
+                  // sorts those failed groups to the front, so they are what
+                  // it spends the budget on first (#297).
+                  kill.parsesReadAt !== null)
             )
             .map((kill) => kill.fightUrl)
         );

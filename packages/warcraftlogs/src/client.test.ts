@@ -2322,6 +2322,133 @@ describe("Warcraft Logs gateway", () => {
     expect(result).not.toHaveProperty("parseLimitation");
   });
 
+  it("records a fight whose report ranked nobody as read", async () => {
+    // The report was fetched and definitively held no ranking for this fight,
+    // which is a different answer from never having asked. Stored the same
+    // way, hydration re-requests the fight on every run forever (#297).
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables?: { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables?.code ?? "report");
+      }
+      return jsonResponse(performanceReport());
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.kills[0]?.performance.damage.state).toBe("unavailable");
+    expect(result.parsedFightUrls).toEqual([
+      "https://www.warcraftlogs.com/reports/performance-report#fight=26"
+    ]);
+  });
+
+  it("records a fight whose parses were applied as read", async () => {
+    const { client } = performanceClient(
+      performanceRankings({ damage: 50, healing: 51, bossDamage: 52 })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parsedFightUrls).toEqual([
+      "https://www.warcraftlogs.com/reports/performance-report#fight=26"
+    ]);
+  });
+
+  it("records a fight as read when the character was in it and matched no ranking", async () => {
+    // `parse_identity_unmatched` is an answer, not a failure: the report
+    // ranked others and none of them was this character. #350 made it
+    // retryable, so unless the attempt is recorded the retry never settles.
+    const { client } = performanceClient(
+      driftedRankingIdentity(
+        performanceRankings({ damage: 50, healing: 51, bossDamage: 52 }),
+        { server: { name: "silvermoon-eu", region: "eu" } }
+      )
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parseLimitation?.code).toBe("parse_identity_unmatched");
+    expect(result.parsedFightUrls).toEqual([
+      "https://www.warcraftlogs.com/reports/performance-report#fight=26"
+    ]);
+  });
+
+  it("leaves a fight unread when its ranking response cannot be decoded", async () => {
+    // Structural drift says nothing about whether a ranking exists, so the
+    // fight must stay eligible for another attempt.
+    const rankings = performanceRankings({
+      damage: 50,
+      healing: 51,
+      bossDamage: 52
+    }) as { data: { reportData: { report: { masterData: unknown } } } };
+    rankings.data.reportData.report.masterData = { actors: [] };
+    const { client } = performanceClient(rankings);
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parseLimitation?.code).toBe("parse_schema_drift");
+    expect(result.parsedFightUrls).toEqual([]);
+  });
+
+  it("leaves a fight unread when the decoder rejected the only response", async () => {
+    // Nothing ranked means no identity to canonicalise, and the read then
+    // ends early. That exit must not sweep up a group the decoder refused:
+    // a fight nothing could be read about is not a fight that was answered.
+    const rankings = performanceRankings({
+      damage: 50,
+      healing: 51,
+      bossDamage: 52
+    }) as { data: { reportData: { report: Record<string, unknown> } } };
+    delete rankings.data.reportData.report.masterData;
+    const { client } = performanceClient(rankings);
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parseLimitation?.code).toBe("parse_schema_drift");
+    expect(result.parsedFightUrls).toEqual([]);
+  });
+
+  it("leaves a fight unread when the parse budget never reached its report", async () => {
+    const { client } = performanceClient(
+      performanceRankings({ damage: 50, healing: 51, bossDamage: 52 })
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      // One request, and one is reserved for the identity lookup, so no
+      // report group is read at all.
+      parseRequestCap: 1
+    });
+
+    if (result.kind !== "evidence") throw new Error("expected evidence");
+    expect(result.parseLimitation?.code).toBe("parse_request_cap");
+    expect(result.parsedFightUrls).toEqual([]);
+  });
+
   it("does not re-request a report whose fights are already hydrated", async () => {
     // Break caught: every run walked the same reports in the same order, so a
     // capped run redid work it had already stored and never reached the rest.
