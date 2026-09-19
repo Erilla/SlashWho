@@ -38,6 +38,21 @@ you already have — for example when a hunk calls something whose behaviour you
 need to check. Opening files speculatively, to "get context", is the main way
 this review gets expensive.
 
+### When the change is large
+
+On a pull request touching many files, do not try to give every file equal
+attention and do not work through them in the order the diff happens to list
+them. Pick the files where a defect would matter most — domain rules,
+persistence, anything handling money, time, identity or concurrency — and
+review those properly. Say at the end of the comment which parts you did not
+cover.
+
+**Post before you run out of room.** A partial review that reaches the pull
+request is worth more than a thorough one that never does: the run is billed
+either way, and a review nobody sees is the only outcome with no value at all.
+If you are deep into a large change and unsure you can finish, post what you
+have, name what is uncovered, and stop.
+
 ## 3. Find real problems, in one pass
 
 Report only defects a reviewer would want fixed before merge:
