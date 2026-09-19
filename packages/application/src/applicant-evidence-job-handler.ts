@@ -2,6 +2,7 @@ import type {
   CharacterMythicKillInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
+  EvidenceRunCost,
   StagedEvidenceCollection,
   StoredEvidenceTiers,
   TerminalTier
@@ -79,6 +80,12 @@ export type ApplicantEvidenceStore = {
    * nothing, so this is the only way the reason reaches a reader.
    */
   recordLimitation(runId: string, code: EvidenceLimitationCode): Promise<void>;
+  /**
+   * Records what this attempt spent and the configuration it spent it under,
+   * so the points budget can be re-derived by query rather than by grepping
+   * deployment logs (#342).
+   */
+  recordRunCost(cost: EvidenceRunCost): Promise<void>;
   /**
    * Holds a finished collection between the scan that paid for it and the
    * publication that stores it, so a retry republishes rather than re-collects.
@@ -628,6 +635,11 @@ export function createApplicantEvidenceJobHandler(
         // Overwritten with the effective cap once the allowance is read; this
         // is the value for a run that never got that far.
         requestCapUsed: options.requestCap,
+        // Unlike the scan cap, this one does not scale with the reported
+        // allowance, so configured and effective are the same number. It is
+        // recorded anyway: it is the other half of what the run was given, and
+        // the half whose divergence between code and Railway caused #295.
+        parseRequestCapUsed: options.parseRequestCap,
         pointsLimitPerHour: null,
         pointsRemainingBefore: null,
         pointsSpentByRun: null,
@@ -653,6 +665,9 @@ export function createApplicantEvidenceJobHandler(
       // as far as spending the allowance, and how to find out what it spent.
       let claimedRunId: string | undefined;
       let collectionBegan = false;
+      // Whose allowance this attempt spent. Read in the `finally` as well as
+      // by the budget, so it outlives the `try` that decides it.
+      let usesVisitorCredentials = false;
       let sampleSpend: (() => Promise<void>) | undefined;
 
       try {
@@ -721,7 +736,7 @@ export function createApplicantEvidenceJobHandler(
         // nothing derived from them reaches `record`.
         // Whose allowance this run spends. The scan share differs by this and
         // not by how big the allowance turns out to be.
-        const usesVisitorCredentials = Boolean(
+        usesVisitorCredentials = Boolean(
           run.wclClientIdEncrypted &&
           run.wclClientSecretEncrypted &&
           options.createWarcraftLogsGateway &&
@@ -1133,6 +1148,58 @@ export function createApplicantEvidenceJobHandler(
               event: "evidence_run_announcement_failed",
               runId: job.runId,
               phase: "finished"
+            });
+          }
+        }
+        // Last on every path, and skipped outright on an abort. #309 gives a
+        // cancelled run a deliberately tight budget to record its outcome
+        // before the container goes, and the catch above already spends one
+        // database write inside it. A lost cost row costs a sample; a lost
+        // outcome costs the run, so this never competes for that window.
+        if (claimedRunId !== undefined && !activeContext.signal.aborted) {
+          const totals = scope.totals();
+          const requests = (field: string) => {
+            const value = totals[`${field}Requests`];
+            return typeof value === "number" ? value : 0;
+          };
+          try {
+            // `options.evidence`, not the measured wrapper: the totals this
+            // would add to have already been logged.
+            await options.evidence.recordRunCost({
+              runId: claimedRunId,
+              attempt: activeContext.attempt,
+              outcome: record.outcome as string,
+              credentials: usesVisitorCredentials ? "visitor" : "own",
+              limitationCode: record.limitationCode as string | null,
+              parseLimitationCode: record.parseLimitationCode as string | null,
+              // Carried across as they are, nulls included: a null is an
+              // allowance that could not be read, and a zero is a run that
+              // spent nothing. Collapsing the two would report a cost no run
+              // ever had.
+              pointsSpent: record.pointsSpentByRun as number | null,
+              pointsLimitPerHour: record.pointsLimitPerHour as number | null,
+              pointsRemainingBefore: record.pointsRemainingBefore as
+                number | null,
+              pointsRemainingAfter: record.pointsRemainingAfter as
+                number | null,
+              requestCapUsed: record.requestCapUsed as number,
+              parseRequestCapUsed: record.parseRequestCapUsed as number,
+              requests: {
+                historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
+                zoneRankings: requests(REQUEST_COUNTER_PREFIX.zone_rankings),
+                fightParses: requests(REQUEST_COUNTER_PREFIX.fight_parses),
+                rankingIdentities: requests(
+                  REQUEST_COUNTER_PREFIX.ranking_identities
+                )
+              }
+            });
+          } catch {
+            // A measurement that could not be stored is not a run that
+            // failed. The `evidence_job` line above still carries the same
+            // numbers; only the ability to query them is lost.
+            options.logger?.info({
+              event: "evidence_run_cost_record_failed",
+              runId: job.runId
             });
           }
         }

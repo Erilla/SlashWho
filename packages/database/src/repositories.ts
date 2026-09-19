@@ -446,6 +446,41 @@ export interface StagedEvidenceCollection {
   }>;
 }
 
+/**
+ * What one attempt of an evidence run spent, and the configuration it spent it
+ * under. Written once per attempt, from the same record the `evidence_job` log
+ * line is built from, so the table and the log can never disagree.
+ */
+export type EvidenceRunCost = Readonly<{
+  runId: string;
+  attempt: number;
+  /** How the attempt ended, as `evidence_job` names it. */
+  outcome: string;
+  /** Whose allowance was spent, as the class the budget arithmetic branches on. */
+  credentials: "own" | "visitor";
+  limitationCode: string | null;
+  parseLimitationCode: string | null;
+  /**
+   * The spend readings, each null when the allowance could not be read. Null
+   * is `unavailable`; it is never collapsed into a zero, which is a legitimate
+   * reading of a run that spent nothing.
+   */
+  pointsSpent: number | null;
+  pointsLimitPerHour: number | null;
+  pointsRemainingBefore: number | null;
+  pointsRemainingAfter: number | null;
+  /** The caps the run was given, which since #320 are not the configured ones. */
+  requestCapUsed: number;
+  parseRequestCapUsed: number;
+  /** Upstream requests by class, as the log line counts them. */
+  requests: Readonly<{
+    historyScan: number;
+    zoneRankings: number;
+    fightParses: number;
+    rankingIdentities: number;
+  }>;
+}>;
+
 export interface EvidenceRepository {
   reserve(input: {
     key: CharacterKey;
@@ -652,6 +687,23 @@ export interface EvidenceRepository {
    * overwrite a publication that landed while it was deciding.
    */
   releaseAbandoned(runIds: readonly string[]): Promise<number>;
+  /**
+   * Records what one attempt spent. Upserted on `(runId, attempt)`, so a
+   * re-entered attempt refreshes its row rather than failing on the key.
+   *
+   * The caller is the evidence job, which writes this after its outcome is
+   * settled and treats a failure here as a non-event: a lost measurement is
+   * cheaper than a lost run.
+   */
+  recordRunCost(cost: EvidenceRunCost): Promise<void>;
+  /**
+   * Drops cost rows recorded before `cutoff`. Retention is deliberately weeks
+   * rather than years: the question this table answers is always "what does a
+   * run cost *now*", and an old row describes a configuration that no longer
+   * runs -- which is the trap #342 was filed to close, not one to re-open with
+   * a long tail of stale rows. Returns the number of rows removed.
+   */
+  clearExpiredRunCosts(cutoff: Date): Promise<number>;
 }
 
 /** One active evidence run, as recovery reads it. */

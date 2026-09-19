@@ -330,6 +330,12 @@ export function loadWorkerConfig(
     // apps/worker/src/evidence-run-budget.test.ts, which expires the
     // measurement when the parse cap or the effective scan depth moves. If it
     // fails, re-measure: do not edit the recorded sample to match.
+    //
+    // Re-measuring is a query now, not an archaeology exercise. Per-run spend
+    // is persisted to character_evidence_run_costs alongside the caps it was
+    // spent under, and docs/operations/evidence-run-cost.md has the query that
+    // returns the distribution -- and the two checks that say whether the
+    // sample was contaminated before you set anything from it (#342).
     // 0 switches the gate off, which is deliberate: an operator who finds it
     // refusing too much needs a lever that is not a code change and a redeploy.
     evidencePointsReserve: integerInRange(

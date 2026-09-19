@@ -3514,6 +3514,73 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }));
       },
 
+      async recordRunCost(cost) {
+        if (!Number.isInteger(cost.attempt) || cost.attempt < 1) {
+          throw new RangeError("character_evidence_run_cost_attempt_invalid");
+        }
+        // Upserted rather than inserted: an attempt re-entered after a crash
+        // writes the cost of the work it actually did, and a primary-key
+        // violation here would surface as a lost run rather than a lost row.
+        await pool.query(
+          `INSERT INTO character_evidence_run_costs (
+             run_id, attempt, outcome, credentials,
+             limitation_code, parse_limitation_code,
+             points_spent, points_limit_per_hour,
+             points_remaining_before, points_remaining_after,
+             request_cap_used, parse_request_cap_used,
+             history_scan_requests, zone_rankings_requests,
+             fight_parses_requests, ranking_identities_requests
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                   $13, $14, $15, $16)
+           ON CONFLICT (run_id, attempt) DO UPDATE SET
+             recorded_at = now(),
+             outcome = EXCLUDED.outcome,
+             credentials = EXCLUDED.credentials,
+             limitation_code = EXCLUDED.limitation_code,
+             parse_limitation_code = EXCLUDED.parse_limitation_code,
+             points_spent = EXCLUDED.points_spent,
+             points_limit_per_hour = EXCLUDED.points_limit_per_hour,
+             points_remaining_before = EXCLUDED.points_remaining_before,
+             points_remaining_after = EXCLUDED.points_remaining_after,
+             request_cap_used = EXCLUDED.request_cap_used,
+             parse_request_cap_used = EXCLUDED.parse_request_cap_used,
+             history_scan_requests = EXCLUDED.history_scan_requests,
+             zone_rankings_requests = EXCLUDED.zone_rankings_requests,
+             fight_parses_requests = EXCLUDED.fight_parses_requests,
+             ranking_identities_requests = EXCLUDED.ranking_identities_requests`,
+          [
+            cost.runId,
+            cost.attempt,
+            cost.outcome,
+            cost.credentials,
+            cost.limitationCode,
+            cost.parseLimitationCode,
+            cost.pointsSpent,
+            cost.pointsLimitPerHour,
+            cost.pointsRemainingBefore,
+            cost.pointsRemainingAfter,
+            cost.requestCapUsed,
+            cost.parseRequestCapUsed,
+            cost.requests.historyScan,
+            cost.requests.zoneRankings,
+            cost.requests.fightParses,
+            cost.requests.rankingIdentities
+          ]
+        );
+      },
+
+      async clearExpiredRunCosts(cutoff) {
+        if (Number.isNaN(cutoff.valueOf())) {
+          throw new RangeError("character_evidence_run_cost_cutoff_invalid");
+        }
+        const result = await pool.query(
+          `DELETE FROM character_evidence_run_costs WHERE recorded_at < $1`,
+          [cutoff]
+        );
+        return result.rowCount ?? 0;
+      },
+
       async releaseAbandoned(runIds) {
         if (runIds.length === 0) return 0;
         // Same columns `fail` writes, for the same reason: `failed` is in

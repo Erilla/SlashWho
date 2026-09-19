@@ -494,6 +494,97 @@ export const characterEvidenceCollections = pgTable(
   }
 );
 
+/**
+ * What one attempt of an evidence run spent, and the configuration it spent it
+ * under.
+ *
+ * This exists because the only record of a run's cost was a line in the
+ * worker's deployment logs, which `railway logs` serves for the current
+ * deployment alone (#342). `EVIDENCE_POINTS_RESERVE`, `EVIDENCE_REQUEST_CAP`
+ * and `EVIDENCE_PARSE_REQUEST_CAP` all carve up the same hourly allowance and
+ * all depend on measured run cost, so a measurement nobody can query is a
+ * measurement nobody redoes.
+ *
+ * One row per *attempt*, not per run: a retry pays for its own collection, and
+ * collapsing the two would hide exactly the spend the retry ceiling is set
+ * from.
+ *
+ * Reachable from the run only by id -- no region, realm or name -- so it adds
+ * no identifying surface the run record does not already hold.
+ */
+export const characterEvidenceRunCosts = pgTable(
+  "character_evidence_run_costs",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    attempt: integer("attempt").notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    /** How the attempt ended, as the `evidence_job` record names it. */
+    outcome: text("outcome").notNull(),
+    /**
+     * Whose allowance was spent, as a class rather than an identity: the scan
+     * share `evidenceRunBudget` grants branches on exactly this, and anything
+     * narrower would put a visitor identifier in this table.
+     */
+    credentials: text("credentials").notNull(),
+    /**
+     * Why the run fell short, in either channel. `outcome` says a run was
+     * limited; these say which limitation, which is what separates the cost of
+     * a run that hit drift from the cost of a clean one without correlating
+     * against the logs by hand.
+     */
+    limitationCode: text("limitation_code"),
+    parseLimitationCode: text("parse_limitation_code"),
+    /**
+     * The three spend readings. Null is `unavailable` -- the allowance could
+     * not be read -- and never zero, which is a legitimate reading of a run
+     * that spent nothing.
+     *
+     * Storing all three looks redundant, and is not: `points_spent` is a
+     * delta between two readings of the same counter, so two independent
+     * checks fall out of keeping the endpoints. See
+     * `docs/operations/evidence-run-cost.md` before dropping a column.
+     */
+    pointsSpent: doublePrecision("points_spent"),
+    pointsLimitPerHour: integer("points_limit_per_hour"),
+    pointsRemainingBefore: doublePrecision("points_remaining_before"),
+    pointsRemainingAfter: doublePrecision("points_remaining_after"),
+    /**
+     * The caps the run was actually given, not the ones configured: #320 made
+     * the effective scan cap a function of the reported allowance, and a
+     * record naming the configured value describes a budget the run may never
+     * have been allowed to reach.
+     */
+    requestCapUsed: integer("request_cap_used").notNull(),
+    parseRequestCapUsed: integer("parse_request_cap_used").notNull(),
+    /** The per-class upstream request counts already on the log line. */
+    historyScanRequests: integer("history_scan_requests").default(0).notNull(),
+    zoneRankingsRequests: integer("zone_rankings_requests")
+      .default(0)
+      .notNull(),
+    fightParsesRequests: integer("fight_parses_requests").default(0).notNull(),
+    rankingIdentitiesRequests: integer("ranking_identities_requests")
+      .default(0)
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_evidence_run_costs_pk",
+      columns: [table.runId, table.attempt]
+    }),
+    // Both the retention sweep's cutoff and the window every question of this
+    // table opens with.
+    index("character_evidence_run_costs_recorded_idx").on(table.recordedAt),
+    check(
+      "character_evidence_run_costs_credentials_check",
+      sql`${table.credentials} in ('own', 'visitor')`
+    )
+  ]
+);
+
 export const characterMythicKills = pgTable(
   "character_mythic_kills",
   {
