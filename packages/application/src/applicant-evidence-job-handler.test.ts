@@ -134,6 +134,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] },
       tierBests: [],
       kills: [
@@ -218,6 +219,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: null,
           parseLimitationCode: null,
           parseLimitationCodesSeen: [],
+          parsedFightUrls: [],
           tierBests: [],
           kills: [
             expect.objectContaining({
@@ -278,6 +280,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: "rate_limited",
           parseLimitationCode: null,
           parseLimitationCodesSeen: [],
+          parsedFightUrls: [],
           retryAfterAt: new Date("2026-09-13T12:02:30.000Z"),
           kills: [],
           wipes: [],
@@ -299,6 +302,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             parseLimitation: {
@@ -362,6 +366,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: null,
           parseLimitationCode: "parse_request_cap",
           parseLimitationCodesSeen: ["parse_request_cap"],
+          parsedFightUrls: [],
           retryAfterAt: new Date("2026-09-13T12:31:00.000Z"),
           tierBests: [],
           kills: [
@@ -390,6 +395,77 @@ describe("applicant evidence job handler", () => {
         }
       }
     ]);
+  });
+
+  it("publishes the fights the gateway asked about, answered or not", async () => {
+    // What separates "asked and told there is no ranking" from "never asked".
+    // Lost here, the fight is re-requested on every later run -- and since
+    // #350 raises a retryable limitation each time, it never settles (#297).
+    const evidence = store();
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        ...openGate,
+        async getFirstKillReports() {
+          return {
+            kind: "evidence" as const,
+            parsedFightUrls: [
+              "https://www.warcraftlogs.com/reports/report#fight=7"
+            ],
+            troubledRaidIds: { parses: [], tierBests: [] },
+            tierBests: [],
+            wipes: [],
+            kills: [
+              {
+                raidId: "42",
+                raidName: "Current Tier",
+                bossId: "7",
+                bossName: "Final Boss",
+                journalBossId: "7",
+                bossOrder: 7,
+                isFinalBoss: false as const,
+                killedAt: "2026-09-12T20:00:00.000Z",
+                reportCode: "report",
+                fightId: 7,
+                difficulty: 5,
+                reportUrl: "https://www.warcraftlogs.com/reports/report",
+                fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
+                guild: null,
+                historicWorldRank: null,
+                performance: {
+                  // Asked, and answered with nothing. The states alone cannot
+                  // say that, which is the whole point of the list above.
+                  damage: { state: "unavailable" as const },
+                  healing: { state: "unavailable" as const },
+                  bossDamage: { state: "unavailable" as const }
+                }
+              }
+            ]
+          };
+        }
+      },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+
+    const asked = ["https://www.warcraftlogs.com/reports/report#fight=7"];
+    expect(evidence.published[0]?.result.parsedFightUrls).toEqual(asked);
+    // And onto the stage, so a retry that republishes rather than re-collects
+    // does not forget what the original attempt paid to learn.
+    expect(evidence.staged.get(run.id)?.parsedFightUrls).toEqual(asked);
   });
 
   it("gives a transport failure a retry, so nothing waits on a reader forever", async () => {
@@ -473,6 +549,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -531,6 +608,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -622,6 +700,7 @@ describe("applicant evidence job handler", () => {
         async getFirstKillReports() {
           return {
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -731,6 +810,7 @@ describe("applicant evidence job handler", () => {
     ]);
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] },
       tierBests: [],
       kills: [],
@@ -776,6 +856,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store();
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] },
       tierBests: [],
       kills: [],
@@ -815,6 +896,7 @@ describe("applicant evidence job handler", () => {
     const evidence = store({ ...run, className: "Death Knight" });
     const getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] },
       tierBests: [],
       kills: [],
@@ -853,6 +935,7 @@ describe("applicant evidence job handler", () => {
     rateLimit: Awaited<ReturnType<WarcraftLogsGateway["getRateLimit"]>>,
     getFirstKillReports = vi.fn(async () => ({
       kind: "evidence" as const,
+      parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] },
       kills: [],
       wipes: [],
@@ -1139,6 +1222,7 @@ describe("applicant evidence job handler", () => {
       })),
       getFirstKillReports: vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         troubledRaidIds: { parses: [], tierBests: [] },
         kills: [],
         wipes: [],
@@ -1424,6 +1508,7 @@ describe("applicant evidence job handler", () => {
         getRateLimit,
         getFirstKillReports: vi.fn(async () => ({
           kind: "evidence" as const,
+          parsedFightUrls: [],
           troubledRaidIds: { parses: [], tierBests: [] },
           kills: [],
           wipes: [],
@@ -1499,6 +1584,7 @@ describe("applicant evidence job handler", () => {
         getRateLimit,
         getFirstKillReports: vi.fn(async () => ({
           kind: "evidence" as const,
+          parsedFightUrls: [],
           troubledRaidIds: { parses: [], tierBests: [] },
           kills: [],
           wipes: [],
@@ -1543,6 +1629,7 @@ describe("applicant evidence job handler", () => {
       spentAfter = 0,
       getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [],
         wipes: [],
         tierBests: []
@@ -1829,6 +1916,7 @@ describe("applicant evidence job handler", () => {
           0,
           vi.fn(async () => ({
             kind: "evidence" as const,
+            parsedFightUrls: [],
             kills: [],
             wipes: [],
             tierBests: [],
@@ -1926,6 +2014,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -1997,6 +2086,7 @@ describe("applicant evidence job handler", () => {
             });
             return {
               kind: "evidence" as const,
+              parsedFightUrls: [],
               troubledRaidIds: { parses: [], tierBests: [] },
               tierBests: [],
               kills: [],
@@ -2075,6 +2165,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             limitation: {
@@ -2268,6 +2359,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -2629,6 +2721,7 @@ describe("applicant evidence job handler", () => {
           ...openGate,
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -2736,6 +2829,7 @@ describe("applicant evidence job handler", () => {
           }),
           getFirstKillReports: async () => ({
             kind: "evidence" as const,
+            parsedFightUrls: [],
             troubledRaidIds: { parses: [], tierBests: [] },
             tierBests: [],
             kills: [],
@@ -2857,6 +2951,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       await handlerFor(evidence, {
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [concludedKill],
         wipes: [],
         tierBests: [],
@@ -2874,6 +2969,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       await handlerFor(evidence, {
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [concludedKill],
         wipes: [],
         tierBests: [],
@@ -2888,6 +2984,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       await handlerFor(evidence, {
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [concludedKill],
         wipes: [],
         tierBests: [],
@@ -2904,6 +3001,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       await handlerFor(evidence, {
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [concludedKill],
         wipes: [],
         tierBests: [],
@@ -2924,6 +3022,7 @@ describe("applicant evidence job handler", () => {
       );
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [],
         wipes: [],
         tierBests: [],
@@ -2976,6 +3075,7 @@ describe("applicant evidence job handler", () => {
       );
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [],
         wipes: [],
         tierBests: [],
@@ -3028,6 +3128,7 @@ describe("applicant evidence job handler", () => {
       });
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [],
         wipes: [],
         tierBests: [],
@@ -3067,6 +3168,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [
           {
             raidId: "42",
@@ -3112,6 +3214,7 @@ describe("applicant evidence job handler", () => {
       });
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [],
         wipes: [],
         tierBests: [],
@@ -3145,6 +3248,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       await handlerFor(evidence, {
         kind: "evidence" as const,
+        parsedFightUrls: [],
         kills: [],
         wipes: [],
         tierBests: [],

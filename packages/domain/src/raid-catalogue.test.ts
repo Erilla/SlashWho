@@ -6,10 +6,17 @@ import {
   lookupRaiderIoBoss,
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
+  mythicDifficultyExistedDuring,
+  raidOffersMythicRankings,
   raidTierConclusion,
   supportedRaidCatalogue
 } from "./raid-catalogue";
 import currentContentWindowSnapshot from "./raid-current-content-windows.generated.json";
+
+/** A kill named only by its Warcraft Logs zone, as the history scan sees it. */
+function evidenceIn(raidName: string) {
+  return { raidName, bossName: "Unknown", journalBossId: null };
+}
 
 it("exposes supported raids newest-first with bosses in natural order", () => {
   // Break caught: gap rows cannot be complete or stable when callers must
@@ -336,4 +343,61 @@ it("concludes a tier at its boundary, not after a further delay", () => {
   expect(
     raidTierConclusion("The Dreamrift", new Date("2026-08-19T22:59:59.999Z"))
   ).toBe("current");
+});
+
+// Break caught: Warcraft Logs answers `zoneRankings(difficulty: 5)` for a zone
+// that never had Mythic difficulty with an error envelope, which the collector
+// read as schema drift -- a limitation that stops the tier settling, so the
+// wasted request is re-paid on every run, forever (#351).
+it("offers Mythic rankings only for a raid it can place after Mythic existed", () => {
+  // Siege of Orgrimmar opened as a Mists tier and was still current content
+  // when the Warlords pre-patch renamed its top difficulty to Mythic, so it is
+  // the boundary case the rule has to keep.
+  expect(raidOffersMythicRankings(evidenceIn("Siege of Orgrimmar"))).toBe(true);
+  expect(raidOffersMythicRankings(evidenceIn("The Venomous Abyss"))).toBe(true);
+});
+
+it("does not offer Mythic rankings for a zone it cannot place as a raid", () => {
+  // Throne of Thunder is a Mists tier whose top difficulty was Heroic, and
+  // Challenge Modes is not a raid at all. Both are asked about only because a
+  // fight without its own game zone falls back to the report's.
+  expect(raidOffersMythicRankings(evidenceIn("Throne of Thunder"))).toBe(false);
+  expect(raidOffersMythicRankings(evidenceIn("Challenge Modes"))).toBe(false);
+});
+
+it("offers Mythic rankings for a raid only its boss names", () => {
+  expect(
+    raidOffersMythicRankings({
+      raidName: "VS / DR / MQD",
+      bossName: "Imperator Averzian",
+      journalBossId: null
+    })
+  ).toBe(true);
+});
+
+it("judges a raid's Mythic difficulty by when its window closed", () => {
+  // Throne of Thunder's real window, which the catalogue does not hold: it
+  // closed more than a year before Mythic difficulty existed.
+  expect(
+    mythicDifficultyExistedDuring({
+      startsAt: "2013-03-05T00:00:00.000Z",
+      endsAt: "2013-09-10T00:00:00.000Z",
+      source: "blizzard-release-dates"
+    })
+  ).toBe(false);
+  // Siege of Orgrimmar's, which straddles the Warlords pre-patch.
+  expect(
+    mythicDifficultyExistedDuring({
+      startsAt: "2013-09-10T00:00:00.000Z",
+      endsAt: "2014-12-02T00:00:00.000Z",
+      source: "blizzard-release-dates"
+    })
+  ).toBe(true);
+  expect(
+    mythicDifficultyExistedDuring({
+      startsAt: "2026-08-01T00:00:00.000Z",
+      endsAt: null,
+      source: "raiderio-raiding-static-data"
+    })
+  ).toBe(true);
 });

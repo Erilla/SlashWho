@@ -350,6 +350,9 @@ describe("recoverAbandonedEvidenceRuns", () => {
       kills: [],
       wipes: [],
       tierBests: [],
+      // Likewise: a stage from before this field recorded no attempts, and
+      // reading its silence as "none" only costs a re-request.
+      parsedFightUrls: [],
       completedAt: new Date("2026-09-18T13:26:00.000Z")
     });
     expect(evidence.releaseAbandoned).not.toHaveBeenCalled();

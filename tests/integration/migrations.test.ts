@@ -90,11 +90,11 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-5).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 22, tag: "0023_concluded_tier_retention" },
       { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
       { idx: 25, tag: "0026_unstick_parse_drift_runs" },
-      { idx: 26, tag: "0027_evidence_run_costs" }
+      { idx: 26, tag: "0027_kill_parses_read_at" },
+      { idx: 27, tag: "0028_evidence_run_costs" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

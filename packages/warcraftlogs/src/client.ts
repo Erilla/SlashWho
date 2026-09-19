@@ -1,6 +1,7 @@
 import {
   currentContentEligibility,
   isNonRaidZone,
+  raidOffersMythicRankings,
   supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
@@ -400,6 +401,9 @@ function firstKillReports(
           kills: [...kills.values()],
           wipes: [...wipes.values()],
           tierBests: [],
+          // This decodes one page of report history and reads no rankings at
+          // all, so it has asked about nothing.
+          parsedFightUrls: [],
           // One page's normalisation attributes trouble to no raid: the caller
           // owns that judgement across the whole read.
           troubledRaidIds: { parses: [], tierBests: [] },
@@ -598,6 +602,7 @@ function firstKillReports(
   return {
     kind: "evidence",
     tierBests: [],
+    parsedFightUrls: [],
     troubledRaidIds: { parses: [], tierBests: [] },
     kills: [...kills.values()].sort(
       (a, b) =>
@@ -1204,6 +1209,19 @@ function decodeZoneRankings(
     const metricValue = record(entry[metric]);
     const rankings = metricValue && metricValue.rankings;
     if (!Array.isArray(rankings)) {
+      // `{ error }` is Warcraft Logs declining a question rather than
+      // answering one -- a difficulty that zone never had, say. It is a
+      // legitimate response meaning "this does not apply here", so it leaves
+      // the metric with no rankings rather than raising a limitation that
+      // would stop the tier settling (#351). Recognised positively: a payload
+      // carrying neither an error nor rankings is still drift.
+      if (
+        metricValue &&
+        !("rankings" in metricValue) &&
+        nonEmptyString(metricValue.error) !== null
+      ) {
+        continue;
+      }
       return { kind: "limitation", code: "parse_schema_drift" };
     }
     for (const rankingValue of rankings) {
@@ -1647,6 +1665,12 @@ export function createWarcraftLogsClient(
       if (currentContentEligibility(kill.killedAt, kill.raidName) === false) {
         continue;
       }
+      // A zone that cannot be placed as a raid from after Mythic difficulty
+      // existed can never answer a Mythic rankings request. Warcraft Logs
+      // refuses it with an error envelope, which carries no rankings array and
+      // so read as schema drift -- and a troubled raid never goes terminal, so
+      // the wasted request was re-paid on every run, forever (#351).
+      if (!raidOffersMythicRankings(kill)) continue;
       const zoneId = Number(kill.raidId);
       if (!Number.isSafeInteger(zoneId) || zoneId <= 0) continue;
       const seen = zones.get(kill.raidId);
@@ -1761,6 +1785,10 @@ export function createWarcraftLogsClient(
 
     const groups = new Map<string, RankingScope>();
     const groupRaidIds = new Map<string, Set<string>>();
+    // The fights each group covers, by URL, so a group that reaches an answer
+    // can say which fights were answered. The group itself is keyed by fight
+    // id within a report, and only the kill carries the URL a caller stores.
+    const groupFightUrls = new Map<string, Set<string>>();
     // Grouped by report alone. A raid night's kills share one report, and one
     // ranking request returns all of them, so grouping any finer would spend a
     // request per boss for data the first request already carried.
@@ -1799,6 +1827,9 @@ export function createWarcraftLogsClient(
       const raidsInGroup = groupRaidIds.get(kill.reportCode);
       if (raidsInGroup) raidsInGroup.add(kill.raidId);
       else groupRaidIds.set(kill.reportCode, new Set([kill.raidId]));
+      const fightUrlsInGroup = groupFightUrls.get(kill.reportCode);
+      if (fightUrlsInGroup) fightUrlsInGroup.add(kill.fightUrl);
+      else groupFightUrls.set(kill.reportCode, new Set([kill.fightUrl]));
       const isFirstKill = firstKillFightUrls.has(kill.fightUrl);
       const existing = groups.get(kill.reportCode);
       const fight = {
@@ -1844,6 +1875,18 @@ export function createWarcraftLogsClient(
       for (const scope of scopes) {
         for (const raidId of groupRaidIds.get(scope.reportCode) ?? []) {
           troubledParseRaidIds.add(raidId);
+        }
+      }
+    }
+    // Fights this read got an answer about, so a later run can tell them from
+    // fights it has never asked about (#297). Only a group that reached an
+    // answer is marked: a read cut short by the budget, by rate limiting or by
+    // a response the decoder rejected learned nothing about its fights.
+    const parsedFightUrls = new Set<string>();
+    function markGroupsRead(scopes: Iterable<RankingScope>): void {
+      for (const scope of scopes) {
+        for (const fightUrl of groupFightUrls.get(scope.reportCode) ?? []) {
+          parsedFightUrls.add(fightUrl);
         }
       }
     }
@@ -1899,6 +1942,15 @@ export function createWarcraftLogsClient(
           decoded.code === "parse_schema_drift" ||
           decoded.code === "parse_identity_unmatched"
         ) {
+          // An unmatched identity is an answer: the report ranked others and
+          // none of them was this character, so there is nothing here to come
+          // back for. Recording it is what stops the retry #350 introduced
+          // from re-asking the same question every run (#297). Structural
+          // drift is not an answer -- it says only that we could not read the
+          // response -- so those fights stay eligible.
+          if (decoded.code === "parse_identity_unmatched") {
+            markGroupsRead([group]);
+          }
           troubleGroups([group]);
           continue;
         }
@@ -1910,6 +1962,12 @@ export function createWarcraftLogsClient(
         identities.set(identity.id, identity);
     }
 
+    if (identities.size === 0) {
+      // Every group that was read ranked nobody at all, so there is no
+      // identity to canonicalise and nothing further to ask. Each of those
+      // fights has its answer.
+      markGroupsRead(decodedGroups.map(({ group }) => group));
+    }
     if (identities.size > 0) {
       if (parseRequests >= options.parseRequestCap) {
         raiseParse(
@@ -1967,7 +2025,11 @@ export function createWarcraftLogsClient(
               // No ranked appearance by this character in this report is an
               // ordinary gap - an unranked fight, or a report that ranks
               // nobody - so the group is left unparsed without a limitation.
-              if (requestedIds.length === 0) continue;
+              // It is still an answer, so the fights are recorded as read.
+              if (requestedIds.length === 0) {
+                markGroupsRead([group]);
+                continue;
+              }
               const performance = normalizedPerformance(
                 decoded.rows,
                 requestedIds,
@@ -1983,6 +2045,7 @@ export function createWarcraftLogsClient(
                 );
                 break;
               }
+              markGroupsRead([group]);
               for (const [fightId, value] of performance) {
                 for (const [fightUrl, kill] of kills) {
                   if (
@@ -2027,12 +2090,14 @@ export function createWarcraftLogsClient(
       parses: [...troubledParseRaidIds].sort(),
       tierBests: [...troubledTierBestRaidIds].sort()
     };
+    const parsed = [...parsedFightUrls].sort();
     return sortedKills.length || sortedWipes.length
       ? {
           kind: "evidence",
           kills: sortedKills,
           wipes: sortedWipes,
           tierBests,
+          parsedFightUrls: parsed,
           troubledRaidIds: troubled,
           ...(scanLimitation ? { limitation: scanLimitation } : {}),
           ...(reportedParseLimitation
@@ -2046,6 +2111,7 @@ export function createWarcraftLogsClient(
             kills: [],
             wipes: [],
             tierBests: [],
+            parsedFightUrls: parsed,
             troubledRaidIds: troubled
           });
   }

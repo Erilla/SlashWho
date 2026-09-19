@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 
 import dungeonCatalogue from "./dungeon-catalogue.generated.json";
-import { isKnownDungeonZone } from "./dungeon-catalogue";
+import { isKnownDungeonZone, isNonRaidZone } from "./dungeon-catalogue";
 import raidCatalogue from "./raid-catalogue.generated.json";
 
 it("recognizes the Mythic dungeons a veteran's history is full of", () => {
@@ -49,4 +49,19 @@ it("names no dungeon that is also a catalogued raid", () => {
       .map((dungeon) => dungeon.dungeonName)
       .filter((dungeonName) => raidNames.has(dungeonName))
   ).toEqual([]);
+});
+
+it("recognizes Warcraft Logs' own non-raid groupings", () => {
+  // Challenge Modes is a Mists grouping of dungeon runs, not an instance, and
+  // it reaches the collector the same way a Mythic+ season does: a fight
+  // without its own game zone falls back to the report's (#351).
+  for (const zoneName of [
+    "Challenge Modes",
+    "challenge modes",
+    "Mythic+ Season 2",
+    "Mythic Dungeons"
+  ]) {
+    expect(isNonRaidZone(zoneName)).toBe(true);
+  }
+  expect(isNonRaidZone("Nerub-ar Palace")).toBe(false);
 });
