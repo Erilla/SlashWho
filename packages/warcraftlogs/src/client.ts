@@ -530,7 +530,6 @@ function firstKillReports(
       ) {
         return schemaDrift();
       }
-      if (!bossName) return schemaDrift();
       if (
         difficulty !== MYTHIC_DIFFICULTY ||
         !friendlyPlayers.some((player) => participantIds.has(player))
@@ -545,6 +544,7 @@ function firstKillReports(
       // place, and still collected, because silence there reads as "never
       // killed it" (#346).
       if (isNonRaidZone(fightRaidName)) continue;
+      if (!bossName) return schemaDrift();
 
       const evidenceAtMilliseconds = reportStartTime + fightEndTime;
       if (
