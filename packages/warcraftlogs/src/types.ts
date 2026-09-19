@@ -191,8 +191,17 @@ export type WarcraftLogsReportResult =
        *
        * The gateway reports them all and ranks none, because which one should
        * drive `retry_after_at` is a retry-policy question and the policy lives
-       * in the caller. `parseLimitation` remains the last one raised, so a
-       * caller that does not care is unaffected.
+       * in the caller.
+       *
+       * `parseLimitation` is untouched by this: it is whatever it always was,
+       * which is the last one raised except where an earlier one was
+       * deliberately kept. That rule was never stated anywhere and is not
+       * worth relying on -- it is assignment order, not a decision, and
+       * preferring it is what discarded the others. A caller that cares which
+       * limitation the run should be judged by reads this list and applies
+       * its own policy; `packages/application` does exactly that in
+       * `drivingParseLimitation`, and the code it picks may differ from
+       * `parseLimitation`.
        */
       parseLimitations?: readonly WarcraftLogsLimitation[];
     }>
