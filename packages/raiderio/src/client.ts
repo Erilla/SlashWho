@@ -25,6 +25,15 @@ import type {
 
 export const maximumHistoricMythicKillTiers = 8;
 
+/**
+ * What this client calls itself upstream. Raider.IO rejects requests without
+ * an identifying agent, which
+ * `scripts/generate-raid-current-content-windows.mts` has always known and the
+ * client that runs in production did not (#356). It names the service, not a
+ * browser: the point is to be identifiable, not to look like someone else.
+ */
+const RAIDER_IO_USER_AGENT = "SlashWho (+https://github.com/Erilla/SlashWho)";
+
 const historicRaidProgressResponseSchema = z.object({
   characterRaidProgress: z.object({
     raidProgress: z.array(
@@ -311,7 +320,16 @@ export function createRaiderIoClient(
     let response: Response;
     try {
       response = await options.fetch(url, {
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          // Raider.IO sits behind Cloudflare bot detection, which refuses a
+          // request carrying no agent with "Error 1010: Access denied" (#356).
+          // That arrives as a 403 -- indistinguishable here from an ordinary
+          // lookup failure -- so discovery spent its whole retry chain on
+          // instant refusals and failed terminally. The access key makes no
+          // difference; this is not authentication.
+          "user-agent": RAIDER_IO_USER_AGENT
+        },
         signal: requestSignal
       });
     } catch {
