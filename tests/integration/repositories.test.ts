@@ -3135,6 +3135,49 @@ describe("PostgreSQL repositories", () => {
         ]);
       });
 
+      it("reads a clean serial handover as clean", async () => {
+        // Break caught: this query flagged every healthy run. Reading the
+        // allowance is itself a metered request, so a clean handover leaves a
+        // gap of exactly one point, not zero -- twelve of twelve consecutive
+        // handovers in `test` on 2026-09-19. The original threshold of 0.01
+        // called all of them contaminated, which is worse than no check: it
+        // invites throwing away the only samples there are.
+        const first = await reserveRun(rootKey, new Date());
+        const second = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(first, {
+            pointsSpent: 1_000,
+            pointsRemainingBefore: 17_000,
+            pointsRemainingAfter: 16_000
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(second, {
+            pointsSpent: 1_000,
+            // One point below the previous run's closing reading: its own
+            // opening allowance check, and nothing else.
+            pointsRemainingBefore: 15_999,
+            pointsRemainingAfter: 14_999
+          })
+        );
+        await pool.query(
+          `UPDATE character_evidence_run_costs SET recorded_at = $2
+           WHERE run_id = $1`,
+          [first, new Date(Date.now() - 60_000)]
+        );
+
+        const result = await pool.query<{
+          raw_gap: string | null;
+          unaccounted_spend: string | null;
+        }>(queries[1] as string);
+
+        expect(result.rows.map((row) => row.raw_gap)).toEqual([null, "1.00"]);
+        expect(result.rows.map((row) => row.unaccounted_spend)).toEqual([
+          null,
+          "0.00"
+        ]);
+      });
+
       it("finds spend by something this table never recorded", async () => {
         // The contamination that produced three wrong numbers: a second run
         // against the same hourly counter. It inflates both of a row's own
@@ -3151,10 +3194,10 @@ describe("PostgreSQL repositories", () => {
         await repositories.evidence.recordRunCost(
           cost(second, {
             pointsSpent: 1_000,
-            // 400 points left the counter between the two runs, and nothing
-            // here paid for them.
-            pointsRemainingBefore: 15_600,
-            pointsRemainingAfter: 14_600
+            // 400 points left the counter between the two runs on top of this
+            // run's own allowance check, and nothing here paid for them.
+            pointsRemainingBefore: 15_599,
+            pointsRemainingAfter: 14_599
           })
         );
         await pool.query(
@@ -3164,9 +3207,11 @@ describe("PostgreSQL repositories", () => {
         );
 
         const result = await pool.query<{
+          raw_gap: string | null;
           unaccounted_spend: string | null;
         }>(queries[1] as string);
 
+        expect(result.rows.map((row) => row.raw_gap)).toEqual([null, "401.00"]);
         expect(result.rows.map((row) => row.unaccounted_spend)).toEqual([
           null,
           "400.00"

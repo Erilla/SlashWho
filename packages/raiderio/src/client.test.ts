@@ -194,6 +194,33 @@ describe("Raider.IO gateway", () => {
     });
   });
 
+  it("identifies itself on every request, because Raider.IO blocks what does not", async () => {
+    // Break caught: #356. Cloudflare refuses an agent-less request with
+    // "Error 1010: Access denied" -- a 403 the client reads as an ordinary
+    // lookup failure, so discovery burned its whole retry chain in 16 seconds
+    // and failed terminally. One dossier had been stuck since 2026-09-15 on
+    // this, and a `raiderio / unavailable` limitation sitting on a character
+    // all week turned out to be the same cause.
+    //
+    // The lesson had already been learned once, in
+    // scripts/generate-raid-current-content-windows.mts, and never applied to
+    // the client that actually runs. Asserted here so it cannot be lost again.
+    const sent: Array<Record<string, string>> = [];
+    const client = createRaiderIoClient({
+      fetch: async (input, init) => {
+        sent.push(Object.fromEntries(new Headers(init?.headers)));
+        return fixtureFetch("character-guild")(input, init);
+      },
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await client.getCharacter(sentinel);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.["user-agent"]).toMatch(/SlashWho/);
+  });
+
   it("normalizes a character's guild, which need not share its realm", async () => {
     const character = await clientFor("character-guild").getCharacter(sentinel);
 

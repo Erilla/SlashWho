@@ -119,37 +119,74 @@ use the next one.
 ### Across rows: something else spent
 
 Runs against the worker's own credentials all draw on one hourly counter.
-Ordered by time, each attempt's `points_remaining_before` should therefore
-equal the previous attempt's `points_remaining_after`. A **drop** between them
-is spend by something this table did not record — a concurrent run, another
-deployment, or a person with the same credentials — and any per-run cost
+Ordered by time, each attempt's `points_remaining_before` should therefore sit
+one point below the previous attempt's `points_remaining_after`, and a wider
+**drop** is spend by something this table did not record — a concurrent run,
+another deployment, or a person with the same credentials. Any per-run cost
 derived from a window containing one is contaminated.
 
 A **rise** is the hourly reset refilling the allowance, which is expected and
 is not flagged.
 
+#### The one point
+
+Reading the allowance is itself a metered Warcraft Logs request. Every run
+opens by reading it, and that request's own point lands between the previous
+run's closing reading and this run's opening one — so a perfectly clean
+handover shows a gap of exactly 1, not 0.
+
+That is the `- 1` in the query below. Measured, not assumed:
+twelve consecutive handovers in `test` on 2026-09-19 were each exactly 1.00,
+on a worker running strictly serially with nothing else holding the
+credentials.
+
+`raw_gap` is reported beside the adjusted figure so the constant stays
+visible. If **every** row is off by the same non-zero amount, suspect the
+constant rather than the runs — an upstream that started charging differently
+for `rateLimitData` would look exactly like that, and a uniform offset is
+never what real contamination looks like.
+
 ```sql
+WITH handovers AS (
+  SELECT recorded_at,
+         run_id,
+         attempt,
+         points_remaining_before,
+         lag(points_remaining_after) OVER w AS previous_remaining_after
+  FROM character_evidence_run_costs
+  WHERE recorded_at >= now() - interval '1 day'
+    AND credentials = 'own'
+    AND points_remaining_before IS NOT NULL
+    AND points_remaining_after IS NOT NULL
+  WINDOW w AS (ORDER BY recorded_at, run_id, attempt)
+)
 SELECT recorded_at,
        run_id,
        attempt,
        points_remaining_before,
-       lag(points_remaining_after) OVER w AS previous_remaining_after,
+       previous_remaining_after,
        round(
-         (lag(points_remaining_after) OVER w - points_remaining_before)::numeric,
-         2
+         (previous_remaining_after - points_remaining_before)::numeric, 2
+       ) AS raw_gap,
+       round(
+         (previous_remaining_after - points_remaining_before - 1)::numeric, 2
        ) AS unaccounted_spend
-FROM character_evidence_run_costs
-WHERE recorded_at >= now() - interval '1 day'
-  AND credentials = 'own'
-  AND points_remaining_before IS NOT NULL
-  AND points_remaining_after IS NOT NULL
-WINDOW w AS (ORDER BY recorded_at, run_id, attempt)
+FROM handovers
 ORDER BY recorded_at, run_id, attempt;
 ```
 
 A row whose `unaccounted_spend` is above about `0.01` is the marker. Scoped to
 `credentials = 'own'` on purpose: a visitor's run draws on their own account's
 counter, so its readings are not comparable to the worker's or to each other's.
+
+One more reading of a wide gap, worth knowing before blaming a third party:
+an attempt whose closing measurement failed has a null `points_remaining_after`
+and drops out of this query entirely, so the comparison then spans _two_
+handovers and the attempt in between. Its spend is genuinely unaccounted for —
+that is why it is flagged — but the culprit is a run this table knows about
+and failed to measure, not an outsider. Check the distribution query's
+`attempts` against `measured` for the same window before concluding anything
+else.
 
 Settle the reserve from a window whose `window_moved` is zero and whose
 `unaccounted_spend` is clean. A sample that fails either check describes
