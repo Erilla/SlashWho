@@ -57,10 +57,13 @@ jobs:
           # `gh` commands it reads and posts with — a full review ran, denied
           # three tool calls, and posted nothing.
           #
-          # --max-turns is a runaway backstop, not a cost dial: setting it low
-          # buys a truncated review at full price. A single-pass review needs
-          # far fewer turns than the plugin's fan-out did.
+          # No --max-turns. It was 20, chosen when the reviewer had only been
+          # seen taking 8 to 14 turns; a 19-file pull request hit the cap at
+          # turn 21, spent $0.50 and posted nothing. A turn ceiling cannot tell
+          # a runaway apart from a large change, and when it binds it discards
+          # the work it has already paid for. `timeout-minutes` above is the
+          # runaway bound, in the unit that actually tracks cost, and the
+          # account spend cap is the bound behind that.
           claude_args: >-
             --model claude-sonnet-5
-            --max-turns 20
             --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read,Grep,Glob"
