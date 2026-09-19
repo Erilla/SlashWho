@@ -1,5 +1,9 @@
 import type { PublicErrorCode } from "@slashwho/contracts";
-import { toRaiderIoUrl, type CharacterKey } from "@slashwho/domain";
+import {
+  isNonRaidZone,
+  toRaiderIoUrl,
+  type CharacterKey
+} from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
@@ -845,9 +849,22 @@ async function loadPositiveEvidenceForPartial(
      ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
     [runIds]
   );
+  // Rows in a zone positively identified as not a raid stop being carried.
+  // They were stored because a Mythic dungeon boss shares a difficulty with a
+  // Mythic raid boss, and collection no longer produces them -- but a
+  // character whose every publish is partial carries all its stored evidence
+  // forward, so without this they would never drain and the counts they
+  // inflate would stay wrong (#346). Keyed on identifying the zone as a
+  // dungeon, never on failing to identify it as a raid: a new tier the
+  // catalogue has not caught up with also fails to resolve, and dropping that
+  // would delete real kills.
   return {
-    kills: kills.rows.map(mapCharacterMythicKill),
-    wipes: wipes.rows.map(mapCharacterMythicWipe)
+    kills: kills.rows
+      .map(mapCharacterMythicKill)
+      .filter((kill) => !isNonRaidZone(kill.raidName)),
+    wipes: wipes.rows
+      .map(mapCharacterMythicWipe)
+      .filter((wipe) => !isNonRaidZone(wipe.raidName))
   };
 }
 
@@ -3222,6 +3239,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           })),
           wipes: (completed?.wipes ?? []).map((wipe) => ({
             raidId: wipe.raidId,
+            raidName: wipe.raidName,
             attemptedAt: wipe.attemptedAt
           }))
         };

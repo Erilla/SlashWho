@@ -364,6 +364,12 @@ export type StoredKillTier = Readonly<{
 /** Where and when one stored wipe happened, without its evidence. */
 export type StoredWipeTier = Readonly<{
   raidId: string;
+  /**
+   * Carried so the scan floor can tell a raid zone from one it knows is not a
+   * raid. A wipe in a Mythic dungeon held the floor down exactly as a kill in
+   * one did (#346).
+   */
+  raidName: string;
   attemptedAt: string;
 }>;
 

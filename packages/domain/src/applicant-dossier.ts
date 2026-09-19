@@ -11,6 +11,7 @@ import {
   type RaidCatalogueEncounter
 } from "./raid-catalogue";
 import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
+import { isNonRaidZone } from "./dungeon-catalogue";
 
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
@@ -261,18 +262,12 @@ function sameAttributedGuild(
   );
 }
 
-function isNonRaidWclZone(zoneName: string): boolean {
-  return /^(?:mythic\+\s+seasons?|(?:normal|heroic|mythic)\s+dungeons)\b/i.test(
-    zoneName.trim()
-  );
-}
-
 function catalogueEncounter(evidence: {
   raidName: string;
   bossName: string;
   journalBossId: string | null;
 }): RaidCatalogueEncounter | null {
-  if (isNonRaidWclZone(evidence.raidName)) return null;
+  if (isNonRaidZone(evidence.raidName)) return null;
   const raid = lookupRaidByName(evidence.raidName);
   const journalEncounter =
     evidence.journalBossId === null
@@ -461,7 +456,7 @@ export function buildApplicantDossier(
       // A Mythic+ dungeon fight is expected noise in a character's reports. A
       // raid-shaped zone the catalogue cannot place is evidence going missing,
       // and silence there reads as "never killed it".
-      if (!isNonRaidWclZone(suppliedKill.raidName)) {
+      if (!isNonRaidZone(suppliedKill.raidName)) {
         withheldKillReasons.set(
           `unmatched_encounter\0${canonicalCharacterId(suppliedKill.character)}`,
           {
