@@ -2563,6 +2563,7 @@ describe("applicant evidence job handler", () => {
             getFirstKillReports: async () => ({
               kind: "evidence" as const,
               troubledRaidIds: { parses: [], tierBests: [] },
+              parsedFightUrls: [],
               tierBests: [],
               kills: [],
               wipes: []
