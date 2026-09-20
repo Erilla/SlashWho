@@ -117,21 +117,19 @@ function clientFor(name: FixtureName) {
 }
 
 describe("Raider.IO gateway", () => {
-  it("attaches the configured access key to every request", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          viewUserCharactersApi: {
-            name: "Foo",
-            characters: []
-          }
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" }
-        }
-      )
-    );
+  it("attaches the configured access key only to official API requests", async () => {
+    // Break caught: Raider.IO rejects access_key on the undocumented endpoints
+    // that back its website, so attaching it indiscriminately makes every
+    // discovery fail even though the same key is valid on /api/v1/*.
+    const requestedUrls: URL[] = [];
+    const fetchMock: typeof globalThis.fetch = async (input) => {
+      requestedUrls.push(
+        new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        )
+      );
+      return Response.json({});
+    };
     const client = createRaiderIoClient({
       fetch: fetchMock,
       baseUrl: "https://raider.io",
@@ -139,12 +137,38 @@ describe("Raider.IO gateway", () => {
       accessKey: "test-access-key"
     });
 
-    await client.getClaimedCharacters("Foo");
+    await client.getCharacter(sentinel).catch(() => undefined);
+    await client.getClaimedCharacters("Foo").catch(() => undefined);
+    await client.resolveProfileGuess("Foo").catch(() => undefined);
+    await client.getHistoricMythicKills(sentinel, { tierOrdinals: [30] });
+    await client.getMythicBossRankings({
+      raidSlug: "nerubar-palace",
+      bossSlug: "queen-ansurek"
+    });
+    await client.getMythicBossRankings({
+      raidSlug: "nerubar-palace",
+      bossSlug: "queen-ansurek",
+      guild: {
+        region: "eu",
+        realm: "tarren-mill",
+        name: "Echo"
+      }
+    });
 
-    const requestedUrl = new URL(
-      (fetchMock.mock.calls[0]![0] as URL).toString()
-    );
-    expect(requestedUrl.searchParams.get("access_key")).toBe("test-access-key");
+    expect(
+      requestedUrls.map((url) => [
+        url.pathname,
+        url.searchParams.get("access_key")
+      ])
+    ).toEqual([
+      ["/api/characters/eu/silvermoon/sentinel", null],
+      ["/api/user/view-characters", null],
+      ["/api/user/view-characters", null],
+      ["/api/characters/eu/silvermoon/sentinel/raid-progress", null],
+      ["/api/v1/raiding/boss-rankings", "test-access-key"],
+      ["/api/guilds/raid-rankings", null],
+      ["/api/v1/guilds/profile", "test-access-key"]
+    ]);
   });
 
   it("sends no access_key parameter when no key is configured", async () => {

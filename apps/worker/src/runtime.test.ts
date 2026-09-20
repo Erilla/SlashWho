@@ -1698,9 +1698,9 @@ describe("createRaiderIoGateway", () => {
     );
   }
 
-  it("sends the configured access key on the worker's own requests", async () => {
-    // Break caught: the worker could parse a server key and never attach it,
-    // leaving discovery sweeps on the anonymous rate limit.
+  it("keeps the configured access key off the worker's unofficial requests", async () => {
+    // Break caught: forwarding the worker's configured key onto character-page
+    // endpoints makes Raider.IO reject otherwise valid discovery requests.
     const fetchMock = jsonFetchMock();
     vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
     try {
@@ -1713,7 +1713,8 @@ describe("createRaiderIoGateway", () => {
         .catch(() => undefined);
 
       const url = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
-      expect(url.searchParams.get("access_key")).toBe("server-key");
+      expect(url.pathname).toBe("/api/characters/eu/silvermoon/sentinel");
+      expect(url.searchParams.has("access_key")).toBe(false);
     } finally {
       vi.restoreAllMocks();
     }
