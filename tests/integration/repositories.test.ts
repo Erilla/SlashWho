@@ -1310,6 +1310,62 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("lists every evidence run through an operator-safe monitor projection", async () => {
+    // Break caught: the monitor must distinguish all six persisted states
+    // without returning queue identifiers or encrypted visitor credentials.
+    await pool.query(
+      `INSERT INTO character_evidence_runs
+         (region, realm_slug, normalized_name, status, evidence_version,
+          attempt, limitation_code, parse_limitation_code, retry_after_at,
+          error_code, created_at, started_at, completed_at,
+          wcl_client_id_encrypted, wcl_client_secret_encrypted)
+       VALUES
+         ('eu', 'silvermoon', 'queued', 'queued', 13, 0, NULL, NULL, NULL,
+          NULL, '2026-09-20T09:00:00Z', NULL, NULL, 'client-cipher', 'secret-cipher'),
+         ('eu', 'silvermoon', 'running', 'running', 13, 1, NULL, NULL, NULL,
+          NULL, '2026-09-20T09:30:00Z', '2026-09-20T10:00:00Z', NULL, NULL, NULL),
+         ('eu', 'silvermoon', 'retrying', 'retrying', 13, 2, 'rate_limited', NULL,
+          '2026-09-20T12:15:00Z', NULL, '2026-09-20T09:45:00Z',
+          '2026-09-20T10:30:00Z', NULL, NULL, NULL),
+         ('eu', 'silvermoon', 'complete', 'complete', 12, 1, NULL, NULL, NULL,
+          NULL, '2026-09-20T07:00:00Z', '2026-09-20T07:05:00Z',
+          '2026-09-20T08:00:00Z', NULL, NULL),
+         ('eu', 'silvermoon', 'partial', 'partial', 13, 1, 'request_cap',
+          'parse_request_cap', NULL, NULL, '2026-09-20T08:00:00Z',
+          '2026-09-20T08:05:00Z', '2026-09-20T09:00:00Z', NULL, NULL),
+         ('eu', 'silvermoon', 'failed', 'failed', 13, 3, NULL, NULL, NULL,
+          'warcraft_logs_unavailable', '2026-09-20T06:00:00Z',
+          '2026-09-20T06:05:00Z', '2026-09-20T07:00:00Z', NULL, NULL)`
+    );
+
+    const rows = await repositories.evidence.listForMonitor();
+
+    expect(rows.map((row) => row.status)).toEqual([
+      "queued",
+      "running",
+      "retrying",
+      "partial",
+      "complete",
+      "failed"
+    ]);
+    expect(rows).toContainEqual({
+      key: { region: "eu", realm: "silvermoon", name: "partial" },
+      status: "partial",
+      evidenceVersion: 13,
+      attempt: 1,
+      limitationCode: "request_cap",
+      parseLimitationCode: "parse_request_cap",
+      retryAfterAt: null,
+      errorCode: null,
+      startedAt: new Date("2026-09-20T08:05:00Z"),
+      completedAt: new Date("2026-09-20T09:00:00Z")
+    });
+    expect(JSON.stringify(rows)).not.toContain("cipher");
+    expect(rows.every((row) => !("id" in row) && !("queueJobId" in row))).toBe(
+      true
+    );
+  });
+
   it("carries terminal-tier kills and wipes through a complete publish", async () => {
     // Break caught: once collection stops paging into a concluded tier, that
     // tier's kills are "not found" on every later run, and a complete publish

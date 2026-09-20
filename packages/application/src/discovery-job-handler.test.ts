@@ -462,6 +462,9 @@ function createMemoryRepositories(): Repositories {
       },
       async clearStaleCredentials() {
         return 0;
+      },
+      async listForMonitor() {
+        return [];
       }
     },
     fingerprintSweeps: {

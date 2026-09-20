@@ -303,6 +303,9 @@ function policyFixture(
       },
       async clearStaleCredentials() {
         return 0;
+      },
+      async listForMonitor() {
+        return [];
       }
     },
     fingerprintSweeps: {

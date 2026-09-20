@@ -3579,6 +3579,55 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rowCount ?? 0;
       },
 
+      async listForMonitor() {
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+          status: CharacterEvidenceRun["status"];
+          evidence_version: number;
+          attempt: number;
+          limitation_code: string | null;
+          parse_limitation_code: string | null;
+          retry_after_at: Date | null;
+          error_code: string | null;
+          started_at: Date | null;
+          completed_at: Date | null;
+        }>(
+          `SELECT region, realm_slug, normalized_name, status,
+                  evidence_version, attempt, limitation_code,
+                  parse_limitation_code, retry_after_at, error_code,
+                  started_at, completed_at
+             FROM character_evidence_runs
+            ORDER BY CASE
+                       WHEN status IN ('queued', 'running', 'retrying') THEN 0
+                       WHEN status IN ('complete', 'partial') THEN 1
+                       ELSE 2
+                     END,
+                     CASE WHEN status IN ('queued', 'running', 'retrying')
+                       THEN COALESCE(started_at, created_at)
+                     END ASC NULLS LAST,
+                     completed_at DESC NULLS LAST,
+                     id DESC`
+        );
+        return result.rows.map((row) => ({
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
+          status: row.status,
+          evidenceVersion: row.evidence_version,
+          attempt: row.attempt,
+          limitationCode: row.limitation_code,
+          parseLimitationCode: row.parse_limitation_code,
+          retryAfterAt: row.retry_after_at,
+          errorCode: row.error_code,
+          startedAt: row.started_at,
+          completedAt: row.completed_at
+        }));
+      },
+
       async listActive(limit) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
           throw new RangeError("character_evidence_active_limit_out_of_range");

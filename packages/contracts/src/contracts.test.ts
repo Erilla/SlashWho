@@ -5,6 +5,7 @@ import {
   characterSchema,
   createDossierRequestSchema,
   createSearchResponseSchema,
+  collectionMonitorResponseSchema,
   historyPageSchema,
   historicalSnapshotSchema,
   jobStatusResponseSchema,
@@ -530,4 +531,61 @@ it("strictly validates applicant dossier parse summaries", () => {
       dossierWithParses({ ...available, percentile: -0.001 })
     ).success
   ).toBe(false);
+});
+
+it("defines a strict operator collection monitor without internal run fields", () => {
+  const response = {
+    generatedAt: "2026-09-20T12:00:00.000Z",
+    inFlight: [
+      {
+        character: applicantCharacter,
+        status: "retrying",
+        attempt: 2,
+        startedAt: "2026-09-20T11:45:00.000Z",
+        elapsedSeconds: 900,
+        retryAfterAt: "2026-09-20T12:15:00.000Z"
+      }
+    ],
+    completed: [
+      {
+        character: applicantCharacter,
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        completedAt: "2026-09-20T11:30:00.000Z",
+        evidenceVersion: 13
+      }
+    ],
+    failed: [
+      {
+        character: applicantCharacter,
+        errorCode: "warcraft_logs_unavailable",
+        stoppedAt: "2026-09-20T10:00:00.000Z"
+      }
+    ]
+  };
+
+  expect(collectionMonitorResponseSchema.parse(response)).toEqual(response);
+  expect(() =>
+    collectionMonitorResponseSchema.parse({
+      ...response,
+      inFlight: [
+        {
+          ...response.inFlight[0],
+          queueJobId: "private-queue-job"
+        }
+      ]
+    })
+  ).toThrow();
+  expect(() =>
+    collectionMonitorResponseSchema.parse({
+      ...response,
+      completed: [
+        {
+          ...response.completed[0],
+          wclClientSecretEncrypted: "ciphertext"
+        }
+      ]
+    })
+  ).toThrow();
 });

@@ -30,6 +30,7 @@ export type {
   DiscoverySource,
   EvidenceCollectionDomain,
   EvidenceRepository,
+  EvidenceMonitorRun,
   EvidenceRunCost,
   EvidenceReservationResult,
   EvidenceRunStatus,
