@@ -70,15 +70,18 @@ describe("readCredentialOverrides", () => {
       const headers = new Headers({ "x-raiderio-access-key": "user-key" });
       const overrides = readCredentialOverrides(headers, config);
 
-      // A 429 is still a transient failure to the caller: reporting the
-      // throttle must not change what the client throws.
+      // Reporting the throttle must not change the limitation returned to the
+      // caller.
       await expect(
-        overrides.raiderio!.getCharacter({
-          region: "eu",
-          realm: "silvermoon",
-          name: "ryii"
+        overrides.raiderio!.getMythicBossRankings({
+          raidSlug: "nerubar-palace",
+          bossSlug: "queen-ansurek"
         })
-      ).rejects.toThrow("raiderio_transient");
+      ).resolves.toEqual({
+        kind: "limitation",
+        code: "rate_limited",
+        retryAfterMs: 3000
+      });
 
       expect(records).toContainEqual(
         expect.objectContaining({
@@ -120,15 +123,13 @@ describe("readCredentialOverrides", () => {
       const headers = new Headers({ "x-raiderio-access-key": "visitor-key" });
       const overrides = readCredentialOverrides(headers, configWithServerKey);
 
-      await overrides
-        .raiderio!.getCharacter({
-          region: "eu",
-          realm: "silvermoon",
-          name: "ryii"
-        })
-        .catch(() => undefined);
+      await overrides.raiderio!.getMythicBossRankings({
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek"
+      });
 
       const url = new URL((fetchMock.mock.calls[0]![0] as URL).toString());
+      expect(url.pathname).toBe("/api/v1/raiding/boss-rankings");
       expect(url.searchParams.get("access_key")).toBe("visitor-key");
     } finally {
       vi.restoreAllMocks();

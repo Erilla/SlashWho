@@ -367,9 +367,10 @@ export function createFingerprintAlertNotifier(
 }
 
 /**
- * The worker's own Raider.IO client. It carries the server-configured access
- * key when one is set, and is anonymous when it is not — there is no visitor
- * on this path to supply a key of their own.
+ * The worker's own Raider.IO client. It receives the server-configured access
+ * key when one is set, but the shared client attaches it only to official
+ * /api/v1 requests. There is no visitor on this path to supply a key of their
+ * own.
  */
 export function createRaiderIoGateway(
   config: WorkerConfig,

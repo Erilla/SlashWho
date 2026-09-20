@@ -125,12 +125,14 @@ FINGERPRINT_SWEEP_CADENCE_HOURS=168
 
 `RAIDER_IO_ACCESS_KEY` is optional in both services and must be a Railway
 secret variable where it is set. When present it is sent as the `access_key`
-query parameter on every Raider.IO request that service makes, raising our
-rate-limit headroom; when absent, both services call Raider.IO anonymously
-exactly as before, which is the supported configuration for local development
-and for contributors without a key. Setting it in one service and not the
-other is valid — each service uses its own value. On the web service it is
-only the fallback: a visitor who supplies their own key in the
+query parameter on official `/api/v1/*` requests, where it raises our
+rate-limit headroom. Raider.IO's unofficial character-page endpoints reject
+the parameter and are always called anonymously. When the key is absent, both
+services call Raider.IO anonymously exactly as before, which is the supported
+configuration for local development and for contributors without a key.
+Setting it in one service and not the other is valid — each service uses its
+own value. On the web service it is only the fallback: a visitor who supplies
+their own key in the
 `x-raiderio-access-key` header spends their own budget instead, and their key
 takes precedence for that request.
 
