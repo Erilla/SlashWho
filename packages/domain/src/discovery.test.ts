@@ -259,6 +259,92 @@ describe("discoverCharacter", () => {
     ).toEqual(["input", "declared_main", "claimed"]);
   });
 
+  it("includes a known reverse-declared character without reading it upstream", async () => {
+    // Break caught: a main could discard a stored reverse declared-main edge,
+    // or preserving that edge could spend another upstream character request.
+    const requested: CharacterKey[] = [];
+    const gateway: RaiderIoGateway = {
+      async getCharacter(key) {
+        requested.push(key);
+        return character(key, {
+          guild: { name: "Rancour", region: "eu", realm: "draenor" }
+        });
+      },
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    const outcome = await discoverCharacter(mainKey, gateway, {
+      ...options,
+      knownReverseDeclaredCharacters: [
+        {
+          key: altKey,
+          displayName: "Alt",
+          className: "Mage",
+          level: 80,
+          guild: null,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/alt",
+          source: "declared_main"
+        }
+      ]
+    });
+
+    expect(requested).toEqual([mainKey]);
+    expect(outcome).toMatchObject({
+      kind: "snapshot",
+      state: "partial",
+      limitationCode: "privacy_hidden"
+    });
+    expect(
+      outcome.kind === "snapshot" &&
+        outcome.characters.map((item) => [item.key, item.source, item.guild])
+    ).toEqual([
+      [mainKey, "input", { name: "Rancour", region: "eu", realm: "draenor" }],
+      [altKey, "declared_main", null]
+    ]);
+  });
+
+  it("excludes a suppressed known reverse-declared character", async () => {
+    // Break caught: stored relationship evidence must not resurrect a character
+    // after a removal request has suppressed that key.
+    const outcome = await discoverCharacter(
+      mainKey,
+      scriptedGateway({
+        characters: [
+          [
+            mainKey,
+            character(mainKey, {
+              guild: { name: "Rancour", region: "eu", realm: "draenor" }
+            })
+          ]
+        ]
+      }),
+      {
+        ...options,
+        isSuppressed: async (key) => keyId(key) === keyId(altKey),
+        knownReverseDeclaredCharacters: [
+          {
+            key: altKey,
+            displayName: "Alt",
+            className: "Mage",
+            level: 80,
+            guild: null,
+            raiderIoUrl: "https://raider.io/characters/eu/silvermoon/alt",
+            source: "declared_main"
+          }
+        ]
+      }
+    );
+
+    expect(
+      outcome.kind === "snapshot" && outcome.characters.map((item) => item.key)
+    ).toEqual([mainKey]);
+  });
+
   it("returns a privacy-limited snapshot when hidden ownership has no valid guess", async () => {
     // Break caught: a hidden owner could be reported as a complete relationship set.
     const outcome = await discoverCharacter(

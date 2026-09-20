@@ -178,6 +178,9 @@ function policyFixture(
       async getCurrent() {
         return options.current ?? null;
       },
+      async listReverseDeclaredCharacters() {
+        return [];
+      },
       async find() {
         return options.current ?? null;
       },

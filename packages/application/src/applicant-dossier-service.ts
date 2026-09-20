@@ -1371,7 +1371,9 @@ export function createApplicantDossierService(options: {
               : {
                   state: "partial",
                   message:
-                    "Additional linked characters may exist; this dossier is not exhaustive."
+                    snapshot.limitationCode === "privacy_hidden"
+                      ? "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive."
+                      : "Additional linked characters may exist; this dossier is not exhaustive."
                 },
           repositories,
           queue: options.queue,
