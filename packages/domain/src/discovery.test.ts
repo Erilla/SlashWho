@@ -96,6 +96,37 @@ const options = {
 };
 
 describe("discoverCharacter", () => {
+  it("uses the admitted root observation without reading it again", async () => {
+    // Break caught: admission could validate one root response, then let the
+    // worker immediately fetch a different response or fail on a duplicate read.
+    let characterCalls = 0;
+    const admitted = character(altKey, { ownerId: "fixture-owner" });
+    const gateway: RaiderIoGateway = {
+      async getCharacter() {
+        characterCalls += 1;
+        throw new Error("duplicate_root_read");
+      },
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await expect(
+      discoverCharacter(altKey, gateway, {
+        ...options,
+        rootCharacter: admitted
+      })
+    ).resolves.toMatchObject({
+      kind: "snapshot",
+      state: "complete",
+      characters: [expect.objectContaining({ key: altKey, source: "input" })]
+    });
+    expect(characterCalls).toBe(0);
+  });
+
   it("enriches a claimed character's guild, absent from the profile payload", async () => {
     // The profile list carries no guild at all, so a claimed character's guild
     // is only knowable from its own character payload.

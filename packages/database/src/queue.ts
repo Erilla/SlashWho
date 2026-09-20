@@ -1,4 +1,4 @@
-import type { CharacterKey } from "@slashwho/domain";
+import type { CharacterKey, RaiderIoCharacter } from "@slashwho/domain";
 import { PgBoss } from "pg-boss";
 
 export const discoverCharacterQueueName = "discover-character";
@@ -17,6 +17,8 @@ export type JobTelemetry = {
 export type DiscoverCharacterJob = {
   runId: string;
   key: CharacterKey;
+  /** Normalized root response validated before this run was admitted. */
+  rootCharacter?: RaiderIoCharacter;
   /**
    * Set when this job resumes a fingerprint sweep that capped. It skips
    * Raider.IO re-discovery and the completed-run guard.

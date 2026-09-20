@@ -123,6 +123,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       NEGATIVE_CACHE_TTL_MS: "60000",
       RAIDER_IO_BASE_URL: fixture.baseUrl,
       RAIDER_IO_TIMEOUT_MS: "30000",
+      DISCOVERY_WEBHOOK_URL: `${fixture.baseUrl}/__webhook/discovery`,
       DATABASE_STARTUP_ATTEMPTS: "10",
       DATABASE_STARTUP_RETRY_MS: "250",
       // These are deliberately inert, non-secret fixtures. The worker validates

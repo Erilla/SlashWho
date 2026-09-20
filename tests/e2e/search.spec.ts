@@ -1,11 +1,68 @@
 import { expect, test } from "playwright/test";
 
-import { seedCharacterEvidence, seedSnapshot } from "./support/seed";
+import {
+  countDiscoveryRuns,
+  seedCharacterEvidence,
+  seedSnapshot
+} from "./support/seed";
 
 const applicantUrls = [
   "https://raider.io/characters/eu/silvermoon/Ryii",
   "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
 ] as const;
+
+test("reports an absent character before creating discovery work", async ({
+  page
+}) => {
+  // Break caught: absence could first become a queued run, expose a polling
+  // URL, post a start webhook, and only then degrade into temporary failure.
+  const fixtureBaseUrl = process.env.E2E_RAIDER_IO_BASE_URL;
+  if (!fixtureBaseUrl) throw new Error("e2e_fixture_base_url_unavailable");
+  await fetch(new URL("/__control/reset-stats", fixtureBaseUrl));
+  const polledJobs: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/dossiers/jobs/")) {
+      polledJobs.push(request.url());
+    }
+  });
+
+  await page.goto("/dossiers/eu/silvermoon/absent");
+
+  await expect(page).toHaveURL("/dossiers/eu/silvermoon/absent");
+  const notFoundAlert = page
+    .getByRole("alert")
+    .filter({ hasText: "The character was not found." });
+  await expect(notFoundAlert).toHaveText("The character was not found.");
+  expect(
+    await countDiscoveryRuns({
+      region: "eu",
+      realm: "silvermoon",
+      name: "absent"
+    })
+  ).toBe(0);
+  expect(polledJobs).toEqual([]);
+
+  await page.reload();
+  await expect(notFoundAlert).toHaveText("The character was not found.");
+  const stats = (await fetch(new URL("/__control/stats", fixtureBaseUrl)).then(
+    (response) => response.json()
+  )) as {
+    discoveryWebhooks: number;
+    characterRequests: Record<string, number>;
+  };
+  expect(stats.discoveryWebhooks).toBe(0);
+  expect(stats.characterRequests["/api/characters/eu/silvermoon/absent"]).toBe(
+    1
+  );
+  expect(
+    await countDiscoveryRuns({
+      region: "eu",
+      realm: "silvermoon",
+      name: "absent"
+    })
+  ).toBe(0);
+  expect(polledJobs).toEqual([]);
+});
 
 for (const applicantUrl of applicantUrls) {
   test(`researches an applicant dossier from ${new URL(applicantUrl).hostname}`, async ({

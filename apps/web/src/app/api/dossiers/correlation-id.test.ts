@@ -173,7 +173,25 @@ const config = applicationConfigSchema.parse({
   RATE_LIMIT_HASH_SECRET: "r".repeat(32)
 });
 
-const search = createSearchService({ repositories, queue, config });
+const search = createSearchService({
+  repositories,
+  queue,
+  raiderio: {
+    async getCharacter() {
+      return {
+        key: root,
+        displayName: "Ryii",
+        className: "Mage",
+        level: 80,
+        guild: null,
+        ownerId: null,
+        profileGuess: null,
+        declaredMain: null
+      };
+    }
+  },
+  config
+});
 const dossiers = createApplicantDossierService({
   repositories: {
     snapshots: {},

@@ -39,6 +39,7 @@ export type WebContainerDependencies = Readonly<{
   createSearchService(options: {
     repositories: Repositories;
     queue: Pick<DiscoveryQueue, "enqueue">;
+    raiderio: Pick<RaiderIoGateway, "getCharacter">;
     config: ApplicationConfig;
   }): SearchService;
   createRaiderIoGateway(options: {
@@ -89,9 +90,22 @@ export async function createWebContainer(
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
     await initializedQueue.start();
+    const raiderio = dependencies.createRaiderIoGateway({
+      fetch: globalThis.fetch,
+      baseUrl: config.dossier.raiderIoBaseUrl,
+      timeoutMs: config.dossier.raiderIoTimeoutMs,
+      accessKey: config.dossier.raiderIoAccessKey,
+      onThrottle: (event) =>
+        webLogger.info({
+          event: "upstream_throttle",
+          provider: "raiderio",
+          retryAfterMs: event.retryAfterMs ?? null
+        })
+    });
     const searches = dependencies.createSearchService({
       repositories,
       queue: initializedQueue,
+      raiderio,
       config: config.application
     });
     const dossiers = dependencies.createApplicantDossierService({
@@ -109,18 +123,7 @@ export async function createWebContainer(
             retryAfterMs: event.retryAfterMs ?? null
           })
       }),
-      raiderio: dependencies.createRaiderIoGateway({
-        fetch: globalThis.fetch,
-        baseUrl: config.dossier.raiderIoBaseUrl,
-        timeoutMs: config.dossier.raiderIoTimeoutMs,
-        accessKey: config.dossier.raiderIoAccessKey,
-        onThrottle: (event) =>
-          webLogger.info({
-            event: "upstream_throttle",
-            provider: "raiderio",
-            retryAfterMs: event.retryAfterMs ?? null
-          })
-      }),
+      raiderio,
       config: config.application,
       evidenceJobCredentialEncryptionKey:
         config.dossier.evidenceJobCredentialEncryptionKey

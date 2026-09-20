@@ -773,6 +773,36 @@ function delivery(attempt = 1, maxAttempts = 5) {
 }
 
 describe("discovery job handler", () => {
+  it("hands the admitted root observation to discovery without rereading it", async () => {
+    // Break caught: the web admission read could be discarded at the queue
+    // boundary, making the worker issue a second, potentially inconsistent read.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const getCharacter = vi.fn(async () => {
+      throw new Error("duplicate_root_read");
+    });
+    const gateway: RaiderIoGateway = {
+      getCharacter,
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await handlerFor(repositories, gateway).execute(run.id, delivery(), {
+      runId: run.id,
+      key: rootKey,
+      rootCharacter: character(rootKey)
+    });
+
+    expect(getCharacter).not.toHaveBeenCalled();
+    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+      status: "complete"
+    });
+  });
+
   it("announces every execution of a run, carrying the attempt", async () => {
     // Break caught: announcing only the first attempt hid a run thrashing on
     // retries behind what looked like a single quiet start.

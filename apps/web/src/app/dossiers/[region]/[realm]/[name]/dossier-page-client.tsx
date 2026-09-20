@@ -43,10 +43,13 @@ const activeJobStates = new Set(["queued", "running", "retrying"]);
 const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
 
 function apiError(response: Response, body: unknown): string {
+  const parsed = safeApiErrorSchema.safeParse(body);
+  if (parsed.success && parsed.data.error.code === "character_not_found") {
+    return parsed.data.error.message;
+  }
   if (response.status === 404) return "This applicant dossier was not found.";
   if (response.status === 429)
     return "Too many dossier requests. Please try again shortly.";
-  const parsed = safeApiErrorSchema.safeParse(body);
   return parsed.success
     ? parsed.data.error.message
     : "The dossier could not be loaded.";

@@ -388,6 +388,108 @@ describe("DossierPageClient staged research", () => {
     expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
   });
 
+  it("shows character absence without starting a job poll", async () => {
+    // Break caught: a confirmed absent root could be rendered as a generic
+    // dossier 404 only after the page had already started polling a job.
+    const fetchMock = vi.fn((input: string) => {
+      if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "discovery_not_ready",
+                message: "Discovery is still in progress."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
+      if (input === "/api/dossiers") {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "character_not_found",
+                message: "The character was not found."
+              }
+            },
+            { status: 404 }
+          )
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The character was not found."
+    );
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).startsWith("/api/dossiers/jobs/")
+      )
+    ).toBe(false);
+  });
+
+  it("keeps an admission timeout visibly temporary without polling", async () => {
+    const fetchMock = vi.fn((input: string) => {
+      if (input === dossierPath) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "discovery_not_ready",
+                message: "Discovery is still in progress."
+              }
+            },
+            { status: 409 }
+          )
+        );
+      }
+      if (input === "/api/dossiers") {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "upstream_unavailable",
+                message: "Character data is temporarily unavailable."
+              }
+            },
+            { status: 503 }
+          )
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Character data is temporarily unavailable."
+    );
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).startsWith("/api/dossiers/jobs/")
+      )
+    ).toBe(false);
+  });
+
   it("shows initial evidence while queued research polls, then replaces it after completion", async () => {
     // Break caught: polling could be skipped as soon as initial evidence exists,
     // leaving a root-only dossier visible after linked-character research finishes.

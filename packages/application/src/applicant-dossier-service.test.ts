@@ -937,6 +937,20 @@ describe("applicant dossier service", () => {
     const search = createSearchService({
       repositories: searchRepositories,
       queue,
+      raiderio: {
+        async getCharacter() {
+          return {
+            key: root,
+            displayName: "Ryii",
+            className: "Mage",
+            level: 80,
+            guild: null,
+            ownerId: null,
+            profileGuess: null,
+            declaredMain: null
+          };
+        }
+      },
       config
     });
     const dossiers = createApplicantDossierService({

@@ -13,10 +13,13 @@ import type {
   SearchReservationResult
 } from "@slashwho/database";
 import {
+  canonicalCharacterId,
   parseRaiderIoCharacterUrl,
   toCharacterPath,
-  type CharacterKey
+  type CharacterKey,
+  type RaiderIoCharacter
 } from "@slashwho/domain";
+import { isRaiderIoFailure, type RaiderIoGateway } from "@slashwho/raiderio";
 
 import {
   AuthenticationError,
@@ -56,7 +59,10 @@ export type CreateSearchResult =
   | { kind: "unauthorized"; code: "unauthorized" }
   | { kind: "client_ip_unavailable"; code: "trusted_client_ip_unavailable" }
   | { kind: "rate_limited"; retryAfterSeconds: number }
-  | { kind: "failed"; code: "search_failed" };
+  | {
+      kind: "failed";
+      code: "search_failed" | "upstream_unavailable";
+    };
 
 export type PublicReadAuthorizationResult =
   | { allowed: true }
@@ -149,15 +155,39 @@ function sameKey(left: CharacterKey, right: CharacterKey): boolean {
 export function createSearchService(options: {
   repositories: Repositories;
   queue: Pick<DiscoveryQueue, "enqueue">;
+  raiderio: Pick<RaiderIoGateway, "getCharacter">;
   config: ApplicationConfig;
   now?: () => Date;
 }): SearchService {
   const now = options.now ?? (() => new Date());
+  const pendingRootLookups = new Map<string, Promise<RaiderIoCharacter>>();
   const rateLimiter = createRateLimiter({
     repository: options.repositories.rateLimits,
     config: options.config,
     now
   });
+
+  function readRootCharacter(
+    key: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<RaiderIoCharacter> {
+    const id = canonicalCharacterId(key);
+    const pending = pendingRootLookups.get(id);
+    if (pending) return pending;
+    const lookup = Promise.resolve()
+      .then(() =>
+        scope
+          ? scope.time("raiderIo", () => options.raiderio.getCharacter(key))
+          : options.raiderio.getCharacter(key)
+      )
+      .finally(() => {
+        if (pendingRootLookups.get(id) === lookup) {
+          pendingRootLookups.delete(id);
+        }
+      });
+    pendingRootLookups.set(id, lookup);
+    return lookup;
+  }
 
   async function limitedRead(
     caller: CallerIdentity,
@@ -264,6 +294,26 @@ export function createSearchService(options: {
         });
       }
 
+      let rootCharacter;
+      try {
+        rootCharacter = await readRootCharacter(key, scope);
+      } catch (error) {
+        if (isRaiderIoFailure(error) && error.kind === "not_found") {
+          await repositories.negativeCache.put(
+            key,
+            new Date(now().getTime() + options.config.NEGATIVE_CACHE_TTL_MS)
+          );
+          return limitedRead(caller, {
+            kind: "not_found",
+            code: "character_not_found"
+          });
+        }
+        return limitedRead(caller, {
+          kind: "failed",
+          code: "upstream_unavailable"
+        });
+      }
+
       const searchPolicy = rateLimiter.searchReservation(caller);
       const reservation = await repositories.searchReservations.reserve({
         key,
@@ -328,6 +378,7 @@ export function createSearchService(options: {
         queueJobId = await options.queue.enqueue({
           runId: reservation.run.id,
           key,
+          rootCharacter,
           correlationId: input.correlationId,
           enqueuedAt: now().toISOString()
         });
