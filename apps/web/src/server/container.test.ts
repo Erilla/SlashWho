@@ -237,6 +237,7 @@ it("clears a rejected startup promise so the next request can recover", async ()
     return {
       searches: {} as never,
       dossiers: {} as never,
+      collectionMonitor: {} as never,
       async ready() {
         return true;
       },

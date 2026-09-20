@@ -61,6 +61,13 @@ export {
 } from "./history";
 export type { HistoricalSnapshot, HistoryItem, HistoryPage } from "./history";
 export {
+  collectionMonitorCompletedRunSchema,
+  collectionMonitorFailedRunSchema,
+  collectionMonitorInFlightRunSchema,
+  collectionMonitorResponseSchema
+} from "./collection-monitor";
+export type { CollectionMonitorResponse } from "./collection-monitor";
+export {
   createSearchRequestSchema,
   createSearchResponseSchema,
   dossierResearchStatusSchema,

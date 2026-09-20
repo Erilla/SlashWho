@@ -17,6 +17,10 @@ import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
 import { Pool } from "pg";
 
 import { loadWebConfig, type WebConfig } from "./config";
+import {
+  createCollectionMonitorService,
+  type CollectionMonitorService
+} from "./collection-monitor";
 import { webLogger } from "./logger";
 
 type WebPool = {
@@ -27,6 +31,7 @@ type WebPool = {
 export type WebContainer = Readonly<{
   searches: SearchService;
   dossiers: ApplicantDossierService;
+  collectionMonitor: CollectionMonitorService;
   ready(): Promise<boolean>;
   close(): Promise<void>;
 }>;
@@ -87,6 +92,9 @@ export async function createWebContainer(
   try {
     await dependencies.runMigrations(pool);
     const repositories = dependencies.createRepositories(pool);
+    const collectionMonitor = createCollectionMonitorService({
+      evidence: repositories.evidence
+    });
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
     await initializedQueue.start();
@@ -131,6 +139,7 @@ export async function createWebContainer(
     return {
       searches,
       dossiers,
+      collectionMonitor,
       async ready() {
         try {
           await pool.query("SELECT 1");
