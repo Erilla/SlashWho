@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { terminalTiersFromStage } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 
 const at = new Date("2026-09-18T12:00:00.000Z");
@@ -34,6 +35,7 @@ function input(overrides: Partial<Parameters<typeof terminalTiersFrom>[0]>) {
     at,
     settleMs,
     kills: [],
+    scanSkipped: false,
     scanLimitation: null,
     troubledRaidIds: { parses: [], tierBests: [] },
     ...overrides
@@ -79,6 +81,64 @@ describe("terminalTiersFrom", () => {
         scanLimitation: "schema_drift"
       })
     ).toEqual([]);
+  });
+
+  it("withholds only the kill mark when the history scan was skipped", () => {
+    // Break caught: no scan result says nothing about whether this run saw
+    // every kill in the tier. Parse work may still settle from the complete
+    // stored kill set, but creating a kill-domain mark would let a future scan
+    // stop above evidence this attempt never looked for.
+    expect(
+      input({
+        kills: [kill("42", concluded, "2026-06-01T00:00:00.000Z")],
+        scanSkipped: true
+      })
+    ).toEqual([
+      { raidId: "42", domain: "parses" },
+      { raidId: "42", domain: "tier_bests" }
+    ]);
+  });
+
+  it("keeps a staged skipped scan from settling the kill domain", () => {
+    // A publication retry and abandoned-run recovery derive marks from the
+    // stage rather than the live gateway response, so the skipped-scan fact
+    // must survive that path too.
+    expect(
+      terminalTiersFromStage(
+        {
+          state: "partial",
+          scanSkipped: true,
+          limitationCode: null,
+          parseLimitationCode: null,
+          retryAfterAt: null,
+          kills: [
+            {
+              ...kill("42", concluded, "2026-06-01T00:00:00.000Z"),
+              bossId: "7",
+              bossOrder: 7,
+              isFinalBoss: true,
+              reportUrl: "https://www.warcraftlogs.com/reports/report",
+              fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
+              guild: null,
+              historicWorldRank: null,
+              performance: {
+                damage: { state: "unavailable" },
+                healing: { state: "unavailable" },
+                bossDamage: { state: "unavailable" }
+              }
+            }
+          ],
+          wipes: [],
+          tierBests: [],
+          completedAt: at.toISOString(),
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        settleMs
+      )
+    ).toEqual([
+      { raidId: "42", domain: "parses" },
+      { raidId: "42", domain: "tier_bests" }
+    ]);
   });
 
   // Break caught: a veteran exhausts the parse budget on every run, so every

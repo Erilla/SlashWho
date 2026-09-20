@@ -398,6 +398,12 @@ export type StoredEvidenceTiers = Readonly<{
   wipes: readonly StoredWipeTier[];
   /** When the last complete history scan was published, if known. */
   lastCleanKillScanAt?: string;
+  /**
+   * Whether the newest completed run established that its only unfinished
+   * collection work was parses. Absent is conservative: it does not license
+   * skipping a scan.
+   */
+  parseWorkOutstanding?: boolean;
   parseOnlyKills?: readonly CharacterMythicKillInput[];
 }>;
 

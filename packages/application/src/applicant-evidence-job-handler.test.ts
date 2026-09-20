@@ -123,6 +123,88 @@ function store(
 }
 
 describe("applicant evidence job handler", () => {
+  it.each([
+    {
+      name: "scans after a fresh run that left no parse work",
+      lastCleanKillScanAt: "2026-09-19T11:30:00.000Z",
+      parseWorkOutstanding: false,
+      expectedRequestCap: 300,
+      expectedParseRequestCap: 8
+    },
+    {
+      name: "skips a fresh scan when the prior run left parse work",
+      lastCleanKillScanAt: "2026-09-19T11:30:00.000Z",
+      parseWorkOutstanding: true,
+      expectedRequestCap: 0,
+      expectedParseRequestCap: 107
+    },
+    {
+      name: "rescans parse work when the clean scan is a day old",
+      lastCleanKillScanAt: "2026-09-18T12:00:00.000Z",
+      parseWorkOutstanding: true,
+      expectedRequestCap: 300,
+      expectedParseRequestCap: 8
+    }
+  ])(
+    "$name",
+    async ({
+      lastCleanKillScanAt,
+      parseWorkOutstanding,
+      expectedRequestCap,
+      expectedParseRequestCap
+    }) => {
+      // Break caught: freshness alone cannot identify a parse-only resume. A
+      // clean, complete run followed by a manual refresh still needs to look
+      // for new kills; only the prior run's parse shortfall licenses no scan.
+      // Even that licence expires so a long hydration chain periodically
+      // checks for new raid nights.
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        lastCleanKillScanAt,
+        parseWorkOutstanding
+      });
+      const getFirstKillReports = vi.fn(
+        async (
+          _key: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[0],
+          collection: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
+        ) => ({
+          kind: "evidence" as const,
+          ...(collection.requestCap === 0 ? { scanSkipped: true } : {}),
+          parsedFightUrls: [],
+          troubledRaidIds: { parses: [], tierBests: [] },
+          tierBests: [],
+          kills: [],
+          wipes: []
+        })
+      );
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { ...openGate, getFirstKillReports },
+        requestCap: 500,
+        parseRequestCap: 8,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        now: () => new Date("2026-09-19T12:00:00.000Z")
+      });
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({
+          requestCap: expectedRequestCap,
+          parseRequestCap: expectedParseRequestCap
+        })
+      );
+    }
+  );
+
   it("publishes the complete high-volume scan using the worker request cap", async () => {
     // Break caught: evidence collection could retain the short web timeout cap
     // and never reach current-tier reports for a prolific character.
