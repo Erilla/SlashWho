@@ -1,6 +1,6 @@
 # Railway deployment
 
-SlashWho runs as three services in a fresh Railway project: PostgreSQL, an unlisted web dossier service, and a private worker. The web and worker images both run the advisory-locked Drizzle migrations before application startup. Only the web service receives a public domain; it is not a public API or searchable directory.
+SlashWho runs as three services in a fresh Railway project: PostgreSQL, an unlisted web dossier service, and a worker whose public surface is limited to operational health endpoints. The web and worker images both run the advisory-locked Drizzle migrations before application startup. The web service is not a public API or searchable directory, and the worker never exposes application or character routes.
 
 The checked-in settings follow Railway's current [config-as-code reference](https://docs.railway.com/config-as-code/reference), [Dockerfile guidance](https://docs.railway.com/builds/dockerfiles), and [public networking header contract](https://docs.railway.com/networking/public-networking/specs-and-limits). Recheck those pages when changing the deployment boundary.
 
@@ -13,7 +13,7 @@ The prior Railway project has been retired. These instructions assume no existin
 3. Set the web service's config-as-code path to `/railway.web.toml`; set the worker's to `/railway.worker.toml`.
 4. Confirm the web build uses `Dockerfile.web` and the worker build uses `Dockerfile.worker`.
 5. Add `DATABASE_URL` to both app services as a private reference to the environment's PostgreSQL `DATABASE_URL`. Do not paste the public TCP proxy URL into any service variable. Maintainer commands that must reach the database from outside Railway read `DATABASE_PUBLIC_URL` from the PostgreSQL service transiently instead; see [`docs/operations/removals.md`](../operations/removals.md).
-6. Generate a public domain for web only. Do not expose the worker or PostgreSQL services publicly.
+6. Generate public domains for web and worker. The worker domain exists only so the scheduled live smoke can read `/health`, `/ready`, and the aggregate `/probe`; do not add application routes to it. Do not expose PostgreSQL publicly.
 7. Configure both services to deploy `main` in `test` and `prod` in `prod`. Disable direct production deploys from feature branches. Do not migrate or reuse resources from the retired project.
 
 Steps 3 and 4 have no Railway CLI flag. Set the config-as-code path from each service's settings page, or through the public API:
@@ -150,8 +150,11 @@ Railway currently documents `X-Real-IP` as the single remote-client header suppl
 
 - Web `/health` is process-only. Web `/ready` runs the shared migrations during container initialization and then verifies PostgreSQL connectivity.
 - Worker `/health` is process-only. Worker `/ready` requires PostgreSQL and a started pg-boss queue/consumer.
+- Worker `/probe` is read-only and reports only readiness, the age of the last successful discovery run, and aggregate queue depth. It contains no character, guild, run-id, credential, provenance, or fingerprint material.
 - Both Railway configs gate deployment on `/ready` and restart failed processes up to ten times.
 - Worker draining is 35 seconds, longer than the default 30-second job drain, so graceful shutdown gets the full settlement window.
+
+The scheduled GitHub live smoke reads the worker domain from the repository variable `SLASHWHO_PRODUCTION_WORKER_URL`. Its checked-in 48-hour successful-run threshold tolerates one delayed daily run while still failing when the worker stops completing work. The probe is asserted before the smoke submits the configured dossier character; a fresh dossier is reported as `skipped/inconclusive` for the job path rather than as worker coverage.
 
 After each staging deploy, verify `/health`, `/ready`, one new search, one stale refresh, one immutable historical snapshot, rate limiting, a suppressed character, and a graceful worker restart. For the new cold search, confirm that submitted-character evidence and `Linked-character research is still running; this evidence covers only the submitted character.` appear before linked-character discovery finishes, then confirm `Linked-character research is complete.` after release. In `test`, temporarily use a deliberately bounded fingerprint sweep to exercise a capped run and confirm `Additional linked characters may exist; this dossier is not exhaustive.` appears, then confirm that the continuation cycles run without operator action and the message becomes `Linked-character research is complete.` once the roster is exhausted. Restore the normal test budget afterwards. Promote only the validated `main` commit by fast-forwarding `prod`.
 

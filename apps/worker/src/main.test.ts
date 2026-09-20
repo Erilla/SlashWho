@@ -44,7 +44,12 @@ describe("worker main", () => {
     // Break caught: EADDRINUSE could leak queue/database resources and signal handlers.
     const occupied = await startHealthServer({
       port: 0,
-      health: async () => ({ live: true, ready: true })
+      health: async () => ({ live: true, ready: true }),
+      probe: async () => ({
+        ready: true,
+        lastSuccessfulRunAgeMs: null,
+        queueDepth: 0
+      })
     });
     const stop = vi.fn(async () => {});
     const sigtermListeners = process.listenerCount("SIGTERM");
@@ -56,6 +61,11 @@ describe("worker main", () => {
           createLogger: () => ({ info() {} }),
           createRuntime: async () => ({
             health: async () => ({ live: true, ready: true }),
+            probe: async () => ({
+              ready: true,
+              lastSuccessfulRunAgeMs: null,
+              queueDepth: 0
+            }),
             stop
           }),
           startHealthServer,
@@ -84,6 +94,11 @@ describe("worker main", () => {
         createLogger: () => ({ info() {} }),
         createRuntime: async () => ({
           health: async () => ({ live: true, ready: true }),
+          probe: async () => ({
+            ready: true,
+            lastSuccessfulRunAgeMs: null,
+            queueDepth: 0
+          }),
           stop: async () => {
             throw new DiscoveryQueueStopTimeoutError();
           }
@@ -117,6 +132,11 @@ describe("worker main", () => {
       createLogger: () => ({ info() {} }),
       createRuntime: async () => ({
         health: async () => ({ live: true, ready: true }),
+        probe: async () => ({
+          ready: true,
+          lastSuccessfulRunAgeMs: null,
+          queueDepth: 0
+        }),
         stop: async () => {
           throw Object.assign(new Error("queue settlement timed out"), {
             code: "discovery_queue_stop_timeout"

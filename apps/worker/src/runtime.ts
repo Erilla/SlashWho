@@ -14,9 +14,12 @@ import {
 } from "@slashwho/application";
 import { createBlizzardClient } from "@slashwho/blizzard";
 import {
+  collectCharacterEvidenceQueueName,
   createDiscoveryQueue,
   createPostgresRepositories,
   DiscoveryQueueStopTimeoutError,
+  discoverCharacterQueueName,
+  fingerprintAdmissionQueueName,
   runMigrations,
   type DiscoveryQueue,
   type Repositories
@@ -30,7 +33,7 @@ import {
 import { Pool } from "pg";
 
 import type { WorkerConfig } from "./config";
-import type { WorkerHealth } from "./health-server";
+import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
 
 // Ciphertext for an abandoned evidence run's WCL credentials should not
 // outlive the run by more than this window. Normal completion (`publish` or
@@ -90,7 +93,10 @@ const ORPHANED_EVIDENCE_RESERVATION_MS = 15 * 60_000;
 const ABANDONED_EVIDENCE_SCAN_LIMIT = 200;
 
 type RuntimePool = {
-  query(text: string): Promise<unknown>;
+  query(
+    text: string,
+    values?: unknown[]
+  ): Promise<{ rows: Array<Record<string, unknown>> }>;
   end(): Promise<void>;
 };
 
@@ -130,8 +136,52 @@ export type WorkerRuntimeDependencies = {
 
 export type WorkerRuntime = {
   health(): Promise<WorkerHealth>;
+  probe(): Promise<WorkerHealthProbe>;
   stop(): Promise<void>;
 };
+
+const workerQueueNames = [
+  discoverCharacterQueueName,
+  fingerprintAdmissionQueueName,
+  collectCharacterEvidenceQueueName
+];
+
+async function readWorkerHealthProbe(
+  pool: RuntimePool
+): Promise<Omit<WorkerHealthProbe, "ready">> {
+  const result = await pool.query(
+    `SELECT
+       GREATEST(
+         0,
+         EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MAX(completed_at))) * 1000
+       ) AS last_successful_run_age_ms,
+       (
+         SELECT COUNT(*)
+         FROM pgboss.job
+         WHERE name = ANY($1::text[])
+           AND state < 'active'
+       ) AS queue_depth
+     FROM discovery_runs
+     WHERE status = 'complete'`,
+    [workerQueueNames]
+  );
+  const row = result.rows[0];
+  const ageValue = row?.last_successful_run_age_ms;
+  const depthValue = row?.queue_depth;
+  const lastSuccessfulRunAgeMs =
+    ageValue === null || ageValue === undefined ? null : Number(ageValue);
+  const queueDepth = Number(depthValue);
+  if (
+    (lastSuccessfulRunAgeMs !== null &&
+      (!Number.isFinite(lastSuccessfulRunAgeMs) ||
+        lastSuccessfulRunAgeMs < 0)) ||
+    !Number.isInteger(queueDepth) ||
+    queueDepth < 0
+  ) {
+    throw new Error("worker_health_probe_invalid");
+  }
+  return { lastSuccessfulRunAgeMs, queueDepth };
+}
 
 export function createFingerprintIntegration(
   config: WorkerConfig,
@@ -657,6 +707,28 @@ export async function createWorkerRuntime(
           return { live: true, ready: true };
         } catch {
           return { live: true, ready: false };
+        }
+      },
+
+      async probe() {
+        if (!ready || !initializedQueue.isReady()) {
+          return {
+            ready: false,
+            lastSuccessfulRunAgeMs: null,
+            queueDepth: 0
+          };
+        }
+        try {
+          return {
+            ready: true,
+            ...(await readWorkerHealthProbe(pool))
+          };
+        } catch {
+          return {
+            ready: false,
+            lastSuccessfulRunAgeMs: null,
+            queueDepth: 0
+          };
         }
       },
 

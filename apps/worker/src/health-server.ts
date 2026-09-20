@@ -5,10 +5,17 @@ export type WorkerHealth = {
   ready: boolean;
 };
 
+export type WorkerHealthProbe = {
+  ready: boolean;
+  lastSuccessfulRunAgeMs: number | null;
+  queueDepth: number;
+};
+
 export type HealthServerOptions = {
   port: number;
   host?: string;
   health: () => Promise<WorkerHealth>;
+  probe: () => Promise<WorkerHealthProbe>;
 };
 
 export type HealthServer = {
@@ -45,6 +52,19 @@ export async function startHealthServer(
           health.ready ? 200 : 503,
           health.ready ? { status: "ready" } : { status: "not_ready" }
         );
+      } catch {
+        json(response, 503, { status: "not_ready" });
+      }
+      return;
+    }
+    if (request.url === "/probe") {
+      try {
+        const probe = await options.probe();
+        json(response, probe.ready ? 200 : 503, {
+          status: probe.ready ? "ready" : "not_ready",
+          lastSuccessfulRunAgeMs: probe.lastSuccessfulRunAgeMs,
+          queueDepth: probe.queueDepth
+        });
       } catch {
         json(response, 503, { status: "not_ready" });
       }
