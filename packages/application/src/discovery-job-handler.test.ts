@@ -330,6 +330,9 @@ function createMemoryRepositories(): Repositories {
             .at(-1) ?? null
         );
       },
+      async listReverseDeclaredCharacters() {
+        return [];
+      },
       async find(id) {
         return snapshots.get(id) ?? null;
       },
@@ -800,6 +803,64 @@ describe("discovery job handler", () => {
     expect(getCharacter).not.toHaveBeenCalled();
     await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
       status: "complete"
+    });
+  });
+
+  it("seeds discovery from stored reverse declared-main relationships", async () => {
+    // Break caught: the repository could know that an alt declared this root
+    // while the worker neither included it nor needlessly hydrated it upstream.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const reverseKey = {
+      region: "eu",
+      realm: "draenor",
+      name: "reverse-alt"
+    } as const;
+    repositories.snapshots.listReverseDeclaredCharacters = vi.fn(async () => [
+      {
+        key: reverseKey,
+        displayName: "Reverse-alt",
+        className: "Priest",
+        level: 80,
+        guild: {
+          name: "Rancour",
+          region: "eu" as const,
+          realm: "draenor"
+        },
+        raiderIoUrl: "https://raider.io/characters/eu/draenor/reverse-alt",
+        source: "declared_main" as const
+      }
+    ]);
+    const getCharacter = vi.fn(async () => {
+      throw new Error("unexpected_character_read");
+    });
+    const gateway: RaiderIoGateway = {
+      getCharacter,
+      async getClaimedCharacters() {
+        return { characters: [] };
+      },
+      async resolveProfileGuess() {
+        return null;
+      }
+    };
+
+    await handlerFor(repositories, gateway).execute(run.id, delivery(), {
+      runId: run.id,
+      key: rootKey,
+      rootCharacter: { ...character(rootKey), guild: rosterGuild }
+    });
+
+    expect(
+      repositories.snapshots.listReverseDeclaredCharacters
+    ).toHaveBeenCalledWith(rootKey);
+    expect(getCharacter).not.toHaveBeenCalled();
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({
+      characters: [
+        expect.objectContaining({ key: rootKey, source: "input" }),
+        expect.objectContaining({ key: reverseKey, source: "declared_main" })
+      ]
     });
   });
 
@@ -1332,7 +1393,7 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
-        dbCalls: 7,
+        dbCalls: 8,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
         // timed is the one that set the maximum.
@@ -1452,7 +1513,7 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
-        dbCalls: 4,
+        dbCalls: 5,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
         // timed is the one that set the maximum.

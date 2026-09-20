@@ -1853,6 +1853,27 @@ describe("applicant dossier service", () => {
     });
   });
 
+  it("explains that an account without a public Raider.IO claim may be incomplete", async () => {
+    // Break caught: `privacy_hidden` could be surfaced as if privacy hid every
+    // missing character, instead of the actual uncertainty: Raider.IO exposes
+    // no account claim, so the known reverse links may still be incomplete.
+    const snapshot = storedSnapshot();
+    snapshot.state = "partial";
+    snapshot.limitationCode = "privacy_hidden";
+    const { dossiers } = fixture({ snapshot });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        research: {
+          state: "partial",
+          message:
+            "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive."
+        }
+      }
+    });
+  });
+
   it("keeps participant-attributed Warcraft Logs evidence when Raider.IO is limited", async () => {
     // Break caught: Raider.IO does not publish historical per-character kill
     // records. A temporary Raider.IO limitation must not discard a public,

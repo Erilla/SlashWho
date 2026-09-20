@@ -81,6 +81,12 @@ export type DiscoverCharacterOptions = {
   requestCap: number;
   isSuppressed(key: CharacterKey): Promise<boolean>;
   /**
+   * Characters already observed in current stored snapshots as declaring this
+   * root their main. They are authoritative relationship evidence just like a
+   * forward declared-main edge, and are admitted without another upstream read.
+   */
+  knownReverseDeclaredCharacters?: readonly DiscoveredCharacter[];
+  /**
    * The root response already read at queue admission. It still spends one
    * request from the sweep budget, but lets the worker consume that exact
    * observation instead of immediately asking Raider.IO for it again.
@@ -229,7 +235,7 @@ export async function discoverCharacter(
     { key: root, source: "input" }
   ];
   const inspectedCharacters: RaiderIoCharacter[] = [];
-  const admittedCharacterIds = new Set<string>();
+  const guildKnownCharacterIds = new Set<string>();
   const observations: DiscoveredCharacter[] = [];
 
   function throwIfAborted(): void {
@@ -324,7 +330,7 @@ export async function discoverCharacter(
       observations.push(discoveredCharacter(character, pending.source));
       inspectedCharacters.push(character);
       if (pending.source === "input" && options.rootCharacter) {
-        admittedCharacterIds.add(canonicalCharacterId(character.key));
+        guildKnownCharacterIds.add(canonicalCharacterId(character.key));
       }
       if (character.declaredMain) {
         pendingCharacters.push({
@@ -366,6 +372,14 @@ export async function discoverCharacter(
       }
       if (capped) break;
     }
+
+    for (const character of options.knownReverseDeclaredCharacters ?? []) {
+      throwIfAborted();
+      if (!(await options.isSuppressed(character.key))) {
+        observations.push({ ...character, source: "declared_main" });
+        guildKnownCharacterIds.add(canonicalCharacterId(character.key));
+      }
+    }
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
     return failureOutcome(error);
@@ -397,7 +411,7 @@ export async function discoverCharacter(
   for (const observed of characters) {
     if (
       observed.guild !== null ||
-      admittedCharacterIds.has(canonicalCharacterId(observed.key))
+      guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
     ) {
       withGuilds.push(observed);
       continue;

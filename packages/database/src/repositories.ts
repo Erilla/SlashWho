@@ -138,6 +138,15 @@ export interface SnapshotRepository {
   getCurrentContainingCharacter?(
     key: CharacterKey
   ): Promise<StoredSnapshot | null>;
+  /**
+   * Characters whose current snapshot stores this key as their direct declared
+   * main. Only the first declared-main membership is direct (later ones are a
+   * forward chain), and only the latest completed snapshot per declaring root
+   * contributes, so a later observation that omits the edge retires it.
+   */
+  listReverseDeclaredCharacters(
+    key: CharacterKey
+  ): Promise<readonly SnapshotCharacterInput[]>;
   find(id: string): Promise<StoredSnapshot | null>;
   listHistory(
     key: CharacterKey,

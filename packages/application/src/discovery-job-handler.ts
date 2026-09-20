@@ -431,6 +431,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           return;
         }
 
+        const knownReverseDeclaredCharacters = resume
+          ? []
+          : await repositories.snapshots.listReverseDeclaredCharacters(
+              run.rootKey
+            );
+        context.signal.throwIfAborted();
         let outcome: DiscoveryOutcome = resume
           ? {
               kind: "snapshot",
@@ -447,6 +453,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               {
                 requestCap: options.requestCap,
                 isSuppressed: (key) => repositories.suppressions.isActive(key),
+                knownReverseDeclaredCharacters,
                 ...(job?.rootCharacter
                   ? { rootCharacter: job.rootCharacter }
                   : {}),

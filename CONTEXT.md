@@ -48,6 +48,17 @@ _Avoid_: Best shown parse, lifetime best, first-kill parse
 The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown only on the reviewer surface; the public alt list still shows one undifferentiated list, and no confidence value is retained alongside it.
 _Avoid_: Confidence, provenance score, match strength
 
+**Known reverse declaration**:
+A character from another root's latest completed snapshot where the current root
+was the first `declared_main` member. Only that first member is the root's direct
+declaration; later members are mains reached by following the forward chain.
+Discovery treats the stored direct edge with the same authority as a forward
+Raider.IO declaration and adds the declaring character without another upstream
+request. The lookup is deliberately one hop: a newer snapshot that omits the edge
+retires it, and canonical deduplication contains self-references and cycles rather
+than recursively walking other dossiers.
+_Avoid_: Historical reverse match, reverse account enumeration
+
 **Manual connection**:
 A durable, directional relationship explicitly added from one applicant dossier
 to a character key. It is recorded before that character has been discovered,

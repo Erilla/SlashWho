@@ -1941,6 +1941,65 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
       },
 
+      async listReverseDeclaredCharacters(key) {
+        const result = await pool.query<SnapshotCharacterRow>(
+          `WITH latest_snapshots AS (
+             SELECT DISTINCT ON (snapshot.root_character_id)
+               snapshot.id, snapshot.root_character_id
+             FROM snapshots snapshot
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE run.status = 'complete'
+             ORDER BY snapshot.root_character_id,
+                      snapshot.refreshed_at DESC,
+                      snapshot.id DESC
+           )
+           SELECT
+             root_membership.character_id,
+             root.region,
+             root.realm_slug,
+             root.normalized_name,
+             root_membership.display_name,
+             root_membership.class_name,
+             root_membership.level,
+             root_membership.raider_io_url,
+             root_membership.guild_name,
+             root_membership.guild_region,
+             root_membership.guild_realm_slug,
+             'declared_main' AS discovery_source,
+             root_membership.display_order
+           FROM latest_snapshots latest
+           JOIN snapshot_characters edge
+             ON edge.snapshot_id = latest.id
+            AND edge.discovery_source = 'declared_main'
+           JOIN characters declared_main ON declared_main.id = edge.character_id
+           JOIN snapshot_characters root_membership
+             ON root_membership.snapshot_id = latest.id
+            AND root_membership.character_id = latest.root_character_id
+           JOIN characters root ON root.id = latest.root_character_id
+           WHERE declared_main.region = $1
+             AND declared_main.realm_slug = $2
+             AND declared_main.normalized_name = $3
+             AND NOT EXISTS (
+               SELECT 1 FROM snapshot_characters earlier_edge
+               WHERE earlier_edge.snapshot_id = edge.snapshot_id
+                 AND earlier_edge.discovery_source = 'declared_main'
+                 AND earlier_edge.display_order < edge.display_order
+             )
+             AND (root.region, root.realm_slug, root.normalized_name)
+                 <> ($1, $2, $3)
+             AND NOT EXISTS (
+               SELECT 1 FROM suppressed_characters suppression
+               WHERE suppression.region = root.region
+                 AND suppression.realm_slug = root.realm_slug
+                 AND suppression.normalized_name = root.normalized_name
+                 AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+             )
+           ORDER BY root.region, root.realm_slug, root.normalized_name`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows.map(mapSnapshotCharacter);
+      },
+
       async find(id) {
         return loadSnapshot(pool, id);
       },

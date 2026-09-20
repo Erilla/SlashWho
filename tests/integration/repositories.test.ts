@@ -211,6 +211,83 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("lists reverse declared-main characters only from each root's current snapshot", async () => {
+    // Break caught: reverse discovery could either miss a stored cross-realm
+    // edge or resurrect an edge that a newer snapshot no longer observes.
+    const declaringKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "yawnersw"
+    } as const;
+    const otherDeclaringKey = {
+      region: "eu",
+      realm: "argent-dawn",
+      name: "knownalt"
+    } as const;
+    const chainedDeclaringKey = {
+      region: "eu",
+      realm: "tarren-mill",
+      name: "chainroot"
+    } as const;
+    const directMainKey = {
+      region: "eu",
+      realm: "twisting-nether",
+      name: "directmain"
+    } as const;
+    const targetMainKey = {
+      region: "eu",
+      realm: "draenor",
+      name: "yawnersowo"
+    } as const;
+    const guild = { name: "Rancour", region: "eu" as const, realm: "draenor" };
+
+    const publish = async (
+      key: CharacterKey,
+      refreshedAt: Date,
+      characters: SnapshotCharacterInput[]
+    ) => {
+      const run = await repositories.runs.createOrReuse(key, "anonymous");
+      await repositories.runs.markRunning(run.id);
+      const snapshot = await repositories.snapshots.create({
+        runId: run.id,
+        rootKey: key,
+        state: "complete",
+        limitationCode: null,
+        refreshedAt,
+        characters
+      });
+      await repositories.runs.complete(run.id, snapshot.id);
+    };
+
+    await publish(declaringKey, new Date("2026-09-16T10:00:00.000Z"), [
+      { ...observation(declaringKey, "Yawnersw"), guild },
+      observation(targetMainKey, "Yawnersowo", "declared_main")
+    ]);
+    await publish(declaringKey, new Date("2026-09-17T10:00:00.000Z"), [
+      { ...observation(declaringKey, "Yawnersw"), guild }
+    ]);
+    await publish(otherDeclaringKey, new Date("2026-09-18T10:00:00.000Z"), [
+      { ...observation(otherDeclaringKey, "Knownalt"), guild },
+      observation(targetMainKey, "Yawnersowo", "declared_main")
+    ]);
+    await publish(chainedDeclaringKey, new Date("2026-09-18T11:00:00.000Z"), [
+      observation(chainedDeclaringKey, "Chainroot"),
+      observation(directMainKey, "Directmain", "declared_main"),
+      observation(targetMainKey, "Yawnersowo", "declared_main")
+    ]);
+
+    await expect(
+      repositories.snapshots.listReverseDeclaredCharacters(targetMainKey)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        key: otherDeclaringKey,
+        displayName: "Knownalt",
+        guild,
+        source: "declared_main"
+      })
+    ]);
+  });
+
   it("keeps enriched parses when a later complete run did not re-fetch them", async () => {
     // Break caught: collection deliberately skips fights whose parses are
     // already stored, but the merge only ran for a partial publish. A complete
