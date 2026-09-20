@@ -36,6 +36,8 @@ export type TerminalTierInput = Readonly<{
    */
   settleMs: number;
   kills: readonly TerminalTierKill[];
+  /** Whether this run deliberately reused stored kills instead of scanning. */
+  scanSkipped: boolean;
   /** The run's history-scan limitation, if it reported one. */
   scanLimitation: string | null;
   /**
@@ -63,13 +65,14 @@ export type TerminalTierInput = Readonly<{
  *    attributed to a raid leaves that raid re-queryable however old it is --
  *    but only for the domain it was raised against. Both trouble sets are
  *    parse-domain, so neither says anything about whether the raid's kills were
- *    fully discovered: kills come from the history scan alone, and a scan that
+ *    fully discovered: kills come from the history scan alone. A scan that
  *    goes wrong reports itself through `scanLimitation`, which leaves *every*
- *    raid re-queryable in *every* domain, because a truncated or drifted scan
- *    may be missing reports from any tier -- kills and wipes, not merely
- *    parses. This is what makes storing evidence indefinitely safe while
- *    collection is still imperfect: "is collection good enough yet" stops being
- *    a judgement call and becomes an invariant enforced per tier, per domain.
+ *    raid re-queryable in *every* domain because it may be missing the kills
+ *    that drive parse work too. A run that deliberately skips the scan may
+ *    settle parse domains from its complete stored kill set, but never kills.
+ *    This is what makes storing evidence indefinitely safe while collection is
+ *    still imperfect: "is collection good enough yet" stops being a judgement
+ *    call and becomes an invariant enforced per tier, per domain.
  *
  *    Conflating the two is what #304 was: a veteran exhausts the parse budget
  *    on every run, so every raid came back troubled, so nothing settled for
@@ -132,9 +135,10 @@ export function terminalTiersFrom(
   )) {
     if (!raid.settled) continue;
     if (!raid.concluded) continue;
-    // Kills survive parse-domain trouble: the scan that found them raised no
-    // limitation, which is the whole of what this mark rests on.
-    marks.push({ raidId, domain: "kills" });
+    // Kills survive parse-domain trouble only when this run actually scanned.
+    // A parse-only attempt has a complete stored kill set to hydrate, but no
+    // scan result from which it can conclude that the set is still complete.
+    if (!input.scanSkipped) marks.push({ raidId, domain: "kills" });
     if (!troubledParses.has(raidId)) marks.push({ raidId, domain: "parses" });
     if (!troubledTierBests.has(raidId)) {
       marks.push({ raidId, domain: "tier_bests" });
@@ -150,8 +154,9 @@ export function terminalTiersFrom(
  * windows, which is both simpler and stricter.
  *
  * The one thing this rests on: **a tier goes terminal for kills only after a
- * run whose history scan raised no limitation at all.** That is now the sole
- * guard, so it is worth stating plainly rather than leaving among the others.
+ * run actually scanned its history and raised no scan limitation at all.**
+ * That is now the sole guard, so it is worth stating plainly rather than
+ * leaving among the others.
  * Parse-domain trouble deliberately does not block the kills mark -- kills come
  * from the history scan alone, so a zone request that failed or a hydration
  * budget that ran out says nothing about whether this raid's kills are

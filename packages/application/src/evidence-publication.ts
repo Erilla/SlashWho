@@ -156,6 +156,7 @@ export function terminalTiersFromStage(
     at: completedAt,
     settleMs,
     kills: staged.kills,
+    scanSkipped: staged.scanSkipped === true,
     scanLimitation: staged.limitationCode,
     troubledRaidIds: staged.troubledRaidIds
   });
