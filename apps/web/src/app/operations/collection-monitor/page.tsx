@@ -1,11 +1,13 @@
 import type { CollectionMonitorResponse } from "@slashwho/contracts";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { unauthorized } from "next/navigation";
+import { redirect } from "next/navigation";
 
-import { isOperatorRequest } from "../../../server/collection-monitor";
 import { loadWebConfig } from "../../../server/config";
 import { getContainer } from "../../../server/container";
+import { isOperatorRequest } from "../../../server/operator-session";
+
+import { OperatorLogoutButton } from "./operator-logout-button";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +67,7 @@ export function CollectionMonitorView({
           Updated <span className="visually-hidden">at </span>
           {dateTime(monitor.generatedAt)}
         </p>
+        <OperatorLogoutButton />
       </div>
 
       <section className="collection-monitor-section">
@@ -190,7 +193,7 @@ export function CollectionMonitorView({
 
 export default async function CollectionMonitorPage() {
   if (!isOperatorRequest(await headers(), loadWebConfig().application)) {
-    unauthorized();
+    redirect("/operations/login");
   }
   const { collectionMonitor } = await getContainer();
   return <CollectionMonitorView monitor={await collectionMonitor.list()} />;

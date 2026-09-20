@@ -5,15 +5,19 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionMonitorResponse } from "@slashwho/contracts";
+import { createOperatorSessionCookie } from "../../../server/operator-session";
 
 const mocks = vi.hoisted(() => ({
   headers: vi.fn(),
-  unauthorized: vi.fn(),
+  redirect: vi.fn(),
   list: vi.fn()
 }));
 
 vi.mock("next/headers", () => ({ headers: mocks.headers }));
-vi.mock("next/navigation", () => ({ unauthorized: mocks.unauthorized }));
+vi.mock("next/navigation", () => ({
+  redirect: mocks.redirect,
+  useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() })
+}));
 vi.mock("../../../server/container", () => ({
   getContainer: async () => ({ collectionMonitor: { list: mocks.list } })
 }));
@@ -63,10 +67,10 @@ afterEach(cleanup);
 
 beforeEach(() => {
   mocks.headers.mockReset();
-  mocks.unauthorized.mockReset();
+  mocks.redirect.mockReset();
   mocks.list.mockReset();
-  mocks.unauthorized.mockImplementation(() => {
-    throw new Error("operator_unauthorized");
+  mocks.redirect.mockImplementation(() => {
+    throw new Error("operator_login_redirect");
   });
   mocks.list.mockResolvedValue(monitor);
 });
@@ -127,9 +131,10 @@ describe("CollectionMonitorPage", () => {
     );
 
     await expect(CollectionMonitorPage()).rejects.toThrow(
-      "operator_unauthorized"
+      "operator_login_redirect"
     );
-    expect(mocks.unauthorized).toHaveBeenCalledOnce();
+    expect(mocks.redirect).toHaveBeenCalledOnce();
+    expect(mocks.redirect).toHaveBeenCalledWith("/operations/login");
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
@@ -146,6 +151,25 @@ describe("CollectionMonitorPage", () => {
       screen.getByRole("heading", { name: "Collection monitor" })
     ).toBeInTheDocument();
     expect(mocks.list).toHaveBeenCalledOnce();
-    expect(mocks.unauthorized).not.toHaveBeenCalled();
+    expect(mocks.redirect).not.toHaveBeenCalled();
+  });
+
+  it("loads the monitor for a valid browser session cookie", async () => {
+    const config = {
+      BOT_API_KEY: "operator-secret-that-is-at-least-32-characters",
+      RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-32-chars"
+    } as Parameters<typeof createOperatorSessionCookie>[1];
+    const setCookie = createOperatorSessionCookie(config.BOT_API_KEY, config);
+    mocks.headers.mockResolvedValue(
+      new Headers({ cookie: setCookie!.split(";", 1)[0]! })
+    );
+
+    render(await CollectionMonitorPage());
+
+    expect(
+      screen.getByRole("heading", { name: "Collection monitor" })
+    ).toBeInTheDocument();
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(mocks.redirect).not.toHaveBeenCalled();
   });
 });
