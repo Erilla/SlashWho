@@ -2,6 +2,8 @@ name: live-smoke
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
 
 permissions:
   contents: read
@@ -28,5 +30,7 @@ jobs:
       - run: corepack pnpm tsx scripts/live-smoke.mts
         env:
           SLASHWHO_BASE_URL: ${{ vars.SLASHWHO_PRODUCTION_URL }}
+          SLASHWHO_WORKER_URL: ${{ vars.SLASHWHO_PRODUCTION_WORKER_URL }}
+          SLASHWHO_WORKER_MAX_SUCCESSFUL_RUN_AGE_MS: 172800000
           SLASHWHO_SMOKE_CHARACTER_URL: ${{ vars.SLASHWHO_SMOKE_CHARACTER_URL }}
           SLASHWHO_BOT_API_KEY: ${{ secrets.SLASHWHO_BOT_API_KEY }}

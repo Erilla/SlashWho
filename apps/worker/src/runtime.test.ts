@@ -141,7 +141,17 @@ function runtimeFakes() {
     execute: vi.fn(async () => {})
   };
   const pool = {
-    async query() {
+    async query(text: string) {
+      if (text.includes("MAX(completed_at)")) {
+        return {
+          rows: [
+            {
+              last_successful_run_age_ms: "12345",
+              queue_depth: "2"
+            }
+          ]
+        };
+      }
       connectionAttempts += 1;
       if (connectionAttempts < 3) throw new Error("database_starting");
       return { rows: [{ "?column?": 1 }] };
@@ -770,6 +780,20 @@ describe("worker runtime", () => {
     await expect(runtime.health()).resolves.toEqual({
       live: true,
       ready: true
+    });
+  });
+
+  it("reports aggregate worker progress without run or character identity", async () => {
+    // Break caught: the probe could report readiness alone, or select and
+    // expose the identity-bearing rows used to calculate aggregate health.
+    const fakes = runtimeFakes();
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await expect(runtime.probe()).resolves.toEqual({
+      ready: true,
+      lastSuccessfulRunAgeMs: 12_345,
+      queueDepth: 2
     });
   });
 

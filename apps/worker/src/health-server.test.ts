@@ -3,12 +3,43 @@ import { describe, expect, it } from "vitest";
 import { startHealthServer } from "./health-server";
 
 describe("worker health server", () => {
+  it("exposes only readiness, successful-run age, and queue depth", async () => {
+    // Break caught: the public operational probe could omit the worker signal
+    // or leak character, run, credential, or fingerprint material.
+    const server = await startHealthServer({
+      port: 0,
+      health: async () => ({ live: true, ready: true }),
+      probe: async () => ({
+        ready: true,
+        lastSuccessfulRunAgeMs: 12_345,
+        queueDepth: 2
+      })
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/probe`);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        status: "ready",
+        lastSuccessfulRunAgeMs: 12_345,
+        queueDepth: 2
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("keeps liveness healthy while readiness follows initialization", async () => {
     // Break caught: an uninitialized worker could receive traffic as ready.
     let ready = false;
     const server = await startHealthServer({
       port: 0,
-      health: async () => ({ live: true, ready })
+      health: async () => ({ live: true, ready }),
+      probe: async () => ({
+        ready,
+        lastSuccessfulRunAgeMs: null,
+        queueDepth: 0
+      })
     });
     try {
       const baseUrl = `http://127.0.0.1:${server.port}`;
@@ -32,7 +63,12 @@ describe("worker health server", () => {
     // Break caught: the operational server could accidentally become a data surface.
     const server = await startHealthServer({
       port: 0,
-      health: async () => ({ live: true, ready: true })
+      health: async () => ({ live: true, ready: true }),
+      probe: async () => ({
+        ready: true,
+        lastSuccessfulRunAgeMs: null,
+        queueDepth: 0
+      })
     });
     try {
       const response = await fetch(
