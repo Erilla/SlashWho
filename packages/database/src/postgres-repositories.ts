@@ -3318,6 +3318,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             attemptedAt: wipe.attemptedAt
           })),
           ...(completed?.kills ? { parseOnlyKills: completed.kills } : {}),
+          // Freshness answers whether a scan result can still be reused; the
+          // newest publication answers whether there is parse work to resume.
+          // Neither fact substitutes for the other. In particular, a clean
+          // complete run must not turn a later manual refresh into a no-scan
+          // attempt merely because its scan is recent.
+          parseWorkOutstanding:
+            completed?.run.limitationCode === null &&
+            completed.run.parseLimitationCode !== null,
           ...(scan.rows[0]?.completed_at
             ? { lastCleanKillScanAt: scan.rows[0].completed_at.toISOString() }
             : {})

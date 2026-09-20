@@ -952,7 +952,13 @@ export function createApplicantEvidenceJobHandler(
           now().getTime() -
             new Date(storedEvidence.lastCleanKillScanAt).getTime() <
             KILL_SCAN_FRESHNESS_MS;
-        const scanCap = scanFresh
+        // Freshness alone is not evidence that this run is a parse resume. A
+        // recent complete collection followed by a manual refresh still has
+        // to look for new kills. The previous publication must also say that
+        // parses were the only unfinished domain.
+        const parseOnlyResume =
+          scanFresh && storedEvidence.parseWorkOutstanding === true;
+        const scanCap = parseOnlyResume
           ? 0
           : openingBudget
             ? evidenceRunBudget({
@@ -965,7 +971,7 @@ export function createApplicantEvidenceJobHandler(
             : options.requestCap;
         const requestCap = job.mode === "light" ? 1 : scanCap;
         const parseRequestCap =
-          scanFresh && openingBudget
+          parseOnlyResume && openingBudget
             ? parseOnlyRequestCap({
                 limitPerHour: openingBudget.limitPerHour,
                 pointsReserve: options.pointsReserve
@@ -986,7 +992,7 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
-            ...(scanFresh
+            ...(parseOnlyResume
               ? {
                   storedKills: (storedEvidence.parseOnlyKills ?? [])
                     .map((kill) => storedKillForParse(kill, run.key.region))
@@ -1123,6 +1129,7 @@ export function createApplicantEvidenceJobHandler(
           at: now(),
           settleMs: options.killSettleMs,
           kills: response.kills,
+          scanSkipped: response.scanSkipped === true,
           scanLimitation: response.limitation?.code ?? null,
           troubledRaidIds: response.troubledRaidIds
         });

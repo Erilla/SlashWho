@@ -1534,6 +1534,73 @@ describe("PostgreSQL repositories", () => {
     );
   });
 
+  it("reports parse work only when the newest completed run left it outstanding", async () => {
+    // Break caught: a clean-scan timestamp by itself made every fresh run
+    // parse-only, including a manual refresh after a fully complete run. The
+    // repository must carry the newest run's reason alongside scan freshness.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "parsework"
+    } as const;
+    const firstAt = new Date("2026-09-19T10:00:00.000Z");
+    const first = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: firstAt,
+      at: firstAt
+    });
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: firstAt
+    });
+    await expect(
+      repositories.evidence.storedEvidenceTiers(key)
+    ).resolves.toMatchObject({ parseWorkOutstanding: false });
+
+    const secondAt = new Date("2026-09-19T10:30:00.000Z");
+    const second = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T10:00:01.000Z"),
+      at: secondAt
+    });
+    await repositories.evidence.publish(second.run.id, {
+      state: "partial",
+      limitationCode: null,
+      parseLimitationCode: "parse_request_cap",
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: secondAt
+    });
+    await expect(
+      repositories.evidence.storedEvidenceTiers(key)
+    ).resolves.toMatchObject({ parseWorkOutstanding: true });
+
+    const thirdAt = new Date("2026-09-19T11:00:00.000Z");
+    const third = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date("2026-09-19T10:30:01.000Z"),
+      at: thirdAt
+    });
+    await repositories.evidence.publish(third.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: thirdAt
+    });
+    await expect(
+      repositories.evidence.storedEvidenceTiers(key)
+    ).resolves.toMatchObject({ parseWorkOutstanding: false });
+  });
+
   it("stores terminal tiers per character and returns them until cleared", async () => {
     const key = {
       region: "eu",
