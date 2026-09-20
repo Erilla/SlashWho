@@ -62,7 +62,7 @@ const config: WorkerConfig = {
   evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
 };
 
-function runtimeFakes() {
+function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
   let connectionAttempts = 0;
   let ended = false;
   let queueReady = false;
@@ -143,10 +143,16 @@ function runtimeFakes() {
   const pool = {
     async query(text: string) {
       if (text.includes("MAX(completed_at)")) {
+        const noRunAge = text.includes(
+          "WHEN MAX(completed_at) IS NULL THEN NULL"
+        )
+          ? null
+          : "0";
         return {
           rows: [
             {
-              last_successful_run_age_ms: "12345",
+              last_successful_run_age_ms:
+                options.probeHasCompletedRun === false ? noRunAge : "12345",
               queue_depth: "2"
             }
           ]
@@ -793,6 +799,20 @@ describe("worker runtime", () => {
     await expect(runtime.probe()).resolves.toEqual({
       ready: true,
       lastSuccessfulRunAgeMs: 12_345,
+      queueDepth: 2
+    });
+  });
+
+  it("keeps a worker with no successful run distinguishable from a fresh success", async () => {
+    // Break caught: PostgreSQL GREATEST ignores a NULL aggregate when another
+    // argument is non-NULL, which could turn "never succeeded" into age zero.
+    const fakes = runtimeFakes({ probeHasCompletedRun: false });
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await expect(runtime.probe()).resolves.toEqual({
+      ready: true,
+      lastSuccessfulRunAgeMs: null,
       queueDepth: 2
     });
   });

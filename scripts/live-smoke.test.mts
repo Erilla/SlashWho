@@ -119,6 +119,30 @@ it("fails before searching when the worker has not succeeded recently", async ()
   expect(fetch).toHaveBeenCalledOnce();
 });
 
+it("fails before searching when the worker has never completed a run", async () => {
+  // Break caught: an absent aggregate must not look like a just-completed run.
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(
+    Response.json({
+      status: "ready",
+      lastSuccessfulRunAgeMs: null,
+      queueDepth: 0
+    })
+  );
+
+  await expect(
+    runLiveSmoke({
+      workerBaseUrl: new URL("https://worker.slashwho.example"),
+      workerMaxSuccessfulRunAgeMs: 48 * 60 * 60_000,
+      baseUrl: new URL("https://slashwho.example"),
+      characterUrl: "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii",
+      authorization: null,
+      fetch,
+      sleep: async () => {}
+    })
+  ).rejects.toThrow("smoke_worker_never_succeeded");
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
 it("fails before checking the web service when the worker is unavailable", async () => {
   // Break caught: the web health checks could mask a worker process that is
   // down or has not finished claiming its queues.

@@ -151,10 +151,13 @@ async function readWorkerHealthProbe(
 ): Promise<Omit<WorkerHealthProbe, "ready">> {
   const result = await pool.query(
     `SELECT
-       GREATEST(
-         0,
-         EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MAX(completed_at))) * 1000
-       ) AS last_successful_run_age_ms,
+       CASE
+         WHEN MAX(completed_at) IS NULL THEN NULL
+         ELSE GREATEST(
+           0,
+           EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MAX(completed_at))) * 1000
+         )
+       END AS last_successful_run_age_ms,
        (
          SELECT COUNT(*)
          FROM pgboss.job
