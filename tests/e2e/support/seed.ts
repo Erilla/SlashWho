@@ -247,6 +247,23 @@ export async function suppressCharacter(
   }
 }
 
+export async function countDiscoveryRuns(key: CharacterKey): Promise<number> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    const result = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM discovery_runs
+       WHERE root_region = $1
+         AND root_realm_slug = $2
+         AND root_normalized_name = $3`,
+      [key.region, key.realm, key.name]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  } finally {
+    await pool.end();
+  }
+}
+
 /** Links a character to a dossier the way the Add character action does. */
 export async function seedManualConnection(
   root: CharacterKey,

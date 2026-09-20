@@ -52,6 +52,10 @@ function policyFixture(
     searchLimit?: number;
     readLimit?: number;
     enqueueFailsOnce?: boolean;
+    raiderIoFailure?: Readonly<{
+      kind: "not_found" | "transient";
+      status?: number;
+    }>;
   } = {}
 ) {
   let activeRun: DiscoveryRun | null = null;
@@ -60,6 +64,26 @@ function policyFixture(
   const enqueued: string[] = [];
   const events = new Map<string, Date[]>();
   const cancelled: string[] = [];
+  const rootCharacter = {
+    key,
+    displayName: "Ryii",
+    className: "Mage",
+    level: 80,
+    guild: null,
+    ownerId: "fixture-owner",
+    profileGuess: null,
+    declaredMain: null
+  } as const;
+  const getCharacter = vi.fn(async () => {
+    if (options.raiderIoFailure) {
+      throw Object.assign(
+        new Error(`raiderio_${options.raiderIoFailure.kind}`),
+        options.raiderIoFailure
+      );
+    }
+    return rootCharacter;
+  });
+  let negativeCached = options.negative ?? false;
 
   const reserveRate = (
     bucket: string,
@@ -197,10 +221,12 @@ function policyFixture(
       }
     },
     negativeCache: {
-      async put() {},
+      async put() {
+        negativeCached = true;
+      },
       async putAndFailRun() {},
       async find() {
-        return options.negative
+        return negativeCached
           ? { key, expiresAt: new Date("2026-08-04T12:15:00.000Z") }
           : null;
       },
@@ -321,7 +347,8 @@ function policyFixture(
     repositories,
     queue,
     config,
-    now: () => now
+    now: () => now,
+    raiderio: { getCharacter }
   });
   const command = {
     characterUrl,
@@ -334,7 +361,8 @@ function policyFixture(
     enqueuedPayloads,
     cancelled,
     events,
-    repositories
+    repositories,
+    getCharacter
   };
 }
 
@@ -414,6 +442,7 @@ describe("search freshness policy", () => {
       kind: "job",
       jobId: first.kind === "job" ? first.jobId : ""
     });
+    expect(fixture.getCharacter).toHaveBeenCalledTimes(1);
     expect(fixture.enqueued).toHaveLength(1);
   });
 
@@ -429,7 +458,76 @@ describe("search freshness policy", () => {
       staleCharacter: null
     });
     expect(fixture.enqueued).toHaveLength(1);
+    expect(fixture.getCharacter).toHaveBeenCalledTimes(1);
+    expect(fixture.enqueuedPayloads[0]).toMatchObject({
+      rootCharacter: {
+        key,
+        displayName: "Ryii",
+        className: "Mage",
+        level: 80
+      }
+    });
   });
+
+  it("returns and caches a missing root before reserving discovery work", async () => {
+    // Break caught: a confirmed absence could reserve and enqueue a run, which
+    // then posted start notifications and exposed a polling URL before failing.
+    const fixture = policyFixture({
+      raiderIoFailure: { kind: "not_found", status: 404 }
+    });
+    const reserve = vi.spyOn(
+      fixture.repositories.searchReservations,
+      "reserve"
+    );
+
+    await expect(fixture.service.create(fixture.command)).resolves.toEqual({
+      kind: "not_found",
+      code: "character_not_found"
+    });
+    await expect(fixture.service.create(fixture.command)).resolves.toEqual({
+      kind: "not_found",
+      code: "character_not_found"
+    });
+
+    expect(fixture.getCharacter).toHaveBeenCalledTimes(1);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(fixture.enqueued).toHaveLength(0);
+  });
+
+  it.each([
+    ["timeout", undefined],
+    ["rate limit", 429],
+    ["server failure", 503]
+  ])(
+    "keeps a genuine Raider.IO %s retryable without reserving work",
+    async (_description, status) => {
+      // Break caught: a temporary provider failure could be cached as absence,
+      // or admitted to the queue only to burn all delivery attempts there.
+      const fixture = policyFixture({
+        raiderIoFailure: { kind: "transient", ...(status ? { status } : {}) }
+      });
+      const reserve = vi.spyOn(
+        fixture.repositories.searchReservations,
+        "reserve"
+      );
+
+      await expect(fixture.service.create(fixture.command)).resolves.toEqual({
+        kind: "failed",
+        code: "upstream_unavailable"
+      });
+      await expect(fixture.service.create(fixture.command)).resolves.toEqual({
+        kind: "failed",
+        code: "upstream_unavailable"
+      });
+
+      expect(fixture.getCharacter).toHaveBeenCalledTimes(2);
+      expect(reserve).not.toHaveBeenCalled();
+      expect(fixture.enqueued).toHaveLength(0);
+      expect([...fixture.events.keys()]).toEqual([
+        expect.stringMatching(/^read:[a-f0-9]{64}$/)
+      ]);
+    }
+  );
 
   it("returns a recent negative result without creating work", async () => {
     // Break caught: repeated known-missing names could hammer the upstream service.
@@ -508,16 +606,17 @@ describe("job telemetry", () => {
     expect(typeof fixture.enqueuedPayloads[0]?.enqueuedAt).toBe("string");
   });
 
-  it("attributes create's repository access to the scope's db bucket when supplied", async () => {
+  it("attributes create's database and admission reads to the supplied scope", async () => {
     // Break caught: dossier_start is measured as "submission to first
-    // response," so create's own database work must land in the db bucket
-    // rather than vanishing when a scope is passed through.
+    // response," so create's database and provider work must land in their
+    // buckets rather than vanishing when a scope is passed through.
     const fixture = policyFixture();
     const scope = createMeasurementScope();
 
     await fixture.service.create(fixture.command, scope);
 
     expect(scope.totals().dbCalls).toBeGreaterThan(0);
+    expect(scope.totals().raiderIoCalls).toBe(1);
   });
 
   it("stamps a fresh enqueuedAt when recovering a pending search", async () => {

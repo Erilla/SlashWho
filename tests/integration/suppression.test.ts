@@ -91,6 +91,20 @@ describe("application suppression policy", () => {
     service = createSearchService({
       repositories,
       queue,
+      raiderio: {
+        async getCharacter(key) {
+          return {
+            key,
+            displayName: key.name,
+            className: "Mage",
+            level: 80,
+            guild: null,
+            ownerId: null,
+            profileGuess: null,
+            declaredMain: null
+          };
+        }
+      },
       config,
       now: () => now
     });

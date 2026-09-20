@@ -75,6 +75,8 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
   // flight. Hold the owner list so discovery stays pending while the initial
   // dossier can independently check the root's tournament eligibility.
   let released = false;
+  let discoveryWebhooks = 0;
+  const characterRequests = new Map<string, number>();
   const held: Array<() => void> = [];
   const releaseAll = () => {
     released = true;
@@ -83,8 +85,29 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
+    if (request.method === "POST" && url.pathname === "/__webhook/discovery") {
+      discoveryWebhooks += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
     if (request.method !== "GET") {
       json(response, 405, { status: 405 });
+      return;
+    }
+
+    if (url.pathname === "/__control/reset-stats") {
+      discoveryWebhooks = 0;
+      characterRequests.clear();
+      json(response, 200, { reset: true });
+      return;
+    }
+
+    if (url.pathname === "/__control/stats") {
+      json(response, 200, {
+        discoveryWebhooks,
+        characterRequests: Object.fromEntries(characterRequests)
+      });
       return;
     }
 
@@ -126,6 +149,13 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
         ]
       });
       return;
+    }
+
+    if (url.pathname.startsWith("/api/characters/")) {
+      characterRequests.set(
+        url.pathname,
+        (characterRequests.get(url.pathname) ?? 0) + 1
+      );
     }
 
     if (

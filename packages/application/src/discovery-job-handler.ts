@@ -447,6 +447,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               {
                 requestCap: options.requestCap,
                 isSuppressed: (key) => repositories.suppressions.isActive(key),
+                ...(job?.rootCharacter
+                  ? { rootCharacter: job.rootCharacter }
+                  : {}),
                 signal: context.signal
               }
             );

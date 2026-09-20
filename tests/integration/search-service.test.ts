@@ -25,6 +25,20 @@ const config = applicationConfigSchema.parse({
   PUBLIC_READS_PER_MINUTE: 20
 });
 const now = new Date("2026-08-04T12:00:00.000Z");
+const raiderio = {
+  async getCharacter(key: CharacterKey) {
+    return {
+      key,
+      displayName: key.name[0]!.toUpperCase() + key.name.slice(1),
+      className: "Mage",
+      level: 80,
+      guild: null,
+      ownerId: null,
+      profileGuess: null,
+      declaredMain: null
+    };
+  }
+};
 
 function command(name: string, authorization?: string) {
   const headers = new Headers({ "x-real-ip": anonymousIp });
@@ -117,6 +131,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config,
       now: () => now
     });
@@ -246,6 +261,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config,
       now: () => now
     });
@@ -294,6 +310,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config: readLimitedConfig,
       now: () => now
     });
@@ -327,6 +344,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config,
       now: () => now
     });
@@ -347,6 +365,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config,
       now: () => now
     });
@@ -370,6 +389,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config,
       now: () => now
     });
@@ -403,6 +423,7 @@ describe("PostgreSQL search policy", () => {
     const service = createSearchService({
       repositories,
       queue,
+      raiderio,
       config,
       now: () => now
     });

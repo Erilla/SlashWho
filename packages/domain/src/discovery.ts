@@ -80,6 +80,12 @@ export type DiscoveryOutcome =
 export type DiscoverCharacterOptions = {
   requestCap: number;
   isSuppressed(key: CharacterKey): Promise<boolean>;
+  /**
+   * The root response already read at queue admission. It still spends one
+   * request from the sweep budget, but lets the worker consume that exact
+   * observation instead of immediately asking Raider.IO for it again.
+   */
+  rootCharacter?: RaiderIoCharacter;
   signal?: AbortSignal;
 };
 
@@ -223,6 +229,7 @@ export async function discoverCharacter(
     { key: root, source: "input" }
   ];
   const inspectedCharacters: RaiderIoCharacter[] = [];
+  const admittedCharacterIds = new Set<string>();
   const observations: DiscoveredCharacter[] = [];
 
   function throwIfAborted(): void {
@@ -293,7 +300,9 @@ export async function discoverCharacter(
       visitedCharacters.add(id);
 
       const character = await request(() =>
-        gateway.getCharacter(pending.key, options.signal)
+        pending.source === "input" && options.rootCharacter
+          ? Promise.resolve(options.rootCharacter)
+          : gateway.getCharacter(pending.key, options.signal)
       );
       throwIfAborted();
       if (character === budgetExhausted) break;
@@ -314,6 +323,9 @@ export async function discoverCharacter(
 
       observations.push(discoveredCharacter(character, pending.source));
       inspectedCharacters.push(character);
+      if (pending.source === "input" && options.rootCharacter) {
+        admittedCharacterIds.add(canonicalCharacterId(character.key));
+      }
       if (character.declaredMain) {
         pendingCharacters.push({
           key: character.declaredMain,
@@ -383,7 +395,10 @@ export async function discoverCharacter(
   // snapshot will not carry.
   const withGuilds: DiscoveredCharacter[] = [];
   for (const observed of characters) {
-    if (observed.guild !== null) {
+    if (
+      observed.guild !== null ||
+      admittedCharacterIds.has(canonicalCharacterId(observed.key))
+    ) {
       withGuilds.push(observed);
       continue;
     }

@@ -169,6 +169,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
       };
     }
   };
+  const raiderio = { getCharacter: vi.fn() };
+  let searchRaiderIo: unknown;
+  let dossierRaiderIo: unknown;
 
   const container = await createWebContainer(
     {
@@ -203,22 +206,26 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
       createQueue() {
         return queue;
       },
-      createSearchService() {
+      createSearchService(options) {
+        searchRaiderIo = options.raiderio;
         return {} as never;
       },
       createRaiderIoGateway() {
-        return {} as never;
+        return raiderio as never;
       },
       createBlizzardGateway() {
         return {} as never;
       },
-      createApplicantDossierService() {
+      createApplicantDossierService(options) {
+        dossierRaiderIo = options.raiderio;
         return dossiers;
       }
     }
   );
 
   expect(container.dossiers).toBe(dossiers);
+  expect(searchRaiderIo).toBe(raiderio);
+  expect(dossierRaiderIo).toBe(raiderio);
 });
 
 it("clears a rejected startup promise so the next request can recover", async () => {
