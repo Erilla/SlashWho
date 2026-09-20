@@ -1979,6 +1979,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            WHERE declared_main.region = $1
              AND declared_main.realm_slug = $2
              AND declared_main.normalized_name = $3
+             AND NOT EXISTS (
+               SELECT 1 FROM snapshot_characters earlier_edge
+               WHERE earlier_edge.snapshot_id = edge.snapshot_id
+                 AND earlier_edge.discovery_source = 'declared_main'
+                 AND earlier_edge.display_order < edge.display_order
+             )
              AND (root.region, root.realm_slug, root.normalized_name)
                  <> ($1, $2, $3)
              AND NOT EXISTS (

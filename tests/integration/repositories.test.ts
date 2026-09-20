@@ -224,6 +224,16 @@ describe("PostgreSQL repositories", () => {
       realm: "argent-dawn",
       name: "knownalt"
     } as const;
+    const chainedDeclaringKey = {
+      region: "eu",
+      realm: "tarren-mill",
+      name: "chainroot"
+    } as const;
+    const directMainKey = {
+      region: "eu",
+      realm: "twisting-nether",
+      name: "directmain"
+    } as const;
     const targetMainKey = {
       region: "eu",
       realm: "draenor",
@@ -258,6 +268,11 @@ describe("PostgreSQL repositories", () => {
     ]);
     await publish(otherDeclaringKey, new Date("2026-09-18T10:00:00.000Z"), [
       { ...observation(otherDeclaringKey, "Knownalt"), guild },
+      observation(targetMainKey, "Yawnersowo", "declared_main")
+    ]);
+    await publish(chainedDeclaringKey, new Date("2026-09-18T11:00:00.000Z"), [
+      observation(chainedDeclaringKey, "Chainroot"),
+      observation(directMainKey, "Directmain", "declared_main"),
       observation(targetMainKey, "Yawnersowo", "declared_main")
     ]);
 

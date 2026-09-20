@@ -139,9 +139,10 @@ export interface SnapshotRepository {
     key: CharacterKey
   ): Promise<StoredSnapshot | null>;
   /**
-   * Characters whose current snapshot stores this key as a declared main.
-   * Only the latest completed snapshot per declaring root contributes, so a
-   * later observation that omits the edge retires it.
+   * Characters whose current snapshot stores this key as their direct declared
+   * main. Only the first declared-main membership is direct (later ones are a
+   * forward chain), and only the latest completed snapshot per declaring root
+   * contributes, so a later observation that omits the edge retires it.
    */
   listReverseDeclaredCharacters(
     key: CharacterKey

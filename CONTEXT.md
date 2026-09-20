@@ -50,11 +50,13 @@ _Avoid_: Confidence, provenance score, match strength
 
 **Known reverse declaration**:
 A character from another root's latest completed snapshot where the current root
-was stored as `declared_main`. Discovery treats that stored edge with the same
-authority as a forward Raider.IO declaration and adds the declaring character
-without another upstream request. The lookup is deliberately one hop: a newer
-snapshot that omits the edge retires it, and canonical deduplication contains
-self-references and cycles rather than recursively walking other dossiers.
+was the first `declared_main` member. Only that first member is the root's direct
+declaration; later members are mains reached by following the forward chain.
+Discovery treats the stored direct edge with the same authority as a forward
+Raider.IO declaration and adds the declaring character without another upstream
+request. The lookup is deliberately one hop: a newer snapshot that omits the edge
+retires it, and canonical deduplication contains self-references and cycles rather
+than recursively walking other dossiers.
 _Avoid_: Historical reverse match, reverse account enumeration
 
 **Manual connection**:
