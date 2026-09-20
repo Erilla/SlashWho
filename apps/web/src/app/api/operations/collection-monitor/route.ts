@@ -2,8 +2,8 @@ import { collectionMonitorResponseSchema } from "@slashwho/contracts";
 
 import { loadWebConfig } from "../../../../server/config";
 import { getContainer } from "../../../../server/container";
-import { isOperatorRequest } from "../../../../server/collection-monitor";
 import { apiError, withHttpRequest } from "../../../../server/http";
+import { isOperatorRequest } from "../../../../server/operator-session";
 
 function unauthorized(): Response {
   const response = apiError("unauthorized");

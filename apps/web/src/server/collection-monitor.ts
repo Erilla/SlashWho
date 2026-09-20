@@ -1,9 +1,4 @@
 import {
-  AuthenticationError,
-  classifyCaller,
-  type ApplicationConfig
-} from "@slashwho/application";
-import {
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
@@ -12,18 +7,6 @@ import type { EvidenceRepository } from "@slashwho/database";
 export type CollectionMonitorService = Readonly<{
   list(): Promise<CollectionMonitorResponse>;
 }>;
-
-export function isOperatorRequest(
-  headers: Pick<Headers, "get">,
-  config: ApplicationConfig
-): boolean {
-  try {
-    return classifyCaller(headers, config).callerClass === "bot";
-  } catch (error) {
-    if (error instanceof AuthenticationError) return false;
-    throw error;
-  }
-}
 
 export function createCollectionMonitorService(options: {
   evidence: Pick<EvidenceRepository, "listForMonitor">;

@@ -1988,6 +1988,53 @@ a {
   color: var(--text);
 }
 
+.operator-login-page {
+  width: min(100% - 2.5rem, 32rem);
+  display: grid;
+  gap: 1.5rem;
+}
+
+.operator-login-page h1,
+.operator-login-page p {
+  margin: 0;
+}
+
+.operator-login-page p {
+  margin-top: 0.55rem;
+  color: var(--muted);
+}
+
+.operator-login-form {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface);
+}
+
+.operator-login-form input {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.4rem;
+  background: var(--page);
+  color: var(--text);
+}
+
+.operator-login-form [role="alert"],
+.operator-logout [role="alert"] {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.operator-logout {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .state-badge[data-state="failed"] {
   color: #fda4af;
 }
