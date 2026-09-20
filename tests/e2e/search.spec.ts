@@ -156,7 +156,7 @@ test("shows submitted-character evidence while queued discovery is held", async 
 
   await expect(page).toHaveURL(/\/dossiers\/eu\/silvermoon\/queued\?job=/);
   const initialDisclosure = page.getByText(
-    "Linked-character research is still running; this evidence covers only the submitted character.",
+    "Linked-character research is pending; stored evidence is shown only for the submitted character.",
     { exact: true }
   );
   await expect(initialDisclosure).toBeVisible();

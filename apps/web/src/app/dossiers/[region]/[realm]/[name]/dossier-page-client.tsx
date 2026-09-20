@@ -184,12 +184,14 @@ export function DossierPageClient({
         const body = await readJson(response);
         if (controller.signal.aborted) return;
         if (!response.ok) {
+          setResearchFailed(true);
           setError(apiError(response, body));
           setStatus(null);
           return;
         }
         const parsed = dossierStartResponseSchema.safeParse(body);
         if (!parsed.success) {
+          setResearchFailed(true);
           setError("The applicant research returned an unexpected response.");
           setStatus(null);
           return;
@@ -203,6 +205,7 @@ export function DossierPageClient({
       } catch (caught) {
         if (caught instanceof Error && caught.name === "AbortError") return;
         if (controller.signal.aborted) return;
+        setResearchFailed(true);
         setError("The applicant research could not be started.");
         setStatus(null);
       }
@@ -221,7 +224,10 @@ export function DossierPageClient({
           if (!parsed.success) {
             setError("The dossier returned an unexpected response.");
           } else {
-            hasExpandedDossier.current = true;
+            const rootOnly = parsed.data.characters.some(
+              (character) => character.source === "submitted"
+            );
+            hasExpandedDossier.current = !rootOnly;
             setDossier(parsed.data);
             setInitialError(null);
             setError(null);
@@ -231,6 +237,10 @@ export function DossierPageClient({
               parsed.data.root.name !== identity.name
             ) {
               await startResearch(parsed.data.root);
+              return;
+            }
+            if (rootOnly) {
+              await startResearch();
               return;
             }
           }
@@ -419,6 +429,9 @@ export function DossierPageClient({
 
   const visibleError = error ?? initialError;
   const research = dossier?.research;
+  const rootOnly =
+    dossier?.characters.some((character) => character.source === "submitted") ??
+    false;
   const rootDisplayName =
     dossier?.characters.find(
       (character) =>
@@ -427,7 +440,7 @@ export function DossierPageClient({
         character.key.name.toLowerCase() === identity.name.toLowerCase()
     )?.displayName ?? identity.name;
   const visibleResearch =
-    research && research.state === "initial" && researchFailed
+    research && rootOnly && researchFailed
       ? {
           ...research,
           message:
