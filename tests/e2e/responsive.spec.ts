@@ -23,29 +23,34 @@ async function raidBannerGeometry(heading: Locator) {
 test("keeps the fixed header visible and offset-safe while dossier scrolling", async ({
   page
 }) => {
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "header"
+  } as const;
   await seedSnapshot({
-    key: { region: "eu", realm: "silvermoon", name: "ryii" },
-    displayName: "Ryii",
+    key,
+    displayName: "Header",
     refreshedAt: new Date()
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await page
-    .getByLabel("Applicant URL")
-    .fill("https://raider.io/characters/eu/silvermoon/ryii");
+    .getByLabel("Character/URL")
+    .fill("https://raider.io/characters/eu/silvermoon/header");
   await page.getByRole("button", { name: "Research applicant" }).click();
   await expect(page).toHaveURL(
-    /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
+    /\/dossiers\/eu\/silvermoon\/header(?:\?job=[\da-f-]+)?$/
   );
 
   const profileLinks = page.locator(".dossier-heading .upstream-icon-link");
   await expect(profileLinks).toHaveCount(2);
   await expect(profileLinks.nth(0)).toHaveAccessibleName(
-    "View Ryii on Raider.IO (opens in a new tab)"
+    "View Header on Raider.IO (opens in a new tab)"
   );
   await expect(profileLinks.nth(1)).toHaveAccessibleName(
-    "View Ryii on Warcraft Logs (opens in a new tab)"
+    "View Header on Warcraft Logs (opens in a new tab)"
   );
   const profileLinkDetails = await profileLinks.evaluateAll((links) =>
     links.map((link) => {
@@ -53,7 +58,7 @@ test("keeps the fixed header visible and offset-safe while dossier scrolling", a
       return {
         width: bounds.width,
         height: bounds.height,
-        hasIcon: Boolean(link.querySelector("svg")),
+        hasIcon: Boolean(link.querySelector("img, svg")),
         target: link.getAttribute("target"),
         rel: link.getAttribute("rel")
       };
@@ -70,7 +75,7 @@ test("keeps the fixed header visible and offset-safe while dossier scrolling", a
 
   const header = page.locator(".site-header");
   await expect(header).toHaveCSS("position", "fixed");
-  await expect(header.getByLabel("Applicant URL")).toBeVisible();
+  await expect(header.getByLabel("Character/URL")).toBeVisible();
   const headline = page.getByRole("heading", { name: "Historic Cutting Edge" });
   const headerRectBeforeScroll = await header.evaluate((element) =>
     element.getBoundingClientRect()
@@ -98,10 +103,14 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
 }) => {
   // Break caught: narrow screens could retain the retired character/history
   // layout or hide the applicant-research controls outside the viewport.
-  const key = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "mobile"
+  } as const;
   await seedSnapshot({
     key,
-    displayName: "Ryii",
+    displayName: "Mobile",
     // This layout fixture must be fresh: queued discovery is covered separately
     // and the shared fake Raider.IO fixture deliberately holds a refresh.
     refreshedAt: new Date()
@@ -113,27 +122,32 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   for (let index = 0; index < 6; index += 1) {
     if (
       (await page.evaluate(() => document.activeElement?.id)) ===
-      "character-url"
+      "character-name"
     )
       break;
     await page.keyboard.press("Tab");
   }
-  await expect(page.getByLabel("Applicant URL")).toBeFocused();
-  await expect(page.getByLabel("Applicant URL")).toHaveCSS(
+  await expect(page.getByLabel("Character/URL")).toBeFocused();
+  await expect(page.getByLabel("Character/URL")).toHaveCSS(
     "outline-style",
     "solid"
   );
-  await page.getByLabel("Applicant URL").fill("not-a-character-url");
+  await page.getByLabel("Character/URL").fill("Ryii");
+  await expect(page.getByLabel("Realm")).toBeVisible();
+  await page.getByLabel("Character/URL").fill("not-a-character-url");
   await page.keyboard.press("Enter");
   await expect(
-    page
-      .getByRole("alert")
-      .filter({ hasText: "Enter a Raider.IO or Warcraft Logs character URL." })
-  ).toHaveText("Enter a Raider.IO or Warcraft Logs character URL.");
+    page.getByRole("alert").filter({
+      hasText:
+        "Enter a valid character URL, or character name, realm, and region."
+    })
+  ).toHaveText(
+    "Enter a valid character URL, or character name, realm, and region."
+  );
 
   await page
-    .getByLabel("Applicant URL")
-    .fill("https://raider.io/characters/eu/silvermoon/ryii");
+    .getByLabel("Character/URL")
+    .fill("https://raider.io/characters/eu/silvermoon/mobile");
   await page.getByRole("button", { name: "Research applicant" }).click();
   await expect(
     page.getByRole("heading", { name: "Historic Cutting Edge" })
@@ -168,7 +182,7 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   ).toBe(true);
 });
 
-test("keeps landing search modes compact and usable at desktop and mobile widths", async ({
+test("keeps landing search fields compact and usable at desktop and mobile widths", async ({
   page
 }) => {
   // Break caught: equal flexible tracks made the character-name and realm
@@ -177,14 +191,12 @@ test("keeps landing search modes compact and usable at desktop and mobile widths
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
 
-  const urlInput = page.getByLabel("Applicant URL");
-  await expect(urlInput).toBeVisible();
-  await page.getByRole("radio", { name: "Character name + realm" }).check();
+  const characterInput = page.getByLabel("Character/URL");
+  await expect(characterInput).toBeVisible();
+  await characterInput.fill("Ryii");
 
-  const [nameWidth, realmWidth, regionWidth] = await Promise.all([
-    page
-      .getByRole("textbox", { name: "Character name" })
-      .evaluate((element) => element.getBoundingClientRect().width),
+  const [characterWidth, realmWidth, regionWidth] = await Promise.all([
+    characterInput.evaluate((element) => element.getBoundingClientRect().width),
     page
       .getByRole("textbox", { name: "Realm" })
       .evaluate((element) => element.getBoundingClientRect().width),
@@ -192,14 +204,13 @@ test("keeps landing search modes compact and usable at desktop and mobile widths
       .getByLabel("Region")
       .evaluate((element) => element.getBoundingClientRect().width)
   ]);
-  expect(nameWidth).toBeLessThanOrEqual(192);
+  expect(characterWidth).toBeLessThanOrEqual(192);
   expect(realmWidth).toBeLessThanOrEqual(192);
   expect(regionWidth).toBeLessThanOrEqual(160);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("textbox", { name: "Character name" }).fill("Ryii");
   await page.getByRole("textbox", { name: "Realm" }).fill("the-shatar");
-  await page.getByRole("textbox", { name: "Character name" }).focus();
+  await characterInput.focus();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("textbox", { name: "Realm" })).toBeFocused();
   await expect(
@@ -453,7 +464,7 @@ test("separates adjacent raid evidence with responsive artwork banners", async (
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   await page
-    .getByLabel("Applicant URL")
+    .getByLabel("Character/URL")
     .fill("https://raider.io/characters/eu/silvermoon/banner");
   await page.getByRole("button", { name: "Research applicant" }).click();
 
