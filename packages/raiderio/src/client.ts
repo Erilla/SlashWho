@@ -311,7 +311,7 @@ export function createRaiderIoClient(
     normalize: (value: unknown) => T,
     signal?: AbortSignal
   ): Promise<T> {
-    if (options.accessKey)
+    if (options.accessKey && url.pathname.startsWith("/api/v1/"))
       url.searchParams.set("access_key", options.accessKey);
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
     const requestSignal = signal
