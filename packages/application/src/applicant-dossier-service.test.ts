@@ -80,6 +80,7 @@ function fixture(
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
     evidenceCompletedAt?: Date;
+    storedEvidence?: boolean;
     gatheringCharacter?: CharacterKey | null;
     /** A limitation recorded on the run that is collecting right now. */
     activeLimitationCode?: string | null;
@@ -208,6 +209,38 @@ function fixture(
           wipeCapable: options.wipeCapable ?? true
         }
       })),
+      getCompleted: vi.fn().mockImplementation(async (key) =>
+        options.storedEvidence === false
+          ? null
+          : {
+              run: {
+                id: "10000000-0000-4000-8000-000000000012",
+                key,
+                queueJobId: "evidence-job",
+                status: options.evidenceStatus ?? "complete",
+                attempt: 1,
+                limitationCode:
+                  "evidenceLimitationCode" in options
+                    ? (options.evidenceLimitationCode ?? null)
+                    : options.evidenceStatus === "partial"
+                      ? "request_cap"
+                      : null,
+                parseLimitationCode:
+                  options.evidenceParseLimitationCode ?? null,
+                errorCode: null,
+                createdAt: new Date("2026-09-11T12:00:00.000Z"),
+                startedAt: new Date("2026-09-11T12:00:00.000Z"),
+                completedAt: evidenceCompletedAt
+              },
+              kills: [
+                ...(options.includeCachedKills === false ? [] : cachedKills),
+                ...(options.additionalKills ?? [])
+              ],
+              wipes: options.wipes ?? [],
+              tierBests: options.tierBests ?? [],
+              wipeCapable: options.wipeCapable ?? true
+            }
+      ),
       markEnqueued
     }
   } as unknown as Repositories;
@@ -416,7 +449,9 @@ describe("applicant dossier service", () => {
   });
 
   it("withholds initial evidence for a tournament root before discovery finishes", async () => {
-    const { dossiers, raiderio, warcraftLogs, blizzard } = fixture();
+    const { dossiers, raiderio, warcraftLogs, blizzard } = fixture({
+      storedEvidence: false
+    });
     vi.mocked(raiderio.getCharacter).mockResolvedValue({
       key: root,
       displayName: "Ryii",
@@ -436,7 +471,9 @@ describe("applicant dossier service", () => {
   });
 
   it("withholds unchecked initial evidence when the eligibility lookup fails", async () => {
-    const { dossiers, raiderio, warcraftLogs } = fixture();
+    const { dossiers, raiderio, warcraftLogs } = fixture({
+      storedEvidence: false
+    });
     vi.mocked(raiderio.getCharacter).mockRejectedValue({ kind: "transient" });
     await expect(dossiers.readInitial(root)).resolves.toEqual({
       kind: "not_ready"
@@ -444,8 +481,31 @@ describe("applicant dossier service", () => {
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
+  it("shows stored root evidence without rechecking an unavailable discovery provider", async () => {
+    // Break caught: the discovery job can already be failing at Raider.IO while
+    // durable evidence from an earlier linked-character collection is still
+    // useful and already public through the dossier that collected it.
+    const { dossiers, raiderio, repositories } = fixture();
+    vi.mocked(raiderio.getCharacter).mockRejectedValue({ kind: "transient" });
+
+    await expect(dossiers.readInitial(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        root,
+        characters: [{ key: root, source: "submitted" }],
+        research: {
+          state: "initial",
+          message:
+            "Linked-character research is pending; stored evidence is shown only for the submitted character."
+        }
+      }
+    });
+    expect(repositories.evidence.getCompleted).toHaveBeenCalledWith(root);
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
+  });
+
   it("preserves cancellation during initial eligibility checking", async () => {
-    const { dossiers, raiderio } = fixture();
+    const { dossiers, raiderio } = fixture({ storedEvidence: false });
     const controller = new AbortController();
     const reason = new DOMException("cancelled", "AbortError");
     vi.mocked(raiderio.getCharacter).mockImplementation(async () => {
@@ -1654,11 +1714,67 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("returns not_ready without contacting evidence sources when no snapshot exists", async () => {
+  it("shows stored root evidence and keeps its freshness reservation when no snapshot exists", async () => {
+    // Break caught: a missing discovery snapshot could hide durable evidence
+    // keyed to the submitted character, even though that evidence can be read
+    // independently and still pass through the ordinary freshness reservation.
+    const { dossiers, repositories, raiderio } = fixture({ snapshot: null });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        root,
+        characters: [{ key: root, source: "submitted" }],
+        raids: expect.arrayContaining([
+          raidWithKill({
+            reportUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+          })
+        ]),
+        research: {
+          state: "initial",
+          message:
+            "Linked-character research is pending; stored evidence is shown only for the submitted character."
+        }
+      }
+    });
+    expect(repositories.evidence.getCompleted).toHaveBeenCalledWith(root);
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: root })
+    );
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
+  });
+
+  it("keeps linked-character uncertainty visible while stale root evidence refreshes", async () => {
+    // Break caught: reserving a refresh for root-only evidence could replace
+    // the linked-character disclosure with a generic evidence-gathering note,
+    // making the single row look like a known-complete character list.
+    const { dossiers } = fixture({
+      snapshot: null,
+      gatheringCharacter: root
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: {
+        characters: [{ key: root, source: "submitted" }],
+        research: {
+          state: "gathering",
+          message:
+            "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
+        }
+      }
+    });
+  });
+
+  it("returns not_ready without contacting evidence sources when no snapshot or stored evidence exists", async () => {
     // Break caught: a missing discovery result could trigger unbounded third-party requests.
-    const { dossiers, warcraftLogs } = fixture({ snapshot: null });
+    const { dossiers, repositories, warcraftLogs } = fixture({
+      snapshot: null,
+      storedEvidence: false
+    });
 
     await expect(dossiers.read(root)).resolves.toEqual({ kind: "not_ready" });
+    expect(repositories.evidence.reserve).not.toHaveBeenCalled();
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
@@ -1704,7 +1820,7 @@ describe("applicant dossier service", () => {
         research: {
           state: "initial",
           message:
-            "Linked-character research is still running; this evidence covers only the submitted character."
+            "Linked-character research is pending; stored evidence is shown only for the submitted character."
         }
       }
     });
@@ -1909,11 +2025,13 @@ describe("applicant dossier service", () => {
     const scope = createMeasurementScope(
       (() => {
         let index = 0;
-        const steps = [0, 12, 12, 12];
+        // The stored-evidence eligibility check is measured first (0 ms), then
+        // the provider lookup occupies the next 12 ms slice.
+        const steps = [0, 0, 0, 12, 12, 12];
         return () => steps[Math.min(index++, steps.length - 1)]!;
       })()
     );
-    const { dossiers, raiderio } = fixture();
+    const { dossiers, raiderio } = fixture({ storedEvidence: false });
     vi.mocked(raiderio.getCharacter).mockResolvedValue({
       key: root,
       displayName: "Ryii",
@@ -2143,7 +2261,7 @@ describe("applicant dossier service", () => {
   });
 
   it("checks initial eligibility with a supplied Raider.IO gateway", async () => {
-    const { dossiers, raiderio } = fixture();
+    const { dossiers, raiderio } = fixture({ storedEvidence: false });
     const override = {
       getCharacter: vi.fn().mockResolvedValue({
         key: root,

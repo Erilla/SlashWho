@@ -80,6 +80,14 @@ const initial = dossier(
   "Linked-character research is still running; this evidence covers only the submitted character.",
   "Initial evidence"
 );
+const storedRootOnly = {
+  ...initial,
+  research: {
+    state: "initial" as const,
+    message:
+      "Linked-character research is pending; stored evidence is shown only for the submitted character."
+  }
+};
 const expanded = dossier(
   "complete",
   "Linked-character research is complete.",
@@ -336,6 +344,99 @@ describe("DossierPageClient staged research", () => {
       screen.queryByText("Loading applicant dossier…")
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("starts linked research after a direct visit immediately returns stored root evidence", async () => {
+    // Break caught: returning root-only evidence with HTTP 200 could suppress
+    // the discovery start that used to be triggered by the missing-snapshot
+    // response, leaving connected characters permanently unknown.
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(storedRootOnly));
+      if (input === "/api/dossiers") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          characterUrl: "https://raider.io/characters/eu/silvermoon/ryii"
+        });
+        return Promise.resolve(
+          Response.json(
+            { kind: "job", jobId, status: "queued" },
+            { status: 202 }
+          )
+        );
+      }
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(storedRootOnly));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return new Promise<Response>(() => undefined);
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Initial evidence")).toBeVisible();
+    expect(
+      screen.getByText(/linked-character research is pending/i)
+    ).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dossiers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          characterUrl: "https://raider.io/characters/eu/silvermoon/ryii"
+        })
+      })
+    );
+  });
+
+  it("keeps stored root evidence and marks linked research failed when its direct start fails", async () => {
+    // Break caught: the new root-only success response could leave its pending
+    // spinner in place after the following discovery-start request failed.
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(storedRootOnly));
+      if (input === "/api/dossiers") {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "search_failed",
+                message: "The applicant research could not be started."
+              }
+            },
+            { status: 503 }
+          )
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Initial evidence")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The applicant research could not be started."
+    );
+    expect(
+      screen.getByText(
+        /linked-character research failed;.*only the submitted character/i
+      )
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/linked-character research is pending/i)
+    ).not.toBeInTheDocument();
   });
 
   it("shows a start failure for a direct visit", async () => {

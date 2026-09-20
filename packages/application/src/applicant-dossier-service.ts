@@ -764,6 +764,8 @@ async function assembleDossier(options: {
    */
   excludedSubjects: readonly DossierSubject[];
   research: ContractApplicantDossier["research"];
+  /** The roster is unknown and only durable evidence for the submitted root is shown. */
+  rootOnlyStoredEvidence?: boolean;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
@@ -840,11 +842,17 @@ async function assembleDossier(options: {
         ? null
         : new Date(Math.min(...collectedTimes)).toISOString(),
     research: evidence.some((item) => item.gathering)
-      ? {
-          state: "gathering" as const,
-          message:
-            "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
-        }
+      ? options.rootOnlyStoredEvidence
+        ? {
+            state: "gathering" as const,
+            message:
+              "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
+          }
+        : {
+            state: "gathering" as const,
+            message:
+              "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+          }
       : options.research,
     characters: [
       ...options.subjects.map((character, index) =>
@@ -1106,6 +1114,50 @@ export function createApplicantDossierService(options: {
       )
     };
   }
+  async function readRootOnly(
+    key: CharacterKey,
+    hasStoredEvidence: boolean,
+    repositories: ReturnType<typeof scopedRepositories>,
+    signal?: AbortSignal,
+    overrides?: DossierGatewayOverrides,
+    scope?: MeasurementScope
+  ): Promise<ReadDossierResult> {
+    return {
+      kind: "ready",
+      dossier: await assembleDossier({
+        root: key,
+        subjects: [
+          {
+            key,
+            displayName: key.name,
+            className: null,
+            guild: null,
+            raiderIoUrl: toRaiderIoUrl(key),
+            source: "submitted"
+          }
+        ],
+        skippedSubjects: [],
+        excludedSubjects: [],
+        research: {
+          state: "initial",
+          message: hasStoredEvidence
+            ? "Linked-character research is pending; stored evidence is shown only for the submitted character."
+            : "Linked-character research is still running; this evidence covers only the submitted character."
+        },
+        rootOnlyStoredEvidence: hasStoredEvidence,
+        repositories,
+        queue: options.queue,
+        ...gatewaysFor(overrides, scope),
+        concurrency: scopedConcurrency(scope),
+        freshnessCutoff: new Date(
+          Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
+        ),
+        signal: signal ?? new AbortController().signal,
+        wclCredentials: overrides?.wclCredentials,
+        encryptionKey: options.evidenceJobCredentialEncryptionKey
+      })
+    };
+  }
   return {
     async start(input, scope) {
       // start does real database and queue work through search.create, so its
@@ -1210,62 +1262,43 @@ export function createApplicantDossierService(options: {
 
     async readInitial(key, signal, overrides, scope) {
       const repositories = scopedRepositories(scope);
-      // Initial evidence precedes the worker's snapshot filter. One bounded
-      // lookup prevents that preview from exposing a tournament root.
-      const timeout = AbortSignal.timeout(15_000);
-      const requestSignal = signal
-        ? AbortSignal.any([signal, timeout])
-        : timeout;
-      const profiles = overrides?.raiderio ?? options.raiderio;
-      try {
-        requestSignal.throwIfAborted();
-        // The visitor's own gateway when they supplied one, the shared gateway
-        // otherwise; either way the call is timed against this read's scope.
-        const loadCharacter = async () =>
-          profiles.getCharacter(key, requestSignal);
-        const character = scope
-          ? await scope.time("raiderIoCharacter", loadCharacter)
-          : await loadCharacter();
-        requestSignal.throwIfAborted();
-        if (character.isTournamentProfile === true)
+      const hasStoredEvidence =
+        (await repositories.evidence.getCompleted(key)) !== null;
+      if (!hasStoredEvidence) {
+        // Initial evidence precedes the worker's snapshot filter. Completed
+        // evidence is already public dossier material; without it, one bounded
+        // lookup prevents a tournament root from appearing before the current
+        // discovery finishes.
+        const timeout = AbortSignal.timeout(15_000);
+        const requestSignal = signal
+          ? AbortSignal.any([signal, timeout])
+          : timeout;
+        const profiles = overrides?.raiderio ?? options.raiderio;
+        try {
+          requestSignal.throwIfAborted();
+          // The visitor's own gateway when supplied, the shared gateway
+          // otherwise; either call is timed against this read's scope.
+          const loadCharacter = async () =>
+            profiles.getCharacter(key, requestSignal);
+          const character = scope
+            ? await scope.time("raiderIoCharacter", loadCharacter)
+            : await loadCharacter();
+          requestSignal.throwIfAborted();
+          if (character.isTournamentProfile === true)
+            return { kind: "not_ready" };
+        } catch {
+          signal?.throwIfAborted();
           return { kind: "not_ready" };
-      } catch {
-        signal?.throwIfAborted();
-        return { kind: "not_ready" };
+        }
       }
-      return {
-        kind: "ready",
-        dossier: await assembleDossier({
-          root: key,
-          subjects: [
-            {
-              key,
-              displayName: key.name,
-              className: null,
-              guild: null,
-              raiderIoUrl: toRaiderIoUrl(key),
-              source: "submitted"
-            }
-          ],
-          skippedSubjects: [],
-          excludedSubjects: [],
-          research: {
-            state: "initial",
-            message:
-              "Linked-character research is still running; this evidence covers only the submitted character."
-          },
-          repositories,
-          queue: options.queue,
-          ...gatewaysFor(overrides, scope),
-          concurrency: scopedConcurrency(scope),
-          freshnessCutoff: new Date(
-            Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
-          ),
-          signal: signal ?? new AbortController().signal,
-          wclCredentials: overrides?.wclCredentials,
-          encryptionKey: options.evidenceJobCredentialEncryptionKey
-        })
-      };
+      return readRootOnly(
+        key,
+        hasStoredEvidence,
+        repositories,
+        signal,
+        overrides,
+        scope
+      );
     },
 
     async read(key, signal, overrides, scope) {
@@ -1273,7 +1306,14 @@ export function createApplicantDossierService(options: {
       const snapshot =
         (await repositories.snapshots.getCurrent(key)) ??
         (await repositories.snapshots.getCurrentContainingCharacter?.(key));
-      if (!snapshot) return { kind: "not_ready" };
+      if (!snapshot) {
+        // Evidence is keyed by character, not by dossier. Reuse that already
+        // public material here, while the ordinary assembly path below still
+        // reserves stale collection work.
+        const completed = await repositories.evidence.getCompleted(key);
+        if (!completed) return { kind: "not_ready" };
+        return readRootOnly(key, true, repositories, signal, overrides, scope);
+      }
 
       const seen = new Set(
         snapshot.characters.map((character) =>
