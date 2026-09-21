@@ -1,6 +1,8 @@
 import {
   createDiscoveryQueue,
-  createPostgresRepositories
+  createPostgresRepositories,
+  type DiscoveryQueue,
+  type Repositories
 } from "@slashwho/database";
 import { refreshCharacter } from "@slashwho/application";
 import { parseRaiderIoCharacterUrl } from "@slashwho/domain";
@@ -73,6 +75,34 @@ export async function runUploaderProvenanceBackfill(
   return { scheduled: characterUrls.length };
 }
 
+export function createUploaderProvenanceBackfillDependencies(options: {
+  repositories: Pick<Repositories, "evidence">;
+  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  now?: () => Date;
+  sleep?: (milliseconds: number) => Promise<void>;
+}): Readonly<{
+  rebuild(characterUrl: string): Promise<void>;
+  sleep(milliseconds: number): Promise<void>;
+}> {
+  const now = options.now ?? (() => new Date());
+  return {
+    rebuild: async (characterUrl) => {
+      await refreshCharacter({
+        key: parseRaiderIoCharacterUrl(characterUrl),
+        at: now(),
+        cooldownMs: 0,
+        rebuild: true,
+        repositories: options.repositories,
+        queue: options.queue
+      });
+    },
+    sleep:
+      options.sleep ??
+      (async (milliseconds) =>
+        new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
+  };
+}
+
 function characterUrlsFrom(input: string): readonly string[] {
   return input
     .split(/\r?\n/)
@@ -98,20 +128,7 @@ async function main(): Promise<void> {
     const result = await runUploaderProvenanceBackfill(
       characterUrls,
       operation,
-      {
-        rebuild: async (characterUrl) => {
-          await refreshCharacter({
-            key: parseRaiderIoCharacterUrl(characterUrl),
-            at: new Date(),
-            cooldownMs: 0,
-            rebuild: true,
-            repositories,
-            queue
-          });
-        },
-        sleep: async (milliseconds) =>
-          new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
-      }
+      createUploaderProvenanceBackfillDependencies({ repositories, queue })
     );
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } finally {

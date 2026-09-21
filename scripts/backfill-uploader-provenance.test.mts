@@ -1,6 +1,7 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import {
+  createUploaderProvenanceBackfillDependencies,
   parseUploaderProvenanceBackfillOperation,
   runUploaderProvenanceBackfill
 } from "./backfill-uploader-provenance.mts";
@@ -96,4 +97,63 @@ it("refuses an input that exceeds the operator-approved limit", async () => {
       { rebuild, sleep: async () => {} }
     )
   ).rejects.toThrow("backfill_limit_exceeded");
+});
+
+it("uses a rebuild to clear terminal tiers before queuing the targeted history scan", async () => {
+  // Break caught: replacing the provenance repair with an ordinary refresh
+  // leaves terminal tiers intact, so the worker skips the historical reports
+  // whose Warcraft Logs owners need to be re-read.
+  const key = { region: "eu" as const, realm: "silvermoon", name: "ryii" };
+  const clearTerminalTiers = vi.fn().mockResolvedValue(3);
+  const enqueueCharacterEvidence = vi.fn().mockResolvedValue("job-1");
+  const markEnqueued = vi.fn().mockResolvedValue(undefined);
+
+  await runUploaderProvenanceBackfill(
+    ["https://raider.io/characters/eu/silvermoon/Ryii"],
+    { intervalMs: 60_000, limit: 1 },
+    createUploaderProvenanceBackfillDependencies({
+      now: () => new Date("2026-09-21T14:00:00.000Z"),
+      repositories: {
+        evidence: {
+          getCompleted: vi.fn().mockResolvedValue(null),
+          clearTerminalTiers,
+          reserve: vi.fn().mockResolvedValue({
+            kind: "reserved",
+            run: { id: "run-1", key, status: "queued" }
+          }),
+          markEnqueued
+        }
+      } as never,
+      queue: { enqueueCharacterEvidence } as never,
+      sleep: async () => {}
+    })
+  );
+
+  expect(clearTerminalTiers).toHaveBeenCalledWith(key);
+  expect(enqueueCharacterEvidence).toHaveBeenCalledWith(
+    "run-1",
+    expect.objectContaining({ mode: "full" })
+  );
+});
+
+it("stops when a rebuild fails instead of scheduling the remaining input", async () => {
+  // Break caught: continuing after a failed target makes the operator lose the
+  // reviewed boundary between an investigated failure and the remaining work.
+  const rebuild = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("rebuild_failed"))
+    .mockResolvedValue(undefined);
+
+  await expect(
+    runUploaderProvenanceBackfill(
+      [
+        "https://raider.io/characters/eu/silvermoon/Ryii",
+        "https://raider.io/characters/eu/silvermoon/Ryan"
+      ],
+      { intervalMs: 60_000, limit: 2 },
+      { rebuild, sleep: async () => {} }
+    )
+  ).rejects.toThrow("rebuild_failed");
+
+  expect(rebuild).toHaveBeenCalledTimes(1);
 });
