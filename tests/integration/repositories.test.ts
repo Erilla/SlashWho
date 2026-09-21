@@ -348,14 +348,11 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
-  it("carries a fight's newest parses forward, not an arbitrary run's", async () => {
-    // Break caught: the carry-forward loader returned one row per fight *per
-    // run* in its window, every copy tied on `(killed_at, source_fight_key)`.
-    // Seeding the merge from that list therefore picked an arbitrary run's
-    // copy of each fight, and PostgreSQL stops preserving insertion order for
-    // tied rows once the set is more than a handful -- so a publish reseeded
-    // fights from the blank baseline and wrote their percentiles away. Enough
-    // fights here that the pick cannot come out right by luck.
+  it("replaces stored parse rows with newly available specialization data", async () => {
+    // Break caught: an old parse row without specialization data can only be
+    // repaired if the refreshed answer wins the per-fight merge. Enough fights
+    // here that the carry-forward path cannot accidentally preserve a richer
+    // arbitrary prior copy instead.
     const fights = 30;
     const start = Date.parse("2026-08-04T12:00:00.000Z");
     const blank = Array.from({ length: fights }, (_, index) =>
@@ -371,7 +368,11 @@ describe("PostgreSQL repositories", () => {
         killedAt: kill.killedAt,
         fightUrl: kill.fightUrl,
         performance: {
-          spec: null,
+          spec: {
+            name: "Assassination",
+            iconUrl:
+              "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+          },
           damage: { state: "available", percentile: 77 },
           healing: { state: "unavailable" },
           bossDamage: { state: "unavailable" }
@@ -418,6 +419,11 @@ describe("PostgreSQL repositories", () => {
         (kill) => kill.performance.damage.state === "available"
       )
     ).toHaveLength(fights);
+    expect(stored?.kills[0]?.performance.spec).toEqual({
+      name: "Assassination",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+    });
   });
 
   it("agrees with the dossier on which run is newest when two tie", async () => {
@@ -1849,11 +1855,10 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toHaveLength(1);
   });
 
-  it("omits a terminal tier recorded below its domain's collection version", async () => {
-    // Per-domain versions: a parse fix bumps `parses` and re-collects parses
-    // alone, leaving kills and tier bests settled. A global bump cannot serve
-    // this -- it invalidates everything, which is ruinous once the whole point
-    // is to stop re-querying.
+  it("reopens only terminal parse tiers recorded before the specialization refresh", async () => {
+    // Break caught: bumping the global evidence version would unbound every
+    // settled tier, while leaving parses at version 1 would keep their old
+    // specialization-free rows permanently out of collection.
     const key = {
       region: "eu",
       realm: "silvermoon",
@@ -1862,12 +1867,15 @@ describe("PostgreSQL repositories", () => {
     await pool.query(
       `INSERT INTO character_terminal_tiers
          (region, realm_slug, normalized_name, raid_id, domain, collection_version)
-       VALUES ($1, $2, $3, '42', 'parses', 0), ($1, $2, $3, '42', 'kills', 1)`,
+       VALUES ($1, $2, $3, '42', 'parses', 1),
+              ($1, $2, $3, '42', 'kills', 1),
+              ($1, $2, $3, '42', 'tier_bests', 1)`,
       [key.region, key.realm, key.name]
     );
 
     await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([
-      { raidId: "42", domain: "kills" }
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "tier_bests" }
     ]);
   });
 

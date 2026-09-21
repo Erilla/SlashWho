@@ -208,7 +208,7 @@ const CURRENT_COLLECTION_VERSIONS: Readonly<
   Record<EvidenceCollectionDomain, number>
 > = {
   kills: 1,
-  parses: 1,
+  parses: 2,
   tier_bests: 1
 };
 
