@@ -171,6 +171,7 @@ export type ApplicantDossierRaid = Readonly<{
 }>;
 type AggregatedDossierBoss = Extract<ApplicantDossierBoss, { state: "kill" }> &
   Readonly<{ isFinalBoss: boolean }>;
+type CatalogueMatchedKill = DossierKillEvidence & RaidCatalogueEncounter;
 export type ApplicantDossierCuttingEdge = Readonly<{
   achievementId: string;
   achievementName: string;
@@ -496,7 +497,7 @@ export function buildApplicantDossier(
       entry.completedAt = evidence.completedAt;
     cuttingEdges.set(key, entry);
   }
-  const allKills: Array<DossierKillEvidence & RaidCatalogueEncounter> = [];
+  const allKills: CatalogueMatchedKill[] = [];
   // One row per character and reason, not per discarded kill. A farming alt
   // produces hundreds of out-of-window kills, and repeating the same sentence
   // for each of them buries every other limitation in the dossier.
@@ -547,10 +548,7 @@ export function buildApplicantDossier(
     const key = [metadata.raidId, metadata.bossId].join("\0");
     tierBestsByBoss.set(key, [...(tierBestsByBoss.get(key) ?? []), tierBest]);
   }
-  const byBoss = new Map<
-    string,
-    Array<DossierKillEvidence & RaidCatalogueEncounter>
-  >();
+  const byBoss = new Map<string, CatalogueMatchedKill[]>();
   for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");
     byBoss.set(key, [...(byBoss.get(key) ?? []), kill]);
@@ -577,10 +575,7 @@ export function buildApplicantDossier(
   }
 
   for (const kills of byBoss.values()) {
-    const groupedEvidence = new Map<
-      string,
-      Array<DossierKillEvidence & RaidCatalogueEncounter>
-    >();
+    const groupedEvidence = new Map<string, CatalogueMatchedKill[]>();
     for (const kill of [...kills].sort(compareEvidence)) {
       const key = killEventKey(kill);
       groupedEvidence.set(key, [...(groupedEvidence.get(key) ?? []), kill]);
