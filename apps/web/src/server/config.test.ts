@@ -6,6 +6,8 @@ const validEnv = {
   DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
   BOT_API_KEY: "b".repeat(32),
   RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+  OPERATOR_ORIGIN: "https://operators.example.test",
+  OPERATOR_SESSION_HASH_SECRET: "s".repeat(32),
   BLIZZARD_CLIENT_ID: "blizzard-client-id",
   BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
   EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
@@ -22,6 +24,39 @@ it("validates all web runtime secrets and operational limits", () => {
   ).toMatchObject({
     databaseUrl: "postgresql://slashwho:secret@db.internal/slashwho",
     application: { PUBLIC_READS_PER_MINUTE: 123 }
+  });
+});
+
+it.each([
+  undefined,
+  "",
+  "http://localhost:3000",
+  "https://example.test/",
+  "https://user:pass@example.test",
+  "https://example.test/path",
+  "https://example.test?x=1",
+  "https://example.test#fragment",
+  " https://example.test",
+  "https://EXAMPLE.test"
+])("rejects a non-exact HTTPS operator origin: %s", (origin) => {
+  expect(() => loadWebConfig({ ...validEnv, OPERATOR_ORIGIN: origin })).toThrow(
+    "invalid_operator_origin"
+  );
+});
+
+it.each([undefined, "", "s".repeat(31), " ".repeat(32)])(
+  "requires a strong dedicated operator session secret",
+  (secret) => {
+    expect(() =>
+      loadWebConfig({ ...validEnv, OPERATOR_SESSION_HASH_SECRET: secret })
+    ).toThrow("invalid_operator_session_hash_secret");
+  }
+);
+
+it("exposes the exact configured operator origin and dedicated session secret", () => {
+  expect(loadWebConfig(validEnv).operatorAuth).toEqual({
+    origin: "https://operators.example.test",
+    sessionHashSecret: "s".repeat(32)
   });
 });
 

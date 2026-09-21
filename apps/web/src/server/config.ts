@@ -7,6 +7,7 @@ import {
 export type WebConfig = Readonly<{
   databaseUrl: string;
   application: ApplicationConfig;
+  operatorAuth: Readonly<{ origin: string; sessionHashSecret: string }>;
   dossier: Readonly<{
     raiderIoBaseUrl: string;
     raiderIoTimeoutMs: number;
@@ -33,6 +34,22 @@ function parseDatabaseUrl(value: string | undefined): string {
 
 function optionalSecret(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
+}
+
+function operatorOrigin(value: string | undefined): string {
+  try {
+    const url = new URL(value ?? "");
+    if (url.protocol === "https:" && url.origin === value) return value;
+  } catch {
+    /* Report only the authored code, never configuration values. */
+  }
+  throw new Error("invalid_operator_origin");
+}
+
+function operatorSessionSecret(value: string | undefined): string {
+  if (!value || value.trim().length < 32)
+    throw new Error("invalid_operator_session_hash_secret");
+  return value;
 }
 
 function requiredSecret(value: string | undefined, errorCode: string): string {
@@ -67,6 +84,12 @@ export function loadWebConfig(
   return {
     databaseUrl: parseDatabaseUrl(environment.DATABASE_URL),
     application,
+    operatorAuth: {
+      origin: operatorOrigin(environment.OPERATOR_ORIGIN),
+      sessionHashSecret: operatorSessionSecret(
+        environment.OPERATOR_SESSION_HASH_SECRET
+      )
+    },
     dossier: {
       raiderIoBaseUrl:
         environment.RAIDER_IO_BASE_URL?.trim() || "https://raider.io",
