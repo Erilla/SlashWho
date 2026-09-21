@@ -31,6 +31,18 @@ describe("operator collection monitor", () => {
         completedAt: null
       },
       {
+        key: { region: "eu", realm: "silvermoon", name: "running" },
+        status: "running",
+        evidenceVersion: 13,
+        attempt: 1,
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        errorCode: null,
+        startedAt: new Date("2026-09-20T11:50:00Z"),
+        completedAt: null
+      },
+      {
         key: { region: "eu", realm: "silvermoon", name: "partial" },
         status: "partial",
         evidenceVersion: 12,
@@ -66,6 +78,7 @@ describe("operator collection monitor", () => {
 
     await expect(service.list()).resolves.toEqual({
       generatedAt: "2026-09-20T12:00:00.000Z",
+      hasActiveRuns: true,
       inFlight: [
         {
           character: { region: "eu", realm: "silvermoon", name: "queued" },
@@ -86,6 +99,18 @@ describe("operator collection monitor", () => {
           startedAt: "2026-09-20T11:45:00.000Z",
           elapsedSeconds: 900,
           retryAfterAt: "2026-09-20T12:15:00.000Z"
+        },
+        {
+          character: {
+            region: "eu",
+            realm: "silvermoon",
+            name: "running"
+          },
+          status: "running",
+          attempt: 1,
+          startedAt: "2026-09-20T11:50:00.000Z",
+          elapsedSeconds: 600,
+          retryAfterAt: null
         }
       ],
       completed: [
@@ -105,6 +130,59 @@ describe("operator collection monitor", () => {
           stoppedAt: "2026-09-20T09:30:00.000Z"
         }
       ]
+    });
+  });
+
+  it("reports no active runs when every row is terminal", async () => {
+    const rows: EvidenceMonitorRun[] = [
+      {
+        key: { region: "eu", realm: "silvermoon", name: "complete" },
+        status: "complete",
+        evidenceVersion: 13,
+        attempt: 1,
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        errorCode: null,
+        startedAt: new Date("2026-09-20T09:00:00Z"),
+        completedAt: new Date("2026-09-20T09:30:00Z")
+      },
+      {
+        key: { region: "eu", realm: "silvermoon", name: "partial" },
+        status: "partial",
+        evidenceVersion: 12,
+        attempt: 1,
+        limitationCode: "request_cap",
+        parseLimitationCode: "parse_request_cap",
+        retryAfterAt: null,
+        errorCode: null,
+        startedAt: new Date("2026-09-20T10:00:00Z"),
+        completedAt: new Date("2026-09-20T11:00:00Z")
+      },
+      {
+        key: { region: "eu", realm: "silvermoon", name: "failed" },
+        status: "failed",
+        evidenceVersion: 13,
+        attempt: 3,
+        limitationCode: null,
+        parseLimitationCode: null,
+        retryAfterAt: null,
+        errorCode: "warcraft_logs_unavailable",
+        startedAt: new Date("2026-09-20T09:00:00Z"),
+        completedAt: new Date("2026-09-20T09:30:00Z")
+      }
+    ];
+    const service = createCollectionMonitorService({
+      evidence: {
+        async listForMonitor() {
+          return rows;
+        }
+      },
+      clock: () => new Date("2026-09-20T12:00:00Z")
+    });
+
+    await expect(service.list()).resolves.toMatchObject({
+      hasActiveRuns: false
     });
   });
 });

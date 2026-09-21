@@ -536,6 +536,7 @@ it("strictly validates applicant dossier parse summaries", () => {
 it("defines a strict operator collection monitor without internal run fields", () => {
   const response = {
     generatedAt: "2026-09-20T12:00:00.000Z",
+    hasActiveRuns: true,
     inFlight: [
       {
         character: applicantCharacter,
