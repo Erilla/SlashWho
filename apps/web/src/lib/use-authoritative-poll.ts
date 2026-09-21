@@ -29,6 +29,7 @@ export function useAuthoritativePoll<T>(
 
   useEffect(() => {
     let mounted = true;
+    let terminal = false;
     let attempt = 0;
 
     function clearScheduledRead() {
@@ -46,6 +47,7 @@ export function useAuthoritativePoll<T>(
     function scheduleRead(delay: number) {
       if (
         !mounted ||
+        terminal ||
         !optionsRef.current.active ||
         document.visibilityState === "hidden"
       ) {
@@ -76,6 +78,7 @@ export function useAuthoritativePoll<T>(
     async function readSnapshot() {
       if (
         !mounted ||
+        terminal ||
         !optionsRef.current.active ||
         document.visibilityState === "hidden" ||
         controllerRef.current
@@ -104,6 +107,7 @@ export function useAuthoritativePoll<T>(
         }
 
         if (result.kind === "terminal") {
+          terminal = true;
           optionsRef.current.onTerminalError(result.response);
           return;
         }
@@ -125,7 +129,7 @@ export function useAuthoritativePoll<T>(
     }
 
     function onVisibilityChange() {
-      if (!optionsRef.current.active) return;
+      if (terminal || !optionsRef.current.active) return;
 
       if (document.visibilityState === "hidden") {
         clearScheduledRead();

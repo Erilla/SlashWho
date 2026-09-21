@@ -195,6 +195,36 @@ describe("useAuthoritativePoll", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("does not restart a terminal resource after visibility returns", async () => {
+    // Break caught: visibility recovery could restart a terminal resource.
+    vi.useFakeTimers();
+    const read = vi
+      .fn<(signal: AbortSignal) => Promise<PollReadResult<string>>>()
+      .mockResolvedValueOnce({
+        kind: "terminal",
+        response: new Response(null, { status: 404 })
+      });
+
+    renderHook(() =>
+      useAuthoritativePoll({
+        active: true,
+        read,
+        onSnapshot: vi.fn(),
+        onTerminalError: vi.fn()
+      })
+    );
+    await flushPromises();
+
+    setVisibilityState("hidden");
+    setVisibilityState("visible");
+    await flushPromises();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("retries rejected reads after the capped delay", async () => {
     // Break caught: a network failure could create a tight retry loop.
     vi.useFakeTimers();
