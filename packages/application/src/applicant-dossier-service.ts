@@ -943,6 +943,7 @@ export function createApplicantDossierService(options: {
   config: ApplicationConfig;
   evidenceJobCredentialEncryptionKey: Buffer;
   onCacheEvent?: (source: string, event: string) => void;
+  logger?: { info(value: Record<string, unknown>): void };
 }): ApplicantDossierService {
   const achievements = createBoundedCache<
     Awaited<ReturnType<BlizzardGateway["getCompletedAchievements"]>>
@@ -1244,6 +1245,7 @@ export function createApplicantDossierService(options: {
         cooldownMs: REFRESH_COOLDOWN_MS,
         repositories: options.repositories,
         queue: options.queue,
+        ...(options.logger ? { logger: options.logger } : {}),
         ...(scope ? { scope } : {})
       });
     },
