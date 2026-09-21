@@ -38,16 +38,14 @@ function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
         evidence.guild !== null && reportUrl === evidence.reportUrl
           ? ("guild_log" as const)
           : ("personal_log" as const),
-      uploader: null
+      uploader: null,
+      guild:
+        evidence.guild !== null && reportUrl === evidence.reportUrl
+          ? evidence.guild
+          : null
     }));
   if (reports.length === 0) return <>Report: —</>;
-  return (
-    <ul className="dossier-report-links">
-      <li>
-        <ReportControl evidenceState="kill" reports={reports} />
-      </li>
-    </ul>
-  );
+  return <ReportControl evidenceState="kill" reports={reports} />;
 }
 
 function ReportControl({
@@ -70,12 +68,32 @@ function ReportControl({
   return <ReportMenu evidenceState={evidenceState} reports={reports} />;
 }
 
-function reportLabel(report: {
+function reportName(report: {
   source: "guild_log" | "personal_log";
   uploader: string | null;
+  guild?: { name: string } | null;
 }) {
-  const source = report.source === "guild_log" ? "Guild log" : "Personal log";
-  return `${source} uploaded by ${report.uploader ?? "Unknown uploader"}`;
+  return report.source === "guild_log"
+    ? (report.guild?.name ?? "Guild log")
+    : (report.uploader ?? "Unknown uploader");
+}
+
+function reportDetail(report: Parameters<typeof reportName>[0]) {
+  return report.source === "guild_log"
+    ? `Guild log uploaded by ${report.uploader ?? "Unknown uploader"}`
+    : "Personal log";
+}
+
+function reportLabel(report: Parameters<typeof reportName>[0]) {
+  return report.source === "guild_log"
+    ? `${reportName(report)} — ${reportDetail(report)}`
+    : `${reportName(report)}, personal log`;
+}
+
+function guildReportsFirst(reports: readonly DossierReport[]) {
+  return [...reports].sort((a, b) =>
+    a.source === b.source ? 0 : a.source === "guild_log" ? -1 : 1
+  );
 }
 
 function ReportMenu({
@@ -92,11 +110,21 @@ function ReportMenu({
   } | null>(null);
   const [isBrowser, setIsBrowser] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuId = useId();
   const tooltipId = useId();
   const count = reports.length;
+  const orderedReports = guildReportsFirst(reports);
 
   useEffect(() => setIsBrowser(true), []);
+
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!open) {
@@ -140,6 +168,28 @@ function ReportMenu({
     };
   }, [count, open]);
 
+  const cancelClose = () => {
+    if (closeTimer.current !== null) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const openMenu = () => {
+    cancelClose();
+    setOpen(true);
+  };
+  const closeMenu = () => {
+    cancelClose();
+    setOpen(false);
+  };
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimer.current = setTimeout(closeMenu, 120);
+  };
+  const containsMenuFocus = (target: EventTarget | null) =>
+    target instanceof Node &&
+    (triggerRef.current?.contains(target) || menuRef.current?.contains(target));
+
   return (
     <span className="dossier-report-menu">
       <button
@@ -148,10 +198,16 @@ function ReportMenu({
         aria-expanded={open}
         aria-label={`Choose from ${count} ${evidenceState} reports`}
         className={`upstream-icon-link upstream-icon-link--warcraft-logs upstream-icon-link--evidence-${evidenceState} dossier-report-menu-trigger`}
-        onClick={() => setOpen((value) => !value)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") setOpen(false);
+        onBlur={(event) => {
+          if (!containsMenuFocus(event.relatedTarget)) scheduleClose();
         }}
+        onClick={openMenu}
+        onFocus={openMenu}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") closeMenu();
+        }}
+        onPointerEnter={openMenu}
+        onPointerLeave={scheduleClose}
         ref={triggerRef}
         type="button"
       >
@@ -170,9 +226,16 @@ function ReportMenu({
               aria-label={`${evidenceState === "kill" ? "Kill" : "Wipe"} reports`}
               className="dossier-report-menu-list"
               id={menuId}
+              onBlur={(event) => {
+                if (!containsMenuFocus(event.relatedTarget)) scheduleClose();
+              }}
+              onFocus={cancelClose}
+              onPointerEnter={cancelClose}
+              onPointerLeave={scheduleClose}
+              ref={menuRef}
               style={menuPosition}
             >
-              {reports.map((report) => (
+              {orderedReports.map((report) => (
                 <li key={report.reportUrl}>
                   <a
                     aria-label={reportLabel(report)}
@@ -180,8 +243,8 @@ function ReportMenu({
                     rel="noopener noreferrer"
                     target="_blank"
                   >
-                    <span>{report.uploader ?? "Unknown uploader"}</span>
-                    <small>{reportLabel(report)}</small>
+                    <span>{reportName(report)}</span>
+                    <small>{reportDetail(report)}</small>
                   </a>
                 </li>
               ))}
@@ -338,7 +401,8 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
       group.reports.push({
         reportUrl: wipe.reportUrl,
         source: wipe.source ?? "personal_log",
-        uploader: wipe.uploader ?? null
+        uploader: wipe.uploader ?? null,
+        guild: wipe.guild ?? null
       });
     }
     for (const character of wipe.characters) {
@@ -461,20 +525,19 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                     <div>
                       <dt>Reports</dt>
                       <dd>
-                        <ReportLinks evidence={evidence} />
-                        {groupWipes(wipes).map((wipe) => (
-                          <ul
-                            className="dossier-report-links"
-                            key={wipe.attemptedAt}
-                          >
-                            <li>
+                        <ul className="dossier-report-links">
+                          <li>
+                            <ReportLinks evidence={evidence} />
+                          </li>
+                          {groupWipes(wipes).map((wipe) => (
+                            <li key={wipe.attemptedAt}>
                               <ReportControl
                                 evidenceState="wipe"
                                 reports={wipe.reports}
                               />
                             </li>
-                          </ul>
-                        ))}
+                          ))}
+                        </ul>
                       </dd>
                     </div>
                     <div>

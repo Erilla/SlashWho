@@ -129,9 +129,7 @@ for (const applicantUrl of applicantUrls) {
     await reportMenu.click();
     const reportLinks = page
       .getByRole("list", { name: "Kill reports" })
-      .getByRole("link", {
-        name: /log uploaded by/
-      });
+      .getByRole("link");
     await expect(reportLinks).toHaveCount(2);
     expect(
       await reportLinks.evaluateAll((links) =>
@@ -184,7 +182,7 @@ test("shows submitted-character evidence while queued discovery is held", async 
   await reportMenu.click();
   const reportLinks = page
     .getByRole("list", { name: "Kill reports" })
-    .getByRole("link", { name: /log uploaded by/ });
+    .getByRole("link");
   await expect(reportLinks).toHaveCount(2);
   expect(
     await reportLinks.evaluateAll((links) =>

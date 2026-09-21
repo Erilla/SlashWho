@@ -169,7 +169,9 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
   expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(844);
 
-  const reportLinks = menu.getByRole("link", { name: /log uploaded by/ });
+  const reportLinks = menu.getByRole("link", {
+    name: /Guild log uploaded by/i
+  });
   await expect(reportLinks).toHaveCount(2);
   expect(
     await reportLinks.evaluateAll((links) =>
@@ -180,11 +182,11 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
     )
   ).toEqual([
     {
-      accessibleName: "Guild log uploaded by Unknown uploader",
+      accessibleName: "Arachnid — Guild log uploaded by Unknown uploader",
       href: "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
     },
     {
-      accessibleName: "Guild log uploaded by Unknown uploader",
+      accessibleName: "Arachnid — Guild log uploaded by Unknown uploader",
       href: "https://www.warcraftlogs.com/reports/e2eReport#fight=9"
     }
   ]);

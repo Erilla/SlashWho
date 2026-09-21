@@ -36,7 +36,8 @@ export const dossierReportSchema = z
   .object({
     reportUrl: z.url(),
     source: z.enum(["guild_log", "personal_log"]),
-    uploader: z.string().min(1).nullable()
+    uploader: z.string().min(1).nullable(),
+    guild: dossierGuildSchema.nullable().optional()
   })
   .strict();
 
@@ -113,6 +114,7 @@ const dossierWipeSchema = z
     reportUrl: z.url(),
     source: z.enum(["guild_log", "personal_log"]).optional(),
     uploader: z.string().min(1).nullable().optional(),
+    guild: dossierGuildSchema.nullable().optional(),
     characters: z.array(characterKeySchema).min(1)
   })
   .strict();

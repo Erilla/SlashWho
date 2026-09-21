@@ -116,6 +116,7 @@ export type ApplicantDossierReport = Readonly<{
   reportUrl: string;
   source: "guild_log" | "personal_log";
   uploader: string | null;
+  guild: DossierKillEvidence["guild"];
 }>;
 export type ApplicantDossierParseMetric =
   | Readonly<{
@@ -142,6 +143,7 @@ export type ApplicantDossierWipe = Readonly<{
   reportUrl: string;
   source: ApplicantDossierReport["source"];
   uploader: string | null;
+  guild: ApplicantDossierReport["guild"];
   characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossierBoss =
@@ -254,7 +256,8 @@ function reportsFor(
   return [...unique.values()].map((kill) => ({
     reportUrl: kill.reportUrl!,
     source: reportSource(kill),
-    uploader: kill.uploader ?? null
+    uploader: kill.uploader ?? null,
+    guild: kill.guild
   }));
 }
 function compareEventsLatestFirst(
@@ -682,6 +685,7 @@ export function buildApplicantDossier(
           reportUrl: selected.reportUrl,
           source: reportSource(selected),
           uploader: selected.uploader ?? null,
+          guild: selected.guild ?? null,
           characters: input.characters
             .filter((character) => ids.has(canonicalCharacterId(character.key)))
             .map((character) => character.key)
