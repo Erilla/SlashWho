@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   type PollReadResult,
+  retryAfterMilliseconds,
   useAuthoritativePoll
 } from "./use-authoritative-poll";
 
@@ -57,6 +58,25 @@ describe("useAuthoritativePoll", () => {
     } else {
       Reflect.deleteProperty(document, "visibilityState");
     }
+  });
+
+  it("parses numeric and HTTP-date Retry-After headers", () => {
+    // Break caught: client polls could disagree about a rate-limit cooldown.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-21T12:00:00.000Z"));
+
+    expect(
+      retryAfterMilliseconds(
+        new Response(null, { headers: { "retry-after": "15" } })
+      )
+    ).toBe(15_000);
+    expect(
+      retryAfterMilliseconds(
+        new Response(null, {
+          headers: { "retry-after": "Mon, 21 Sep 2026 12:00:15 GMT" }
+        })
+      )
+    ).toBe(15_000);
   });
 
   it("does not read an initially terminal resource", () => {

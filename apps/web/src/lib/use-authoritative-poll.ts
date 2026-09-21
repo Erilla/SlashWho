@@ -15,6 +15,17 @@ export interface AuthoritativePollOptions<T> {
   onTerminalError(response: Response): void;
 }
 
+export function retryAfterMilliseconds(response: Response): number | undefined {
+  const retryAfter = response.headers.get("retry-after");
+  if (!retryAfter) return undefined;
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const retryAt = Date.parse(retryAfter);
+  return Number.isFinite(retryAt)
+    ? Math.max(0, retryAt - Date.now())
+    : undefined;
+}
+
 export function useAuthoritativePoll<T>(
   options: AuthoritativePollOptions<T>
 ): void {

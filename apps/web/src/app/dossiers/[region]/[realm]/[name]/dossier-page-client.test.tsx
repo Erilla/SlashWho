@@ -98,6 +98,13 @@ const partiallyExpanded = dossier(
   "Additional linked characters may exist; this dossier is not exhaustive.",
   "Partial evidence"
 );
+const linkedCharacters = initial.characters.concat({
+  key: { region: "eu" as const, realm: "silvermoon", name: "ryalts" },
+  displayName: "Ryalts",
+  className: "Rogue",
+  raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+  source: "manually_added" as const
+});
 // Rancour is a Draenor guild while Ryii is on Silvermoon, so this fixture also
 // pins that the heading never invents a realm suffix for the guild.
 const guilded: ApplicantDossier = {
@@ -128,6 +135,26 @@ afterEach(() => {
   clearStoredCredentials();
 });
 
+async function startFirstLiveEvidenceRead() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+}
+
+async function waitForFirstLiveEvidenceRead() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  });
+}
+
+async function flushAsyncWork() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 function withEvidenceState(
   source: ApplicantDossier,
   evidenceState: "waiting" | "scanning" | "partial" | "complete"
@@ -142,8 +169,23 @@ function withEvidenceState(
   };
 }
 
+function withCharacterEvidenceStates(
+  source: ApplicantDossier,
+  states: Record<string, "waiting" | "scanning" | "partial" | "complete">
+): ApplicantDossier {
+  return {
+    ...source,
+    characters: linkedCharacters.map((character) => ({
+      ...character,
+      evidenceState: states[character.key.name],
+      researchState: "complete" as const
+    }))
+  };
+}
+
 describe("DossierPageClient live evidence", () => {
   it("cancels the old dossier read when navigating to another character", async () => {
+    vi.useFakeTimers();
     let resolveOld!: (response: Response) => void;
     const fetchMock = vi.fn().mockReturnValue(
       new Promise<Response>((resolve) => {
@@ -158,6 +200,7 @@ describe("DossierPageClient live evidence", () => {
         jobId={null}
       />
     );
+    await startFirstLiveEvidenceRead();
     const signal = fetchMock.mock.calls[0]?.[1].signal as AbortSignal;
     view.rerender(
       <DossierPageClient
@@ -194,6 +237,7 @@ describe("DossierPageClient live evidence", () => {
         jobId={null}
       />
     );
+    await waitForFirstLiveEvidenceRead();
     await user.click(screen.getByRole("button", { name: "Add character" }));
     const textbox = screen.getByRole("textbox", { name: "Character/URL" });
     await user.type(textbox, "Ryalts");
@@ -232,9 +276,11 @@ describe("DossierPageClient live evidence", () => {
         jobId={null}
       />
     );
-    expect(await screen.findByRole("alert")).toBeVisible();
+    await waitForFirstLiveEvidenceRead();
+    expect(screen.getByRole("alert")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
-    expect(await screen.findByText("Expanded evidence")).toBeVisible();
+    await waitForFirstLiveEvidenceRead();
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(`${dossierPath}/refresh`, {
       method: "POST"
@@ -261,9 +307,7 @@ describe("DossierPageClient live evidence", () => {
           jobId={null}
         />
       );
-      await act(async () => {
-        await Promise.resolve();
-      });
+      await startFirstLiveEvidenceRead();
       expect(screen.getByText("Initial evidence")).toBeVisible();
       expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
       await act(() => vi.advanceTimersByTimeAsync(9_999));
@@ -304,6 +348,7 @@ describe("DossierPageClient live evidence", () => {
   );
 
   it("keeps credential headers and no-store on a live dossier read", async () => {
+    vi.useFakeTimers();
     writeStoredCredentials({
       blizzardClientId: "id",
       blizzardClientSecret: "secret",
@@ -324,9 +369,7 @@ describe("DossierPageClient live evidence", () => {
         jobId={null}
       />
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await startFirstLiveEvidenceRead();
     expect(fetchMock).toHaveBeenCalledWith(
       dossierPath,
       expect.objectContaining({
@@ -364,10 +407,10 @@ describe("DossierPageClient live evidence", () => {
           jobId={null}
         />
       );
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await act(() => vi.advanceTimersByTimeAsync(14_999));
+      await startFirstLiveEvidenceRead();
+      await act(() =>
+        vi.advanceTimersByTimeAsync(retryAfter === "15" ? 14_999 : 13_999)
+      );
       expect(screen.getByText("Initial evidence")).toBeVisible();
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
@@ -391,9 +434,7 @@ describe("DossierPageClient live evidence", () => {
           jobId={null}
         />
       );
-      await act(async () => {
-        await Promise.resolve();
-      });
+      await startFirstLiveEvidenceRead();
       expect(screen.getByRole("alert")).toHaveTextContent(
         status === 404
           ? "This applicant dossier was not found."
@@ -489,9 +530,8 @@ describe("DossierPageClient live evidence", () => {
           jobId={jobId}
         />
       );
-      await act(async () => {
-        await Promise.resolve();
-      });
+      await flushAsyncWork();
+      await startFirstLiveEvidenceRead();
       const terminalMessage = screen.getByRole("alert").textContent;
       expect(screen.getByText("Initial evidence")).toBeVisible();
       await act(async () => {
@@ -537,10 +577,12 @@ describe("DossierPageClient live evidence", () => {
         jobId={jobId}
       />
     );
+    await flushAsyncWork();
+    await startFirstLiveEvidenceRead();
     await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
       await Promise.resolve();
     });
-    await act(() => vi.advanceTimersByTimeAsync(1_000));
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     await act(async () => {
       resolveOlder(
@@ -583,8 +625,9 @@ describe("DossierPageClient live evidence", () => {
     expect(
       screen.getByRole("status", { name: "Evidence collection updates" })
     ).toBeEmptyDOMElement();
-    const announcement = await screen.findByRole("status", {
-      name: "Evidence collection complete"
+    await waitForFirstLiveEvidenceRead();
+    const announcement = screen.getByRole("status", {
+      name: "Ryii evidence collection is complete."
     });
     const messages: (string | null)[] = [];
     const observer = new MutationObserver(() =>
@@ -600,15 +643,18 @@ describe("DossierPageClient live evidence", () => {
       expect(
         screen.getByRole("status", { name: "Evidence collection updates" })
       ).toBeEmptyDOMElement();
+      await waitForFirstLiveEvidenceRead();
       await act(async () => {
         resolveSecondCompletion(
           Response.json(withEvidenceState(expanded, "complete"))
         );
       });
       expect(
-        screen.getByRole("status", { name: "Evidence collection complete" })
-      ).toHaveTextContent("Evidence collection complete");
-      expect(messages).toEqual(["", "Evidence collection complete"]);
+        screen.getByRole("status", {
+          name: "Ryii evidence collection is complete."
+        })
+      ).toHaveTextContent("Ryii evidence collection is complete.");
+      expect(messages).toEqual(["", "Ryii evidence collection is complete."]);
     } finally {
       observer.disconnect();
     }
@@ -632,11 +678,9 @@ describe("DossierPageClient live evidence", () => {
         jobId={null}
       />
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await startFirstLiveEvidenceRead();
     const announcement = screen.getByRole("status", {
-      name: "Evidence collection partial"
+      name: "Ryii evidence collection is partial."
     });
     expect(announcement).toHaveAttribute("aria-live", "polite");
     const changes = vi.fn();
@@ -646,14 +690,60 @@ describe("DossierPageClient live evidence", () => {
       characterData: true,
       subtree: true
     });
-    await act(() => vi.advanceTimersByTimeAsync(1_000));
-    expect(changes).not.toHaveBeenCalled();
     await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(changes).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(4_000));
     expect(
-      screen.getAllByRole("status", { name: "Evidence collection complete" })
+      screen.getAllByRole("status", {
+        name: "Ryii evidence collection is complete."
+      })
     ).toHaveLength(1);
     expect(changes).toHaveBeenCalledTimes(1);
     observer.disconnect();
+  });
+
+  it("announces each non-excluded character's evidence transition", async () => {
+    // Break caught: one character completing could be hidden by another still scanning.
+    vi.useFakeTimers();
+    const rootCompleteAltScanning = withCharacterEvidenceStates(initial, {
+      ryii: "complete",
+      ryalts: "scanning"
+    });
+    const rootCompleteAltPartial = withCharacterEvidenceStates(initial, {
+      ryii: "complete",
+      ryalts: "partial"
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(rootCompleteAltScanning))
+        .mockResolvedValueOnce(Response.json(rootCompleteAltPartial))
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withCharacterEvidenceStates(initial, {
+          ryii: "scanning",
+          ryalts: "scanning"
+        })}
+        jobId={null}
+      />
+    );
+
+    await startFirstLiveEvidenceRead();
+    expect(
+      screen.getByRole("status", {
+        name: "Ryii evidence collection is complete."
+      })
+    ).toHaveTextContent("Ryii evidence collection is complete.");
+
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(
+      screen.getByRole("status", {
+        name: "Ryalts evidence collection is partial."
+      })
+    ).toHaveTextContent("Ryalts evidence collection is partial.");
   });
 });
 
@@ -1230,7 +1320,7 @@ describe("DossierPageClient staged research", () => {
     expect(evidenceCalls).toBe(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(9_000);
+      await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(evidenceCalls).toBe(2);
     expect(screen.getByText(partiallyExpanded.research.message)).toBeVisible();

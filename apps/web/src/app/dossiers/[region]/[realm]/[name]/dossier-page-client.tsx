@@ -19,6 +19,7 @@ import {
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
   type PollReadResult,
+  retryAfterMilliseconds,
   useAuthoritativePoll
 } from "../../../../../lib/use-authoritative-poll";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
@@ -58,28 +59,51 @@ function hasLiveEvidence(value: ApplicantDossier | null): boolean {
   );
 }
 
-function retryAfterMilliseconds(response: Response): number | undefined {
-  const retryAfter = response.headers.get("retry-after");
-  if (!retryAfter) return undefined;
-  const seconds = Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
-  const retryAt = Date.parse(retryAfter);
-  return Number.isFinite(retryAt)
-    ? Math.max(0, retryAt - Date.now())
-    : undefined;
+function dossierCharacterKey(character: CharacterKey): string {
+  return `${character.region}:${character.realm}:${character.name}`;
 }
 
-function evidencePublication(value: ApplicantDossier | null) {
-  const characters =
-    value?.characters.filter((character) => !character.excluded) ?? [];
-  if (characters.some((character) => character.evidenceState === "partial"))
-    return "partial";
-  if (
-    characters.length > 0 &&
-    characters.every((character) => character.evidenceState === "complete")
-  )
-    return "complete";
-  return null;
+function evidenceStatesByCharacter(value: ApplicantDossier | null) {
+  return new Map(
+    (value?.characters ?? [])
+      .filter((character) => !character.excluded)
+      .map((character) => [
+        dossierCharacterKey(character.key),
+        { name: character.displayName, state: character.evidenceState }
+      ])
+  );
+}
+
+function evidenceAnnouncement(
+  previous: ApplicantDossier | null,
+  next: ApplicantDossier | null
+): string | null {
+  const before = evidenceStatesByCharacter(previous);
+  const announcements: string[] = [];
+  for (const [key, current] of evidenceStatesByCharacter(next)) {
+    if (
+      (current.state !== "partial" && current.state !== "complete") ||
+      before.get(key)?.state === current.state
+    )
+      continue;
+    announcements.push(
+      `${current.name} evidence collection is ${current.state}.`
+    );
+  }
+  return announcements.length === 0 ? null : announcements.join(" ");
+}
+
+function evidenceStatesChanged(
+  previous: ApplicantDossier | null,
+  next: ApplicantDossier | null
+): boolean {
+  const before = evidenceStatesByCharacter(previous);
+  const after = evidenceStatesByCharacter(next);
+  if (before.size !== after.size) return true;
+  for (const [key, current] of after) {
+    if (before.get(key)?.state !== current.state) return true;
+  }
+  return false;
 }
 
 function apiError(response: Response, body: unknown): string {
@@ -122,7 +146,7 @@ function DossierPageState({
   const terminalPollError = useRef(
     "The dossier returned an unexpected response."
   );
-  const previousPublication = useRef(evidencePublication(initialDossier));
+  const previousDossier = useRef(initialDossier);
   const [researchFailed, setResearchFailed] = useState(false);
   const [identityHidden, setIdentityHidden] = useState(false);
   const [identitySlot, setIdentitySlot] = useState<HTMLElement | null>(null);
@@ -139,11 +163,14 @@ function DossierPageState({
   const appliedSequence = useRef(0);
 
   useEffect(() => {
-    const publication = evidencePublication(dossier);
-    if (publication !== previousPublication.current) {
-      setAnnouncement(publication ? `Evidence collection ${publication}` : "");
-    }
-    previousPublication.current = publication;
+    const nextAnnouncement = evidenceAnnouncement(
+      previousDossier.current,
+      dossier
+    );
+    if (nextAnnouncement) setAnnouncement(nextAnnouncement);
+    else if (evidenceStatesChanged(previousDossier.current, dossier))
+      setAnnouncement("");
+    previousDossier.current = dossier;
   }, [dossier]);
   const dossierPath = useMemo(
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
@@ -487,15 +514,18 @@ function DossierPageState({
         if (signal.aborted || sequence < appliedSequence.current)
           return { kind: "retry" };
         terminalPollError.current = apiError(response, body);
+        appliedSequence.current = sequence;
         return { kind: "terminal", response };
       }
       const body: unknown = await response.json().catch(() => null);
       if (signal.aborted || sequence < appliedSequence.current)
         return { kind: "retry" };
       const parsed = applicantDossierSchema.safeParse(body);
-      if (!parsed.success)
+      if (!parsed.success) {
         terminalPollError.current =
           "The dossier returned an unexpected response.";
+        appliedSequence.current = sequence;
+      }
       return parsed.success
         ? { kind: "snapshot", value: { dossier: parsed.data, sequence } }
         : { kind: "terminal", response };

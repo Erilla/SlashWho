@@ -140,10 +140,10 @@ describe("CollectionMonitorClient", () => {
     mockFetchMonitor(partialMonitor, completeMonitor);
 
     render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
-    await advance(0);
+    await advance(1_000);
     expect(screen.getByText("request_cap")).toBeVisible();
 
-    await advance(1_000);
+    await advance(2_000);
     expect(screen.getAllByText("complete")).not.toHaveLength(0);
   });
 
@@ -162,12 +162,12 @@ describe("CollectionMonitorClient", () => {
     mockFetchMonitor(partialMonitor, completeMonitor);
 
     render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
-    await advance(0);
+    await advance(1_000);
     expect(screen.getByRole("status")).toHaveTextContent(
       "ryii collection is partial."
     );
 
-    await advance(1_000);
+    await advance(2_000);
     expect(screen.getByRole("status")).toHaveTextContent(
       "ryii collection is complete."
     );
@@ -178,7 +178,7 @@ describe("CollectionMonitorClient", () => {
     mockFetchMonitor(multipleTerminalMonitor);
 
     render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
-    await advance(0);
+    await advance(1_000);
 
     expect(screen.getByRole("status")).toHaveTextContent(
       "ryii collection is complete. blocked collection is failed."
