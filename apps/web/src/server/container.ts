@@ -69,6 +69,7 @@ export type WebContainerDependencies = Readonly<{
     config: ApplicationConfig;
     evidenceJobCredentialEncryptionKey: Buffer;
     onCacheEvent?: (source: string, event: string) => void;
+    logger?: { info(value: Record<string, unknown>): void };
   }): ApplicantDossierService;
 }>;
 
@@ -134,7 +135,8 @@ export async function createWebContainer(
       raiderio,
       config: config.application,
       evidenceJobCredentialEncryptionKey:
-        config.dossier.evidenceJobCredentialEncryptionKey
+        config.dossier.evidenceJobCredentialEncryptionKey,
+      logger: webLogger
     });
     return {
       searches,

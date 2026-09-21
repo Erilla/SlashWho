@@ -22,12 +22,40 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
     );
   const markEnqueued = vi.fn().mockResolvedValue(undefined);
   const enqueueCharacterEvidence = vi.fn().mockResolvedValue("job-1");
+  const terminalTiers = vi.fn().mockResolvedValue([
+    { raidId: "42", domain: "kills" },
+    { raidId: "42", domain: "parses" },
+    { raidId: "42", domain: "tier_bests" }
+  ]);
+  const storedEvidenceTiers = vi.fn().mockResolvedValue({
+    kills: [
+      {
+        raidId: "42",
+        raidName: "The Tidebound Grotto",
+        killedAt: "2026-09-16T10:00:00.000Z"
+      }
+    ],
+    wipes: [],
+    lastCleanKillScanAt: "2026-09-16T11:55:00.000Z"
+  });
+  const hydratedFightUrls = vi
+    .fn()
+    .mockResolvedValue([
+      "https://www.warcraftlogs.com/reports/example#fight=9"
+    ]);
+  const collectedTierZones = vi
+    .fn()
+    .mockResolvedValue([["42", "2026-09-16T11:00:00.000Z"]]);
   return {
     reserve,
     getCompleted,
     markEnqueued,
     enqueueCharacterEvidence,
     clearTerminalTiers,
+    terminalTiers,
+    storedEvidenceTiers,
+    hydratedFightUrls,
+    collectedTierZones,
     run: () =>
       refreshCharacter({
         key,
@@ -39,7 +67,11 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
             reserve,
             getCompleted,
             markEnqueued,
-            clearTerminalTiers
+            clearTerminalTiers,
+            terminalTiers,
+            storedEvidenceTiers,
+            hydratedFightUrls,
+            collectedTierZones
           }
         } as never,
         queue: { enqueueCharacterEvidence } as never
@@ -68,6 +100,176 @@ describe("refreshCharacter", () => {
     const h = harness(new Date("2026-09-16T11:55:00.000Z"));
 
     await expect(h.run()).resolves.toMatchObject({ mode: "light" });
+
+    expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({ mode: "light" })
+    );
+  });
+
+  it("skips a light collection when every persisted domain is fresh and terminal", async () => {
+    const h = harness(new Date("2026-09-16T11:55:00.000Z"));
+    h.getCompleted.mockResolvedValue({
+      run: {
+        id: "run-0",
+        key,
+        completedAt: new Date("2026-09-16T11:55:00.000Z"),
+        limitationCode: null,
+        parseLimitationCode: null
+      },
+      kills: [
+        {
+          raidId: "42",
+          raidName: "The Tidebound Grotto",
+          killedAt: "2026-09-16T10:00:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+        }
+      ]
+    });
+
+    await expect(h.run()).resolves.toMatchObject({ mode: "light" });
+
+    expect(h.reserve).not.toHaveBeenCalled();
+    expect(h.enqueueCharacterEvidence).not.toHaveBeenCalled();
+  });
+
+  it("logs only a static reason when it skips a light collection", async () => {
+    const h = harness(new Date("2026-09-16T11:55:00.000Z"));
+    h.getCompleted.mockResolvedValue({
+      run: {
+        id: "run-0",
+        key,
+        completedAt: new Date("2026-09-16T11:55:00.000Z"),
+        limitationCode: null,
+        parseLimitationCode: null
+      },
+      kills: [
+        {
+          raidId: "42",
+          raidName: "The Tidebound Grotto",
+          killedAt: "2026-09-16T10:00:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+        }
+      ]
+    });
+    const info = vi.fn();
+
+    await refreshCharacter({
+      key,
+      at,
+      cooldownMs,
+      repositories: { evidence: h } as never,
+      queue: { enqueueCharacterEvidence: h.enqueueCharacterEvidence } as never,
+      logger: { info }
+    });
+
+    expect(info).toHaveBeenCalledWith({
+      event: "light_collection_skipped",
+      reason: "all_domains_fresh_terminal"
+    });
+  });
+
+  it.each([
+    {
+      name: "a newly persisted kill has no terminal marks",
+      change: (h: ReturnType<typeof harness>) =>
+        h.getCompleted.mockResolvedValue({
+          run: {
+            id: "run-0",
+            key,
+            completedAt: new Date("2026-09-16T11:55:00.000Z"),
+            limitationCode: null,
+            parseLimitationCode: null
+          },
+          kills: [
+            {
+              raidId: "43",
+              raidName: "The Tidebound Grotto",
+              killedAt: "2026-09-16T10:00:00.000Z",
+              fightUrl: "https://www.warcraftlogs.com/reports/new#fight=10"
+            }
+          ]
+        })
+    },
+    {
+      name: "a catalogue change invalidates a terminal domain",
+      change: (h: ReturnType<typeof harness>) =>
+        h.terminalTiers.mockResolvedValue([
+          { raidId: "42", domain: "kills" },
+          { raidId: "42", domain: "parses" }
+        ])
+    },
+    {
+      name: "the clean kill scan has expired",
+      change: (h: ReturnType<typeof harness>) =>
+        h.storedEvidenceTiers.mockResolvedValue({
+          kills: [],
+          wipes: [],
+          lastCleanKillScanAt: "2026-09-16T11:44:59.999Z"
+        })
+    },
+    {
+      name: "a scan limitation is still disclosed",
+      change: (h: ReturnType<typeof harness>) =>
+        h.getCompleted.mockResolvedValue({
+          run: {
+            id: "run-0",
+            key,
+            completedAt: new Date("2026-09-16T11:55:00.000Z"),
+            limitationCode: "request_cap",
+            parseLimitationCode: null
+          },
+          kills: []
+        })
+    },
+    {
+      name: "a parse limitation leaves kill collection open",
+      change: (h: ReturnType<typeof harness>) =>
+        h.getCompleted.mockResolvedValue({
+          run: {
+            id: "run-0",
+            key,
+            completedAt: new Date("2026-09-16T11:55:00.000Z"),
+            limitationCode: null,
+            parseLimitationCode: "parse_request_cap"
+          },
+          kills: []
+        })
+    },
+    {
+      name: "an unhydrated exact fight remains",
+      change: (h: ReturnType<typeof harness>) =>
+        h.hydratedFightUrls.mockResolvedValue([])
+    },
+    {
+      name: "a tier best collected before its newest kill remains",
+      change: (h: ReturnType<typeof harness>) =>
+        h.collectedTierZones.mockResolvedValue([
+          ["42", "2026-09-16T09:59:59.999Z"]
+        ])
+    }
+  ])("queues a light collection when $name", async ({ change }) => {
+    const h = harness(new Date("2026-09-16T11:55:00.000Z"));
+    h.getCompleted.mockResolvedValue({
+      run: {
+        id: "run-0",
+        key,
+        completedAt: new Date("2026-09-16T11:55:00.000Z"),
+        limitationCode: null,
+        parseLimitationCode: null
+      },
+      kills: [
+        {
+          raidId: "42",
+          raidName: "The Tidebound Grotto",
+          killedAt: "2026-09-16T10:00:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+        }
+      ]
+    });
+    change(h);
+
+    await h.run();
 
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
