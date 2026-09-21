@@ -12,7 +12,8 @@ const baseFields = new Set([
   "status",
   "durationMs",
   "count",
-  "errorName"
+  "errorName",
+  "reason"
 ]);
 
 // An explicit, independent literal of every performance field the brief
@@ -63,6 +64,7 @@ it("logs only operational fields and redacts request and upstream secrets", asyn
     status: 202,
     durationMs: 12,
     count: 3,
+    reason: "all_domains_fresh_terminal",
     errorName: "UpstreamReadError",
     errorMessage: marker,
     authorization: marker,
@@ -78,6 +80,7 @@ it("logs only operational fields and redacts request and upstream secrets", asyn
   expect(captured).toContain('"endpoint":"search"');
   expect(captured).toContain('"status":202');
   expect(captured).toContain('"errorName":"UpstreamReadError"');
+  expect(captured).toContain('"reason":"all_domains_fresh_terminal"');
   expect(captured).not.toContain("errorMessage");
   expect(captured).not.toContain(marker);
 });
