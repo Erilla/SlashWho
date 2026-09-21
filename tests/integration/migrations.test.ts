@@ -43,6 +43,10 @@ describe("database migrations", () => {
       "fingerprint_sweep_states",
       "manual_dossier_connections",
       "negative_character_cache",
+      "operator_auth_events",
+      "operator_login_attempts",
+      "operator_sessions",
+      "operators",
       "rate_limit_events",
       "snapshot_characters",
       "snapshots",
@@ -99,7 +103,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-10).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
       { idx: 25, tag: "0026_unstick_parse_drift_runs" },
       { idx: 26, tag: "0027_kill_parses_read_at" },
@@ -108,7 +111,8 @@ describe("database migrations", () => {
       { idx: 29, tag: "0030_unstick_schema_drift_runs" },
       { idx: 30, tag: "0031_partial_scan_skipped" },
       { idx: 31, tag: "0032_report_provenance" },
-      { idx: 32, tag: "0033_history_scan_resume_boundary" }
+      { idx: 32, tag: "0033_history_scan_resume_boundary" },
+      { idx: 33, tag: "0034_operator_auth" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
@@ -163,6 +167,79 @@ describe("database migrations", () => {
         values
       )
     ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("creates indexed, revocable operator authentication persistence", async () => {
+    // Break caught: a migration that omits any operator-auth store, makes the
+    // login lookup non-unique, or drops the query paths authentication needs.
+    const columns = async (tableName: string) => {
+      const result = await pool.query<{ column_name: string }>(
+        `SELECT column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1
+         ORDER BY column_name`,
+        [tableName]
+      );
+      return result.rows.map(({ column_name }) => column_name);
+    };
+
+    expect(await columns("operators")).toContain("canonical_login");
+    expect(await columns("operator_sessions")).toEqual(
+      expect.arrayContaining([
+        "operator_id",
+        "secret_digest",
+        "credential_version",
+        "idle_expires_at",
+        "absolute_expires_at",
+        "revoked_at"
+      ])
+    );
+    expect(await columns("operator_login_attempts")).toEqual(
+      expect.arrayContaining(["subject_hash", "expires_at"])
+    );
+    expect(await columns("operator_auth_events")).toEqual(
+      expect.arrayContaining([
+        "operator_id",
+        "action",
+        "outcome",
+        "occurred_at"
+      ])
+    );
+
+    await pool.query(
+      `INSERT INTO operators
+        (canonical_login, display_login, password_hash, password_salt, scrypt_version, scrypt_cost)
+       VALUES ('operator', 'Operator', 'hash', 'salt', 1, 16384)`
+    );
+    await expect(
+      pool.query(
+        `INSERT INTO operators
+          (canonical_login, display_login, password_hash, password_salt, scrypt_version, scrypt_cost)
+         VALUES ('operator', 'Operator', 'hash', 'salt', 1, 16384)`
+      )
+    ).rejects.toMatchObject({ code: "23505" });
+
+    const indexes = await pool.query<{ tablename: string; indexdef: string }>(
+      `SELECT tablename, indexdef
+       FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND tablename IN ('operator_sessions', 'operator_login_attempts', 'operator_auth_events')`
+    );
+    const indexDef = (tableName: string) =>
+      indexes.rows
+        .filter(({ tablename }) => tablename === tableName)
+        .map(({ indexdef }) => indexdef)
+        .join("\n");
+
+    expect(indexDef("operator_sessions")).toMatch(
+      /operator_id[\s\S]*revoked_at[\s\S]*IS NULL/
+    );
+    expect(indexDef("operator_login_attempts")).toMatch(
+      /subject_hash[\s\S]*expires_at/
+    );
+    expect(indexDef("operator_auth_events")).toMatch(
+      /operator_id[\s\S]*occurred_at/
+    );
   });
 
   it("adds the fingerprint sweep cursor columns", async () => {

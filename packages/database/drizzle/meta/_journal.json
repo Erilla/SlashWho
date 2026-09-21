@@ -232,6 +232,13 @@
       "when": 1790575200000,
       "tag": "0033_history_scan_resume_boundary",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790575200001,
+      "tag": "0034_operator_auth",
+      "breakpoints": true
     }
   ]
 }
