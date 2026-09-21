@@ -8,12 +8,9 @@ import process from "node:process";
 import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
-import {
-  e2eWebBaseUrl,
-  e2eWebPort,
-  e2eWorkerBaseUrl,
-  e2eWorkerPort
-} from "./ports";
+
+const webBaseUrl = "http://127.0.0.1:3100";
+const workerBaseUrl = "http://127.0.0.1:3101";
 
 type ManagedProcess = Readonly<{
   child: ChildProcess;
@@ -43,22 +40,6 @@ function startPnpm(
   child.stdout?.on("data", collect);
   child.stderr?.on("data", collect);
   return { child, output: () => output };
-}
-
-async function runPnpm(
-  args: string[],
-  environment: NodeJS.ProcessEnv
-): Promise<void> {
-  const processHandle = startPnpm(args, environment);
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    processHandle.child.once("exit", resolve);
-    processHandle.child.once("error", reject);
-  });
-  if (exitCode !== 0) {
-    throw new Error(
-      `command_failed:${args.join(" ")}\n${processHandle.output()}`
-    );
-  }
 }
 
 async function waitForReady(
@@ -125,12 +106,6 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     blizzard = await startFakeBlizzard();
     warcraftLogs = await startFakeWarcraftLogs();
     const databaseUrl = postgres.getConnectionUri();
-    // The web app can become ready while the worker is still booting. Migrate
-    // the fresh container here rather than relying on that worker startup race.
-    await runPnpm(["--filter", "@slashwho/database", "migrate"], {
-      ...process.env,
-      DATABASE_URL: databaseUrl
-    });
     process.env.E2E_DATABASE_URL = databaseUrl;
     process.env.E2E_RAIDER_IO_BASE_URL = fixture.baseUrl;
 
@@ -165,7 +140,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
       ...environment,
-      PORT: String(e2eWorkerPort)
+      PORT: "3101"
     });
     const web = startPnpm(
       [
@@ -175,15 +150,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         "--hostname",
         "127.0.0.1",
         "--port",
-        String(e2eWebPort)
+        "3100"
       ],
       environment
     );
     processes.push(worker, web);
 
     await Promise.all([
-      waitForReady(`${e2eWorkerBaseUrl}/ready`, worker),
-      waitForReady(`${e2eWebBaseUrl}/ready`, web)
+      waitForReady(`${workerBaseUrl}/ready`, worker),
+      waitForReady(`${webBaseUrl}/ready`, web)
     ]);
 
     return async () => {
