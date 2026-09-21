@@ -12,7 +12,6 @@ const base: DossierKillEvidence = {
   bossName: "Nek'zali the Soulcoiler",
   journalBossId: "2888",
   bossOrder: 1,
-  isFinalBoss: false,
   character,
   killedAt: "2026-08-23T20:50:12.607Z",
   guild: null,

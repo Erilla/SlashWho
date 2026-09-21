@@ -42,7 +42,6 @@ const settledKill = {
   bossName: "Chrome King Gallywix",
   journalBossId: null,
   bossOrder: 8,
-  isFinalBoss: true,
   killedAt: "2026-06-01T20:00:00.000Z",
   reportUrl: "https://www.warcraftlogs.com/reports/abc",
   fightUrl: "https://www.warcraftlogs.com/reports/abc#fight=12",

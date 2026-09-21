@@ -296,14 +296,12 @@ export interface CharacterMythicKillInput {
   bossName: string;
   journalBossId: string | null;
   bossOrder: number;
-  isFinalBoss: boolean;
   killedAt: string;
   reportUrl: string;
   fightUrl: string;
   guild: { name: string; realm: string } | null;
   /** Absent on evidence collected before Warcraft Logs exposed report owners. */
   uploader?: string | null;
-  historicWorldRank?: number | null;
   performance: CharacterMythicKillPerformance;
 }
 

@@ -36,7 +36,6 @@ export type DossierKillEvidence = Readonly<{
   bossName: string;
   journalBossId: string | null;
   bossOrder: number;
-  isFinalBoss: boolean;
   character: CharacterKey;
   killedAt: string;
   guild: Readonly<{
@@ -218,7 +217,6 @@ function compareEvidence(
     optionalText(a.reportUrl, b.reportUrl) ||
     compareGuild(a.guild, b.guild) ||
     optionalNumber(a.historicWorldRank, b.historicWorldRank) ||
-    (a.isFinalBoss === b.isFinalBoss ? 0 : a.isFinalBoss ? -1 : 1) ||
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
 }
@@ -498,7 +496,7 @@ export function buildApplicantDossier(
       entry.completedAt = evidence.completedAt;
     cuttingEdges.set(key, entry);
   }
-  const allKills: DossierKillEvidence[] = [];
+  const allKills: Array<DossierKillEvidence & RaidCatalogueEncounter> = [];
   // One row per character and reason, not per discarded kill. A farming alt
   // produces hundreds of out-of-window kills, and repeating the same sentence
   // for each of them buries every other limitation in the dossier.
@@ -549,7 +547,10 @@ export function buildApplicantDossier(
     const key = [metadata.raidId, metadata.bossId].join("\0");
     tierBestsByBoss.set(key, [...(tierBestsByBoss.get(key) ?? []), tierBest]);
   }
-  const byBoss = new Map<string, DossierKillEvidence[]>();
+  const byBoss = new Map<
+    string,
+    Array<DossierKillEvidence & RaidCatalogueEncounter>
+  >();
   for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");
     byBoss.set(key, [...(byBoss.get(key) ?? []), kill]);
@@ -576,7 +577,10 @@ export function buildApplicantDossier(
   }
 
   for (const kills of byBoss.values()) {
-    const groupedEvidence = new Map<string, DossierKillEvidence[]>();
+    const groupedEvidence = new Map<
+      string,
+      Array<DossierKillEvidence & RaidCatalogueEncounter>
+    >();
     for (const kill of [...kills].sort(compareEvidence)) {
       const key = killEventKey(kill);
       groupedEvidence.set(key, [...(groupedEvidence.get(key) ?? []), kill]);
