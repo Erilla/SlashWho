@@ -992,6 +992,11 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            ...(storedEvidence.historyScanResumePage
+              ? {
+                  historyScanStartPage: storedEvidence.historyScanResumePage
+                }
+              : {}),
             ...(parseOnlyResume
               ? {
                   storedKills: (storedEvidence.parseOnlyKills ?? [])
@@ -1050,6 +1055,11 @@ export function createApplicantEvidenceJobHandler(
           await stageAndPublish(
             {
               state: "partial",
+              ...(storedEvidence.historyScanResumePage !== undefined
+                ? {
+                    historyScanResumePage: storedEvidence.historyScanResumePage
+                  }
+                : {}),
               limitationCode: response.code,
               parseLimitationCode: null,
               // The scan stopped before any parse work, so there is nothing
@@ -1105,6 +1115,20 @@ export function createApplicantEvidenceJobHandler(
           {
             state: incomplete ? "partial" : "complete",
             scanSkipped: response.scanSkipped,
+            ...(response.scanSkipped
+              ? {}
+              : response.historyScanResumePage !== undefined
+                ? { historyScanResumePage: response.historyScanResumePage }
+                : response.limitation === undefined
+                  ? storedEvidence.historyScanResumePage !== undefined
+                    ? { historyScanResumePage: null }
+                    : {}
+                  : storedEvidence.historyScanResumePage !== undefined
+                    ? {
+                        historyScanResumePage:
+                          storedEvidence.historyScanResumePage
+                      }
+                    : {}),
             limitationCode: response.limitation?.code ?? null,
             parseLimitationCode: drivingParse?.code ?? null,
             parseLimitationCodesSeen: parseLimitationsSeen.map(

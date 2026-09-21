@@ -1492,6 +1492,7 @@ export function createWarcraftLogsClient(
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      historyScanStartPage?: number;
       storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       className?: string;
       /**
@@ -1544,6 +1545,13 @@ export function createWarcraftLogsClient(
     ) {
       return { kind: "limitation", code: "parse_request_cap" };
     }
+    if (
+      options.historyScanStartPage !== undefined &&
+      (!Number.isSafeInteger(options.historyScanStartPage) ||
+        options.historyScanStartPage <= 0)
+    ) {
+      return { kind: "limitation", code: "schema_drift" };
+    }
 
     // Counted here rather than inside `graphql` so the observer stays scoped to
     // this call: the client is a process-wide singleton, so a
@@ -1574,7 +1582,13 @@ export function createWarcraftLogsClient(
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
     const scanSkipped = options.requestCap === 0;
-    for (let page = 1; page <= options.requestCap; page++) {
+    const historyScanStartPage = options.historyScanStartPage ?? 1;
+    let lastDecodedHistoryPage: number | undefined;
+    for (
+      let page = historyScanStartPage;
+      page < historyScanStartPage + options.requestCap;
+      page++
+    ) {
       const result = counted(
         "history_scan",
         await graphql(
@@ -1626,8 +1640,12 @@ export function createWarcraftLogsClient(
         scanLimitation = { kind: "limitation", code: "schema_drift" };
         break;
       }
+      // A resume boundary is a fact about a fully decoded page, never about a
+      // response that was unavailable or structurally suspect. It is safe to
+      // carry this forward even if a later page is limited.
+      lastDecodedHistoryPage = page;
       if (!hasMorePages) break;
-      if (page === options.requestCap) {
+      if (page === historyScanStartPage + options.requestCap - 1) {
         scanLimitation = { kind: "limitation", code: "request_cap" };
       }
     }
@@ -2117,13 +2135,32 @@ export function createWarcraftLogsClient(
           tierBests,
           parsedFightUrls: parsed,
           troubledRaidIds: troubled,
+          ...(scanLimitation && lastDecodedHistoryPage !== undefined
+            ? { historyScanResumePage: lastDecodedHistoryPage + 1 }
+            : {}),
           ...(scanLimitation ? { limitation: scanLimitation } : {}),
           ...(reportedParseLimitation
             ? { parseLimitation: reportedParseLimitation }
             : {}),
           ...(parseLimitations.length > 0 ? { parseLimitations } : {})
         }
-      : (scanLimitation ??
+      : scanLimitation && lastDecodedHistoryPage !== undefined
+        ? {
+            kind: "evidence",
+            scanSkipped,
+            kills: [],
+            wipes: [],
+            tierBests: [],
+            parsedFightUrls: parsed,
+            troubledRaidIds: troubled,
+            limitation: scanLimitation,
+            historyScanResumePage: lastDecodedHistoryPage + 1,
+            ...(reportedParseLimitation
+              ? { parseLimitation: reportedParseLimitation }
+              : {}),
+            ...(parseLimitations.length > 0 ? { parseLimitations } : {})
+          }
+        : (scanLimitation ??
           reportedParseLimitation ?? {
             kind: "evidence",
             scanSkipped,
@@ -2131,7 +2168,10 @@ export function createWarcraftLogsClient(
             wipes: [],
             tierBests: [],
             parsedFightUrls: parsed,
-            troubledRaidIds: troubled
+            troubledRaidIds: troubled,
+            ...(scanLimitation && lastDecodedHistoryPage !== undefined
+              ? { historyScanResumePage: lastDecodedHistoryPage + 1 }
+              : {})
           });
   }
 

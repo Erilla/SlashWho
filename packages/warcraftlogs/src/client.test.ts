@@ -4234,6 +4234,57 @@ describe("Warcraft Logs gateway", () => {
     expect(fetch).toHaveBeenCalledTimes(4);
   });
 
+  it("continues a capped scan at its proved next page", async () => {
+    // Break caught: #394. A retry that starts at page one re-reads every
+    // newest report the cap already decoded and never reaches older history.
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0];
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        historyPages.push(body.variables.page ?? 0);
+      }
+      return jsonResponse(page);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 2,
+      parseRequestCap: 10,
+      historyScanStartPage: 19
+    });
+
+    expect(historyPages).toEqual([19, 20]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "request_cap" },
+      historyScanResumePage: 21
+    });
+  });
+
+  it("does not manufacture a resume page from an undecodable history response", async () => {
+    // Break caught: a malformed or refused page is not evidence of where the
+    // scan reached, so persisting a boundary for it can silently skip history.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse(fixture("schema-drift"))
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10,
+      historyScanStartPage: 19
+    });
+
+    expect(result).toEqual({ kind: "limitation", code: "schema_drift" });
+    expect(JSON.stringify(result)).not.toContain("schema-envelope-marker");
+  });
+
   it("retains collected kills if a later report page is malformed", async () => {
     const firstPage = (
       fixture("character-report-valid") as { pages: unknown[] }
