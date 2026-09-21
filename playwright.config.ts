@@ -1,9 +1,14 @@
 import { defineConfig, devices } from "playwright/test";
+import { reservePortPair } from "./tests/e2e/support/port-reservation";
 
-const webPort = Number(
-  process.env.SLASHWHO_E2E_WEB_PORT ?? 20_000 + (process.pid % 10_000)
-);
-const workerPort = webPort + 1;
+const configuredWebPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
+const configuredWorkerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
+const reservedPorts =
+  Number.isSafeInteger(configuredWebPort) &&
+  Number.isSafeInteger(configuredWorkerPort)
+    ? { webPort: configuredWebPort, workerPort: configuredWorkerPort }
+    : reservePortPair();
+const { webPort, workerPort } = reservedPorts;
 process.env.SLASHWHO_E2E_WEB_PORT = `${webPort}`;
 process.env.SLASHWHO_E2E_WORKER_PORT = `${workerPort}`;
 const webBaseUrl = `http://127.0.0.1:${webPort}`;

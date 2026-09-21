@@ -8,6 +8,7 @@ import process from "node:process";
 import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
+import { releasePortPair } from "./port-reservation";
 
 const webPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
 const workerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
@@ -72,19 +73,26 @@ async function waitForSuccessfulExit(
 
 async function waitForReady(
   url: string,
-  processHandle: ManagedProcess
+  processHandle: ManagedProcess,
+  readyOutput: string
 ): Promise<void> {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (processHandle.child.exitCode !== null) {
       throw new Error(`process_exited_before_ready\n${processHandle.output()}`);
     }
+    let response: Response | undefined;
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-      if (response.ok) return;
+      response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
     } catch {
       // Startup polling is intentionally quiet; the collected process output is
       // included if the readiness deadline expires.
+    }
+    if (response?.ok) {
+      // Do not accept a stale listener as our service. The spawned process
+      // must report that it successfully bound its own port before its
+      // endpoint can satisfy readiness.
+      if (processHandle.output().includes(readyOutput)) return;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -173,6 +181,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       startPnpm(["tsx", "tests/e2e/support/migrate.ts"], environment)
     );
 
+    await releasePortPair();
+
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
       ...environment,
       PORT: `${workerPort}`
@@ -192,8 +202,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     processes.push(worker, web);
 
     await Promise.all([
-      waitForReady(`${workerBaseUrl}/ready`, worker),
-      waitForReady(`${webBaseUrl}/ready`, web)
+      waitForReady(`${workerBaseUrl}/ready`, worker, '"event":"worker_ready"'),
+      waitForReady(`${webBaseUrl}/ready`, web, "Ready in")
     ]);
 
     return async () => {
@@ -206,7 +216,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ]);
     };
   } catch (error) {
-    await Promise.allSettled(processes.map(stopProcess));
+    await Promise.allSettled([
+      releasePortPair(),
+      ...processes.map(stopProcess)
+    ]);
     await Promise.allSettled([
       ...(fixture ? [fixture.close()] : []),
       ...(blizzard ? [blizzard.close()] : []),
