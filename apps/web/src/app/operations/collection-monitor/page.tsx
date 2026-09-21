@@ -191,6 +191,8 @@ export function CollectionMonitorView({
 }
 
 export default async function CollectionMonitorPage() {
+  // The page proxy applies renewal/expiry cookies to the navigation response.
+  // Recheck here before reading data; never trust a client-supplied principal.
   const { collectionMonitor, operatorAuth } = await getContainer();
   const authentication = await operatorAuth.authenticateOperator(
     new Request(
