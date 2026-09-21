@@ -141,6 +141,7 @@ interface CharacterMythicKillRow {
   fight_url: string;
   guild_name: string | null;
   guild_realm: string | null;
+  uploader: string | null;
   historic_world_rank: number | null;
   spec_name: string | null;
   spec_icon_url: string | null;
@@ -182,6 +183,9 @@ interface CharacterMythicWipeRow {
   attempted_at: Date;
   report_url: string;
   fight_url: string;
+  guild_name: string | null;
+  guild_realm: string | null;
+  uploader: string | null;
 }
 
 type Queryable = Pick<Pool | PoolClient, "query">;
@@ -190,7 +194,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 13;
+const CURRENT_EVIDENCE_VERSION = 14;
 
 /**
  * Per-domain collection versions, for evidence stored indefinitely.
@@ -438,6 +442,7 @@ function mapCharacterMythicKill(
       row.guild_name === null
         ? null
         : { name: row.guild_name, realm: row.guild_realm! },
+    ...(row.uploader === null ? {} : { uploader: row.uploader }),
     historicWorldRank: row.historic_world_rank,
     performance: {
       spec:
@@ -571,7 +576,12 @@ function mapCharacterMythicWipe(
     bossOrder: row.boss_order,
     attemptedAt: row.attempted_at.toISOString(),
     reportUrl: row.report_url,
-    fightUrl: row.fight_url
+    fightUrl: row.fight_url,
+    guild:
+      row.guild_name === null
+        ? null
+        : { name: row.guild_name, realm: row.guild_realm! },
+    ...(row.uploader === null ? {} : { uploader: row.uploader })
   };
 }
 
@@ -598,7 +608,7 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
+            guild_name, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -609,7 +619,7 @@ async function loadCompletedEvidence(
   );
   const wipesResult = await client.query<CharacterMythicWipeRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
-            boss_order, attempted_at, report_url, fight_url
+            boss_order, attempted_at, report_url, fight_url, guild_name, guild_realm, uploader
      FROM character_mythic_wipes
      WHERE evidence_run_id = $1
      ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
@@ -815,7 +825,7 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, historic_world_rank, spec_name, spec_icon_url,
+            guild_name, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
@@ -824,7 +834,7 @@ async function loadPositiveEvidenceForPartial(
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
               k.journal_boss_id, k.boss_order, k.is_final_boss, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_realm, k.historic_world_rank, k.spec_name, k.spec_icon_url,
+              k.guild_realm, k.uploader, k.historic_world_rank, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -839,12 +849,12 @@ async function loadPositiveEvidenceForPartial(
   );
   const wipes = await client.query<CharacterMythicWipeRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
-            boss_order, attempted_at, report_url, fight_url
+            boss_order, attempted_at, report_url, fight_url, guild_name, guild_realm, uploader
      FROM (
        SELECT DISTINCT ON (w.fight_url)
               w.id, w.raid_id, w.raid_name, w.boss_id, w.boss_name,
               w.journal_boss_id, w.boss_order, w.attempted_at, w.report_url,
-              w.fight_url
+              w.fight_url, w.guild_name, w.guild_realm, w.uploader
          FROM character_mythic_wipes w
          JOIN character_evidence_runs r ON r.id = w.evidence_run_id
         WHERE w.evidence_run_id = ANY($1::uuid[])
@@ -3099,11 +3109,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               `INSERT INTO character_mythic_kills
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
-                 report_url, fight_url, guild_name, guild_realm, historic_world_rank,
+                 report_url, fight_url, guild_name, guild_realm, uploader, historic_world_rank,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
               [
                 runId,
                 kill.fightUrl,
@@ -3119,6 +3129,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.fightUrl,
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
+                kill.uploader ?? null,
                 kill.historicWorldRank ?? null,
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
@@ -3179,8 +3190,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await client.query(
               `INSERT INTO character_mythic_wipes
                 (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
-                 journal_boss_id, boss_order, attempted_at, report_url, fight_url)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                 journal_boss_id, boss_order, attempted_at, report_url, fight_url,
+                 guild_name, guild_realm, uploader)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
               [
                 runId,
                 wipe.raidId,
@@ -3191,7 +3203,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 wipe.bossOrder,
                 wipe.attemptedAt,
                 wipe.reportUrl,
-                wipe.fightUrl
+                wipe.fightUrl,
+                wipe.guild?.name ?? null,
+                wipe.guild?.realm ?? null,
+                wipe.uploader ?? null
               ]
             );
           }

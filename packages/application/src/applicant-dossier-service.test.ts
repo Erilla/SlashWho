@@ -368,7 +368,12 @@ describe("applicant dossier service", () => {
       bossOrder: 5,
       attemptedAt: "2024-09-01T20:00:00.000Z",
       reportUrl: "https://www.warcraftlogs.com/reports/wipe",
-      fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5"
+      fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5",
+      guild: { name: "Example Guild", realm: "silvermoon" },
+      uploader: "Dorian"
+    } as StoredCharacterMythicWipe & {
+      guild: { name: string; realm: string };
+      uploader: string;
     };
     const complete = await fixture({
       includeCachedKills: false,
@@ -384,7 +389,11 @@ describe("applicant dossier service", () => {
       )
     ).toMatchObject({
       state: "wipe",
-      wipe: { characters: [root, alt] }
+      wipe: {
+        characters: [root, alt],
+        source: "guild_log",
+        uploader: "Dorian"
+      }
     });
     expect(nerubar.bosses.find((boss) => boss.bossOrder === 1)).toMatchObject({
       state: "no_logs"

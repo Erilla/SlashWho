@@ -46,6 +46,8 @@ export type DossierKillEvidence = Readonly<{
   }> | null;
   historicWorldRank: number | null;
   reportUrl: string | null;
+  /** Absent on evidence collected before Warcraft Logs exposed the owner. */
+  uploader?: string | null;
   performance: DossierKillPerformance;
 }>;
 /**
@@ -71,6 +73,9 @@ export type DossierWipeEvidence = Readonly<{
   character: CharacterKey;
   attemptedAt: string;
   reportUrl: string;
+  guild?: DossierKillEvidence["guild"];
+  /** Absent on evidence collected before Warcraft Logs exposed the owner. */
+  uploader?: string | null;
 }>;
 export type DossierLimitation = Readonly<{
   source: "raiderio" | "warcraft_logs" | "blizzard";
@@ -103,8 +108,14 @@ export type ApplicantDossierFirstKill = Readonly<{
   historicWorldRank: number | null;
   reportUrl: string | null;
   reportUrls: readonly string[];
+  reports: readonly ApplicantDossierReport[];
   characters: readonly CharacterKey[];
   parses: readonly ApplicantDossierCharacterParses[];
+}>;
+export type ApplicantDossierReport = Readonly<{
+  reportUrl: string;
+  source: "guild_log" | "personal_log";
+  uploader: string | null;
 }>;
 export type ApplicantDossierParseMetric =
   | Readonly<{
@@ -129,6 +140,8 @@ type ApplicantDossierBossMetadata = Readonly<{
 export type ApplicantDossierWipe = Readonly<{
   attemptedAt: string;
   reportUrl: string;
+  source: ApplicantDossierReport["source"];
+  uploader: string | null;
   characters: readonly CharacterKey[];
 }>;
 export type ApplicantDossierBoss =
@@ -206,6 +219,43 @@ function compareEvidence(
     (a.isFinalBoss === b.isFinalBoss ? 0 : a.isFinalBoss ? -1 : 1) ||
     text(canonicalCharacterId(a.character), canonicalCharacterId(b.character))
   );
+}
+
+function reportSource(evidence: {
+  guild?: DossierKillEvidence["guild"];
+}): ApplicantDossierReport["source"] {
+  return evidence.guild ? "guild_log" : "personal_log";
+}
+
+function compareReportEvidence(
+  a: DossierKillEvidence,
+  b: DossierKillEvidence
+): number {
+  return (
+    (reportSource(a) === reportSource(b)
+      ? 0
+      : reportSource(a) === "guild_log"
+        ? -1
+        : 1) ||
+    optionalText(a.reportUrl, b.reportUrl) ||
+    compareEvidence(a, b)
+  );
+}
+
+function reportsFor(
+  evidence: readonly DossierKillEvidence[]
+): readonly ApplicantDossierReport[] {
+  const unique = new Map<string, DossierKillEvidence>();
+  for (const kill of [...evidence].sort(compareReportEvidence)) {
+    if (kill.reportUrl !== null && !unique.has(kill.reportUrl)) {
+      unique.set(kill.reportUrl, kill);
+    }
+  }
+  return [...unique.values()].map((kill) => ({
+    reportUrl: kill.reportUrl!,
+    source: reportSource(kill),
+    uploader: kill.uploader ?? null
+  }));
 }
 function compareEventsLatestFirst(
   a: DossierKillEvidence,
@@ -544,9 +594,9 @@ export function buildApplicantDossier(
               : []
           )
         );
-        const reportUrls = [
-          ...new Set(shared.flatMap((k) => (k.reportUrl ? [k.reportUrl] : [])))
-        ].sort(text);
+        const reports = reportsFor(shared);
+        const reportUrls = reports.map((report) => report.reportUrl);
+        const preferredReport = reports[0];
         const ids = new Set(
           shared.map((kill) => canonicalCharacterId(kill.character))
         );
@@ -557,8 +607,9 @@ export function buildApplicantDossier(
             killedAt: selected.killedAt,
             guild: attributed ?? null,
             historicWorldRank: ranks.size === 1 ? [...ranks][0]! : null,
-            reportUrl: selected.reportUrl,
+            reportUrl: preferredReport?.reportUrl ?? selected.reportUrl,
             reportUrls,
+            reports,
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
               .map((c) => c.key),
@@ -629,6 +680,8 @@ export function buildApplicantDossier(
         return {
           attemptedAt: selected.attemptedAt,
           reportUrl: selected.reportUrl,
+          source: reportSource(selected),
+          uploader: selected.uploader ?? null,
           characters: input.characters
             .filter((character) => ids.has(canonicalCharacterId(character.key)))
             .map((character) => character.key)

@@ -122,9 +122,16 @@ for (const applicantUrl of applicantUrls) {
           )
       )
       .toEqual(["2025-01-13T21:31:40.000Z"]);
-    const reportLinks = evidence.getByRole("link", {
-      name: /View Warcraft Logs report/
+    const reportMenu = evidence.getByRole("button", {
+      name: "Choose from 2 kill reports"
     });
+    await expect(reportMenu).toHaveAccessibleDescription("2 reports found");
+    await reportMenu.click();
+    const reportLinks = page
+      .getByRole("list", { name: "Kill reports" })
+      .getByRole("link", {
+        name: /log uploaded by/
+      });
     await expect(reportLinks).toHaveCount(2);
     expect(
       await reportLinks.evaluateAll((links) =>
@@ -170,9 +177,14 @@ test("shows submitted-character evidence while queued discovery is held", async 
   ).toBeVisible({ timeout: 15_000 });
   await expect(initialDisclosure).not.toBeVisible();
   await evidence.getByText("View kill evidence").click();
-  const reportLinks = evidence.getByRole("link", {
-    name: /View Warcraft Logs report/
+  const reportMenu = evidence.getByRole("button", {
+    name: "Choose from 2 kill reports"
   });
+  await expect(reportMenu).toHaveAccessibleDescription("2 reports found");
+  await reportMenu.click();
+  const reportLinks = page
+    .getByRole("list", { name: "Kill reports" })
+    .getByRole("link", { name: /log uploaded by/ });
   await expect(reportLinks).toHaveCount(2);
   expect(
     await reportLinks.evaluateAll((links) =>

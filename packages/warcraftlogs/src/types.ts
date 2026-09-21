@@ -122,6 +122,8 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
     region: CharacterKey["region"];
     realm: string;
   }> | null;
+  /** The Warcraft Logs account that uploaded the report, when public. */
+  uploader?: string | null;
   historicWorldRank: number | null;
 }>;
 
@@ -152,6 +154,9 @@ export type WarcraftLogsWipeEvidence = Readonly<{
   attemptedAt: string;
   reportUrl: string;
   fightUrl: string;
+  guild?: WarcraftLogsFirstKillEvidence["guild"];
+  /** The Warcraft Logs account that uploaded the report, when public. */
+  uploader?: string | null;
 }>;
 
 export type WarcraftLogsReportResult =

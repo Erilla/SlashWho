@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import {
   buildApplicantDossier,
-  type DossierKillEvidence
+  type DossierKillEvidence,
+  type DossierWipeEvidence
 } from "./applicant-dossier";
 const character = { region: "eu", realm: "silvermoon", name: "rinn" } as const;
 const base: DossierKillEvidence = {
@@ -57,6 +58,94 @@ it("combines recorded Nekzali timestamps while retaining guild, rank and all rep
     })
   ]);
   expect(events([...kills].reverse())).toEqual(events(kills));
+});
+
+it("prefers a guild log and preserves the historic report URL order within each source", () => {
+  const kills = [
+    { ...base, uploader: "Ryiislogs" },
+    { ...second, uploader: "Dorian" },
+    { ...third, uploader: "Varod" }
+  ];
+
+  expect(events(kills)).toMatchObject([
+    {
+      reportUrl: second.reportUrl,
+      reports: [
+        {
+          reportUrl: second.reportUrl,
+          source: "guild_log",
+          uploader: "Dorian"
+        },
+        {
+          reportUrl: third.reportUrl,
+          source: "personal_log",
+          uploader: "Varod"
+        },
+        {
+          reportUrl: base.reportUrl,
+          source: "personal_log",
+          uploader: "Ryiislogs"
+        }
+      ]
+    }
+  ]);
+});
+
+it("preserves wipe report source and uploader for the report menu", () => {
+  const wipes = [
+    {
+      raidId: base.raidId,
+      raidName: base.raidName,
+      bossId: base.bossId,
+      bossName: base.bossName,
+      journalBossId: base.journalBossId,
+      bossOrder: base.bossOrder,
+      character,
+      attemptedAt: "2026-08-23T20:50:12.607Z",
+      reportUrl: base.reportUrl!,
+      guild: null,
+      uploader: "Ryiislogs"
+    },
+    {
+      raidId: second.raidId,
+      raidName: second.raidName,
+      bossId: second.bossId,
+      bossName: second.bossName,
+      journalBossId: second.journalBossId,
+      bossOrder: second.bossOrder,
+      character,
+      attemptedAt: "2026-08-23T20:50:13.386Z",
+      reportUrl: second.reportUrl!,
+      guild: second.guild,
+      uploader: "Dorian"
+    }
+  ] as (DossierWipeEvidence & {
+    guild: DossierKillEvidence["guild"];
+    uploader: string;
+  })[];
+
+  const raid = buildApplicantDossier({
+    root: character,
+    characters: [{ key: character, displayName: "Rinn" }],
+    kills: [],
+    wipes,
+    limitations: []
+  }).raids.find((entry) => entry.raidId === base.raidId)!;
+  const boss = raid.bosses.find((entry) => entry.bossId === base.bossId)!;
+  if (boss.state !== "wipe") throw new Error("expected_wipe");
+
+  expect(boss.wipes).toMatchObject([
+    {
+      reportUrl: second.reportUrl,
+      source: "guild_log",
+      uploader: "Dorian"
+    },
+    {
+      reportUrl: base.reportUrl,
+      source: "personal_log",
+      uploader: "Ryiislogs"
+    }
+  ]);
 });
 it("groups the full UTC date and starts a new event at midnight", () => {
   const kills = [

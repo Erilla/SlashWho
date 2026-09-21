@@ -292,6 +292,8 @@ export interface CharacterMythicKillInput {
   reportUrl: string;
   fightUrl: string;
   guild: { name: string; realm: string } | null;
+  /** Absent on evidence collected before Warcraft Logs exposed report owners. */
+  uploader?: string | null;
   historicWorldRank?: number | null;
   performance: CharacterMythicKillPerformance;
 }
@@ -335,6 +337,10 @@ export interface CharacterMythicWipeInput {
   attemptedAt: string;
   reportUrl: string;
   fightUrl: string;
+  /** Absent on evidence collected before report provenance was stored. */
+  guild?: { name: string; realm: string } | null;
+  /** Absent on evidence collected before Warcraft Logs exposed report owners. */
+  uploader?: string | null;
 }
 
 export interface StoredCharacterMythicWipe extends CharacterMythicWipeInput {
