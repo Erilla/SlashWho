@@ -111,12 +111,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
-      NODE_ENV: "development",
+      NODE_ENV: "test",
       DATABASE_URL: databaseUrl,
       BOT_API_KEY: "e2e-bot-key-that-is-longer-than-32-characters",
       RATE_LIMIT_HASH_SECRET:
         "e2e-rate-secret-that-is-longer-than-32-characters",
-      OPERATOR_ORIGIN: "https://operators.e2e.invalid",
+      OPERATOR_ORIGIN: webBaseUrl,
       OPERATOR_SESSION_HASH_SECRET:
         "e2e-operator-session-secret-that-is-longer-than-32-characters",
       ANONYMOUS_SEARCHES_PER_HOUR: "1000",

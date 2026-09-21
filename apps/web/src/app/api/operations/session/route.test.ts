@@ -147,4 +147,16 @@ describe("POST /api/operations/session", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(await response.text()).not.toContain(operatorCredential);
   });
+
+  it("rejects a valid automation bearer key before browser sign-in", async () => {
+    const response = await POST(
+      operatorMutation(
+        { login: operatorLogin, credential: operatorCredential },
+        { authorization: `Bearer ${fixture.config.BOT_API_KEY}` }
+      )
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(fixture.repository.issueSession).not.toHaveBeenCalled();
+  });
 });

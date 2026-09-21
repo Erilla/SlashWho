@@ -36,10 +36,23 @@ function optionalSecret(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
 }
 
-function operatorOrigin(value: string | undefined): string {
+function operatorOrigin(
+  value: string | undefined,
+  nodeEnvironment: string | undefined
+): string {
   try {
     const url = new URL(value ?? "");
     if (url.protocol === "https:" && url.origin === value) return value;
+    // E2E uses a dynamically allocated loopback HTTP port. This exception is
+    // deliberately unavailable outside Node's test runtime; production still
+    // accepts an exact HTTPS origin only, keeping Secure/__Host cookie policy.
+    if (
+      nodeEnvironment === "test" &&
+      url.protocol === "http:" &&
+      url.hostname === "127.0.0.1" &&
+      url.origin === value
+    )
+      return value;
   } catch {
     /* Report only the authored code, never configuration values. */
   }
@@ -85,7 +98,7 @@ export function loadWebConfig(
     databaseUrl: parseDatabaseUrl(environment.DATABASE_URL),
     application,
     operatorAuth: {
-      origin: operatorOrigin(environment.OPERATOR_ORIGIN),
+      origin: operatorOrigin(environment.OPERATOR_ORIGIN, environment.NODE_ENV),
       sessionHashSecret: operatorSessionSecret(
         environment.OPERATOR_SESSION_HASH_SECRET
       )

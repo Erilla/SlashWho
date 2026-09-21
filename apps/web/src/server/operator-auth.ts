@@ -309,10 +309,8 @@ export function createOperatorAuth(options: {
 
   async function signIn(request: Request): Promise<OperatorAuthentication> {
     const at = now();
-    if (
-      request.headers.has("authorization") &&
-      !(await authenticateOperator(request)).principal
-    ) {
+    // Browser credential exchange must never accept the automation bearer key.
+    if (request.headers.has("authorization")) {
       await audit(null, "sign_in", "failure", at);
       return { principal: null };
     }

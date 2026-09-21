@@ -44,6 +44,23 @@ it.each([
   );
 });
 
+it("accepts only the dynamic loopback HTTP origin under the test runtime", () => {
+  expect(
+    loadWebConfig({
+      ...validEnv,
+      NODE_ENV: "test",
+      OPERATOR_ORIGIN: "http://127.0.0.1:41053"
+    }).operatorAuth.origin
+  ).toBe("http://127.0.0.1:41053");
+  expect(() =>
+    loadWebConfig({
+      ...validEnv,
+      NODE_ENV: "development",
+      OPERATOR_ORIGIN: "http://127.0.0.1:41053"
+    })
+  ).toThrow("invalid_operator_origin");
+});
+
 it.each([undefined, "", "s".repeat(31), " ".repeat(32)])(
   "requires a strong dedicated operator session secret",
   (secret) => {
