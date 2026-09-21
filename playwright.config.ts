@@ -1,6 +1,12 @@
 import { defineConfig, devices } from "playwright/test";
 
-const webBaseUrl = "http://127.0.0.1:3100";
+const webPort = Number(
+  process.env.SLASHWHO_E2E_WEB_PORT ?? 20_000 + (process.pid % 10_000)
+);
+const workerPort = webPort + 1;
+process.env.SLASHWHO_E2E_WEB_PORT = `${webPort}`;
+process.env.SLASHWHO_E2E_WORKER_PORT = `${workerPort}`;
+const webBaseUrl = `http://127.0.0.1:${webPort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",

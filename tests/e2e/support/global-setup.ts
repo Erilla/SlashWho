@@ -9,8 +9,13 @@ import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
 
-const webBaseUrl = "http://127.0.0.1:3100";
-const workerBaseUrl = "http://127.0.0.1:3101";
+const webPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
+const workerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
+if (!Number.isSafeInteger(webPort) || !Number.isSafeInteger(workerPort)) {
+  throw new Error("e2e_port_unavailable");
+}
+const webBaseUrl = `http://127.0.0.1:${webPort}`;
+const workerBaseUrl = `http://127.0.0.1:${workerPort}`;
 
 type ManagedProcess = Readonly<{
   child: ChildProcess;
@@ -40,6 +45,29 @@ function startPnpm(
   child.stdout?.on("data", collect);
   child.stderr?.on("data", collect);
   return { child, output: () => output };
+}
+
+async function waitForSuccessfulExit(
+  processHandle: ManagedProcess
+): Promise<void> {
+  if (processHandle.child.exitCode !== null) {
+    if (processHandle.child.exitCode === 0) return;
+    throw new Error(
+      `process_exited_with_code:${processHandle.child.exitCode}\n${processHandle.output()}`
+    );
+  }
+  await new Promise<void>((resolve, reject) => {
+    processHandle.child.once("error", reject);
+    processHandle.child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `process_exited_with_code:${code ?? "signal"}\n${processHandle.output()}`
+          )
+        );
+    });
+  });
 }
 
 async function waitForReady(
@@ -138,9 +166,16 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
     };
 
+    // Browser-test seeds access PostgreSQL directly. Establish the schema
+    // before either server becomes ready, rather than relying on their startup
+    // migrations to win the race with the first seed.
+    await waitForSuccessfulExit(
+      startPnpm(["tsx", "tests/e2e/support/migrate.ts"], environment)
+    );
+
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
       ...environment,
-      PORT: "3101"
+      PORT: `${workerPort}`
     });
     const web = startPnpm(
       [
@@ -150,7 +185,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         "--hostname",
         "127.0.0.1",
         "--port",
-        "3100"
+        `${webPort}`
       ],
       environment
     );
