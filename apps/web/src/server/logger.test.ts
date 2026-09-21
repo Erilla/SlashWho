@@ -27,6 +27,8 @@ const expectedPerformanceFields = [
   "raiderIoRankingsMs",
   "raiderIoRankingsCalls",
   "raiderIoRankingsMaxCallMs",
+  "raiderIoRankingLogicalKeys",
+  "raiderIoRankingPhysicalCalls",
   "raiderIoCharacterMs",
   "raiderIoCharacterCalls",
   "raiderIoCharacterMaxCallMs",

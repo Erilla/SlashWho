@@ -700,6 +700,7 @@ async function enrichHistoricRanks(options: {
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   concurrency: ReturnType<typeof createConcurrencyLimiter>;
   signal: AbortSignal;
+  scope?: MeasurementScope;
 }): Promise<{
   kills: readonly DossierKillEvidence[];
   limitations: readonly DossierLimitation[];
@@ -712,6 +713,11 @@ async function enrichHistoricRanks(options: {
     const boss = guildRankingRequest(kill);
     if (boss) requests.set(rankingKey(boss), boss);
   }
+  // A logical key is one guild/raid confirmation that the dossier needs,
+  // irrespective of whether its normalized result is a cache hit or a miss.
+  // It is deliberately a count only: the identity belongs in neither request
+  // telemetry nor logs.
+  options.scope?.increment("raiderIoRankingLogicalKeys", requests.size);
   await Promise.all(
     [...requests.entries()].map(async ([key, boss]) => {
       const result = await options.concurrency.run(() =>
@@ -771,6 +777,7 @@ async function assembleDossier(options: {
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   concurrency: ReturnType<typeof createConcurrencyLimiter>;
+  scope?: MeasurementScope;
 
   freshnessCutoff: Date;
   signal: AbortSignal;
@@ -807,7 +814,8 @@ async function assembleDossier(options: {
     kills: evidence.flatMap((item) => item.kills),
     raiderio: options.raiderio,
     concurrency: options.concurrency,
-    signal: options.signal
+    signal: options.signal,
+    scope: options.scope
   });
   const dossier = buildApplicantDossier({
     root: options.root,
@@ -1029,6 +1037,11 @@ export function createApplicantDossierService(options: {
         const load = async () => {
           const run = async () =>
             source.getMythicBossRankings(boss, AbortSignal.timeout(15_000));
+          // Guild confirmation expands into the rank table and encounter
+          // profile reads in the Raider.IO client; ordinary boss rankings are
+          // one physical read. Count at the only seam that dispatches either
+          // operation, after a cache miss and without recording its key.
+          scope?.increment("raiderIoRankingPhysicalCalls", boss.guild ? 2 : 1);
           const response = scope
             ? await scope.time("raiderIoRankings", run)
             : await run();
@@ -1149,6 +1162,7 @@ export function createApplicantDossierService(options: {
         queue: options.queue,
         ...gatewaysFor(overrides, scope),
         concurrency: scopedConcurrency(scope),
+        scope,
         freshnessCutoff: new Date(
           Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
         ),
@@ -1419,6 +1433,7 @@ export function createApplicantDossierService(options: {
           queue: options.queue,
           ...gatewaysFor(overrides, scope),
           concurrency: scopedConcurrency(scope),
+          scope,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),

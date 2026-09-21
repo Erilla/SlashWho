@@ -1297,7 +1297,8 @@ describe("applicant dossier service", () => {
         }))
       })
     );
-    const result = await dossiers.read(root);
+    const scope = createMeasurementScope();
+    const result = await dossiers.read(root, undefined, undefined, scope);
     expect(result.kind).toBe("ready");
     if (result.kind !== "ready") throw new Error("Expected dossier");
     expect(
@@ -1307,6 +1308,10 @@ describe("applicant dossier service", () => {
         .map((boss) => boss.firstKill.historicWorldRank)
         .sort()
     ).toEqual([371, 412, 741]);
+    expect(scope.totals()).toMatchObject({
+      raiderIoRankingLogicalKeys: 2,
+      raiderIoRankingPhysicalCalls: 4
+    });
     await dossiers.read(root);
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
   });

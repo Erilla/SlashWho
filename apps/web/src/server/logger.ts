@@ -19,6 +19,8 @@ const allowlist = new Set([
   "raiderIoRankingsMs",
   "raiderIoRankingsCalls",
   "raiderIoRankingsMaxCallMs",
+  "raiderIoRankingLogicalKeys",
+  "raiderIoRankingPhysicalCalls",
   "raiderIoCharacterMs",
   "raiderIoCharacterCalls",
   "raiderIoCharacterMaxCallMs",
