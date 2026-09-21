@@ -26,6 +26,7 @@ const options = {
 
 it("loads guild boss world ranks beyond 50 and excludes undefeated attempts", async () => {
   const urls: URL[] = [];
+  let physicalCalls = 0;
   const client = createRaiderIoClient({
     baseUrl: "https://raider.io",
     timeoutMs: 1000,
@@ -37,7 +38,15 @@ it("loads guild boss world ranks beyond 50 and excludes undefeated attempts", as
       );
     }
   });
-  expect(await client.getMythicBossRankings(options)).toEqual({
+  expect(
+    await (
+      client.getMythicBossRankings as unknown as (
+        rankingOptions: typeof options,
+        signal: AbortSignal | undefined,
+        onPhysicalRequest: () => void
+      ) => ReturnType<typeof client.getMythicBossRankings>
+    )(options, undefined, () => physicalCalls++)
+  ).toEqual({
     kind: "rankings",
     rows: [
       {
@@ -67,6 +76,9 @@ it("loads guild boss world ranks beyond 50 and excludes undefeated attempts", as
       .find((url) => url.pathname.endsWith("profile"))
       ?.searchParams.get("fields")
   ).toBe("raid_encounters:the-venomous-abyss:mythic");
+  // Break caught: reporting from the application wrapper can infer the two
+  // reads without proving that the client actually sent them.
+  expect(physicalCalls).toBe(2);
 });
 
 it("preserves schema drift as a limitation", async () => {

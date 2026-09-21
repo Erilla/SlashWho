@@ -19,6 +19,7 @@ import type {
   MythicBossRanking,
   MythicBossRankingsOptions,
   MythicBossRankingsResult,
+  RaiderIoPhysicalRequestObserver,
   RaiderIoGateway,
   RaiderIoProfile
 } from "./types";
@@ -146,6 +147,16 @@ function reportThrottle(
     onThrottle?.({ retryAfterMs });
   } catch {
     // Intentionally ignored; see above.
+  }
+}
+
+function reportPhysicalRequest(
+  observer: RaiderIoPhysicalRequestObserver | undefined
+): void {
+  try {
+    observer?.();
+  } catch {
+    // Measurement cannot change an upstream result.
   }
 }
 
@@ -309,7 +320,8 @@ export function createRaiderIoClient(
   async function request<T>(
     url: URL,
     normalize: (value: unknown) => T,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
   ): Promise<T> {
     if (options.accessKey && url.pathname.startsWith("/api/v1/"))
       url.searchParams.set("access_key", options.accessKey);
@@ -319,6 +331,7 @@ export function createRaiderIoClient(
       : timeoutSignal;
     let response: Response;
     try {
+      reportPhysicalRequest(onPhysicalRequest);
       response = await options.fetch(url, {
         headers: {
           Accept: "application/json",
@@ -493,7 +506,8 @@ export function createRaiderIoClient(
 
   async function getMythicBossRankings(
     rankingOptions: MythicBossRankingsOptions,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
   ): Promise<MythicBossRankingsResult> {
     const raidSlug = rankingOptions.raidSlug;
     const bossSlug = rankingOptions.bossSlug;
@@ -525,12 +539,14 @@ export function createRaiderIoClient(
           request(
             ranksUrl,
             (value) => guildBossRanksSchema.parse(value),
-            signal
+            signal,
+            onPhysicalRequest
           ),
           request(
             profileUrl,
             (value) => guildEncountersSchema.parse(value),
-            signal
+            signal,
+            onPhysicalRequest
           )
         ]);
         // The website also ranks unfinished attempts. A matching confirmed
@@ -571,7 +587,8 @@ export function createRaiderIoClient(
       const rows = await request(
         url,
         (value) => normalizeBossRankings(value, bossSlug),
-        signal
+        signal,
+        onPhysicalRequest
       );
       return { kind: "rankings", rows };
     } catch (error) {

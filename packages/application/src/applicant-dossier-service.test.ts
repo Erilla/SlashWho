@@ -1280,22 +1280,26 @@ describe("applicant dossier service", () => {
       ]
     });
     vi.mocked(raiderio.getMythicBossRankings).mockImplementation(
-      async (request) => ({
-        kind: "rankings",
-        rows: (request.guild?.name === "Other Guild"
-          ? [{ bossSlug: "ulgrax-the-devourer", rank: 741 }]
-          : [
-              { bossSlug: "queen-ansurek", rank: 371 },
-              { bossSlug: "the-silken-court", rank: 412 }
-            ]
-        ).map((row) => ({
-          ...row,
-          guildName: request.guild!.name,
-          guildRealm: "silvermoon",
-          guildRegion: "eu",
-          firstDefeated: "2024-10-01T20:00:00.000Z"
-        }))
-      })
+      async (request, _signal, onPhysicalRequest) => {
+        onPhysicalRequest?.();
+        onPhysicalRequest?.();
+        return {
+          kind: "rankings",
+          rows: (request.guild?.name === "Other Guild"
+            ? [{ bossSlug: "ulgrax-the-devourer", rank: 741 }]
+            : [
+                { bossSlug: "queen-ansurek", rank: 371 },
+                { bossSlug: "the-silken-court", rank: 412 }
+              ]
+          ).map((row) => ({
+            ...row,
+            guildName: request.guild!.name,
+            guildRealm: "silvermoon",
+            guildRegion: "eu",
+            firstDefeated: "2024-10-01T20:00:00.000Z"
+          }))
+        };
+      }
     );
     const scope = createMeasurementScope();
     const result = await dossiers.read(root, undefined, undefined, scope);
@@ -1350,7 +1354,8 @@ describe("applicant dossier service", () => {
         bossSlug: "queen-ansurek",
         guild: { name: "Example Guild", realm: "silvermoon", region: "eu" }
       },
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      expect.any(Function)
     );
   });
 

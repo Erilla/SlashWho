@@ -1036,12 +1036,11 @@ export function createApplicantDossierService(options: {
         signal?.throwIfAborted();
         const load = async () => {
           const run = async () =>
-            source.getMythicBossRankings(boss, AbortSignal.timeout(15_000));
-          // Guild confirmation expands into the rank table and encounter
-          // profile reads in the Raider.IO client; ordinary boss rankings are
-          // one physical read. Count at the only seam that dispatches either
-          // operation, after a cache miss and without recording its key.
-          scope?.increment("raiderIoRankingPhysicalCalls", boss.guild ? 2 : 1);
+            source.getMythicBossRankings(
+              boss,
+              AbortSignal.timeout(15_000),
+              () => scope?.increment("raiderIoRankingPhysicalCalls")
+            );
           const response = scope
             ? await scope.time("raiderIoRankings", run)
             : await run();
