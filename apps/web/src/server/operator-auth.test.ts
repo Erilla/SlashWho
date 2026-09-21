@@ -222,8 +222,17 @@ describe("operator authentication", () => {
         },
         body
       });
-      await expect(f.auth.signIn(request)).resolves.toMatchObject({
+      const signOutRequest = new Request(request.url, {
+        method: "POST",
+        headers: request.headers,
+        body
+      });
+      await expect(f.auth.signIn(request)).resolves.toEqual({
         principal: null
+      });
+      await expect(f.auth.signOut(signOutRequest)).resolves.toEqual({
+        principal: null,
+        accepted: false
       });
     }
     expect(f.repository.findCredential).not.toHaveBeenCalled();
@@ -258,7 +267,7 @@ describe("operator authentication", () => {
       f.auth.signIn(
         mutation(undefined, { cookie, authorization: "Bearer invalid" })
       )
-    ).resolves.toMatchObject({ principal: null });
+    ).resolves.toEqual({ principal: null });
     expect(f.repository.issueSession).not.toHaveBeenCalled();
     expect(f.repository.revokeSession).not.toHaveBeenCalled();
   });
@@ -270,7 +279,7 @@ describe("operator authentication", () => {
     )[0]!;
     await expect(
       f.auth.signOut(mutation({}, { cookie, origin: "https://evil.test" }))
-    ).resolves.toMatchObject({ accepted: false });
+    ).resolves.toEqual({ principal: null, accepted: false });
     await expect(
       f.auth.authenticateOperator(f.request(cookie))
     ).resolves.toMatchObject({ principal: { kind: "operator" } });
@@ -345,7 +354,7 @@ describe("operator authentication", () => {
       retryAt: initialTime
     });
     const throttled = await f.auth.signIn(mutation());
-    expect(unknown).toMatchObject({ principal: null, cookie: { maxAge: 0 } });
+    expect(unknown).toEqual({ principal: null });
     expect(wrong).toEqual(unknown);
     expect(disabled).toEqual(unknown);
     expect(throttled).toEqual(unknown);
@@ -373,10 +382,10 @@ describe("operator authentication", () => {
       const f = await fixture();
       await expect(
         f.auth.signIn(mutation(undefined, headers, method))
-      ).resolves.toMatchObject({ principal: null });
+      ).resolves.toEqual({ principal: null });
       await expect(
         f.auth.signOut(mutation({}, headers, method))
-      ).resolves.toMatchObject({ principal: null });
+      ).resolves.toEqual({ principal: null, accepted: false });
       expect(f.repository.issueSession).not.toHaveBeenCalled();
       expect(f.repository.revokeSession).not.toHaveBeenCalled();
     }

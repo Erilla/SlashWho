@@ -46,11 +46,10 @@ export type OperatorAuthentication = Readonly<{
   principal: OperatorPrincipal | null;
   cookie?: CookieDirective;
 }>;
-export type OperatorSignOut = Readonly<{
-  accepted: boolean;
-  principal: null;
-  cookie: CookieDirective;
-}>;
+export type OperatorSignOut = Readonly<
+  | { accepted: false; principal: null; cookie?: never }
+  | { accepted: true; principal: null; cookie: CookieDirective }
+>;
 export type OperatorAuth = ReturnType<typeof createOperatorAuth>;
 
 export function canonicalizeOperatorLogin(login: string): string | null {
@@ -240,7 +239,7 @@ export function createOperatorAuth(options: {
       .update("operator-session\0")
       .update(secret)
       .digest("hex");
-  const deny = () =>
+  const expireSession = () =>
     ({
       principal: null,
       cookie: clearCookie()
@@ -301,7 +300,7 @@ export function createOperatorAuth(options: {
     }
     const at = now();
     const { cookie, used } = await useCookie(request, at);
-    if (!used) return cookie.present ? deny() : { principal: null };
+    if (!used) return cookie.present ? expireSession() : { principal: null };
     return {
       principal: principal(used.operator),
       cookie: renewal(cookie.token!, used.session, at)
@@ -315,7 +314,7 @@ export function createOperatorAuth(options: {
       !(await authenticateOperator(request)).principal
     ) {
       await audit(null, "sign_in", "failure", at);
-      return deny();
+      return { principal: null };
     }
     const body = await mutationBody(request, options.origin);
     const login =
@@ -329,7 +328,7 @@ export function createOperatorAuth(options: {
       body.credential.length > 1024
     ) {
       await audit(null, "sign_in", "failure", at);
-      return deny();
+      return { principal: null };
     }
     const ip = request.headers.get("x-real-ip")?.trim();
     const trustedIp = ip && isIP(ip) !== 0 ? ip : null;
@@ -348,12 +347,12 @@ export function createOperatorAuth(options: {
     });
     if (admission.kind === "throttled") {
       await audit(null, "sign_in", "failure", at);
-      return deny();
+      return { principal: null };
     }
     const stored = await repository.findCredential(login);
     if (!(await verifyCredential(body.credential, stored))) {
       await audit(stored?.id ?? null, "sign_in", "failure", at);
-      return deny();
+      return { principal: null };
     }
     const prior = await useCookie(request, at);
     if (prior.used) {
@@ -386,17 +385,17 @@ export function createOperatorAuth(options: {
   async function signOut(request: Request): Promise<OperatorSignOut> {
     const at = now();
     if (!(await mutationBody(request, options.origin)))
-      return { ...deny(), accepted: false };
+      return { principal: null, accepted: false };
     // Authorization precedence also applies to session mutations: a malformed
     // Bearer value must not cause a cookie-authenticated revocation.
     if (request.headers.has("authorization"))
-      return { ...deny(), accepted: false };
+      return { principal: null, accepted: false };
     const { used } = await useCookie(request, at);
     if (used) {
       await repository.revokeSession(used.session.id, at);
       await audit(used.operator.id, "sign_out", "success", at);
     }
-    return { ...deny(), accepted: true };
+    return { ...expireSession(), accepted: true };
   }
 
   return { authenticateOperator, signIn, signOut };
