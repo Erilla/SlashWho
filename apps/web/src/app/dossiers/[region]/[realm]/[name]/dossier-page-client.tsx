@@ -17,6 +17,10 @@ import {
   readStoredCredentials
 } from "../../../../../lib/api-credentials";
 import { dossierTitle } from "../../../../../lib/dossier-title";
+import {
+  type PollReadResult,
+  useAuthoritativePoll
+} from "../../../../../lib/use-authoritative-poll";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
   DossierCharacterName,
@@ -42,6 +46,42 @@ type DossierPageClientProps = Readonly<{
 const activeJobStates = new Set(["queued", "running", "retrying"]);
 const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
 
+function hasLiveEvidence(value: ApplicantDossier | null): boolean {
+  return (
+    value?.characters.some(
+      (character) =>
+        !character.excluded &&
+        (character.evidenceState === "waiting" ||
+          character.evidenceState === "scanning" ||
+          character.evidenceState === "partial")
+    ) ?? false
+  );
+}
+
+function retryAfterMilliseconds(response: Response): number | undefined {
+  const retryAfter = response.headers.get("retry-after");
+  if (!retryAfter) return undefined;
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const retryAt = Date.parse(retryAfter);
+  return Number.isFinite(retryAt)
+    ? Math.max(0, retryAt - Date.now())
+    : undefined;
+}
+
+function evidencePublication(value: ApplicantDossier | null) {
+  const characters =
+    value?.characters.filter((character) => !character.excluded) ?? [];
+  if (characters.some((character) => character.evidenceState === "partial"))
+    return "partial";
+  if (
+    characters.length > 0 &&
+    characters.every((character) => character.evidenceState === "complete")
+  )
+    return "complete";
+  return null;
+}
+
 function apiError(response: Response, body: unknown): string {
   const parsed = safeApiErrorSchema.safeParse(body);
   if (parsed.success && parsed.data.error.code === "character_not_found") {
@@ -55,7 +95,17 @@ function apiError(response: Response, body: unknown): string {
     : "The dossier could not be loaded.";
 }
 
-export function DossierPageClient({
+export function DossierPageClient(props: DossierPageClientProps) {
+  const { identity } = props;
+  return (
+    <DossierPageState
+      key={`${identity.region}/${identity.realm}/${identity.name}`}
+      {...props}
+    />
+  );
+}
+
+function DossierPageState({
   identity,
   initialDossier,
   jobId,
@@ -66,6 +116,13 @@ export function DossierPageClient({
   const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const [pollUnavailable, setPollUnavailable] = useState(false);
+  const [pollStopped, setPollStopped] = useState(false);
+  const terminalPollError = useRef(
+    "The dossier returned an unexpected response."
+  );
+  const previousPublication = useRef(evidencePublication(initialDossier));
   const [researchFailed, setResearchFailed] = useState(false);
   const [identityHidden, setIdentityHidden] = useState(false);
   const [identitySlot, setIdentitySlot] = useState<HTMLElement | null>(null);
@@ -78,6 +135,16 @@ export function DossierPageClient({
         : "Loading applicant dossier…"
   );
   const hasExpandedDossier = useRef(false);
+  const requestSequence = useRef(0);
+  const appliedSequence = useRef(0);
+
+  useEffect(() => {
+    const publication = evidencePublication(dossier);
+    if (publication && publication !== previousPublication.current) {
+      setAnnouncement(`Evidence collection ${publication}`);
+    }
+    previousPublication.current = publication;
+  }, [dossier]);
   const dossierPath = useMemo(
     () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
     [identity]
@@ -86,15 +153,23 @@ export function DossierPageClient({
   // A manually connected character changes the dossier immediately, so read it
   // back rather than reloading the page and discarding the polls in flight.
   const refreshDossier = useCallback(async () => {
-    const response = await fetch(dossierPath, { cache: "no-store" });
+    const sequence = ++requestSequence.current;
+    const response = await fetch(dossierPath, {
+      cache: "no-store",
+      headers: credentialHeaders(readStoredCredentials())
+    });
     if (!response.ok) return;
     const body: unknown = await response.json().catch(() => null);
+    if (sequence < appliedSequence.current) return;
     const parsed = applicantDossierSchema.safeParse(body);
     if (!parsed.success) return;
+    appliedSequence.current = sequence;
     hasExpandedDossier.current = true;
     setDossier(parsed.data);
     setInitialError(null);
     setError(null);
+    setPollUnavailable(false);
+    setPollStopped(false);
   }, [dossierPath]);
 
   useEffect(() => {
@@ -146,13 +221,15 @@ export function DossierPageClient({
     }
 
     async function readCompletedDossier() {
+      const sequence = ++requestSequence.current;
       const response = await fetch(dossierPath, {
         cache: "no-store",
         signal: controller.signal,
         headers: credentialHeaders(readStoredCredentials())
       });
       const body = await readJson(response);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || sequence < appliedSequence.current)
+        return;
       if (!response.ok) {
         setError(apiError(response, body));
         setStatus(null);
@@ -162,6 +239,7 @@ export function DossierPageClient({
       if (!parsed.success) {
         setError("The dossier returned an unexpected response.");
       } else {
+        appliedSequence.current = sequence;
         hasExpandedDossier.current = true;
         setDossier(parsed.data);
         setInitialError(null);
@@ -292,11 +370,15 @@ export function DossierPageClient({
     }
 
     async function readExpandedDossier() {
+      const sequence = ++requestSequence.current;
       const response = await fetch(dossierPath, {
         cache: "no-store",
-        signal: controller.signal
+        signal: controller.signal,
+        headers: credentialHeaders(readStoredCredentials())
       });
       const body = await readJson(response);
+      if (controller.signal.aborted || sequence < appliedSequence.current)
+        return;
       if (!response.ok) {
         if (response.status === 409) {
           setStatus("Researching applicant dossier…");
@@ -311,6 +393,7 @@ export function DossierPageClient({
       if (!parsed.success) {
         setError("The dossier returned an unexpected response.");
       } else {
+        appliedSequence.current = sequence;
         hasExpandedDossier.current = true;
         setDossier(parsed.data);
         setInitialError(null);
@@ -326,6 +409,7 @@ export function DossierPageClient({
           signal: controller.signal
         });
         const body = await readJson(response);
+        if (controller.signal.aborted) return;
         if (!response.ok) {
           setError(apiError(response, body));
           setStatus(null);
@@ -368,64 +452,81 @@ export function DossierPageClient({
     };
   }, [activeJobId, dossierPath]);
 
-  useEffect(() => {
-    // The read-only demo never has live evidence to catch up on, and its
-    // frozen dossier is never re-fetchable, so it must never poll.
-    if (!canAddCharacters) return;
-    if (dossier?.research.state !== "gathering") return;
-
-    const controller = new AbortController();
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
-    let attempt = 0;
-
-    function schedulePoll() {
-      const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
-      attempt += 1;
-      timeout = setTimeout(() => void pollEvidence(), delay);
-    }
-
-    async function pollEvidence() {
+  const readDossierPoll = useCallback(
+    async (
+      signal: AbortSignal
+    ): Promise<
+      PollReadResult<{ dossier: ApplicantDossier; sequence: number }>
+    > => {
+      const sequence = ++requestSequence.current;
+      let response: Response;
       try {
-        const response = await fetch(dossierPath, {
+        response = await fetch(dossierPath, {
           cache: "no-store",
-          signal: controller.signal
+          signal,
+          headers: credentialHeaders(readStoredCredentials())
         });
-        const body = await response.json().catch(() => null);
-        if (!response.ok) {
-          if (response.status === 429 || response.status >= 500) {
-            schedulePoll();
-            return;
-          }
-          setError(apiError(response, body));
-          return;
-        }
-        const parsed = applicantDossierSchema.safeParse(body);
-        if (!parsed.success) {
-          setError("The dossier returned an unexpected response.");
-          return;
-        }
-        setDossier(parsed.data);
-        setInitialError(null);
-        setError(null);
-        if (parsed.data.research.state !== "gathering") return;
-        schedulePoll();
       } catch (caught) {
-        if (caught instanceof Error && caught.name === "AbortError") return;
-        if (!stopped) {
-          schedulePoll();
-        }
+        if (!signal.aborted && sequence >= appliedSequence.current)
+          setPollUnavailable(true);
+        throw caught;
       }
-    }
+      if (signal.aborted || sequence < appliedSequence.current)
+        return { kind: "retry" };
+      if (!response.ok) {
+        setPollUnavailable(true);
+        if (response.status === 429) {
+          return {
+            kind: "retry",
+            retryAfterMs: retryAfterMilliseconds(response)
+          };
+        }
+        if (response.status >= 500) return { kind: "retry" };
+        const body: unknown = await response.json().catch(() => null);
+        if (signal.aborted || sequence < appliedSequence.current)
+          return { kind: "retry" };
+        terminalPollError.current = apiError(response, body);
+        return { kind: "terminal", response };
+      }
+      const body: unknown = await response.json().catch(() => null);
+      if (signal.aborted || sequence < appliedSequence.current)
+        return { kind: "retry" };
+      const parsed = applicantDossierSchema.safeParse(body);
+      if (!parsed.success)
+        terminalPollError.current =
+          "The dossier returned an unexpected response.";
+      return parsed.success
+        ? { kind: "snapshot", value: { dossier: parsed.data, sequence } }
+        : { kind: "terminal", response };
+    },
+    [dossierPath]
+  );
 
-    timeout = setTimeout(() => void pollEvidence(), pollDelaysMs[0]);
+  const applyFreshDossier = useCallback(
+    (snapshot: { dossier: ApplicantDossier; sequence: number }) => {
+      if (snapshot.sequence < appliedSequence.current) return;
+      appliedSequence.current = snapshot.sequence;
+      hasExpandedDossier.current = true;
+      setDossier(snapshot.dossier);
+      setInitialError(null);
+      setError(null);
+      setPollUnavailable(false);
+    },
+    []
+  );
 
-    return () => {
-      stopped = true;
-      controller.abort();
-      if (timeout) clearTimeout(timeout);
-    };
-  }, [canAddCharacters, dossier?.research.state, dossierPath]);
+  const applyDossierError = useCallback(() => {
+    setError(terminalPollError.current);
+    setPollUnavailable(true);
+    setPollStopped(true);
+  }, []);
+
+  useAuthoritativePoll({
+    active: canAddCharacters && !pollStopped && hasLiveEvidence(dossier),
+    read: readDossierPoll,
+    onSnapshot: applyFreshDossier,
+    onTerminalError: applyDossierError
+  });
 
   const visibleError = error ?? initialError;
   const research = dossier?.research;
@@ -513,6 +614,14 @@ export function DossierPageClient({
   return (
     <DossierCharacterProvider characters={dossier?.characters ?? []}>
       <main className="page-shell dossier-page">
+        <p
+          className="visually-hidden"
+          role="status"
+          aria-live="polite"
+          aria-label={announcement || "Evidence collection updates"}
+        >
+          {announcement}
+        </p>
         <header className="dossier-heading">
           <div ref={identityRef}>
             <p className="eyebrow">Applicant dossier</p>
@@ -539,7 +648,7 @@ export function DossierPageClient({
               character={{ key: identity, displayName: rootDisplayName }}
             />
             <DossierRefreshControl
-              busy={dossier?.research.state === "gathering"}
+              busy={hasLiveEvidence(dossier) && !pollUnavailable}
               lastCollectedAt={dossier?.lastCollectedAt ?? null}
               onRefresh={async () => {
                 const response = await fetch(
@@ -547,7 +656,11 @@ export function DossierPageClient({
                   { method: "POST" }
                 );
                 if (!response.ok) throw new Error("refresh_failed");
-                return (await response.json()) as { mode: "full" | "light" };
+                const result = (await response.json()) as {
+                  mode: "full" | "light";
+                };
+                await refreshDossier();
+                return result;
               }}
             />
           </div>
@@ -615,7 +728,7 @@ export function DossierPageClient({
             />
             <DossierRaidList
               raids={dossier.raids}
-              loading={dossier.research.state === "gathering"}
+              loading={hasLiveEvidence(dossier)}
               limitations={dossier.limitations}
             />
             <DossierLimitations limitations={dossier.limitations} />
