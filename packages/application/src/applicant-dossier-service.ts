@@ -340,6 +340,7 @@ function cachedKill(
     character,
     killedAt: kill.killedAt,
     guild: kill.guild ? { ...kill.guild, region: character.region } : null,
+    uploader: kill.uploader ?? null,
     historicWorldRank: kill.historicWorldRank ?? null,
     reportUrl: kill.fightUrl,
     performance: kill.performance
@@ -372,7 +373,9 @@ function cachedWipe(
     bossOrder: wipe.bossOrder,
     character,
     attemptedAt: wipe.attemptedAt,
-    reportUrl: wipe.fightUrl
+    reportUrl: wipe.fightUrl,
+    guild: wipe.guild ? { ...wipe.guild, region: character.region } : null,
+    uploader: wipe.uploader ?? null
   };
 }
 

@@ -70,7 +70,7 @@ const boss = {
 
 afterEach(cleanup);
 
-it("shows the grouped rank in the summary and retains all distinct report links", () => {
+it("shows the grouped rank and keeps distinct reports in a click-only menu", async () => {
   const reportUrls = [
     "https://www.warcraftlogs.com/reports/one#fight=1",
     "https://www.warcraftlogs.com/reports/two#fight=2"
@@ -102,31 +102,154 @@ it("shows the grouped rank in the summary and retains all distinct report links"
     />
   );
   expect(screen.getByText("World #48")).toBeVisible();
-  expect(
-    screen
-      .getAllByRole("link", { hidden: true })
-      .map((link) => link.getAttribute("href"))
-      .filter((href) => href?.includes("/reports/"))
-  ).toEqual(reportUrls);
-  for (const [index, link] of screen
-    .getAllByRole("link", {
-      hidden: true,
-      name: /View Warcraft Logs report \d+ \(opens in a new tab\)/
-    })
-    .entries()) {
-    expect(link).toHaveAccessibleName(
-      `View Warcraft Logs report ${index + 1} (opens in a new tab)`
-    );
+  const trigger = screen.getByRole("button", {
+    name: "Choose from 2 kill reports"
+  });
+  expect(trigger).toHaveAccessibleDescription("2 reports found");
+  await userEvent.click(trigger);
+
+  const links = screen.getAllByRole("link", { name: /log uploaded by/i });
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(reportUrls);
+  for (const link of links) {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(
-      link.querySelector(".upstream-link-icon--evidence-kill")
-    ).toBeInTheDocument();
-    expect(
-      link.querySelector(".upstream-link-icon--warcraft-logs")
-    ).not.toBeInTheDocument();
   }
   expect(screen.getAllByText("First kill")).toHaveLength(1);
+});
+
+it("replaces duplicate kill report icons with a click-only guild-first report menu", async () => {
+  const reportUrls = [
+    "https://www.warcraftlogs.com/reports/personal#fight=1",
+    "https://www.warcraftlogs.com/reports/guild#fight=2",
+    "https://www.warcraftlogs.com/reports/personal-two#fight=3"
+  ];
+  const raids = [
+    {
+      raidId: "menu-raid",
+      raidName: "Menu Raid",
+      imageUrl: null,
+      cuttingEdge: null,
+      bosses: [
+        {
+          ...boss,
+          firstKill: {
+            ...boss.firstKill,
+            reportUrl: reportUrls[1]!,
+            reportUrls,
+            reports: [
+              {
+                reportUrl: reportUrls[1]!,
+                source: "guild_log",
+                uploader: "Dorian"
+              },
+              {
+                reportUrl: reportUrls[0]!,
+                source: "personal_log",
+                uploader: "Ryiislogs"
+              },
+              {
+                reportUrl: reportUrls[2]!,
+                source: "personal_log",
+                uploader: "Varod"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ] as unknown as ApplicantDossier["raids"];
+
+  renderWithDossierCharacters(<DossierRaidList raids={raids} />);
+
+  const trigger = screen.getByRole("button", {
+    name: "Choose from 3 kill reports"
+  });
+  expect(trigger).toHaveAccessibleDescription("3 reports found");
+  expect(
+    screen.queryByRole("link", { name: "Guild log uploaded by Dorian" })
+  ).not.toBeInTheDocument();
+
+  await userEvent.setup().click(trigger);
+
+  expect(
+    screen
+      .getAllByRole("link", { name: /log uploaded by/ })
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([reportUrls[1], reportUrls[0], reportUrls[2]]);
+});
+
+it("replaces duplicate wipe report icons with a guild-first click-only report menu", async () => {
+  const reportUrls = [
+    "https://www.warcraftlogs.com/reports/personal-wipe#fight=1",
+    "https://www.warcraftlogs.com/reports/guild-wipe#fight=2",
+    "https://www.warcraftlogs.com/reports/personal-wipe-two#fight=3"
+  ];
+  const raids = [
+    {
+      raidId: "wipe-menu-raid",
+      raidName: "Wipe Menu Raid",
+      imageUrl: null,
+      cuttingEdge: null,
+      bosses: [
+        {
+          bossId: "wipe-menu-boss",
+          bossName: "Wipe Menu Boss",
+          bossOrder: 1,
+          imageUrl: null,
+          state: "wipe",
+          wipe: {
+            attemptedAt: "2025-02-14T20:30:00.000Z",
+            reportUrl: reportUrls[1],
+            source: "guild_log",
+            uploader: "Dorian",
+            characters: [ryii]
+          },
+          wipes: [
+            {
+              attemptedAt: "2025-02-14T20:30:00.000Z",
+              reportUrl: reportUrls[0],
+              source: "personal_log",
+              uploader: "Ryiislogs",
+              characters: [ryii]
+            },
+            {
+              attemptedAt: "2025-02-14T20:30:00.000Z",
+              reportUrl: reportUrls[1],
+              source: "guild_log",
+              uploader: "Dorian",
+              characters: [ryii]
+            },
+            {
+              attemptedAt: "2025-02-14T20:30:00.000Z",
+              reportUrl: reportUrls[2],
+              source: "personal_log",
+              uploader: "Varod",
+              characters: [ryii]
+            }
+          ]
+        }
+      ]
+    }
+  ] as unknown as ApplicantDossier["raids"];
+
+  renderWithDossierCharacters(<DossierRaidList raids={raids} />);
+  await userEvent.setup().click(screen.getByText("View wipe evidence"));
+
+  const trigger = screen.getByRole("button", {
+    name: "Choose from 3 wipe reports"
+  });
+  expect(trigger).toHaveAccessibleDescription("3 reports found");
+  expect(
+    screen.queryByRole("link", { name: "Guild log uploaded by Dorian" })
+  ).not.toBeInTheDocument();
+
+  await userEvent.click(trigger);
+
+  expect(
+    screen
+      .getAllByRole("link", { name: /log uploaded by/ })
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([reportUrls[1], reportUrls[0], reportUrls[2]]);
 });
 
 it("renders guild attribution as a concise value with an accessible label", async () => {
@@ -1029,13 +1152,25 @@ it("orders wipe-only evidence newest first with a stable tie-break", async () =>
   await userEvent.setup().click(screen.getByText("View wipe evidence"));
   const evidence = screen.getByRole("region", { name: "Wipe evidence" });
   expect(
-    within(evidence)
-      .getAllByRole("link", { name: /View Warcraft Logs wipe report/ })
+    within(evidence).getByRole("link", {
+      name: "View Warcraft Logs wipe report (opens in a new tab)"
+    })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/reports/older#fight=2"
+  );
+  await userEvent.click(
+    within(evidence).getByRole("button", {
+      name: "Choose from 2 wipe reports"
+    })
+  );
+  expect(
+    screen
+      .getAllByRole("link", { name: /log uploaded by/ })
       .map((link) => link.getAttribute("href"))
   ).toEqual([
     "https://www.warcraftlogs.com/reports/tie-b#fight=1",
-    "https://www.warcraftlogs.com/reports/tie-a#fight=1",
-    "https://www.warcraftlogs.com/reports/older#fight=2"
+    "https://www.warcraftlogs.com/reports/tie-a#fight=1"
   ]);
 });
 
@@ -1094,13 +1229,16 @@ it("merges wipe rows on the same date and deduplicates reports", async () => {
   const evidence = screen.getByRole("region", { name: "Wipe evidence" });
   expect(evidence.querySelectorAll(".dossier-evidence-row")).toHaveLength(1);
   expect(within(evidence).getByText("14 Feb 2025")).toBeVisible();
-  const reportLinks = Array.from(
-    evidence.querySelectorAll<HTMLAnchorElement>(
-      ".dossier-report-links a.upstream-icon-link"
-    )
+  await userEvent.click(
+    within(evidence).getByRole("button", {
+      name: "Choose from 2 wipe reports"
+    })
   );
-  expect(reportLinks).toHaveLength(2);
-  expect(reportLinks.map((link) => link.getAttribute("href"))).toEqual([
+  expect(
+    screen
+      .getAllByRole("link", { name: /log uploaded by/ })
+      .map((link) => link.getAttribute("href"))
+  ).toEqual([
     "https://www.warcraftlogs.com/reports/other#fight=3",
     "https://www.warcraftlogs.com/reports/shared#fight=2"
   ]);

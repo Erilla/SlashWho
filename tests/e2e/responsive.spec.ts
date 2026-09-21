@@ -154,9 +154,22 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
   ).toBeVisible();
   const evidence = page.getByRole("group", { name: "Queen Ansurek evidence" });
   await evidence.getByText("View kill evidence").click();
-  const reportLinks = evidence.getByRole("link", {
-    name: /View Warcraft Logs report/
+  const reportMenu = evidence.getByRole("button", {
+    name: "Choose from 2 kill reports"
   });
+  await expect(reportMenu).toHaveAccessibleDescription("2 reports found");
+  await reportMenu.click();
+  const menu = page.getByRole("list", { name: "Kill reports" });
+  await expect(menu).toBeVisible();
+  expect(
+    await menu.evaluate((element) => element.parentElement === document.body)
+  ).toBe(true);
+  const menuBounds = await menu.boundingBox();
+  expect(menuBounds).not.toBeNull();
+  expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
+  expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(844);
+
+  const reportLinks = menu.getByRole("link", { name: /log uploaded by/ });
   await expect(reportLinks).toHaveCount(2);
   expect(
     await reportLinks.evaluateAll((links) =>
@@ -167,11 +180,11 @@ test("keeps dossier research accessible without horizontal overflow on mobile", 
     )
   ).toEqual([
     {
-      accessibleName: "View Warcraft Logs report 1 (opens in a new tab)",
+      accessibleName: "Guild log uploaded by Unknown uploader",
       href: "https://www.warcraftlogs.com/reports/e2eReport#fight=10"
     },
     {
-      accessibleName: "View Warcraft Logs report 2 (opens in a new tab)",
+      accessibleName: "Guild log uploaded by Unknown uploader",
       href: "https://www.warcraftlogs.com/reports/e2eReport#fight=9"
     }
   ]);

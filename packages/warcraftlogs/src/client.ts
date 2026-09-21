@@ -52,6 +52,7 @@ const recentReportsQuery = `
           data {
             code
             startTime
+            owner { name }
             guild { name server { slug region { slug } } }
             zone { id name encounters { id journalID } }
             masterData { actors { id name server type } }
@@ -416,6 +417,8 @@ function firstKillReports(
     const reportStartTime =
       report && validTimestampMilliseconds(report.startTime);
     const reportGuild = report && report.guild;
+    const reportOwner = report && record(report.owner);
+    const uploader = reportOwner ? nonEmptyString(reportOwner.name) : null;
     const fights = report && report.fights;
     const zone = report && record(report.zone);
     const raidId = zone && positiveInteger(zone.id);
@@ -566,7 +569,9 @@ function firstKillReports(
           bossOrder: encounterId,
           attemptedAt: evidenceAt,
           reportUrl,
-          fightUrl
+          fightUrl,
+          guild,
+          uploader
         };
         wipes.set(candidate.fightUrl, candidate);
         continue;
@@ -587,6 +592,7 @@ function firstKillReports(
         reportUrl,
         fightUrl,
         guild,
+        uploader,
         historicWorldRank: null
       };
       killedByReportBoss.add(`${candidate.reportUrl}\0${candidate.bossId}`);
