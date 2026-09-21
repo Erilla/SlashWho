@@ -9,7 +9,9 @@ CREATE TABLE "operators" (
   "active" boolean DEFAULT true NOT NULL,
   "credential_version" integer DEFAULT 1 NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
-  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "operators_canonical_login_check"
+    CHECK (char_length("canonical_login") BETWEEN 1 AND 64 AND "canonical_login" ~ '^[a-z0-9_-]+$')
 );
 --> statement-breakpoint
 CREATE TABLE "operator_sessions" (
@@ -35,7 +37,11 @@ CREATE TABLE "operator_auth_events" (
   "operator_id" uuid REFERENCES "operators"("id"),
   "action" text NOT NULL,
   "outcome" text NOT NULL,
-  "occurred_at" timestamp with time zone DEFAULT now() NOT NULL
+  "occurred_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "operator_auth_events_action_check"
+    CHECK ("action" IN ('provision', 'rotate', 'disable', 'sign_in', 'sign_out', 'session_revoke')),
+  CONSTRAINT "operator_auth_events_outcome_check"
+    CHECK ("outcome" IN ('success', 'failure'))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX "operators_canonical_login_idx"

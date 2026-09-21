@@ -206,18 +206,46 @@ describe("database migrations", () => {
       ])
     );
 
-    await pool.query(
-      `INSERT INTO operators
-        (canonical_login, display_login, password_hash, password_salt, scrypt_version, scrypt_cost)
-       VALUES ('operator', 'Operator', 'hash', 'salt', 1, 16384)`
-    );
-    await expect(
+    const insertOperator = (canonicalLogin: string) =>
       pool.query(
         `INSERT INTO operators
           (canonical_login, display_login, password_hash, password_salt, scrypt_version, scrypt_cost)
-         VALUES ('operator', 'Operator', 'hash', 'salt', 1, 16384)`
+         VALUES ($1, 'Operator', 'hash', 'salt', 1, 16384)`,
+        [canonicalLogin]
+      );
+
+    await expect(insertOperator("operator")).resolves.toBeDefined();
+    await expect(insertOperator("operator")).rejects.toMatchObject({
+      code: "23505"
+    });
+    await expect(insertOperator("Operator")).rejects.toMatchObject({
+      code: "23514"
+    });
+    await expect(insertOperator("operator-é")).rejects.toMatchObject({
+      code: "23514"
+    });
+    await expect(insertOperator("a".repeat(65))).rejects.toMatchObject({
+      code: "23514"
+    });
+
+    await expect(
+      pool.query(
+        `INSERT INTO operator_auth_events (action, outcome)
+         VALUES ('sign_in', 'success')`
       )
-    ).rejects.toMatchObject({ code: "23505" });
+    ).resolves.toBeDefined();
+    await expect(
+      pool.query(
+        `INSERT INTO operator_auth_events (action, outcome)
+         VALUES ('password=unsafe', 'success')`
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      pool.query(
+        `INSERT INTO operator_auth_events (action, outcome)
+         VALUES ('sign_in', 'cookie=v1.secret')`
+      )
+    ).rejects.toMatchObject({ code: "23514" });
 
     const indexes = await pool.query<{ tablename: string; indexdef: string }>(
       `SELECT tablename, indexdef

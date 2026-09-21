@@ -26,6 +26,9 @@ const timestamps = {
     .notNull()
 };
 
+/** Shared with the operator-login canonicalizer; canonical logins are ASCII. */
+export const operatorCanonicalLoginMaxLength = 64;
+
 export const discoveryRunStatus = pgEnum("discovery_run_status", [
   "queued",
   "running",
@@ -286,7 +289,11 @@ export const operators = pgTable(
     ...timestamps
   },
   (table) => [
-    uniqueIndex("operators_canonical_login_idx").on(table.canonicalLogin)
+    uniqueIndex("operators_canonical_login_idx").on(table.canonicalLogin),
+    check(
+      "operators_canonical_login_check",
+      sql`char_length(${table.canonicalLogin}) BETWEEN 1 AND ${operatorCanonicalLoginMaxLength} AND ${table.canonicalLogin} ~ '^[a-z0-9_-]+$'`
+    )
   ]
 );
 
@@ -360,6 +367,14 @@ export const operatorAuthEvents = pgTable(
     index("operator_auth_events_operator_occurred_idx").on(
       table.operatorId,
       table.occurredAt
+    ),
+    check(
+      "operator_auth_events_action_check",
+      sql`${table.action} IN ('provision', 'rotate', 'disable', 'sign_in', 'sign_out', 'session_revoke')`
+    ),
+    check(
+      "operator_auth_events_outcome_check",
+      sql`${table.outcome} IN ('success', 'failure')`
     )
   ]
 );

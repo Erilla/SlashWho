@@ -907,6 +907,18 @@ export type OperatorSession = Readonly<{
 export type OperatorLoginAdmission =
   { kind: "admitted" } | { kind: "throttled"; retryAt: Date };
 
+/** The only lifecycle actions an operator-auth audit record may name. */
+export type OperatorAuthEventAction =
+  | "provision"
+  | "rotate"
+  | "disable"
+  | "sign_in"
+  | "sign_out"
+  | "session_revoke";
+
+/** Safe, bounded outcomes for an operator-auth audit record. */
+export type OperatorAuthEventOutcome = "success" | "failure";
+
 /**
  * Persistence boundary for operator credentials and revocable browser
  * sessions. Inputs accept derived digests only; outputs never expose raw
@@ -941,8 +953,8 @@ export interface OperatorAuthRepository {
   }): Promise<OperatorLoginAdmission>;
   appendEvent(input: {
     operatorId: string | null;
-    action: string;
-    outcome: string;
+    action: OperatorAuthEventAction;
+    outcome: OperatorAuthEventOutcome;
     at: Date;
   }): Promise<void>;
   issueSession(input: {
