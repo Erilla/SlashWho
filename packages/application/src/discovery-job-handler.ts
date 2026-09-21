@@ -517,6 +517,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               return;
             }
 
+            if (admission.kind === "not_due") {
+              const live = await repositories.fingerprintSweeps.getResumeState(
+                run.rootKey
+              );
+              if (live && live.runId !== runId) {
+                await repositories.runs.complete(runId, live.snapshotId);
+                record.outcome = "fingerprint_continuation_pending";
+                return;
+              }
+            }
+
             if (admission.kind === "admitted") {
               const fingerprintStartedAt = monotonic();
               let reservationActive = true;
@@ -646,7 +657,19 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                           runId,
                           reservationId: admission.reservationId,
                           finishedAt: now(),
-                          limitationCode
+                          limitationCode,
+                          ...(cursor.resumeAfter === null
+                            ? {}
+                            : {
+                                continuationAdmission: {
+                                  requestCap: fingerprint.requestCap,
+                                  hourlyBudget: fingerprint.hourlyBudget,
+                                  cadenceCutoff: new Date(
+                                    fingerprintPersistenceTime.getTime() -
+                                      fingerprint.cadenceMs
+                                  )
+                                }
+                              })
                         },
                         cursor,
                         { signal: context.signal }
@@ -690,7 +713,19 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       {
                         reservationId: admission.reservationId,
                         finishedAt: now(),
-                        limitationCode
+                        limitationCode,
+                        ...(cursor.resumeAfter === null
+                          ? {}
+                          : {
+                              continuationAdmission: {
+                                requestCap: fingerprint.requestCap,
+                                hourlyBudget: fingerprint.hourlyBudget,
+                                cadenceCutoff: new Date(
+                                  fingerprintPersistenceTime.getTime() -
+                                    fingerprint.cadenceMs
+                                )
+                              }
+                            })
                       },
                       cursor,
                       { signal: context.signal }

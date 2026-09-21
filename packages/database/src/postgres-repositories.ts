@@ -18,6 +18,7 @@ import type {
   DiscoveryRun,
   EvidenceCollectionDomain,
   FingerprintAdmission,
+  FingerprintContinuationAdmission,
   Repositories,
   SnapshotHistoryItem,
   SnapshotHistoryPage,
@@ -1113,6 +1114,7 @@ async function finishFingerprintSweep(
     published: boolean;
     at: Date;
     limitationCode: string | null;
+    continuationAdmission?: FingerprintContinuationAdmission;
     /**
      * Omitted by a caller that has no claim on the sweep cursor. The resume
      * columns are then left exactly as they are, so finishing one reservation
@@ -1128,6 +1130,7 @@ async function finishFingerprintSweep(
 ): Promise<void> {
   const reservation = await client.query<{
     admission_id: string;
+    discovery_run_id: string;
     region: CharacterKey["region"];
     realm_slug: string;
     normalized_name: string;
@@ -1141,7 +1144,8 @@ async function finishFingerprintSweep(
      WHERE reservation.id = $1
        AND reservation.admission_id = admission.id
        AND reservation.released_at IS NULL
-     RETURNING reservation.admission_id, admission.region,
+     RETURNING reservation.admission_id, admission.discovery_run_id,
+               admission.region,
                admission.realm_slug, admission.normalized_name`,
     [reservationId, input.at, input.published, input.limitationCode]
   );
@@ -1200,6 +1204,29 @@ async function finishFingerprintSweep(
       cursor.advanced
     ]
   );
+  if (cursor.resumeAfter !== null && input.continuationAdmission) {
+    const continuation = input.continuationAdmission;
+    await client.query(
+      `INSERT INTO fingerprint_sweep_admissions
+        (discovery_run_id, region, realm_slug, normalized_name, request_cap,
+         hourly_budget, cadence_cutoff, requested_at)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8
+       WHERE NOT EXISTS (
+         SELECT 1 FROM fingerprint_sweep_admissions
+         WHERE discovery_run_id = $1 AND status IN ('waiting', 'admitted')
+       )`,
+      [
+        row.discovery_run_id,
+        row.region,
+        row.realm_slug,
+        row.normalized_name,
+        continuation.requestCap,
+        continuation.hourlyBudget,
+        continuation.cadenceCutoff,
+        input.at
+      ]
+    );
+  }
 }
 
 async function requireUpdated(
@@ -1684,6 +1711,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             published: true,
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
+            continuationAdmission: fingerprint.continuationAdmission,
             cursor: {
               resumeAfter: cursor.resumeAfter,
               resumeLimitationCode:
@@ -1868,6 +1896,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             published: true,
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
+            continuationAdmission: fingerprint.continuationAdmission,
             cursor: {
               resumeAfter: cursor.resumeAfter,
               resumeLimitationCode:
@@ -2688,13 +2717,24 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             return { kind: "settled" };
           }
 
-          const state = await client.query<{ last_published_at: Date | null }>(
-            `SELECT last_published_at
-             FROM fingerprint_sweep_states
-             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          const state = await client.query<{
+            last_published_at: Date | null;
+            resume_after: string | null;
+            discovery_run_id: string | null;
+          }>(
+            `SELECT state.last_published_at, state.resume_after,
+                    snapshot.discovery_run_id
+             FROM fingerprint_sweep_states state
+             LEFT JOIN snapshots snapshot ON snapshot.id = state.resume_snapshot_id
+             WHERE state.region = $1 AND state.realm_slug = $2
+               AND state.normalized_name = $3`,
             [admission.region, admission.realm_slug, admission.normalized_name]
           );
+          const liveContinuation =
+            state.rows[0]?.resume_after !== null &&
+            state.rows[0]?.discovery_run_id === runId;
           if (
+            !liveContinuation &&
             state.rows[0]?.last_published_at &&
             state.rows[0].last_published_at > admission.cadence_cutoff
           ) {
@@ -2711,7 +2751,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const result = await admitFingerprintWaitingRun(
             client,
             admission.id,
-            at
+            at,
+            liveContinuation ? admission.id : undefined
           );
           await client.query("COMMIT");
           return result.kind === "admitted" ? { kind: "admitted" } : result;
