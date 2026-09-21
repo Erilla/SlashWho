@@ -1,5 +1,9 @@
-import type { Repositories, DiscoveryQueue } from "@slashwho/database";
-import { currentContentEligibility, type CharacterKey } from "@slashwho/domain";
+import type {
+  Repositories,
+  DiscoveryQueue,
+  EvidenceCollectionDomain
+} from "@slashwho/database";
+import type { CharacterKey } from "@slashwho/domain";
 
 import { measuredRepositories } from "./measured-repositories";
 import type { MeasurementScope } from "./measurement";
@@ -24,15 +28,20 @@ async function lightCollectionIsSettled(options: {
     | "terminalTiers"
     | "hydratedFightUrls"
     | "collectedTierZones"
+    | "listStatus"
   >;
 }): Promise<boolean> {
-  const [completed, stored, terminal] = await Promise.all([
+  const [completed, stored, terminal, status] = await Promise.all([
     options.evidence.getCompleted(options.key),
     options.evidence.storedEvidenceTiers(options.key),
-    options.evidence.terminalTiers(options.key)
+    options.evidence.terminalTiers(options.key),
+    options.evidence.listStatus([options.key])
   ]);
   if (
     completed === null ||
+    status.some((run) =>
+      ["queued", "running", "retrying"].includes(run.status)
+    ) ||
     completed.run.limitationCode !== null ||
     completed.run.parseLimitationCode !== null ||
     stored.lastCleanKillScanAt === undefined ||
@@ -41,18 +50,16 @@ async function lightCollectionIsSettled(options: {
   )
     return false;
 
-  const kills = completed.kills.filter(
-    (kill) => currentContentEligibility(kill.killedAt, kill.raidName) !== false
-  );
+  const kills = completed.kills;
   const raidIds = new Set(kills.map((kill) => kill.raidId));
-  const terminalByDomain = new Map<string, Set<string>>();
+  const terminalByDomain = new Map<EvidenceCollectionDomain, Set<string>>();
   for (const tier of terminal) {
     const raids = terminalByDomain.get(tier.domain) ?? new Set<string>();
     raids.add(tier.raidId);
     terminalByDomain.set(tier.domain, raids);
   }
   if (
-    !["kills", "parses", "tier_bests"].every((domain) =>
+    !(["kills", "parses", "tier_bests"] as const).every((domain) =>
       [...raidIds].every((raidId) => terminalByDomain.get(domain)?.has(raidId))
     )
   )

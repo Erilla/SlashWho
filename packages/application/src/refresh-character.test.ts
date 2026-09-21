@@ -46,6 +46,7 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
   const collectedTierZones = vi
     .fn()
     .mockResolvedValue([["42", "2026-09-16T11:00:00.000Z"]]);
+  const listStatus = vi.fn().mockResolvedValue([]);
   return {
     reserve,
     getCompleted,
@@ -56,6 +57,7 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
     storedEvidenceTiers,
     hydratedFightUrls,
     collectedTierZones,
+    listStatus,
     run: () =>
       refreshCharacter({
         key,
@@ -71,7 +73,8 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
             terminalTiers,
             storedEvidenceTiers,
             hydratedFightUrls,
-            collectedTierZones
+            collectedTierZones,
+            listStatus
           }
         } as never,
         queue: { enqueueCharacterEvidence } as never
@@ -169,6 +172,37 @@ describe("refreshCharacter", () => {
     });
   });
 
+  it("joins an active collection instead of skipping its light refresh", async () => {
+    const h = harness(new Date("2026-09-16T11:55:00.000Z"));
+    h.getCompleted.mockResolvedValue({
+      run: {
+        id: "run-0",
+        key,
+        completedAt: new Date("2026-09-16T11:55:00.000Z"),
+        limitationCode: null,
+        parseLimitationCode: null
+      },
+      kills: [
+        {
+          raidId: "42",
+          raidName: "The Tidebound Grotto",
+          killedAt: "2026-09-16T10:00:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+        }
+      ]
+    });
+    h.listStatus.mockResolvedValue([{ status: "running" }]);
+    h.reserve.mockResolvedValue({
+      kind: "active",
+      run: { id: "run-active", key, status: "running" }
+    });
+
+    await h.run();
+
+    expect(h.reserve).toHaveBeenCalled();
+    expect(h.enqueueCharacterEvidence).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "a newly persisted kill has no terminal marks",
@@ -198,6 +232,32 @@ describe("refreshCharacter", () => {
           { raidId: "42", domain: "kills" },
           { raidId: "42", domain: "parses" }
         ])
+    },
+    {
+      name: "a content-window change reopens a historical tier",
+      change: (h: ReturnType<typeof harness>) => {
+        h.terminalTiers.mockResolvedValue([
+          { raidId: "42", domain: "kills" },
+          { raidId: "42", domain: "parses" }
+        ]);
+        h.getCompleted.mockResolvedValue({
+          run: {
+            id: "run-0",
+            key,
+            completedAt: new Date("2026-09-16T11:55:00.000Z"),
+            limitationCode: null,
+            parseLimitationCode: null
+          },
+          kills: [
+            {
+              raidId: "42",
+              raidName: "The Eternal Palace",
+              killedAt: "2019-08-01T21:31:40.000Z",
+              fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+            }
+          ]
+        });
+      }
     },
     {
       name: "the clean kill scan has expired",
