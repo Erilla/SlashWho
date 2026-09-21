@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 
 import { loadWebConfig } from "../../../server/config";
 import { getContainer } from "../../../server/container";
-import { isOperatorRequest } from "../../../server/operator-session";
 
 import { OperatorLogoutButton } from "./operator-logout-button";
 
@@ -192,9 +191,20 @@ export function CollectionMonitorView({
 }
 
 export default async function CollectionMonitorPage() {
-  if (!isOperatorRequest(await headers(), loadWebConfig().application)) {
+  // The page proxy applies renewal/expiry cookies to the navigation response.
+  // Recheck here before reading data; never trust a client-supplied principal.
+  const { collectionMonitor, operatorAuth } = await getContainer();
+  const authentication = await operatorAuth.authenticateOperator(
+    new Request(
+      new URL(
+        "/operations/collection-monitor",
+        loadWebConfig().operatorAuth.origin
+      ),
+      { headers: await headers() }
+    )
+  );
+  if (!authentication.principal) {
     redirect("/operations/login");
   }
-  const { collectionMonitor } = await getContainer();
   return <CollectionMonitorView monitor={await collectionMonitor.list()} />;
 }

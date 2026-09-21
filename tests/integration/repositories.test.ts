@@ -192,9 +192,25 @@ describe("PostgreSQL repositories", () => {
       suppressed_characters,
       negative_character_cache,
       rate_limit_events,
-      manual_dossier_connections
+      manual_dossier_connections,
+      operator_auth_events,
+      operator_login_attempts,
+      operator_sessions,
+      operators
       CASCADE`);
   });
+
+  async function provisionOperator() {
+    return repositories.operatorAuth.provision({
+      canonicalLogin: "operator_one",
+      displayLogin: "Operator One",
+      passwordHash: "derived-password-hash",
+      passwordSalt: "derived-password-salt",
+      scryptVersion: 1,
+      scryptCost: 16_384,
+      at: new Date("2026-09-21T12:00:00.000Z")
+    });
+  }
 
   it("round-trips a character's guild through the snapshot", async () => {
     // The guild columns are written by hand-built SQL and read back by a
@@ -5378,5 +5394,312 @@ describe("PostgreSQL repositories", () => {
         continuation: true
       })
     ).resolves.toMatchObject({ kind: "admitted" });
+  });
+
+  it("renews only a valid operator session without extending its absolute expiry", async () => {
+    // Break caught: a session lookup that verifies only the id could accept a
+    // forged secret, expired session, disabled operator, or stale credential.
+    const auth = repositories.operatorAuth;
+    const operator = await provisionOperator();
+    const sessionId = "10000000-0000-0000-0000-000000000001";
+    const issuedAt = new Date("2026-09-21T12:00:00.000Z");
+    const absoluteExpiresAt = new Date("2026-09-21T20:00:00.000Z");
+
+    await auth.issueSession({
+      sessionId,
+      secretDigest: "hmac:valid-secret",
+      operatorId: operator.id,
+      credentialVersion: operator.credentialVersion,
+      issuedAt,
+      lastUsedAt: issuedAt,
+      idleExpiresAt: new Date("2026-09-21T12:30:00.000Z"),
+      absoluteExpiresAt
+    });
+
+    await expect(
+      auth.useSession({
+        sessionId,
+        secretDigest: "hmac:valid-secret",
+        at: new Date("2026-09-21T12:10:00.000Z"),
+        idleExpiresAt: new Date("2026-09-21T20:30:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      operator: { id: operator.id, active: true },
+      session: {
+        id: sessionId,
+        lastUsedAt: new Date("2026-09-21T12:10:00.000Z"),
+        idleExpiresAt: absoluteExpiresAt,
+        absoluteExpiresAt
+      }
+    });
+    await expect(
+      auth.useSession({
+        sessionId,
+        secretDigest: "hmac:wrong-secret",
+        at: new Date("2026-09-21T12:11:00.000Z"),
+        idleExpiresAt: new Date("2026-09-21T12:41:00.000Z")
+      })
+    ).resolves.toBeNull();
+    await expect(
+      auth.useSession({
+        sessionId,
+        secretDigest: "hmac:valid-secret",
+        at: absoluteExpiresAt,
+        idleExpiresAt: new Date("2026-09-21T20:30:00.000Z")
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("denies revoked, idle-expired, stale-version, and disabled operator sessions", async () => {
+    // Break caught: missing any use-session predicate revives a session that
+    // was explicitly revoked, superseded, expired, or belongs to a disabled operator.
+    const auth = repositories.operatorAuth;
+    const operator = await provisionOperator();
+    const at = new Date("2026-09-21T12:00:00.000Z");
+    const absoluteExpiresAt = new Date("2026-09-21T20:00:00.000Z");
+    const cases = [
+      {
+        id: "10000000-0000-0000-0000-000000000002",
+        digest: "hmac:revoked",
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z")
+      },
+      {
+        id: "10000000-0000-0000-0000-000000000003",
+        digest: "hmac:idle-expired",
+        idleExpiresAt: at
+      },
+      {
+        id: "10000000-0000-0000-0000-000000000004",
+        digest: "hmac:stale-version",
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z"),
+        credentialVersion: 0
+      },
+      {
+        id: "10000000-0000-0000-0000-000000000005",
+        digest: "hmac:disabled",
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z")
+      }
+    ];
+    for (const session of cases) {
+      await auth.issueSession({
+        sessionId: session.id,
+        secretDigest: session.digest,
+        operatorId: operator.id,
+        credentialVersion:
+          session.credentialVersion ?? operator.credentialVersion,
+        issuedAt: at,
+        lastUsedAt: at,
+        idleExpiresAt: session.idleExpiresAt,
+        absoluteExpiresAt
+      });
+    }
+    await auth.revokeSession(cases[0]!.id, at);
+    for (const session of cases.slice(0, 3)) {
+      await expect(
+        auth.useSession({
+          sessionId: session.id,
+          secretDigest: session.digest,
+          at,
+          idleExpiresAt: new Date("2026-09-21T12:30:00.000Z")
+        })
+      ).resolves.toBeNull();
+    }
+    await pool.query("UPDATE operators SET active = false WHERE id = $1", [
+      operator.id
+    ]);
+    await expect(
+      auth.useSession({
+        sessionId: cases[3]!.id,
+        secretDigest: cases[3]!.digest,
+        at,
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z")
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("rotates and disables credentials with session revocation and safe audit evidence", async () => {
+    // Break caught: credential lifecycle changes that leave old sessions alive
+    // or make lifecycle evidence disappear from the same durable operation.
+    const auth = repositories.operatorAuth;
+    const operator = await provisionOperator();
+    const at = new Date("2026-09-21T12:00:00.000Z");
+    const firstSession = "10000000-0000-0000-0000-000000000006";
+    const secondSession = "10000000-0000-0000-0000-000000000007";
+    const issue = async (sessionId: string, credentialVersion: number) =>
+      auth.issueSession({
+        sessionId,
+        secretDigest: `hmac:${sessionId}`,
+        operatorId: operator.id,
+        credentialVersion,
+        issuedAt: at,
+        lastUsedAt: at,
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z"),
+        absoluteExpiresAt: new Date("2026-09-21T20:00:00.000Z")
+      });
+
+    await issue(firstSession, operator.credentialVersion);
+    await expect(
+      auth.rotateCredential({
+        operatorId: operator.id,
+        passwordHash: "rotated-password-hash",
+        passwordSalt: "rotated-password-salt",
+        scryptVersion: 2,
+        scryptCost: 32_768,
+        at
+      })
+    ).resolves.toMatchObject({
+      id: operator.id,
+      credentialVersion: 2,
+      active: true
+    });
+    await expect(
+      auth.useSession({
+        sessionId: firstSession,
+        secretDigest: `hmac:${firstSession}`,
+        at,
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z")
+      })
+    ).resolves.toBeNull();
+
+    await issue(secondSession, 2);
+    await expect(auth.disable(operator.id, at)).resolves.toMatchObject({
+      id: operator.id,
+      active: false,
+      credentialVersion: 2
+    });
+    await expect(
+      auth.useSession({
+        sessionId: secondSession,
+        secretDigest: `hmac:${secondSession}`,
+        at,
+        idleExpiresAt: new Date("2026-09-21T12:30:00.000Z")
+      })
+    ).resolves.toBeNull();
+
+    const events = await pool.query<{
+      operator_id: string;
+      action: string;
+      outcome: string;
+    }>(`SELECT operator_id, action, outcome FROM operator_auth_events
+       ORDER BY id`);
+    expect(events.rows).toEqual([
+      { operator_id: operator.id, action: "provision", outcome: "success" },
+      { operator_id: operator.id, action: "rotate", outcome: "success" },
+      { operator_id: operator.id, action: "disable", outcome: "success" }
+    ]);
+  });
+
+  it("bounds hashed throttle buckets and cleans up only expired or revoked auth records", async () => {
+    // Break caught: a throttle that lets a hash exceed its window, conflates
+    // independently derived buckets, or cleanup that deletes live sessions.
+    const auth = repositories.operatorAuth;
+    const operator = await provisionOperator();
+    const at = new Date("2026-09-21T12:00:00.000Z");
+    const expiresAt = new Date("2026-09-21T12:15:00.000Z");
+    await expect(
+      auth.admitLoginAttempt({
+        subjectHash: "hmac:login-and-address",
+        limit: 2,
+        expiresAt,
+        at
+      })
+    ).resolves.toEqual({ kind: "admitted" });
+    await expect(
+      auth.admitLoginAttempt({
+        subjectHash: "hmac:login-and-address",
+        limit: 2,
+        expiresAt,
+        at
+      })
+    ).resolves.toEqual({ kind: "admitted" });
+    await expect(
+      auth.admitLoginAttempt({
+        subjectHash: "hmac:login-and-address",
+        limit: 2,
+        expiresAt,
+        at
+      })
+    ).resolves.toEqual({ kind: "throttled", retryAt: expiresAt });
+    await expect(
+      auth.admitLoginAttempt({
+        subjectHash: "hmac:global-fallback",
+        limit: 2,
+        expiresAt,
+        at
+      })
+    ).resolves.toEqual({ kind: "admitted" });
+
+    await auth.issueSession({
+      sessionId: "10000000-0000-0000-0000-000000000008",
+      secretDigest: "hmac:revoked-cleanup",
+      operatorId: operator.id,
+      credentialVersion: operator.credentialVersion,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date("2026-09-21T12:30:00.000Z"),
+      absoluteExpiresAt: new Date("2026-09-21T20:00:00.000Z")
+    });
+    await auth.revokeSession("10000000-0000-0000-0000-000000000008", at);
+    await auth.issueSession({
+      sessionId: "10000000-0000-0000-0000-000000000009",
+      secretDigest: "hmac:live-cleanup",
+      operatorId: operator.id,
+      credentialVersion: operator.credentialVersion,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date("2026-09-21T12:30:00.000Z"),
+      absoluteExpiresAt: new Date("2026-09-21T20:00:00.000Z")
+    });
+    await expect(auth.cleanupExpired(expiresAt)).resolves.toEqual({
+      sessions: 1,
+      loginAttempts: 3
+    });
+    await expect(
+      auth.useSession({
+        sessionId: "10000000-0000-0000-0000-000000000009",
+        secretDigest: "hmac:live-cleanup",
+        at: new Date("2026-09-21T12:16:00.000Z"),
+        idleExpiresAt: new Date("2026-09-21T12:46:00.000Z")
+      })
+    ).resolves.toMatchObject({ operator: { id: operator.id } });
+  });
+
+  it("appends audit rows that contain only the allowed safe fields", async () => {
+    // Break caught: audit logging that stores any credential or session
+    // material, or drops unknown-identity failures.
+    const auth = repositories.operatorAuth;
+    await auth.appendEvent({
+      operatorId: null,
+      action: "sign_in",
+      outcome: "failure",
+      at: new Date("2026-09-21T12:00:00.000Z")
+    });
+
+    const columns = await pool.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'operator_auth_events'
+       ORDER BY ordinal_position`
+    );
+    expect(columns.rows.map((row) => row.column_name)).toEqual([
+      "id",
+      "operator_id",
+      "action",
+      "outcome",
+      "occurred_at"
+    ]);
+    await expect(
+      pool.query(
+        "SELECT operator_id, action, outcome, occurred_at FROM operator_auth_events"
+      )
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          operator_id: null,
+          action: "sign_in",
+          outcome: "failure",
+          occurred_at: new Date("2026-09-21T12:00:00.000Z")
+        }
+      ]
+    });
   });
 });

@@ -38,9 +38,17 @@ jobs:
             exit 0
           fi
 
-          files=$(gh api --paginate \
+          if ! files=$(gh api --paginate \
             "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
-            --jq '.[].filename')
+            --jq '.[].filename'); then
+            # File classification only makes a prose-only pull request cheaper.
+            # GitHub can intermittently fail this endpoint under load; treating
+            # that as an unknown change and running the gate is safe, whereas
+            # failing here leaves a healthy branch permanently red.
+            echo "Could not list pull-request files; running the full suite."
+            echo "run_full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ -z "$files" ]; then
             echo "No files reported; running the full suite."

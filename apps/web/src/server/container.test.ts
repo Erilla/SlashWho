@@ -3,6 +3,12 @@ import { expect, it, vi } from "vitest";
 
 import { createWebContainer } from "./container";
 import { createContainerProvider } from "./container";
+import {
+  operatorAuthFixture,
+  operatorLogin,
+  operatorCredential,
+  operatorMutation
+} from "./operator-auth-test-fixture";
 
 // Mocked so the upstream_throttle test below can assert against a plain
 // spy instead of parsing pino's serialized output; production code is
@@ -46,11 +52,16 @@ it("migrates and initializes the durable queue before serving searches", async (
       return true;
     }
   } satisfies DiscoveryQueue;
-  const repositories = {} as Repositories;
+  const fixture = await operatorAuthFixture();
+  const repositories = { operatorAuth: fixture.repository } as Repositories;
 
   const container = await createWebContainer(
     {
       databaseUrl: "postgresql://db/slashwho",
+      operatorAuth: {
+        origin: "https://slashwho.example",
+        sessionHashSecret: "s".repeat(32)
+      },
       application: {
         BOT_API_KEY: "b".repeat(32),
         RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -101,6 +112,21 @@ it("migrates and initializes the durable queue before serving searches", async (
   );
 
   expect(events).toEqual(["migrate", "repositories", "queue", "service"]);
+  const signedIn = await container.operatorAuth.signIn(
+    operatorMutation({ login: operatorLogin, credential: operatorCredential })
+  );
+  expect(signedIn.principal).toMatchObject({
+    kind: "operator",
+    login: operatorLogin
+  });
+  expect(fixture.repository.issueSession).toHaveBeenCalledOnce();
+  await expect(
+    container.operatorAuth.authenticateOperator(
+      new Request("https://slashwho.example", {
+        headers: { authorization: `Bearer ${"b".repeat(32)}` }
+      })
+    )
+  ).resolves.toEqual({ principal: { kind: "automation" } });
   await expect(container.ready()).resolves.toBe(true);
   expect(events.at(-1)).toBe("query");
 });
@@ -176,6 +202,10 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
   const container = await createWebContainer(
     {
       databaseUrl: "postgresql://db/slashwho",
+      operatorAuth: {
+        origin: "https://slashwho.example",
+        sessionHashSecret: "s".repeat(32)
+      },
       application: {
         BOT_API_KEY: "b".repeat(32),
         RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -238,6 +268,7 @@ it("clears a rejected startup promise so the next request can recover", async ()
       searches: {} as never,
       dossiers: {} as never,
       collectionMonitor: {} as never,
+      operatorAuth: {} as never,
       async ready() {
         return true;
       },
@@ -287,6 +318,10 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
   await createWebContainer(
     {
       databaseUrl: "postgresql://db/slashwho",
+      operatorAuth: {
+        origin: "https://slashwho.example",
+        sessionHashSecret: "s".repeat(32)
+      },
       application: {
         BOT_API_KEY: "b".repeat(32),
         RATE_LIMIT_HASH_SECRET: "r".repeat(32),
@@ -394,6 +429,10 @@ it.each([
     await createWebContainer(
       {
         databaseUrl: "postgresql://db/slashwho",
+        operatorAuth: {
+          origin: "https://slashwho.example",
+          sessionHashSecret: "s".repeat(32)
+        },
         application: {
           BOT_API_KEY: "b".repeat(32),
           RATE_LIMIT_HASH_SECRET: "r".repeat(32),

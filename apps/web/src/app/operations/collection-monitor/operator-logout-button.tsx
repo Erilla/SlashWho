@@ -13,8 +13,10 @@ export function OperatorLogoutButton() {
     setPending(true);
     setFailed(false);
     try {
-      const response = await fetch("/api/operations/session", {
-        method: "DELETE"
+      const response = await fetch("/api/operations/session/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({})
       });
       if (!response.ok) {
         setFailed(true);

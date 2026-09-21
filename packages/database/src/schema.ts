@@ -26,6 +26,9 @@ const timestamps = {
     .notNull()
 };
 
+/** Shared with the operator-login canonicalizer; canonical logins are ASCII. */
+export const operatorCanonicalLoginMaxLength = 64;
+
 export const discoveryRunStatus = pgEnum("discovery_run_status", [
   "queued",
   "running",
@@ -264,6 +267,115 @@ export const rateLimitEvents = pgTable(
     uniqueIndex("rate_limit_events_discovery_run_idx")
       .on(table.discoveryRunId)
       .where(sql`${table.discoveryRunId} IS NOT NULL`)
+  ]
+);
+
+/**
+ * An accountable human operator. Credential material is salted and derived
+ * before it reaches this table; no reusable password is ever persisted.
+ */
+export const operators = pgTable(
+  "operators",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    canonicalLogin: text("canonical_login").notNull(),
+    displayLogin: text("display_login").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    passwordSalt: text("password_salt").notNull(),
+    scryptVersion: integer("scrypt_version").notNull(),
+    scryptCost: integer("scrypt_cost").notNull(),
+    active: boolean("active").default(true).notNull(),
+    credentialVersion: integer("credential_version").default(1).notNull(),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("operators_canonical_login_idx").on(table.canonicalLogin),
+    check(
+      "operators_canonical_login_check",
+      sql`char_length(${table.canonicalLogin}) BETWEEN 1 AND ${operatorCanonicalLoginMaxLength} AND ${table.canonicalLogin} ~ '^[a-z0-9_-]+$'`
+    )
+  ]
+);
+
+/**
+ * A revocable browser-session handle. The browser secret is HMACed before
+ * storage, so this table contains an opaque identifier and digest only.
+ */
+export const operatorSessions = pgTable(
+  "operator_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    secretDigest: text("secret_digest").notNull(),
+    operatorId: uuid("operator_id")
+      .notNull()
+      .references(() => operators.id),
+    credentialVersion: integer("credential_version").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+    idleExpiresAt: timestamp("idle_expires_at", {
+      withTimezone: true
+    }).notNull(),
+    absoluteExpiresAt: timestamp("absolute_expires_at", {
+      withTimezone: true
+    }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true })
+  },
+  (table) => [
+    index("operator_sessions_live_operator_idx")
+      .on(table.operatorId)
+      .where(sql`${table.revokedAt} IS NULL`),
+    index("operator_sessions_absolute_expiry_idx").on(table.absoluteExpiresAt)
+  ]
+);
+
+/**
+ * A throttling admission record keyed only by an HMAC subject hash. It holds
+ * neither a login nor an address, and expires once its window is over.
+ */
+export const operatorLoginAttempts = pgTable(
+  "operator_login_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    subjectHash: text("subject_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    index("operator_login_attempts_subject_expiry_idx").on(
+      table.subjectHash,
+      table.expiresAt
+    ),
+    index("operator_login_attempts_expiry_idx").on(table.expiresAt)
+  ]
+);
+
+/**
+ * Append-only lifecycle evidence. Its nullable actor link deliberately keeps
+ * unknown-login failures auditable without storing a guessed identity.
+ */
+export const operatorAuthEvents = pgTable(
+  "operator_auth_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    operatorId: uuid("operator_id").references(() => operators.id),
+    action: text("action").notNull(),
+    outcome: text("outcome").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    index("operator_auth_events_operator_occurred_idx").on(
+      table.operatorId,
+      table.occurredAt
+    ),
+    check(
+      "operator_auth_events_action_check",
+      sql`${table.action} IN ('provision', 'rotate', 'disable', 'sign_in', 'sign_out', 'session_revoke')`
+    ),
+    check(
+      "operator_auth_events_outcome_check",
+      sql`${table.outcome} IN ('success', 'failure')`
+    )
   ]
 );
 

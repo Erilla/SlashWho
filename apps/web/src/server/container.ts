@@ -22,6 +22,7 @@ import {
   type CollectionMonitorService
 } from "./collection-monitor";
 import { webLogger } from "./logger";
+import { createOperatorAuth, type OperatorAuth } from "./operator-auth";
 
 type WebPool = {
   query(text: string): Promise<unknown>;
@@ -32,6 +33,7 @@ export type WebContainer = Readonly<{
   searches: SearchService;
   dossiers: ApplicantDossierService;
   collectionMonitor: CollectionMonitorService;
+  operatorAuth: OperatorAuth;
   ready(): Promise<boolean>;
   close(): Promise<void>;
 }>;
@@ -93,6 +95,11 @@ export async function createWebContainer(
   try {
     await dependencies.runMigrations(pool);
     const repositories = dependencies.createRepositories(pool);
+    const operatorAuth = createOperatorAuth({
+      repository: repositories.operatorAuth,
+      config: config.application,
+      ...config.operatorAuth
+    });
     const collectionMonitor = createCollectionMonitorService({
       evidence: repositories.evidence
     });
@@ -142,6 +149,7 @@ export async function createWebContainer(
       searches,
       dossiers,
       collectionMonitor,
+      operatorAuth,
       async ready() {
         try {
           await pool.query("SELECT 1");

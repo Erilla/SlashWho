@@ -35,6 +35,8 @@ Web variables:
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 BOT_API_KEY=<at least 32 random characters>
 RATE_LIMIT_HASH_SECRET=<different value, at least 32 random characters>
+OPERATOR_SESSION_HASH_SECRET=<distinct value, at least 32 random characters>
+OPERATOR_ORIGIN=https://<exact public web hostname>
 ANONYMOUS_SEARCHES_PER_HOUR=10
 BOT_SEARCHES_PER_HOUR=60
 PUBLIC_READS_PER_MINUTE=300
@@ -63,6 +65,22 @@ those stay worker-only and never reach the web service. It does receive a
 visitor's own WCL client ID and secret, as request headers on a dossier read,
 but encrypts that pair immediately and never persists it in plaintext; only
 the ciphertext is written to a queued evidence run for the worker to decrypt.
+
+`OPERATOR_ORIGIN` is the exact public HTTPS origin for browser operator
+authentication, with no trailing slash, path, query, or user information.
+Sign-in and sign-out require JSON POST, an exactly matching `Origin`, and
+`Sec-Fetch-Site: same-origin`. Local browser testing must also use HTTPS;
+cookies retain `__Host-`, `Secure`, `HttpOnly`, `Path=/`, and `SameSite=Strict`.
+The session cookie renews a 30-minute idle deadline up to an eight-hour
+absolute deadline. Authentication responses must use `Cache-Control: no-store`.
+
+`OPERATOR_SESSION_HASH_SECRET` is a web-only Railway secret, separate from
+`BOT_API_KEY` and `RATE_LIMIT_HASH_SECRET`. Rotating it invalidates all browser
+sessions without changing operator credentials. `BOT_API_KEY` remains an
+automation Bearer credential and must not be entered into the browser login.
+Operator login throttling trusts only Railway's `X-Real-IP`; missing or invalid
+values share a separately bounded global bucket. Forwarded-IP headers are not
+accepted as substitutes.
 
 Worker variables. `DISCOVERY_REQUEST_CAP` and the Blizzard fingerprint settings
 are read only by the worker, so set them on the worker service alone.
