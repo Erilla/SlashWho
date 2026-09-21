@@ -152,6 +152,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       BOT_API_KEY: "e2e-bot-key-that-is-longer-than-32-characters",
       RATE_LIMIT_HASH_SECRET:
         "e2e-rate-secret-that-is-longer-than-32-characters",
+      OPERATOR_ORIGIN: webBaseUrl,
+      OPERATOR_SESSION_HASH_SECRET:
+        "e2e-operator-session-secret-that-is-longer-than-32-characters",
       ANONYMOUS_SEARCHES_PER_HOUR: "1000",
       PUBLIC_READS_PER_MINUTE: "1000",
       FRESHNESS_HOURS: "24",

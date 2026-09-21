@@ -8,6 +8,8 @@ const config = loadWebConfig({
   DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
   BOT_API_KEY: "b".repeat(32),
   RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+  OPERATOR_ORIGIN: "https://operators.example.test",
+  OPERATOR_SESSION_HASH_SECRET: "s".repeat(32),
   BLIZZARD_CLIENT_ID: "blizzard-client-id",
   BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
   EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
@@ -105,6 +107,8 @@ describe("readCredentialOverrides", () => {
       DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
       BOT_API_KEY: "b".repeat(32),
       RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+      OPERATOR_ORIGIN: "https://operators.example.test",
+      OPERATOR_SESSION_HASH_SECRET: "s".repeat(32),
       BLIZZARD_CLIENT_ID: "blizzard-client-id",
       BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
       EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64),

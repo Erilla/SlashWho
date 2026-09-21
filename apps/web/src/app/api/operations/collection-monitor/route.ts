@@ -1,9 +1,7 @@
 import { collectionMonitorResponseSchema } from "@slashwho/contracts";
 
-import { loadWebConfig } from "../../../../server/config";
 import { getContainer } from "../../../../server/container";
 import { apiError, withHttpRequest } from "../../../../server/http";
-import { isOperatorRequest } from "../../../../server/operator-session";
 
 function unauthorized(): Response {
   const response = apiError("unauthorized");
@@ -13,15 +11,24 @@ function unauthorized(): Response {
 
 export async function GET(request: Request): Promise<Response> {
   return withHttpRequest("collection_monitor", async () => {
-    if (!isOperatorRequest(request.headers, loadWebConfig().application)) {
-      return unauthorized();
+    const { collectionMonitor, operatorAuth } = await getContainer();
+    const authentication = await operatorAuth.authenticateOperator(request);
+    if (!authentication.principal) {
+      const response = unauthorized();
+      if (authentication.cookie)
+        response.headers.set("set-cookie", authentication.cookie.header);
+      return response;
     }
-    const { collectionMonitor } = await getContainer();
     const monitor = collectionMonitorResponseSchema.parse(
       await collectionMonitor.list()
     );
     return Response.json(monitor, {
-      headers: { "cache-control": "no-store" }
+      headers: {
+        "cache-control": "no-store",
+        ...(authentication.cookie
+          ? { "set-cookie": authentication.cookie.header }
+          : {})
+      }
     });
   });
 }

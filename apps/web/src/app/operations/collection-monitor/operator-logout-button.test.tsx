@@ -32,8 +32,10 @@ describe("OperatorLogoutButton", () => {
     render(<OperatorLogoutButton />);
     await user.click(screen.getByRole("button", { name: "Sign out" }));
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/operations/session", {
-      method: "DELETE"
+    expect(fetchMock).toHaveBeenCalledWith("/api/operations/session/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
     });
     expect(router.replace).toHaveBeenCalledWith("/operations/login");
     expect(router.refresh).toHaveBeenCalledOnce();

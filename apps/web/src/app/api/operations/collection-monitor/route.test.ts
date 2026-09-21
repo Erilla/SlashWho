@@ -1,28 +1,19 @@
 import { safeApiErrorSchema } from "@slashwho/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createOperatorSessionCookie } from "../../../../server/operator-session";
+import {
+  automationKey,
+  operatorAuthFixture
+} from "../../../../server/operator-auth-test-fixture";
+let fixture: Awaited<ReturnType<typeof operatorAuthFixture>>;
 
-const operatorKey = "operator-secret-that-is-at-least-32-characters";
+const operatorKey = automationKey;
 const list = vi.fn();
 
 vi.mock("../../../../server/container", () => ({
-  getContainer: async () => ({ collectionMonitor: { list } })
-}));
-
-vi.mock("../../../../server/config", () => ({
-  loadWebConfig: () => ({
-    application: {
-      BOT_API_KEY: operatorKey,
-      RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-32-chars",
-      ANONYMOUS_SEARCHES_PER_HOUR: 10,
-      BOT_SEARCHES_PER_HOUR: 60,
-      PUBLIC_READS_PER_MINUTE: 300,
-      FRESHNESS_HOURS: 24,
-      DOSSIER_CHARACTER_CAP: 12,
-      DOSSIER_PROVIDER_CONCURRENCY: 4,
-      NEGATIVE_CACHE_TTL_MS: 300_000
-    }
+  getContainer: async () => ({
+    collectionMonitor: { list },
+    operatorAuth: fixture.auth
   })
 }));
 
@@ -57,7 +48,8 @@ function request(headers: Record<string, string> = {}): Request {
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  fixture = await operatorAuthFixture();
   list.mockReset();
   list.mockResolvedValue(monitor);
 });
@@ -100,14 +92,10 @@ describe("GET /api/operations/collection-monitor", () => {
   });
 
   it("accepts the short-lived browser session cookie", async () => {
-    const config = {
-      BOT_API_KEY: operatorKey,
-      RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-32-chars"
-    } as Parameters<typeof createOperatorSessionCookie>[1];
-    const setCookie = createOperatorSessionCookie(operatorKey, config);
-    const response = await GET(
-      request({ cookie: setCookie!.split(";", 1)[0]! })
-    );
+    const cookie = await fixture.cookie();
+    const response = await GET(request({ cookie }));
+    expect(response.headers.get("set-cookie")).toContain(cookie);
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=1800");
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual(monitor);
@@ -131,5 +119,25 @@ describe("GET /api/operations/collection-monitor", () => {
     expect(safeApiErrorSchema.parse(JSON.parse(body)).error.code).toBe(
       "search_failed"
     );
+  });
+  it("expires legacy cookies before reading monitor data", async () => {
+    const response = await GET(
+      request({ cookie: "__Host-slashwho-operator=legacy.signed.cookie" })
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to a valid browser cookie for malformed authorization", async () => {
+    const response = await GET(
+      request({
+        cookie: await fixture.cookie(),
+        authorization: "Bearer invalid"
+      })
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(list).not.toHaveBeenCalled();
   });
 });

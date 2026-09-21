@@ -875,7 +875,120 @@ export interface SearchReservationRepository {
   markEnqueued(runId: string, queueJobId: string): Promise<void>;
 }
 
+/** An operator projection safe for application callers. */
+export type Operator = Readonly<{
+  id: string;
+  canonicalLogin: string;
+  displayLogin: string;
+  active: boolean;
+  credentialVersion: number;
+  createdAt: Date;
+  updatedAt: Date;
+}>;
+
+/**
+ * The derived material needed only to verify an operator credential. This is
+ * intentionally distinct from `Operator`, so ordinary callers never receive
+ * a hash or salt; neither type can expose a raw password.
+ */
+export type OperatorCredential = Operator &
+  Readonly<{
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+  }>;
+
+/** A browser session projection that deliberately omits its secret digest. */
+export type OperatorSession = Readonly<{
+  id: string;
+  operatorId: string;
+  credentialVersion: number;
+  issuedAt: Date;
+  lastUsedAt: Date;
+  idleExpiresAt: Date;
+  absoluteExpiresAt: Date;
+  revokedAt: Date | null;
+}>;
+
+export type OperatorLoginAdmission =
+  { kind: "admitted" } | { kind: "throttled"; retryAt: Date };
+
+/** The only lifecycle actions an operator-auth audit record may name. */
+export type OperatorAuthEventAction =
+  | "provision"
+  | "rotate"
+  | "disable"
+  | "sign_in"
+  | "sign_out"
+  | "session_revoke";
+
+/** Safe, bounded outcomes for an operator-auth audit record. */
+export type OperatorAuthEventOutcome = "success" | "failure";
+
+/**
+ * Persistence boundary for operator credentials and revocable browser
+ * sessions. Inputs accept derived digests only; outputs never expose raw
+ * passwords or browser-session secrets.
+ */
+export interface OperatorAuthRepository {
+  findCredential(canonicalLogin: string): Promise<OperatorCredential | null>;
+  provision(input: {
+    canonicalLogin: string;
+    displayLogin: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<Operator>;
+  rotateCredential(input: {
+    operatorId: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<Operator | null>;
+  disable(operatorId: string, at: Date): Promise<Operator | null>;
+  list(): Promise<readonly Operator[]>;
+  admitLoginAttempt(input: {
+    subjectHash: string;
+    limit: number;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<OperatorLoginAdmission>;
+  appendEvent(input: {
+    operatorId: string | null;
+    action: OperatorAuthEventAction;
+    outcome: OperatorAuthEventOutcome;
+    at: Date;
+  }): Promise<void>;
+  issueSession(input: {
+    sessionId: string;
+    secretDigest: string;
+    operatorId: string;
+    credentialVersion: number;
+    issuedAt: Date;
+    lastUsedAt: Date;
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+  }): Promise<OperatorSession>;
+  useSession(input: {
+    sessionId: string;
+    secretDigest: string;
+    at: Date;
+    idleExpiresAt: Date;
+  }): Promise<{ operator: Operator; session: OperatorSession } | null>;
+  revokeSession(sessionId: string, at: Date): Promise<void>;
+  cleanupExpired(at: Date): Promise<{
+    sessions: number;
+    loginAttempts: number;
+  }>;
+}
+
 export interface Repositories {
+  operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;
   runs: {
     createOrReuse(

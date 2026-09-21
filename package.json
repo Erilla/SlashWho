@@ -15,6 +15,7 @@
     "ops:removals": "tsx scripts/removals.mts",
     "analyze:performance": "tsx scripts/analyze-performance-logs.mts",
     "ops:backfill-uploader-provenance": "tsx scripts/backfill-uploader-provenance.mts",
+    "ops:operators": "tsx scripts/operators.mts",
     "prototype:fingerprint-sweep": "tsx scripts/prototypes/fingerprint-sweep-measurement.ts",
     "typecheck": "tsc -p tsconfig.tools.json && pnpm -r typecheck",
     "test": "vitest run",

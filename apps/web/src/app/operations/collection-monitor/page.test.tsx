@@ -5,7 +5,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionMonitorResponse } from "@slashwho/contracts";
-import { createOperatorSessionCookie } from "../../../server/operator-session";
+import {
+  automationKey,
+  operatorAuthFixture
+} from "../../../server/operator-auth-test-fixture";
+let fixture: Awaited<ReturnType<typeof operatorAuthFixture>>;
 
 const mocks = vi.hoisted(() => ({
   headers: vi.fn(),
@@ -19,14 +23,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() })
 }));
 vi.mock("../../../server/container", () => ({
-  getContainer: async () => ({ collectionMonitor: { list: mocks.list } })
-}));
-vi.mock("../../../server/config", () => ({
-  loadWebConfig: () => ({
-    application: {
-      BOT_API_KEY: "operator-secret-that-is-at-least-32-characters",
-      RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-32-chars"
-    }
+  getContainer: async () => ({
+    collectionMonitor: { list: mocks.list },
+    operatorAuth: fixture.auth
   })
 }));
 vi.mock("./collection-monitor-client", () => ({
@@ -42,6 +41,11 @@ vi.mock("./collection-monitor-client", () => ({
 }));
 
 import CollectionMonitorPage from "./page";
+vi.mock("../../../server/config", () => ({
+  loadWebConfig: () => ({
+    operatorAuth: { origin: "https://slashwho.example" }
+  })
+}));
 
 const monitor: CollectionMonitorResponse = {
   generatedAt: "2026-09-20T12:00:00.000Z",
@@ -77,7 +81,8 @@ const monitor: CollectionMonitorResponse = {
 
 afterEach(cleanup);
 
-beforeEach(() => {
+beforeEach(async () => {
+  fixture = await operatorAuthFixture();
   mocks.headers.mockReset();
   mocks.redirect.mockReset();
   mocks.list.mockReset();
@@ -104,7 +109,7 @@ describe("CollectionMonitorPage", () => {
   it("passes the active monitor snapshot to the client for the configured operator Bearer credential", async () => {
     mocks.headers.mockResolvedValue(
       new Headers({
-        authorization: "Bearer operator-secret-that-is-at-least-32-characters"
+        authorization: `Bearer ${automationKey}`
       })
     );
 
@@ -116,13 +121,8 @@ describe("CollectionMonitorPage", () => {
   });
 
   it("loads the monitor for a valid browser session cookie", async () => {
-    const config = {
-      BOT_API_KEY: "operator-secret-that-is-at-least-32-characters",
-      RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-32-chars"
-    } as Parameters<typeof createOperatorSessionCookie>[1];
-    const setCookie = createOperatorSessionCookie(config.BOT_API_KEY, config);
     mocks.headers.mockResolvedValue(
-      new Headers({ cookie: setCookie!.split(";", 1)[0]! })
+      new Headers({ cookie: await fixture.cookie() })
     );
 
     render(await CollectionMonitorPage());

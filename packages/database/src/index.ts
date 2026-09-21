@@ -1,5 +1,6 @@
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
+export { operatorCanonicalLoginMaxLength } from "./schema";
 export {
   createDiscoveryQueue,
   collectCharacterEvidenceQueueName,
@@ -40,6 +41,13 @@ export type {
   FingerprintSweepRepository,
   NegativeCacheEntry,
   NegativeCacheRepository,
+  Operator,
+  OperatorAuthRepository,
+  OperatorAuthEventAction,
+  OperatorAuthEventOutcome,
+  OperatorCredential,
+  OperatorLoginAdmission,
+  OperatorSession,
   RateLimitRepository,
   Repositories,
   SearchReservationRepository,
