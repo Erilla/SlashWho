@@ -14,6 +14,12 @@ type CredentialHash = Readonly<{
   scryptVersion: number;
   scryptCost: number;
 }>;
+type HiddenCredentialInput = Readonly<{
+  isTTY?: boolean;
+  setRawMode?(enabled: boolean): void;
+  on(event: "data", listener: (chunk: string | Buffer) => void): unknown;
+  off(event: "data", listener: (chunk: string | Buffer) => void): unknown;
+}>;
 
 export type OperatorOperation =
   | Readonly<{ command: "provision"; login: string }>
@@ -34,6 +40,8 @@ export function parseOperatorOperation(
   const command = args[0] as Command | undefined;
   if (!command || !commands.includes(command))
     throw new Error("operator_command_required");
+  if (args.length !== (command === "list" ? 1 : 2))
+    throw new Error("operator_arguments_invalid");
   if (command === "list") return { command };
   const value = args[1];
   if (!value)
@@ -52,7 +60,7 @@ export async function runOperatorOperation(
   dependencies: Readonly<{
     repository: Pick<
       OperatorAuthRepository,
-      "provision" | "rotateCredential" | "disable" | "list" | "appendEvent"
+      "provision" | "rotateCredential" | "disable" | "list"
     >;
     readCredential(): Promise<string>;
     hashCredential(credential: string): Promise<CredentialHash>;
@@ -67,12 +75,6 @@ export async function runOperatorOperation(
       at
     );
     if (!operator) throw new Error("operator_not_found");
-    await dependencies.repository.appendEvent({
-      operatorId: operator.id,
-      action: "disable",
-      outcome: "success",
-      at
-    });
     return { action: "disable", operatorId: operator.id };
   }
   const credential = await dependencies.readCredential();
@@ -88,12 +90,6 @@ export async function runOperatorOperation(
       ...hash,
       at
     });
-    await dependencies.repository.appendEvent({
-      operatorId: operator.id,
-      action: "provision",
-      outcome: "success",
-      at
-    });
     return { action: "provision", operatorId: operator.id };
   }
   const operator = await dependencies.repository.rotateCredential({
@@ -102,19 +98,13 @@ export async function runOperatorOperation(
     at
   });
   if (!operator) throw new Error("operator_not_found");
-  await dependencies.repository.appendEvent({
-    operatorId: operator.id,
-    action: "rotate",
-    outcome: "success",
-    at
-  });
   return { action: "rotate", operatorId: operator.id };
 }
 
 export async function readHiddenCredential(
   options: Readonly<{
-    input: Pick<NodeJS.ReadStream, "isTTY" | "setRawMode" | "on" | "off">;
-    output: Pick<NodeJS.WriteStream, "write">;
+    input: HiddenCredentialInput;
+    output: Readonly<{ write(text: string): unknown }>;
   }>
 ): Promise<string> {
   const { input, output } = options;

@@ -15,7 +15,7 @@ describe("operator lifecycle command", () => {
     });
     const output = { write: vi.fn() };
     const credential = readHiddenCredential({ input, output });
-    input.emit("data", Buffer.from("secret\\r"));
+    input.emit("data", Buffer.from("secret\r"));
     await expect(credential).resolves.toBe("secret");
     expect(input.setRawMode.mock.calls).toEqual([[true], [false]]);
     expect(output.write).toHaveBeenCalledWith("Credential: ");
@@ -30,15 +30,22 @@ describe("operator lifecycle command", () => {
     expect(() =>
       parseOperatorOperation(["provision", "Admin", "--credential", "secret"])
     ).toThrow("operator_credential_cli_forbidden");
+    expect(() =>
+      parseOperatorOperation(["provision", "Admin", "secret"])
+    ).toThrow("operator_arguments_invalid");
   });
 
-  it("provisions a canonical operator and records only the lifecycle event", async () => {
+  it("provisions a canonical operator without duplicating its transactional audit event", async () => {
     const provision = vi.fn().mockResolvedValue({ id: "operator-id" });
-    const appendEvent = vi.fn().mockResolvedValue(undefined);
     const result = await runOperatorOperation(
       { command: "provision", login: "Admin" },
       {
-        repository: { provision, appendEvent },
+        repository: {
+          provision,
+          rotateCredential: vi.fn(),
+          disable: vi.fn(),
+          list: vi.fn()
+        },
         readCredential: async () => "x".repeat(20),
         hashCredential: async () => ({
           passwordHash: "hash",
@@ -54,13 +61,6 @@ describe("operator lifecycle command", () => {
       expect.objectContaining({
         canonicalLogin: "admin",
         displayLogin: "Admin"
-      })
-    );
-    expect(appendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        operatorId: "operator-id",
-        action: "provision",
-        outcome: "success"
       })
     );
   });
