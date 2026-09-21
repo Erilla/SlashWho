@@ -98,6 +98,13 @@ const partiallyExpanded = dossier(
   "Additional linked characters may exist; this dossier is not exhaustive.",
   "Partial evidence"
 );
+const linkedCharacters = initial.characters.concat({
+  key: { region: "eu" as const, realm: "silvermoon", name: "ryalts" },
+  displayName: "Ryalts",
+  className: "Rogue",
+  raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+  source: "manually_added" as const
+});
 // Rancour is a Draenor guild while Ryii is on Silvermoon, so this fixture also
 // pins that the heading never invents a realm suffix for the guild.
 const guilded: ApplicantDossier = {
@@ -126,6 +133,618 @@ afterEach(() => {
   vi.unstubAllGlobals();
   push.mockReset();
   clearStoredCredentials();
+});
+
+async function startFirstLiveEvidenceRead() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+}
+
+async function waitForFirstLiveEvidenceRead() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  });
+}
+
+async function flushAsyncWork() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function withEvidenceState(
+  source: ApplicantDossier,
+  evidenceState: "waiting" | "scanning" | "partial" | "complete"
+): ApplicantDossier {
+  return {
+    ...source,
+    characters: source.characters.map((character) => ({
+      ...character,
+      evidenceState,
+      researchState: "complete"
+    }))
+  };
+}
+
+function withCharacterEvidenceStates(
+  source: ApplicantDossier,
+  states: Record<string, "waiting" | "scanning" | "partial" | "complete">
+): ApplicantDossier {
+  return {
+    ...source,
+    characters: linkedCharacters.map((character) => ({
+      ...character,
+      evidenceState: states[character.key.name],
+      researchState: "complete" as const
+    }))
+  };
+}
+
+describe("DossierPageClient live evidence", () => {
+  it("cancels the old dossier read when navigating to another character", async () => {
+    vi.useFakeTimers();
+    let resolveOld!: (response: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveOld = resolve;
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    await startFirstLiveEvidenceRead();
+    const signal = fetchMock.mock.calls[0]?.[1].signal as AbortSignal;
+    view.rerender(
+      <DossierPageClient
+        identity={{ ...identity, name: "other" }}
+        initialDossier={withEvidenceState(expanded, "complete")}
+        jobId={null}
+      />
+    );
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      resolveOld(
+        Response.json(withEvidenceState(partiallyExpanded, "partial"))
+      );
+    });
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByText("Partial evidence")).not.toBeInTheDocument();
+  });
+
+  it("keeps an open character dialog and its draft while evidence refreshes", async () => {
+    const user = userEvent.setup();
+    let resolveRead!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveRead = resolve;
+        })
+      )
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    await waitForFirstLiveEvidenceRead();
+    await user.click(screen.getByRole("button", { name: "Add character" }));
+    const textbox = screen.getByRole("textbox", { name: "Character/URL" });
+    await user.type(textbox, "Ryalts");
+    await act(async () => {
+      resolveRead(Response.json(withEvidenceState(expanded, "complete")));
+    });
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Character/URL" })).toHaveValue(
+      "Ryalts"
+    );
+  });
+
+  it("allows manual refresh to recover after a terminal live-read error", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input.endsWith("/refresh"))
+        return Promise.resolve(Response.json({ mode: "light" }));
+      reads += 1;
+      return Promise.resolve(
+        reads === 1
+          ? Response.json({}, { status: 403 })
+          : Response.json(
+              withEvidenceState(
+                reads === 2 ? partiallyExpanded : expanded,
+                reads === 2 ? "partial" : "complete"
+              )
+            )
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "partial")}
+        jobId={null}
+      />
+    );
+    await waitForFirstLiveEvidenceRead();
+    expect(screen.getByRole("alert")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitForFirstLiveEvidenceRead();
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(`${dossierPath}/refresh`, {
+      method: "POST"
+    });
+    expect(reads).toBe(3);
+  });
+
+  it.each(["network", "server"])(
+    "retries a %s failure while leaving manual refresh usable",
+    async (failure) => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn();
+      if (failure === "network")
+        fetchMock.mockRejectedValueOnce(new Error("offline"));
+      else fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }));
+      fetchMock.mockResolvedValueOnce(
+        Response.json(withEvidenceState(expanded, "complete"))
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={withEvidenceState(initial, "partial")}
+          jobId={null}
+        />
+      );
+      await startFirstLiveEvidenceRead();
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      await act(() => vi.advanceTimersByTimeAsync(9_999));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+    }
+  );
+
+  it.each(["excluded", "demo", "legacy"])(
+    "does not poll %s evidence",
+    async (kind) => {
+      vi.useFakeTimers();
+      const source = withEvidenceState(expanded, "scanning");
+      const snapshot = {
+        ...source,
+        characters: source.characters.map((character) => ({
+          ...character,
+          ...(kind === "excluded" ? { excluded: true as const } : {}),
+          ...(kind === "legacy"
+            ? { evidenceState: undefined, researchState: "gathering" as const }
+            : {})
+        }))
+      };
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={snapshot}
+          jobId={null}
+          canAddCharacters={kind !== "demo"}
+        />
+      );
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps credential headers and no-store on a live dossier read", async () => {
+    vi.useFakeTimers();
+    writeStoredCredentials({
+      blizzardClientId: "id",
+      blizzardClientSecret: "secret",
+      raiderIoAccessKey: "",
+      wclClientId: "",
+      wclClientSecret: ""
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(withEvidenceState(expanded, "complete"))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "partial")}
+        jobId={null}
+      />
+    );
+    await startFirstLiveEvidenceRead();
+    expect(fetchMock).toHaveBeenCalledWith(
+      dossierPath,
+      expect.objectContaining({
+        cache: "no-store",
+        signal: expect.any(AbortSignal),
+        headers: expect.objectContaining({
+          "x-blizzard-client-id": "id",
+          "x-blizzard-client-secret": "secret"
+        })
+      })
+    );
+  });
+
+  it.each(["15", "Mon, 21 Sep 2026 12:00:15 GMT"])(
+    "honors Retry-After %s without clearing visible evidence",
+    async (retryAfter) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 429,
+            headers: { "retry-after": retryAfter }
+          })
+        )
+        .mockResolvedValueOnce(
+          Response.json(withEvidenceState(expanded, "complete"))
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={withEvidenceState(initial, "partial")}
+          jobId={null}
+        />
+      );
+      await startFirstLiveEvidenceRead();
+      await act(() =>
+        vi.advanceTimersByTimeAsync(retryAfter === "15" ? 14_999 : 13_999)
+      );
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+    }
+  );
+
+  it.each([401, 403, 404, 200])(
+    "stops on terminal response %s and retains evidence",
+    async (status) => {
+      vi.useFakeTimers();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(Response.json({}, { status }));
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={withEvidenceState(initial, "partial")}
+          jobId={null}
+        />
+      );
+      await startFirstLiveEvidenceRead();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        status === 404
+          ? "This applicant dossier was not found."
+          : status === 200
+            ? "The dossier returned an unexpected response."
+            : "The dossier could not be loaded."
+      );
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    }
+  );
+
+  it("does not poll initially terminal evidence even with gathering research", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(
+          {
+            ...expanded,
+            research: { ...expanded.research, state: "gathering" }
+          },
+          "complete"
+        )}
+        jobId={null}
+      />
+    );
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+  });
+
+  it.each(["waiting", "scanning", "partial"] as const)(
+    "updates %s evidence without using research.state",
+    async (state) => {
+      vi.useFakeTimers();
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json(withEvidenceState(expanded, "complete"))
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={withEvidenceState(initial, state)}
+          jobId={null}
+        />
+      );
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(() => vi.advanceTimersByTimeAsync(1_000));
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    }
+  );
+
+  it.each([401, 403, 404, 200])(
+    "retains a newer terminal discovery response %s when an older live snapshot arrives",
+    async (status) => {
+      vi.useFakeTimers();
+      let resolveOlder!: (response: Response) => void;
+      const older = new Promise<Response>((resolve) => {
+        resolveOlder = resolve;
+      });
+      let reads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string) => {
+          if (input === `/api/dossiers/jobs/${jobId}`) {
+            return Promise.resolve(
+              Response.json({ status: "complete", error: null })
+            );
+          }
+          reads += 1;
+          return reads === 1
+            ? older
+            : Promise.resolve(Response.json({}, { status }));
+        })
+      );
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={withEvidenceState(initial, "scanning")}
+          jobId={jobId}
+        />
+      );
+      await flushAsyncWork();
+      await startFirstLiveEvidenceRead();
+      const terminalMessage = screen.getByRole("alert").textContent;
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      await act(async () => {
+        resolveOlder(Response.json(withEvidenceState(expanded, "complete")));
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent(terminalMessage!);
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
+    }
+  );
+
+  it("does not let an older dossier response replace a newer terminal response", async () => {
+    vi.useFakeTimers();
+    let resolveOlder!: (response: Response) => void;
+    const older = new Promise<Response>((resolve) => {
+      resolveOlder = resolve;
+    });
+    let dossierCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input === `/api/dossiers/jobs/${jobId}`)
+          return Promise.resolve(
+            Response.json({ status: "complete", error: null })
+          );
+        dossierCalls += 1;
+        if (dossierCalls === 2) return older;
+        if (dossierCalls > 3) return new Promise<Response>(() => undefined);
+        return Promise.resolve(
+          Response.json(
+            withEvidenceState(
+              dossierCalls === 1 ? initial : expanded,
+              dossierCalls === 1 ? "partial" : "complete"
+            )
+          )
+        );
+      })
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={jobId}
+      />
+    );
+    await flushAsyncWork();
+    await startFirstLiveEvidenceRead();
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    await act(async () => {
+      resolveOlder(
+        Response.json(withEvidenceState(partiallyExpanded, "partial"))
+      );
+    });
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByText("Partial evidence")).not.toBeInTheDocument();
+  });
+
+  it("announces both completions in a scanning complete scanning complete cycle", async () => {
+    const user = userEvent.setup();
+    let resolveSecondCompletion!: (response: Response) => void;
+    const secondCompletion = new Promise<Response>((resolve) => {
+      resolveSecondCompletion = resolve;
+    });
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.endsWith("/refresh")) {
+          return Promise.resolve(Response.json({ mode: "full" }));
+        }
+        reads += 1;
+        if (reads === 3) return secondCompletion;
+        return Promise.resolve(
+          Response.json(
+            withEvidenceState(expanded, reads === 1 ? "complete" : "scanning")
+          )
+        );
+      })
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    expect(
+      screen.getByRole("status", { name: "Evidence collection updates" })
+    ).toBeEmptyDOMElement();
+    await waitForFirstLiveEvidenceRead();
+    const announcement = screen.getByRole("status", {
+      name: "Ryii evidence collection is complete."
+    });
+    const messages: (string | null)[] = [];
+    const observer = new MutationObserver(() =>
+      messages.push(announcement.textContent)
+    );
+    observer.observe(announcement, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(
+        screen.getByRole("status", { name: "Evidence collection updates" })
+      ).toBeEmptyDOMElement();
+      await waitForFirstLiveEvidenceRead();
+      await act(async () => {
+        resolveSecondCompletion(
+          Response.json(withEvidenceState(expanded, "complete"))
+        );
+      });
+      expect(
+        screen.getByRole("status", {
+          name: "Ryii evidence collection is complete."
+        })
+      ).toHaveTextContent("Ryii evidence collection is complete.");
+      expect(messages).toEqual(["", "Ryii evidence collection is complete."]);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  it("announces partial and complete evidence changes once", async () => {
+    vi.useFakeTimers();
+    const partial = withEvidenceState(partiallyExpanded, "partial");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(partial))
+      .mockResolvedValueOnce(Response.json(partial))
+      .mockResolvedValueOnce(
+        Response.json(withEvidenceState(expanded, "complete"))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    await startFirstLiveEvidenceRead();
+    const announcement = screen.getByRole("status", {
+      name: "Ryii evidence collection is partial."
+    });
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    const changes = vi.fn();
+    const observer = new MutationObserver(changes);
+    observer.observe(announcement, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(changes).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(4_000));
+    expect(
+      screen.getAllByRole("status", {
+        name: "Ryii evidence collection is complete."
+      })
+    ).toHaveLength(1);
+    expect(changes).toHaveBeenCalledTimes(1);
+    observer.disconnect();
+  });
+
+  it("announces each non-excluded character's evidence transition", async () => {
+    // Break caught: one character completing could be hidden by another still scanning.
+    vi.useFakeTimers();
+    const rootCompleteAltScanning = withCharacterEvidenceStates(initial, {
+      ryii: "complete",
+      ryalts: "scanning"
+    });
+    const rootCompleteAltPartial = withCharacterEvidenceStates(initial, {
+      ryii: "complete",
+      ryalts: "partial"
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(rootCompleteAltScanning))
+        .mockResolvedValueOnce(Response.json(rootCompleteAltPartial))
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withCharacterEvidenceStates(initial, {
+          ryii: "scanning",
+          ryalts: "scanning"
+        })}
+        jobId={null}
+      />
+    );
+
+    await startFirstLiveEvidenceRead();
+    expect(
+      screen.getByRole("status", {
+        name: "Ryii evidence collection is complete."
+      })
+    ).toHaveTextContent("Ryii evidence collection is complete.");
+
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(
+      screen.getByRole("status", {
+        name: "Ryalts evidence collection is partial."
+      })
+    ).toHaveTextContent("Ryalts evidence collection is partial.");
+  });
 });
 
 describe("DossierPageClient staged research", () => {
@@ -291,7 +910,7 @@ describe("DossierPageClient staged research", () => {
       />
     );
 
-    const status = screen.getByRole("status");
+    const status = screen.getByRole("status", { name: "" });
     expect(status).toBeVisible();
     expect(status).toHaveTextContent("Researching applicant dossier…");
     expect(status.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
@@ -677,10 +1296,13 @@ describe("DossierPageClient staged research", () => {
     render(
       <DossierPageClient
         identity={identity}
-        initialDossier={dossier(
-          "gathering",
-          "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes.",
-          "Gathering evidence"
+        initialDossier={withEvidenceState(
+          dossier(
+            "gathering",
+            "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes.",
+            "Gathering evidence"
+          ),
+          "scanning"
         )}
         jobId={null}
       />
@@ -698,7 +1320,7 @@ describe("DossierPageClient staged research", () => {
     expect(evidenceCalls).toBe(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(evidenceCalls).toBe(2);
     expect(screen.getByText(partiallyExpanded.research.message)).toBeVisible();

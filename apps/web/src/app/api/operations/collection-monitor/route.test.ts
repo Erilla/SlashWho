@@ -21,6 +21,7 @@ import { GET } from "./route";
 
 const monitor = {
   generatedAt: "2026-09-20T12:00:00.000Z",
+  hasActiveRuns: true,
   inFlight: [
     {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
@@ -83,7 +84,10 @@ describe("GET /api/operations/collection-monitor", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual(monitor);
+    await expect(response.json()).resolves.toEqual({
+      ...monitor,
+      hasActiveRuns: true
+    });
     expect(list).toHaveBeenCalledOnce();
   });
 

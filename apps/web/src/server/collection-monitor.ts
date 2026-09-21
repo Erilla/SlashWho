@@ -17,8 +17,15 @@ export function createCollectionMonitorService(options: {
     async list() {
       const generatedAt = clock();
       const rows = await options.evidence.listForMonitor();
+      const hasActiveRuns = rows.some(
+        (row) =>
+          row.status === "queued" ||
+          row.status === "running" ||
+          row.status === "retrying"
+      );
       const response: CollectionMonitorResponse = {
         generatedAt: generatedAt.toISOString(),
+        hasActiveRuns,
         inFlight: [],
         completed: [],
         failed: []

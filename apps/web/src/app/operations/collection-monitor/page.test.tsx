@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionMonitorResponse } from "@slashwho/contracts";
@@ -28,8 +28,19 @@ vi.mock("../../../server/container", () => ({
     operatorAuth: fixture.auth
   })
 }));
+vi.mock("./collection-monitor-client", () => ({
+  CollectionMonitorClient: ({
+    initialMonitor
+  }: {
+    initialMonitor: CollectionMonitorResponse;
+  }) => (
+    <output data-testid="monitor-liveness">
+      {initialMonitor.hasActiveRuns ? "active" : "terminal"}
+    </output>
+  )
+}));
 
-import CollectionMonitorPage, { CollectionMonitorView } from "./page";
+import CollectionMonitorPage from "./page";
 vi.mock("../../../server/config", () => ({
   loadWebConfig: () => ({
     operatorAuth: { origin: "https://slashwho.example" }
@@ -38,6 +49,7 @@ vi.mock("../../../server/config", () => ({
 
 const monitor: CollectionMonitorResponse = {
   generatedAt: "2026-09-20T12:00:00.000Z",
+  hasActiveRuns: true,
   inFlight: [
     {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
@@ -81,55 +93,6 @@ beforeEach(async () => {
 });
 
 describe("CollectionMonitorPage", () => {
-  it("renders the three requested tables with only their requested columns", () => {
-    render(<CollectionMonitorView monitor={monitor} />);
-
-    const inFlight = screen.getByRole("table", {
-      name: "In flight and pending"
-    });
-    const completed = screen.getByRole("table", { name: "Completed" });
-    const failed = screen.getByRole("table", { name: "Failed" });
-
-    expect(
-      within(inFlight)
-        .getAllByRole("columnheader")
-        .map((cell) => cell.textContent)
-    ).toEqual([
-      "Character",
-      "Status",
-      "Attempt",
-      "Started",
-      "Elapsed",
-      "Retry after"
-    ]);
-    expect(
-      within(completed)
-        .getAllByRole("columnheader")
-        .map((cell) => cell.textContent)
-    ).toEqual([
-      "Character",
-      "State",
-      "Limitation",
-      "Parse limitation",
-      "Completed",
-      "Evidence version"
-    ]);
-    expect(
-      within(failed)
-        .getAllByRole("columnheader")
-        .map((cell) => cell.textContent)
-    ).toEqual(["Character", "Error", "Stopped"]);
-
-    expect(within(inFlight).getByText("15m")).toBeInTheDocument();
-    expect(within(completed).getByText("request_cap")).toBeInTheDocument();
-    expect(
-      within(completed).getByText("parse_request_cap")
-    ).toBeInTheDocument();
-    expect(
-      within(failed).getByText("warcraft_logs_unavailable")
-    ).toBeInTheDocument();
-  });
-
   it("does not load identities when the page request lacks operator authorization", async () => {
     mocks.headers.mockResolvedValue(
       new Headers({ "x-real-ip": "203.0.113.8" })
@@ -143,7 +106,7 @@ describe("CollectionMonitorPage", () => {
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
-  it("loads the monitor for the configured operator Bearer credential", async () => {
+  it("passes the active monitor snapshot to the client for the configured operator Bearer credential", async () => {
     mocks.headers.mockResolvedValue(
       new Headers({
         authorization: `Bearer ${automationKey}`
@@ -152,9 +115,7 @@ describe("CollectionMonitorPage", () => {
 
     render(await CollectionMonitorPage());
 
-    expect(
-      screen.getByRole("heading", { name: "Collection monitor" })
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("monitor-liveness")).toHaveTextContent("active");
     expect(mocks.list).toHaveBeenCalledOnce();
     expect(mocks.redirect).not.toHaveBeenCalled();
   });
@@ -166,9 +127,7 @@ describe("CollectionMonitorPage", () => {
 
     render(await CollectionMonitorPage());
 
-    expect(
-      screen.getByRole("heading", { name: "Collection monitor" })
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("monitor-liveness")).toHaveTextContent("active");
     expect(mocks.list).toHaveBeenCalledOnce();
     expect(mocks.redirect).not.toHaveBeenCalled();
   });

@@ -37,6 +37,7 @@ export const collectionMonitorFailedRunSchema = z
 export const collectionMonitorResponseSchema = z
   .object({
     generatedAt: timestampSchema,
+    hasActiveRuns: z.boolean(),
     inFlight: z.array(collectionMonitorInFlightRunSchema),
     completed: z.array(collectionMonitorCompletedRunSchema),
     failed: z.array(collectionMonitorFailedRunSchema)
