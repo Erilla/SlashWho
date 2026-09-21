@@ -164,6 +164,16 @@ export type WarcraftLogsReportResult =
       kind: "evidence";
       /** True when history was intentionally omitted and only parses ran. */
       scanSkipped?: boolean;
+      /**
+       * The next report page after the newest contiguous prefix decoded by a
+       * limited scan. It is absent unless a cleanly decoded page proves it.
+       */
+      historyScanResumePage?: number;
+      /**
+       * The last report code on the final proved page. It validates that the
+       * page offset has not moved before a later run resumes below it.
+       */
+      historyScanResumeBoundaryReportCode?: string;
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
@@ -245,6 +255,13 @@ export interface WarcraftLogsGateway {
     options: Readonly<{
       requestCap: number;
       parseRequestCap: number;
+      /**
+       * The first history page to scan. A persisted value resumes below a
+       * prefix a prior capped scan decoded cleanly.
+       */
+      historyScanStartPage?: number;
+      /** The final report code on the stored boundary page. */
+      historyScanResumeBoundaryReportCode?: string;
       storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       /** The character's known class, used to settle shared specialisation names. */
       className?: string;
