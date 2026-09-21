@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CharacterKey } from "./character-key";
 import {
   buildApplicantDossier,
@@ -42,7 +42,6 @@ function kill(
     bossName: "Queen Ansurek",
     journalBossId: null,
     bossOrder: 8,
-    isFinalBoss: true,
     character,
     killedAt: "2024-10-01T20:00:00.000Z",
     guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
@@ -102,6 +101,20 @@ function wipe(
 }
 
 describe("applicant dossier", () => {
+  it("derives final-boss status from the raid catalogue", () => {
+    expectTypeOf<"isFinalBoss">().not.toMatchTypeOf<
+      keyof DossierKillEvidence
+    >();
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [kill(root)],
+      limitations: []
+    });
+
+    expect(dossier.raids[0]!.bosses[0]!.bossName).toBe("Queen Ansurek");
+  });
+
   it("reports a limitation when a raid kill cannot be matched to the catalogue", () => {
     // Break caught: an unmatched raid zone used to drop the kill with no trace,
     // so a whole tier could read as unkilled and nothing in the dossier said
@@ -859,8 +872,8 @@ describe("applicant dossier", () => {
 
   it("uses the same result when tied evidence input is reversed", () => {
     const forward = [
-      kill(root, { killedAt: "2024-10-01T20:00:00.000Z", isFinalBoss: false }),
-      kill(altKey, { killedAt: "2024-10-01T20:00:00.000Z", isFinalBoss: true })
+      kill(root, { killedAt: "2024-10-01T20:00:00.000Z" }),
+      kill(altKey, { killedAt: "2024-10-01T20:00:00.000Z" })
     ];
     const reverse = [...forward].reverse();
     const make = (kills: DossierKillEvidence[]) =>
@@ -1036,13 +1049,11 @@ describe("applicant dossier", () => {
         kill(root, {
           raidName: "Nerub-ar Palace",
           bossName: "Sikran",
-          journalBossId: "2599",
-          isFinalBoss: false
+          journalBossId: "2599"
         }),
         kill(root, {
           raidName: "Nerub-ar Palace",
-          journalBossId: "2602",
-          isFinalBoss: false
+          journalBossId: "2602"
         }),
         kill(root, {
           raidName: "Amirdrassil, the Dream's Hope",
@@ -1311,7 +1322,6 @@ describe("historic tier current-content windows", () => {
           bossName: "Vigilant Guardian",
           journalBossId: "2458",
           bossOrder: 1,
-          isFinalBoss: false,
           killedAt: "2022-04-13T20:00:00.000Z"
         })
       ],
@@ -1345,7 +1355,6 @@ describe("historic tier current-content windows", () => {
           bossName: "Vigilant Guardian",
           journalBossId: "2458",
           bossOrder: 1,
-          isFinalBoss: false,
           killedAt: "2025-01-01T20:00:00.000Z"
         })
       ],
@@ -1484,7 +1493,6 @@ it("reports one withheld-evidence limitation per character and reason", () => {
       bossName: "Vigilant Guardian",
       journalBossId: bossId,
       bossOrder: 1,
-      isFinalBoss: false,
       killedAt
     });
   const dossier = buildApplicantDossier({

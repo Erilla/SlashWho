@@ -124,14 +124,12 @@ export async function seedCharacterEvidence(
                       bossName: "Queen Ansurek",
                       journalBossId: null,
                       bossOrder: 8,
-                      isFinalBoss: true,
                       killedAt: "2025-01-13T21:31:40.000Z",
                       reportUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
                       guild: { name: "Arachnid", realm: "silvermoon" },
-                      historicWorldRank: 147,
                       performance: {
                         spec: seedSpec,
                         damage: {
@@ -149,14 +147,12 @@ export async function seedCharacterEvidence(
                       bossName: "Queen Ansurek",
                       journalBossId: null,
                       bossOrder: 8,
-                      isFinalBoss: true,
                       killedAt: "2025-01-13T22:31:40.000Z",
                       reportUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
                       guild: { name: "Arachnid", realm: "silvermoon" },
-                      historicWorldRank: 147,
                       performance: {
                         spec: seedSpec,
                         damage: {
@@ -177,14 +173,12 @@ export async function seedCharacterEvidence(
                       bossName: "Queen Ansurek",
                       journalBossId: null,
                       bossOrder: 8,
-                      isFinalBoss: true,
                       killedAt: "2025-01-14T21:31:40.000Z",
                       reportUrl:
                         "https://www.warcraftlogs.com/reports/e2eLaterReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eLaterReport#fight=11",
                       guild: { name: "Arachnid", realm: "silvermoon" },
-                      historicWorldRank: 147,
                       performance: {
                         spec: seedSpec,
                         damage: {
@@ -206,14 +200,12 @@ export async function seedCharacterEvidence(
                       bossName: "Raszageth the Storm-Eater",
                       journalBossId: "2499",
                       bossOrder: 8,
-                      isFinalBoss: true,
                       killedAt: "2023-01-09T21:31:40.000Z",
                       reportUrl:
                         "https://www.warcraftlogs.com/reports/e2eVaultReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eVaultReport#fight=11",
                       guild: { name: "Arachnid", realm: "silvermoon" },
-                      historicWorldRank: 212,
                       performance: {
                         spec: seedSpec,
                         damage: { state: "unavailable" as const },

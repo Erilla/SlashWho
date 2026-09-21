@@ -151,6 +151,48 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       return;
     }
 
+    if (url.pathname === "/api/guilds/raid-rankings") {
+      if (
+        url.searchParams.get("region") !== "eu" ||
+        url.searchParams.get("realm") !== "silvermoon" ||
+        url.searchParams.get("guild") !== "Arachnid" ||
+        url.searchParams.get("raid") !== "nerubar-palace" ||
+        url.searchParams.get("difficulty") !== "mythic"
+      ) {
+        json(response, 404, { status: 404 });
+        return;
+      }
+      json(response, 200, {
+        bossRankings: [{ boss: "queen-ansurek", ranks: { world: 147 } }]
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/v1/guilds/profile") {
+      if (
+        url.searchParams.get("region") !== "eu" ||
+        url.searchParams.get("realm") !== "silvermoon" ||
+        url.searchParams.get("name") !== "Arachnid" ||
+        url.searchParams.get("fields") !==
+          "raid_encounters:nerubar-palace:mythic"
+      ) {
+        json(response, 404, { status: 404 });
+        return;
+      }
+      json(response, 200, {
+        name: "Arachnid",
+        realm: "silvermoon",
+        region: "eu",
+        raid_encounters: [
+          {
+            slug: "queen-ansurek",
+            defeatedAt: "2025-01-13T21:31:40.000Z"
+          }
+        ]
+      });
+      return;
+    }
+
     if (url.pathname.startsWith("/api/characters/")) {
       characterRequests.set(
         url.pathname,

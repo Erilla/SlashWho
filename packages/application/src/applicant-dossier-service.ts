@@ -336,12 +336,11 @@ function cachedKill(
     bossName: kill.bossName,
     journalBossId: kill.journalBossId,
     bossOrder: kill.bossOrder,
-    isFinalBoss: kill.isFinalBoss,
     character,
     killedAt: kill.killedAt,
     guild: kill.guild ? { ...kill.guild, region: character.region } : null,
     uploader: kill.uploader ?? null,
-    historicWorldRank: kill.historicWorldRank ?? null,
+    historicWorldRank: null,
     reportUrl: kill.fightUrl,
     performance: kill.performance
   };

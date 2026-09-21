@@ -136,14 +136,12 @@ interface CharacterMythicKillRow {
   boss_name: string;
   journal_boss_id: string | null;
   boss_order: number;
-  is_final_boss: boolean;
   killed_at: Date;
   report_url: string;
   fight_url: string;
   guild_name: string | null;
   guild_realm: string | null;
   uploader: string | null;
-  historic_world_rank: number | null;
   spec_name: string | null;
   spec_icon_url: string | null;
   damage_parse_state: CharacterMythicKillParseMetric["state"];
@@ -435,7 +433,6 @@ function mapCharacterMythicKill(
     bossName: row.boss_name,
     journalBossId: row.journal_boss_id,
     bossOrder: row.boss_order,
-    isFinalBoss: row.is_final_boss,
     killedAt: row.killed_at.toISOString(),
     reportUrl: row.report_url,
     fightUrl: row.fight_url,
@@ -444,7 +441,6 @@ function mapCharacterMythicKill(
         ? null
         : { name: row.guild_name, realm: row.guild_realm! },
     ...(row.uploader === null ? {} : { uploader: row.uploader }),
-    historicWorldRank: row.historic_world_rank,
     performance: {
       spec:
         row.spec_name === null || row.spec_icon_url === null
@@ -608,8 +604,8 @@ async function loadCompletedEvidence(
 
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
-            boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
+            boss_order, killed_at, report_url, fight_url,
+            guild_name, guild_realm, uploader, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -825,17 +821,17 @@ async function loadPositiveEvidenceForPartial(
   // publish already merged into. Pick it explicitly (#326).
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
-            boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
+            boss_order, killed_at, report_url, fight_url,
+            guild_name, guild_realm, uploader, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
      FROM (
        SELECT DISTINCT ON (k.fight_url)
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
-              k.journal_boss_id, k.boss_order, k.is_final_boss, k.killed_at,
+              k.journal_boss_id, k.boss_order, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_realm, k.uploader, k.historic_world_rank, k.spec_name, k.spec_icon_url,
+              k.guild_realm, k.uploader, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -3149,12 +3145,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await client.query(
               `INSERT INTO character_mythic_kills
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
-                 boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
-                 report_url, fight_url, guild_name, guild_realm, uploader, historic_world_rank,
+                 boss_name, journal_boss_id, boss_order, killed_at,
+                 report_url, fight_url, guild_name, guild_realm, uploader,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
               [
                 runId,
                 kill.fightUrl,
@@ -3164,14 +3160,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.bossName,
                 kill.journalBossId,
                 kill.bossOrder,
-                kill.isFinalBoss,
                 kill.killedAt,
                 kill.reportUrl,
                 kill.fightUrl,
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
                 kill.uploader ?? null,
-                kill.historicWorldRank ?? null,
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
                 performance.damage.state,
