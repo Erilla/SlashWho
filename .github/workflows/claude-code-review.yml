@@ -21,6 +21,8 @@ on:
       - "docs/**"
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
+      - "apps/web/public/brand/**"
+      - "apps/web/src/app/icon.svg"
 
 permissions:
   contents: read
