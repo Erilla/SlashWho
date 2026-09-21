@@ -1250,10 +1250,25 @@ a {
   gap: 0.4rem 1.15rem;
 }
 
+.dossier-parse-list--with-character-name li {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  align-items: start;
+  column-gap: 1.15rem;
+}
+
+.dossier-parse-list--with-character-name .dossier-parse-character {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .dossier-parse-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   min-width: 0;
+  width: 100%;
   align-items: baseline;
   gap: 0.4rem 1rem;
 }
@@ -2187,9 +2202,22 @@ a {
   .history-panel {
     margin-top: 1rem;
   }
+
+  .dossier-parse-list--with-character-name li {
+    grid-template-columns: 8rem minmax(0, 1fr);
+    column-gap: 0.75rem;
+  }
+
+  .dossier-parse-list--with-character-name .dossier-parse-metrics {
+    column-gap: 0.5rem;
+  }
 }
 
 @media (max-width: 34rem) {
+  .dossier-parse-list--with-character-name li {
+    grid-template-columns: 7rem minmax(0, 1fr);
+  }
+
   .dossier-heading {
     align-items: stretch;
     flex-direction: column;
