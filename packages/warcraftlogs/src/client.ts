@@ -583,7 +583,6 @@ function firstKillReports(
         bossName,
         journalBossId: journalBossIds.get(encounterId) ?? null,
         bossOrder: encounterId,
-        isFinalBoss: false,
         killedAt: evidenceAt,
         reportCode: code,
         fightId: id,
@@ -592,8 +591,7 @@ function firstKillReports(
         reportUrl,
         fightUrl,
         guild,
-        uploader,
-        historicWorldRank: null
+        uploader
       };
       killedByReportBoss.add(`${candidate.reportUrl}\0${candidate.bossId}`);
       kills.set(candidate.fightUrl, candidate);

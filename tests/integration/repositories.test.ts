@@ -80,12 +80,10 @@ function mythicKill(
     bossName: "Queen Ansurek",
     journalBossId: "3014",
     bossOrder: 8,
-    isFinalBoss: true,
     killedAt: "2026-08-04T12:00:00.000Z",
     reportUrl: "https://www.warcraftlogs.com/reports/example",
     fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
     guild: { name: "Example Guild", realm: "silvermoon" },
-    historicWorldRank: null,
     performance: {
       spec: null,
       damage: { state: "unavailable" },
@@ -500,11 +498,11 @@ describe("PostgreSQL repositories", () => {
     await pool.query(
       `INSERT INTO character_mythic_kills
          (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
-          boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
+          boss_name, journal_boss_id, boss_order, killed_at,
           report_url, fight_url, damage_parse_state, healing_parse_state,
           boss_damage_parse_state, collected_at)
        SELECT $1, source_fight_key, raid_id, raid_name, boss_id, boss_name,
-              journal_boss_id, boss_order, is_final_boss, killed_at,
+              journal_boss_id, boss_order, killed_at,
               report_url, fight_url, 'unavailable', 'unavailable',
               'unavailable', collected_at
          FROM character_mythic_kills

@@ -3054,12 +3054,10 @@ describe("Warcraft Logs gateway", () => {
           bossName: "Queen Ansurek",
           journalBossId: null,
           bossOrder: 1234,
-          isFinalBoss: false,
           killedAt: "2024-10-05T01:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/earlyReport",
           fightUrl: "https://www.warcraftlogs.com/reports/earlyReport#fight=7",
-          guild: null,
-          historicWorldRank: null
+          guild: null
         },
         {
           raidId: "42",
@@ -3068,12 +3066,10 @@ describe("Warcraft Logs gateway", () => {
           bossName: "Queen Ansurek",
           journalBossId: null,
           bossOrder: 1234,
-          isFinalBoss: false,
           killedAt: "2024-10-07T03:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/lateReport",
           fightUrl: "https://www.warcraftlogs.com/reports/lateReport#fight=1",
-          guild: null,
-          historicWorldRank: null
+          guild: null
         },
         {
           raidId: "42",
@@ -3082,12 +3078,10 @@ describe("Warcraft Logs gateway", () => {
           bossName: "The Silken Court",
           journalBossId: null,
           bossOrder: 4321,
-          isFinalBoss: false,
           killedAt: "2024-10-06T02:00:00.000Z",
           reportUrl: "https://www.warcraftlogs.com/reports/secondBoss",
           fightUrl: "https://www.warcraftlogs.com/reports/secondBoss#fight=2",
-          guild: null,
-          historicWorldRank: null
+          guild: null
         }
       ],
       wipes: [

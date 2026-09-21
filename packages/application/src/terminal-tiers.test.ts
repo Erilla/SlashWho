@@ -116,11 +116,9 @@ describe("terminalTiersFrom", () => {
               ...kill("42", concluded, "2026-06-01T00:00:00.000Z"),
               bossId: "7",
               bossOrder: 7,
-              isFinalBoss: true,
               reportUrl: "https://www.warcraftlogs.com/reports/report",
               fightUrl: "https://www.warcraftlogs.com/reports/report#fight=7",
               guild: null,
-              historicWorldRank: null,
               performance: {
                 damage: { state: "unavailable" },
                 healing: { state: "unavailable" },
