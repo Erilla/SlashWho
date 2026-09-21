@@ -23,6 +23,14 @@ const inFlightMonitor: CollectionMonitorResponse = {
       startedAt: "2026-09-20T11:45:00.000Z",
       elapsedSeconds: 900,
       retryAfterAt: null
+    },
+    {
+      character: { region: "us", realm: "illidan", name: "blocked" },
+      status: "running",
+      attempt: 1,
+      startedAt: "2026-09-20T11:50:00.000Z",
+      elapsedSeconds: 600,
+      retryAfterAt: null
     }
   ],
   completed: [
@@ -69,6 +77,17 @@ const completeMonitor: CollectionMonitorResponse = {
       evidenceVersion: 15
     },
     ...inFlightMonitor.completed
+  ]
+};
+
+const multipleTerminalMonitor: CollectionMonitorResponse = {
+  ...completeMonitor,
+  failed: [
+    {
+      character: { region: "us", realm: "illidan", name: "blocked" },
+      errorCode: "warcraft_logs_unavailable",
+      stoppedAt: "2026-09-20T12:03:00.000Z"
+    }
   ]
 };
 
@@ -152,6 +171,41 @@ describe("CollectionMonitorClient", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "ryii collection is complete."
     );
+  });
+
+  it("announces every terminal transition published in one snapshot", async () => {
+    // Break caught: a single authoritative publication could hide later terminal transitions from assistive technology.
+    mockFetchMonitor(multipleTerminalMonitor);
+
+    render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
+    await advance(0);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "ryii collection is complete. blocked collection is failed."
+    );
+  });
+
+  it("does not announce an identical snapshot", async () => {
+    // Break caught: unchanged data could create noisy repeated announcements.
+    mockFetchMonitor(inFlightMonitor);
+
+    render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
+    await advance(0);
+
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  it("does not announce a generated-at-only change", async () => {
+    // Break caught: timestamp-only updates could create noisy repeated announcements.
+    mockFetchMonitor({
+      ...inFlightMonitor,
+      generatedAt: "2026-09-20T12:00:01.000Z"
+    });
+
+    render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
+    await advance(0);
+
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
   it("retains the last monitor snapshot after an unauthorized poll response", async () => {

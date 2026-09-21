@@ -121,11 +121,12 @@ function publicationAnnouncement(
   next: CollectionMonitorResponse
 ): string | null {
   const before = terminalStateByCharacter(previous);
+  const announcements: string[] = [];
   for (const [key, current] of terminalStateByCharacter(next)) {
     if (before.get(key)?.state === current.state) continue;
-    return `${current.name} collection is ${current.state}.`;
+    announcements.push(`${current.name} collection is ${current.state}.`);
   }
-  return null;
+  return announcements.length === 0 ? null : announcements.join(" ");
 }
 
 function terminalErrorMessage(response: Response): string {
