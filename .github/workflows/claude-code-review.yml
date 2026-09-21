@@ -4,7 +4,7 @@ name: claude-code-review
 # upstream code-review plugin. The plugin fanned out to four agents plus one
 # Opus validator per candidate finding, which cost about $1 per pull request
 # and scaled with the size of the diff and the number of suspicions raised.
-# This reads the diff once, on Sonnet, and spends more only when it actually
+# This reads the diff once, on Haiku, and spends more only when it actually
 # has a finding to check.
 #
 # The trade-off is precision: the plugin's extra agents existed to filter false
@@ -65,5 +65,5 @@ jobs:
           # runaway bound, in the unit that actually tracks cost, and the
           # account spend cap is the bound behind that.
           claude_args: >-
-            --model claude-sonnet-5
+            --model claude-haiku-4-5
             --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read,Grep,Glob"
