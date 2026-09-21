@@ -9,13 +9,13 @@ import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
 
+const webBaseUrl = "http://127.0.0.1:3100";
+const workerBaseUrl = "http://127.0.0.1:3101";
+
 type ManagedProcess = Readonly<{
   child: ChildProcess;
   output(): string;
 }>;
-
-const webBaseUrl = "http://127.0.0.1:3100";
-const workerBaseUrl = "http://127.0.0.1:3101";
 
 function startPnpm(
   args: string[],
