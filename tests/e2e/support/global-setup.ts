@@ -8,9 +8,15 @@ import process from "node:process";
 import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
+import { releasePortPair } from "./port-reservation";
 
-const webBaseUrl = "http://127.0.0.1:3100";
-const workerBaseUrl = "http://127.0.0.1:3101";
+const webPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
+const workerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
+if (!Number.isSafeInteger(webPort) || !Number.isSafeInteger(workerPort)) {
+  throw new Error("e2e_port_unavailable");
+}
+const webBaseUrl = `http://127.0.0.1:${webPort}`;
+const workerBaseUrl = `http://127.0.0.1:${workerPort}`;
 
 type ManagedProcess = Readonly<{
   child: ChildProcess;
@@ -42,21 +48,51 @@ function startPnpm(
   return { child, output: () => output };
 }
 
+async function waitForSuccessfulExit(
+  processHandle: ManagedProcess
+): Promise<void> {
+  if (processHandle.child.exitCode !== null) {
+    if (processHandle.child.exitCode === 0) return;
+    throw new Error(
+      `process_exited_with_code:${processHandle.child.exitCode}\n${processHandle.output()}`
+    );
+  }
+  await new Promise<void>((resolve, reject) => {
+    processHandle.child.once("error", reject);
+    processHandle.child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `process_exited_with_code:${code ?? "signal"}\n${processHandle.output()}`
+          )
+        );
+    });
+  });
+}
+
 async function waitForReady(
   url: string,
-  processHandle: ManagedProcess
+  processHandle: ManagedProcess,
+  readyOutput: string
 ): Promise<void> {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (processHandle.child.exitCode !== null) {
       throw new Error(`process_exited_before_ready\n${processHandle.output()}`);
     }
+    let response: Response | undefined;
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-      if (response.ok) return;
+      response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
     } catch {
       // Startup polling is intentionally quiet; the collected process output is
       // included if the readiness deadline expires.
+    }
+    if (response?.ok) {
+      // Do not accept a stale listener as our service. The spawned process
+      // must report that it successfully bound its own port before its
+      // endpoint can satisfy readiness.
+      if (processHandle.output().includes(readyOutput)) return;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -138,9 +174,18 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
     };
 
+    // Browser-test seeds access PostgreSQL directly. Establish the schema
+    // before either server becomes ready, rather than relying on their startup
+    // migrations to win the race with the first seed.
+    await waitForSuccessfulExit(
+      startPnpm(["tsx", "tests/e2e/support/migrate.ts"], environment)
+    );
+
+    await releasePortPair();
+
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
       ...environment,
-      PORT: "3101"
+      PORT: `${workerPort}`
     });
     const web = startPnpm(
       [
@@ -150,15 +195,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         "--hostname",
         "127.0.0.1",
         "--port",
-        "3100"
+        `${webPort}`
       ],
       environment
     );
     processes.push(worker, web);
 
     await Promise.all([
-      waitForReady(`${workerBaseUrl}/ready`, worker),
-      waitForReady(`${webBaseUrl}/ready`, web)
+      waitForReady(`${workerBaseUrl}/ready`, worker, '"event":"worker_ready"'),
+      waitForReady(`${webBaseUrl}/ready`, web, "Ready in")
     ]);
 
     return async () => {
@@ -171,7 +216,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ]);
     };
   } catch (error) {
-    await Promise.allSettled(processes.map(stopProcess));
+    await Promise.allSettled([
+      releasePortPair(),
+      ...processes.map(stopProcess)
+    ]);
     await Promise.allSettled([
       ...(fixture ? [fixture.close()] : []),
       ...(blizzard ? [blizzard.close()] : []),
