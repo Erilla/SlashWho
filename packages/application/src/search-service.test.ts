@@ -100,6 +100,37 @@ function policyFixture(
   };
 
   const repositories = {
+    operatorAuth: {
+      async findCredential() {
+        return null;
+      },
+      async provision() {
+        throw new Error("not_used");
+      },
+      async rotateCredential() {
+        return null;
+      },
+      async disable() {
+        return null;
+      },
+      async list() {
+        return [];
+      },
+      async admitLoginAttempt() {
+        return { kind: "admitted" as const };
+      },
+      async appendEvent() {},
+      async issueSession() {
+        throw new Error("not_used");
+      },
+      async useSession() {
+        return null;
+      },
+      async revokeSession() {},
+      async cleanupExpired() {
+        return { sessions: 0, loginAttempts: 0 };
+      }
+    },
     searchReservations: {
       async reserve(input) {
         if (activeRun) return { kind: "active" as const, run: activeRun };
