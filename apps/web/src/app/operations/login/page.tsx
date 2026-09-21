@@ -12,10 +12,7 @@ export default function OperatorLoginPage() {
     <main className="page-shell operator-login-page">
       <div>
         <h1>Operator sign in</h1>
-        <p>
-          Enter the bot API key to open a short-lived operator session in this
-          browser.
-        </p>
+        <p>Enter your operator login and credential to sign in.</p>
       </div>
       <OperatorLoginForm />
     </main>

@@ -1,105 +1,150 @@
 import { safeApiErrorSchema } from "@slashwho/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  operatorAuthFixture,
+  operatorCredential,
+  operatorLogin,
+  operatorMutation
+} from "../../../../server/operator-auth-test-fixture";
 
-const operatorKey = "operator-secret-that-is-at-least-32-characters";
-
-vi.mock("../../../../server/config", () => ({
-  loadWebConfig: () => ({
-    application: {
-      BOT_API_KEY: operatorKey,
-      RATE_LIMIT_HASH_SECRET: "rate-limit-secret-that-is-32-chars",
-      ANONYMOUS_SEARCHES_PER_HOUR: 10,
-      BOT_SEARCHES_PER_HOUR: 60,
-      PUBLIC_READS_PER_MINUTE: 300,
-      FRESHNESS_HOURS: 24,
-      DOSSIER_CHARACTER_CAP: 12,
-      DOSSIER_PROVIDER_CONCURRENCY: 4,
-      NEGATIVE_CACHE_TTL_MS: 300_000
-    }
+let fixture: Awaited<ReturnType<typeof operatorAuthFixture>>;
+const list = vi.fn();
+vi.mock("../../../../server/container", () => ({
+  getContainer: async () => ({
+    operatorAuth: fixture.auth,
+    collectionMonitor: { list }
   })
 }));
+import { POST } from "./route";
 
-import { DELETE, POST } from "./route";
-
-function loginRequest(
-  body: unknown,
-  options: { contentType?: string; url?: string } = {}
-): Request {
-  return new Request(
-    options.url ?? "https://slashwho.example/api/operations/session",
-    {
-      method: "POST",
-      headers: {
-        "content-type": options.contentType ?? "application/json"
-      },
-      body: typeof body === "string" ? body : JSON.stringify(body)
-    }
-  );
-}
+beforeEach(async () => {
+  fixture = await operatorAuthFixture();
+  list.mockReset();
+});
 
 describe("POST /api/operations/session", () => {
-  it("sets a hardened opaque session cookie for the configured operator key", async () => {
-    const response = await POST(loginRequest({ operatorKey }));
-    const cookie = response.headers.get("set-cookie");
-
+  it("issues an opaque hardened cookie without reflecting identity or credential", async () => {
+    const response = await POST(
+      operatorMutation({ login: operatorLogin, credential: operatorCredential })
+    );
     expect(response.status).toBe(204);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    const cookie = response.headers.get("set-cookie");
     expect(cookie).toMatch(
-      /^__Host-slashwho-operator=[A-Za-z0-9._-]+; Path=\/; Max-Age=1800; HttpOnly; Secure; SameSite=Strict$/
+      /^__Host-slashwho-operator=v1\.[a-f0-9-]+\.[A-Za-z0-9_-]+;/
     );
-    expect(cookie).not.toContain(operatorKey);
+    for (const attribute of [
+      "Path=/",
+      "Max-Age=1800",
+      "HttpOnly",
+      "Secure",
+      "SameSite=Strict"
+    ])
+      expect(cookie).toContain(attribute);
+    expect(cookie).not.toContain(operatorLogin);
+    expect(cookie).not.toContain(operatorCredential);
     expect(await response.text()).toBe("");
   });
 
   it.each([
-    ["a wrong key", { operatorKey: "x".repeat(40) }, "application/json"],
-    ["a missing key", {}, "application/json"],
-    ["malformed JSON", "{", "application/json"],
     [
-      "a form submission",
-      `operatorKey=${operatorKey}`,
-      "application/x-www-form-urlencoded"
-    ]
-  ])(
-    "rejects %s without setting or reflecting a credential",
-    async (_, body, contentType) => {
-      const response = await POST(loginRequest(body, { contentType }));
-      const text = await response.text();
-
+      "wrong credential",
+      { login: operatorLogin, credential: "x".repeat(40) },
+      {},
+      "POST"
+    ],
+    [
+      "unknown login",
+      { login: "unknown", credential: operatorCredential },
+      {},
+      "POST"
+    ],
+    ["legacy key", { operatorKey: operatorCredential }, {}, "POST"],
+    ["malformed JSON", "{", {}, "POST"],
+    [
+      "non JSON",
+      { login: operatorLogin, credential: operatorCredential },
+      { "content-type": "text/plain" },
+      "POST"
+    ],
+    [
+      "cross origin",
+      { login: operatorLogin, credential: operatorCredential },
+      { origin: "https://evil.example" },
+      "POST"
+    ],
+    [
+      "missing origin",
+      { login: operatorLogin, credential: operatorCredential },
+      { origin: "" },
+      "POST"
+    ],
+    [
+      "cross-site metadata",
+      { login: operatorLogin, credential: operatorCredential },
+      { "sec-fetch-site": "cross-site" },
+      "POST"
+    ],
+    [
+      "missing metadata",
+      { login: operatorLogin, credential: operatorCredential },
+      { "sec-fetch-site": "" },
+      "POST"
+    ],
+    ["invalid method", {}, {}, "GET"]
+  ] as const)(
+    "rejects %s generically without cookies or monitor reads",
+    async (_, body, headers, method) => {
+      const response = await POST(operatorMutation(body, headers, method));
       expect(response.status).toBe(401);
       expect(response.headers.get("set-cookie")).toBeNull();
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(text).not.toContain(operatorKey);
+      const text = await response.text();
+      expect(text).not.toContain(operatorCredential);
+      expect(text).not.toContain(operatorLogin);
       expect(safeApiErrorSchema.parse(JSON.parse(text)).error.code).toBe(
         "unauthorized"
       );
+      expect(list).not.toHaveBeenCalled();
     }
   );
 
-  it("never accepts or reflects a key supplied in the URL", async () => {
+  it("denies throttled login without issuing a cookie or checking credentials", async () => {
+    vi.mocked(fixture.repository.admitLoginAttempt).mockResolvedValue({
+      kind: "throttled",
+      retryAt: new Date()
+    });
     const response = await POST(
-      loginRequest(
-        {},
-        {
-          url: `https://slashwho.example/api/operations/session?operatorKey=${operatorKey}`
-        }
-      )
+      operatorMutation({ login: operatorLogin, credential: operatorCredential })
     );
-
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toBeNull();
-    expect(await response.text()).not.toContain(operatorKey);
+    expect(fixture.repository.findCredential).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
   });
-});
 
-describe("DELETE /api/operations/session", () => {
-  it("expires the operator cookie with its security attributes intact", async () => {
-    const response = await DELETE();
-
-    expect(response.status).toBe(204);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("set-cookie")).toBe(
-      "__Host-slashwho-operator=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
+  it("never applies a cookie directive returned with a rejected sign-in", async () => {
+    const rejected = await fixture.auth.authenticateOperator(
+      new Request("https://slashwho.example", {
+        headers: { cookie: "__Host-slashwho-operator=legacy" }
+      })
     );
+    vi.spyOn(fixture.auth, "signIn").mockResolvedValue(rejected);
+    const response = await POST(operatorMutation({}));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("does not accept or reflect credentials supplied only in the URL", async () => {
+    const template = operatorMutation({});
+    const response = await POST(
+      new Request(
+        `${template.url}?login=${operatorLogin}&credential=${operatorCredential}`,
+        { method: "POST", headers: template.headers, body: "{}" }
+      )
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await response.text()).not.toContain(operatorCredential);
   });
 });
