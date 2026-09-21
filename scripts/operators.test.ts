@@ -32,7 +32,10 @@ describe("operator lifecycle command", () => {
     );
     expect(result).toEqual({ action: "provision", operatorId: "operator-id" });
     expect(provision).toHaveBeenCalledWith(
-      expect.objectContaining({ canonicalLogin: "admin", displayLogin: "Admin" })
+      expect.objectContaining({
+        canonicalLogin: "admin",
+        displayLogin: "Admin"
+      })
     );
     expect(appendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
