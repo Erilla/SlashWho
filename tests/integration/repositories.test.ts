@@ -9,6 +9,7 @@ import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createPostgresRepositories,
+  createDiscoveryQueue,
   runMigrations,
   type Repositories,
   type CharacterMythicKillInput,
@@ -27,6 +28,18 @@ import { startPostgres } from "./postgres";
  * leaving a document that quietly stopped being true.
  */
 const SQL_BLOCK = /```sql\n([\s\S]*?)```/g;
+
+async function eventually(
+  predicate: () => Promise<boolean>,
+  timeoutMs = 10_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("timed_out");
+}
 
 const rootKey = {
   region: "eu",
@@ -67,12 +80,10 @@ function mythicKill(
     bossName: "Queen Ansurek",
     journalBossId: "3014",
     bossOrder: 8,
-    isFinalBoss: true,
     killedAt: "2026-08-04T12:00:00.000Z",
     reportUrl: "https://www.warcraftlogs.com/reports/example",
     fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
     guild: { name: "Example Guild", realm: "silvermoon" },
-    historicWorldRank: null,
     performance: {
       spec: null,
       damage: { state: "unavailable" },
@@ -503,11 +514,11 @@ describe("PostgreSQL repositories", () => {
     await pool.query(
       `INSERT INTO character_mythic_kills
          (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
-          boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
+          boss_name, journal_boss_id, boss_order, killed_at,
           report_url, fight_url, damage_parse_state, healing_parse_state,
           boss_damage_parse_state, collected_at)
        SELECT $1, source_fight_key, raid_id, raid_name, boss_id, boss_name,
-              journal_boss_id, boss_order, is_final_boss, killed_at,
+              journal_boss_id, boss_order, killed_at,
               report_url, fight_url, 'unavailable', 'unavailable',
               'unavailable', collected_at
          FROM character_mythic_kills
@@ -4079,6 +4090,149 @@ describe("PostgreSQL repositories", () => {
       // The run that published the snapshot, and so the only one allowed to
       // continue this chain.
       runId: run.id,
+      limitationCode: "privacy_hidden"
+    });
+  });
+
+  it("retains a waiting continuation admission when a capped snapshot persists its cursor", async () => {
+    // Break caught: publishing a capped snapshot finished its only admission;
+    // the queued fingerprint-admission delivery then settled without a
+    // continuation, leaving the cursor's membership vulnerable to replacement.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "waitcursor"
+    } as const;
+    const at = new Date("2026-09-21T12:00:00.000Z");
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key,
+      requestCap: 10,
+      hourlyBudget: 100,
+      cadenceCutoff: new Date(at.getTime() - 60_000),
+      at
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+
+    const snapshot =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: at,
+          characters: [observation(key, "input")]
+        },
+        {
+          reservationId: admission.reservationId,
+          finishedAt: at,
+          limitationCode: "fingerprint_sweep_capped",
+          continuationAdmission: {
+            requestCap: 10,
+            hourlyBudget: 100,
+            cadenceCutoff: new Date(at.getTime() - 60_000)
+          }
+        },
+        {
+          resumeAfter: "eu/silvermoon/tail",
+          limitationCode: null,
+          advanced: true
+        }
+      );
+
+    await expect(
+      repositories.fingerprintSweeps.listWaiting(10)
+    ).resolves.toEqual([run.id]);
+    const queue = createDiscoveryQueue({
+      connectionString: pool.options.connectionString!
+    });
+    await queue.start();
+    const continuations: Array<{ continuation?: true }> = [];
+    await queue.work(async (payload) => {
+      continuations.push(payload);
+    });
+    await queue.workFingerprintAdmissions(async (runId) => {
+      const admitted = await repositories.fingerprintSweeps.admitWaiting(
+        runId,
+        new Date(at.getTime() + 1)
+      );
+      if (admitted.kind !== "admitted") return;
+      const resume = await repositories.fingerprintSweeps.getResumeState(key);
+      await queue.enqueue({
+        runId,
+        key,
+        enqueuedAt: new Date(at.getTime() + 1).toISOString(),
+        ...(resume?.runId === runId ? { continuation: true as const } : {})
+      });
+      await repositories.fingerprintSweeps.markDispatched(
+        runId,
+        new Date(at.getTime() + 1)
+      );
+    });
+    await queue.enqueueFingerprintAdmission(run.id);
+    await eventually(async () => continuations.length === 1);
+    expect(continuations).toEqual([
+      expect.objectContaining({ runId: run.id, continuation: true })
+    ]);
+    await queue.stop({ graceful: false, timeoutMs: 1_000 });
+
+    const fresh = await repositories.runs.createOrReuse(key, "anonymous");
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: fresh.id,
+        key,
+        requestCap: 10,
+        hourlyBudget: 100,
+        cadenceCutoff: new Date(at.getTime() - 60_000),
+        at: new Date(at.getTime() + 2)
+      })
+    ).resolves.toEqual({ kind: "not_due" });
+    await expect(repositories.snapshots.getCurrent(key)).resolves.toMatchObject(
+      {
+        id: snapshot.id,
+        characterCount: 1
+      }
+    );
+
+    const continuation = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key,
+      requestCap: 10,
+      hourlyBudget: 100,
+      cadenceCutoff: new Date(at.getTime() - 60_000),
+      at: new Date(at.getTime() + 1),
+      continuation: true
+    });
+    if (continuation.kind !== "admitted") {
+      throw new Error("continuation_not_admitted");
+    }
+    const amended = await repositories.snapshots.amendAndFinishFingerprintSweep(
+      snapshot.id,
+      [
+        observation(
+          { region: "eu", realm: "silvermoon", name: "latermatch" },
+          "fingerprint"
+        )
+      ],
+      {
+        runId: run.id,
+        reservationId: continuation.reservationId,
+        finishedAt: new Date(at.getTime() + 2),
+        limitationCode: "privacy_hidden"
+      },
+      { resumeAfter: null, limitationCode: "privacy_hidden", advanced: true }
+    );
+
+    expect(amended).toMatchObject({
+      characterCount: 2,
       limitationCode: "privacy_hidden"
     });
   });

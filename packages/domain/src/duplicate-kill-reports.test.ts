@@ -12,7 +12,6 @@ const base: DossierKillEvidence = {
   bossName: "Nek'zali the Soulcoiler",
   journalBossId: "2888",
   bossOrder: 1,
-  isFinalBoss: false,
   character,
   killedAt: "2026-08-23T20:50:12.607Z",
   guild: null,
@@ -74,17 +73,20 @@ it("prefers a guild log and preserves the historic report URL order within each 
         {
           reportUrl: second.reportUrl,
           source: "guild_log",
-          uploader: "Dorian"
+          uploader: "Dorian",
+          guild: second.guild
         },
         {
           reportUrl: third.reportUrl,
           source: "personal_log",
-          uploader: "Varod"
+          uploader: "Varod",
+          guild: null
         },
         {
           reportUrl: base.reportUrl,
           source: "personal_log",
-          uploader: "Ryiislogs"
+          uploader: "Ryiislogs",
+          guild: null
         }
       ]
     }
@@ -138,12 +140,14 @@ it("preserves wipe report source and uploader for the report menu", () => {
     {
       reportUrl: second.reportUrl,
       source: "guild_log",
-      uploader: "Dorian"
+      uploader: "Dorian",
+      guild: second.guild
     },
     {
       reportUrl: base.reportUrl,
       source: "personal_log",
-      uploader: "Ryiislogs"
+      uploader: "Ryiislogs",
+      guild: null
     }
   ]);
 });

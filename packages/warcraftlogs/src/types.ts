@@ -108,8 +108,6 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   journalBossId: string | null;
   /** Warcraft Logs does not expose encounter ordering in report lists. */
   bossOrder: number;
-  /** The public report schema does not declare final-boss status. */
-  isFinalBoss: boolean;
   killedAt: string;
   reportCode: string;
   fightId: number;
@@ -124,7 +122,6 @@ export type WarcraftLogsFirstKillEvidence = Readonly<{
   }> | null;
   /** The Warcraft Logs account that uploaded the report, when public. */
   uploader?: string | null;
-  historicWorldRank: number | null;
 }>;
 
 /**

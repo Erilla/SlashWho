@@ -1396,7 +1396,7 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
-        dbCalls: 8,
+        dbCalls: 9,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
         // timed is the one that set the maximum.
@@ -2096,6 +2096,62 @@ describe("discovery job handler", () => {
     await expect(
       harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
     ).resolves.not.toBeNull();
+  });
+
+  it("retains a waiting admission while a capped cursor is live", async () => {
+    // Break caught: the cap publication finished its only admission, so the
+    // queued follow-up settled without ever dispatching this continuation.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    const publish = vi.spyOn(
+      harness.repositories.snapshots,
+      "createAndFinishFingerprintSweep"
+    );
+
+    await harness.handler.execute(harness.runId);
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        continuationAdmission: expect.objectContaining({
+          requestCap: 300
+        })
+      }),
+      expect.any(Object),
+      expect.any(Object)
+    );
+  });
+
+  it("does not replace a live capped snapshot after a cadence-gated refresh", async () => {
+    // Break caught: a fresh Raider.IO-only run was allowed to publish after its
+    // fingerprint admission was cadence-gated, shrinking the live cursor's
+    // membership before its continuation could amend it.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    await harness.handler.execute(harness.runId);
+    const live = await harness.repositories.fingerprintSweeps.getResumeState(
+      harness.rootKey
+    );
+    if (!live) throw new Error("expected_live_cursor");
+    const fresh = await harness.repositories.runs.createOrReuse(
+      harness.rootKey,
+      "anonymous"
+    );
+    harness.admission = { kind: "not_due" };
+
+    await harness.handler.execute(fresh.id);
+
+    expect(harness.snapshots.created).toHaveLength(1);
+    await expect(
+      harness.repositories.runs.find(fresh.id)
+    ).resolves.toMatchObject({
+      status: "complete",
+      snapshotId: live.snapshotId
+    });
   });
 
   it("amends rather than republishes on a continuation", async () => {

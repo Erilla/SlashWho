@@ -61,6 +61,15 @@ describe("database migrations", () => {
         AND column_name = 'kill_scan_resume_page'
     `);
     expect(cursor.rows).toEqual([{ column_name: "kill_scan_resume_page" }]);
+
+    const vestigialKillColumns = await pool.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'character_mythic_kills'
+        AND column_name IN ('is_final_boss', 'historic_world_rank')
+    `);
+    expect(vestigialKillColumns.rows).toEqual([]);
   });
 
   it("can run repeatedly without applying migrations twice", async () => {
@@ -101,8 +110,9 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-10).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-12).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
+      { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
       { idx: 25, tag: "0026_unstick_parse_drift_runs" },
       { idx: 26, tag: "0027_kill_parses_read_at" },
@@ -112,7 +122,8 @@ describe("database migrations", () => {
       { idx: 30, tag: "0031_partial_scan_skipped" },
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
-      { idx: 33, tag: "0034_operator_auth" }
+      { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
+      { idx: 34, tag: "0035_operator_auth" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

@@ -236,8 +236,15 @@
     {
       "idx": 33,
       "version": "7",
-      "when": 1790575200001,
-      "tag": "0034_operator_auth",
+      "when": 1790575201000,
+      "tag": "0034_remove_vestigial_kill_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790575201001,
+      "tag": "0035_operator_auth",
       "breakpoints": true
     }
   ]

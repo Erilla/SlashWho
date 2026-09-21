@@ -108,8 +108,18 @@ it("shows the grouped rank and keeps distinct reports in a click-only menu", asy
   expect(trigger).toHaveAccessibleDescription("2 reports found");
   await userEvent.click(trigger);
 
-  const links = screen.getAllByRole("link", { name: /log uploaded by/i });
+  const links = within(
+    screen.getByRole("list", { name: "Kill reports" })
+  ).getAllByRole("link");
   expect(links.map((link) => link.getAttribute("href"))).toEqual(reportUrls);
+  expect(
+    screen.getByRole("link", {
+      name: "Rancour — Guild log uploaded by Unknown uploader"
+    })
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Unknown uploader, personal log" })
+  ).toBeVisible();
   for (const link of links) {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
@@ -117,7 +127,7 @@ it("shows the grouped rank and keeps distinct reports in a click-only menu", asy
   expect(screen.getAllByText("First kill")).toHaveLength(1);
 });
 
-it("replaces duplicate kill report icons with a click-only guild-first report menu", async () => {
+it("opens duplicate kill reports on hover with guild and uploader labels", () => {
   const reportUrls = [
     "https://www.warcraftlogs.com/reports/personal#fight=1",
     "https://www.warcraftlogs.com/reports/guild#fight=2",
@@ -138,19 +148,22 @@ it("replaces duplicate kill report icons with a click-only guild-first report me
             reportUrls,
             reports: [
               {
-                reportUrl: reportUrls[1]!,
-                source: "guild_log",
-                uploader: "Dorian"
-              },
-              {
                 reportUrl: reportUrls[0]!,
                 source: "personal_log",
-                uploader: "Ryiislogs"
+                uploader: "Ryiislogs",
+                guild: null
+              },
+              {
+                reportUrl: reportUrls[1]!,
+                source: "guild_log",
+                uploader: "Dorian",
+                guild: { name: "Rancour", region: "eu", realm: "draenor" }
               },
               {
                 reportUrl: reportUrls[2]!,
                 source: "personal_log",
-                uploader: "Varod"
+                uploader: "Varod",
+                guild: null
               }
             ]
           }
@@ -166,19 +179,27 @@ it("replaces duplicate kill report icons with a click-only guild-first report me
   });
   expect(trigger).toHaveAccessibleDescription("3 reports found");
   expect(
-    screen.queryByRole("link", { name: "Guild log uploaded by Dorian" })
+    screen.queryByRole("link", { name: /guild log/i })
   ).not.toBeInTheDocument();
 
-  await userEvent.setup().click(trigger);
+  fireEvent.pointerEnter(trigger);
 
   expect(
-    screen
-      .getAllByRole("link", { name: /log uploaded by/ })
+    within(screen.getByRole("list", { name: "Kill reports" }))
+      .getAllByRole("link")
       .map((link) => link.getAttribute("href"))
   ).toEqual([reportUrls[1], reportUrls[0], reportUrls[2]]);
+  expect(
+    screen.getByRole("link", {
+      name: "Rancour — Guild log uploaded by Dorian"
+    })
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Ryiislogs, personal log" })
+  ).toBeVisible();
 });
 
-it("replaces duplicate wipe report icons with a guild-first click-only report menu", async () => {
+it("opens duplicate wipe reports on hover with guild and uploader labels", () => {
   const reportUrls = [
     "https://www.warcraftlogs.com/reports/personal-wipe#fight=1",
     "https://www.warcraftlogs.com/reports/guild-wipe#fight=2",
@@ -202,6 +223,7 @@ it("replaces duplicate wipe report icons with a guild-first click-only report me
             reportUrl: reportUrls[1],
             source: "guild_log",
             uploader: "Dorian",
+            guild: { name: "Rancour", region: "eu", realm: "draenor" },
             characters: [ryii]
           },
           wipes: [
@@ -210,6 +232,7 @@ it("replaces duplicate wipe report icons with a guild-first click-only report me
               reportUrl: reportUrls[0],
               source: "personal_log",
               uploader: "Ryiislogs",
+              guild: null,
               characters: [ryii]
             },
             {
@@ -217,6 +240,7 @@ it("replaces duplicate wipe report icons with a guild-first click-only report me
               reportUrl: reportUrls[1],
               source: "guild_log",
               uploader: "Dorian",
+              guild: { name: "Rancour", region: "eu", realm: "draenor" },
               characters: [ryii]
             },
             {
@@ -224,6 +248,7 @@ it("replaces duplicate wipe report icons with a guild-first click-only report me
               reportUrl: reportUrls[2],
               source: "personal_log",
               uploader: "Varod",
+              guild: null,
               characters: [ryii]
             }
           ]
@@ -233,23 +258,31 @@ it("replaces duplicate wipe report icons with a guild-first click-only report me
   ] as unknown as ApplicantDossier["raids"];
 
   renderWithDossierCharacters(<DossierRaidList raids={raids} />);
-  await userEvent.setup().click(screen.getByText("View wipe evidence"));
+  fireEvent.click(screen.getByText("View wipe evidence"));
 
   const trigger = screen.getByRole("button", {
     name: "Choose from 3 wipe reports"
   });
   expect(trigger).toHaveAccessibleDescription("3 reports found");
   expect(
-    screen.queryByRole("link", { name: "Guild log uploaded by Dorian" })
+    screen.queryByRole("link", { name: /guild log/i })
   ).not.toBeInTheDocument();
 
-  await userEvent.click(trigger);
+  fireEvent.pointerEnter(trigger);
 
   expect(
-    screen
-      .getAllByRole("link", { name: /log uploaded by/ })
+    within(screen.getByRole("list", { name: "Wipe reports" }))
+      .getAllByRole("link")
       .map((link) => link.getAttribute("href"))
   ).toEqual([reportUrls[1], reportUrls[0], reportUrls[2]]);
+  expect(
+    screen.getByRole("link", {
+      name: "Rancour — Guild log uploaded by Dorian"
+    })
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Ryiislogs, personal log" })
+  ).toBeVisible();
 });
 
 it("renders guild attribution as a concise value with an accessible label", async () => {
@@ -1166,7 +1199,7 @@ it("orders wipe-only evidence newest first with a stable tie-break", async () =>
   );
   expect(
     screen
-      .getAllByRole("link", { name: /log uploaded by/ })
+      .getAllByRole("link", { name: /log$/i })
       .map((link) => link.getAttribute("href"))
   ).toEqual([
     "https://www.warcraftlogs.com/reports/tie-b#fight=1",
@@ -1236,7 +1269,7 @@ it("merges wipe rows on the same date and deduplicates reports", async () => {
   );
   expect(
     screen
-      .getAllByRole("link", { name: /log uploaded by/ })
+      .getAllByRole("link", { name: /log$/i })
       .map((link) => link.getAttribute("href"))
   ).toEqual([
     "https://www.warcraftlogs.com/reports/other#fight=3",

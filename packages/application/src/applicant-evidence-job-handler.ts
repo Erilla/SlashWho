@@ -260,13 +260,11 @@ function toCharacterMythicKillInput(
     bossName: kill.bossName,
     journalBossId: kill.journalBossId,
     bossOrder: kill.bossOrder,
-    isFinalBoss: kill.isFinalBoss,
     killedAt: kill.killedAt,
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild,
     uploader: kill.uploader,
-    historicWorldRank: kill.historicWorldRank,
     performance: kill.performance
   };
 }
@@ -500,7 +498,6 @@ function storedKillForParse(
     bossName: kill.bossName,
     journalBossId: kill.journalBossId,
     bossOrder: kill.bossOrder,
-    isFinalBoss: kill.isFinalBoss,
     killedAt: kill.killedAt,
     reportCode,
     fightId: Number(fightId),
@@ -511,8 +508,7 @@ function storedKillForParse(
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild ? { ...kill.guild, region } : null,
-    uploader: kill.uploader ?? null,
-    historicWorldRank: kill.historicWorldRank ?? null
+    uploader: kill.uploader ?? null
   };
 }
 

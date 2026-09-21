@@ -95,6 +95,13 @@ export interface FingerprintSweepCursor {
   advanced: boolean;
 }
 
+/** The next admission a capped sweep persists atomically with its cursor. */
+export type FingerprintContinuationAdmission = Readonly<{
+  requestCap: number;
+  hourlyBudget: number;
+  cadenceCutoff: Date;
+}>;
+
 export interface SnapshotRepository {
   create(
     input: CreateSnapshotInput,
@@ -106,6 +113,7 @@ export interface SnapshotRepository {
       reservationId: string;
       finishedAt: Date;
       limitationCode: string | null;
+      continuationAdmission?: FingerprintContinuationAdmission;
     },
     cursor: FingerprintSweepCursor,
     options?: { signal?: AbortSignal }
@@ -130,6 +138,7 @@ export interface SnapshotRepository {
       reservationId: string;
       finishedAt: Date;
       limitationCode: string | null;
+      continuationAdmission?: FingerprintContinuationAdmission;
     },
     cursor: FingerprintSweepCursor,
     options?: { signal?: AbortSignal }
@@ -287,14 +296,12 @@ export interface CharacterMythicKillInput {
   bossName: string;
   journalBossId: string | null;
   bossOrder: number;
-  isFinalBoss: boolean;
   killedAt: string;
   reportUrl: string;
   fightUrl: string;
   guild: { name: string; realm: string } | null;
   /** Absent on evidence collected before Warcraft Logs exposed report owners. */
   uploader?: string | null;
-  historicWorldRank?: number | null;
   performance: CharacterMythicKillPerformance;
 }
 

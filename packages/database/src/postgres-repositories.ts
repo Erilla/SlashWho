@@ -18,6 +18,7 @@ import type {
   DiscoveryRun,
   EvidenceCollectionDomain,
   FingerprintAdmission,
+  FingerprintContinuationAdmission,
   Operator,
   OperatorCredential,
   OperatorSession,
@@ -177,14 +178,12 @@ interface CharacterMythicKillRow {
   boss_name: string;
   journal_boss_id: string | null;
   boss_order: number;
-  is_final_boss: boolean;
   killed_at: Date;
   report_url: string;
   fight_url: string;
   guild_name: string | null;
   guild_realm: string | null;
   uploader: string | null;
-  historic_world_rank: number | null;
   spec_name: string | null;
   spec_icon_url: string | null;
   damage_parse_state: CharacterMythicKillParseMetric["state"];
@@ -530,7 +529,6 @@ function mapCharacterMythicKill(
     bossName: row.boss_name,
     journalBossId: row.journal_boss_id,
     bossOrder: row.boss_order,
-    isFinalBoss: row.is_final_boss,
     killedAt: row.killed_at.toISOString(),
     reportUrl: row.report_url,
     fightUrl: row.fight_url,
@@ -539,7 +537,6 @@ function mapCharacterMythicKill(
         ? null
         : { name: row.guild_name, realm: row.guild_realm! },
     ...(row.uploader === null ? {} : { uploader: row.uploader }),
-    historicWorldRank: row.historic_world_rank,
     performance: {
       spec:
         row.spec_name === null || row.spec_icon_url === null
@@ -703,8 +700,8 @@ async function loadCompletedEvidence(
 
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
-            boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
+            boss_order, killed_at, report_url, fight_url,
+            guild_name, guild_realm, uploader, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -920,17 +917,17 @@ async function loadPositiveEvidenceForPartial(
   // publish already merged into. Pick it explicitly (#326).
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
-            boss_order, is_final_boss, killed_at, report_url, fight_url,
-            guild_name, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
+            boss_order, killed_at, report_url, fight_url,
+            guild_name, guild_realm, uploader, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
      FROM (
        SELECT DISTINCT ON (k.fight_url)
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
-              k.journal_boss_id, k.boss_order, k.is_final_boss, k.killed_at,
+              k.journal_boss_id, k.boss_order, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_realm, k.uploader, k.historic_world_rank, k.spec_name, k.spec_icon_url,
+              k.guild_realm, k.uploader, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -1219,6 +1216,7 @@ async function finishFingerprintSweep(
     published: boolean;
     at: Date;
     limitationCode: string | null;
+    continuationAdmission?: FingerprintContinuationAdmission;
     /**
      * Omitted by a caller that has no claim on the sweep cursor. The resume
      * columns are then left exactly as they are, so finishing one reservation
@@ -1234,6 +1232,7 @@ async function finishFingerprintSweep(
 ): Promise<void> {
   const reservation = await client.query<{
     admission_id: string;
+    discovery_run_id: string;
     region: CharacterKey["region"];
     realm_slug: string;
     normalized_name: string;
@@ -1247,7 +1246,8 @@ async function finishFingerprintSweep(
      WHERE reservation.id = $1
        AND reservation.admission_id = admission.id
        AND reservation.released_at IS NULL
-     RETURNING reservation.admission_id, admission.region,
+     RETURNING reservation.admission_id, admission.discovery_run_id,
+               admission.region,
                admission.realm_slug, admission.normalized_name`,
     [reservationId, input.at, input.published, input.limitationCode]
   );
@@ -1306,6 +1306,29 @@ async function finishFingerprintSweep(
       cursor.advanced
     ]
   );
+  if (cursor.resumeAfter !== null && input.continuationAdmission) {
+    const continuation = input.continuationAdmission;
+    await client.query(
+      `INSERT INTO fingerprint_sweep_admissions
+        (discovery_run_id, region, realm_slug, normalized_name, request_cap,
+         hourly_budget, cadence_cutoff, requested_at)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8
+       WHERE NOT EXISTS (
+         SELECT 1 FROM fingerprint_sweep_admissions
+         WHERE discovery_run_id = $1 AND status IN ('waiting', 'admitted')
+       )`,
+      [
+        row.discovery_run_id,
+        row.region,
+        row.realm_slug,
+        row.normalized_name,
+        continuation.requestCap,
+        continuation.hourlyBudget,
+        continuation.cadenceCutoff,
+        input.at
+      ]
+    );
+  }
 }
 
 async function requireUpdated(
@@ -2073,6 +2096,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             published: true,
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
+            continuationAdmission: fingerprint.continuationAdmission,
             cursor: {
               resumeAfter: cursor.resumeAfter,
               resumeLimitationCode:
@@ -2257,6 +2281,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             published: true,
             at: fingerprint.finishedAt,
             limitationCode: fingerprint.limitationCode,
+            continuationAdmission: fingerprint.continuationAdmission,
             cursor: {
               resumeAfter: cursor.resumeAfter,
               resumeLimitationCode:
@@ -3077,13 +3102,24 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             return { kind: "settled" };
           }
 
-          const state = await client.query<{ last_published_at: Date | null }>(
-            `SELECT last_published_at
-             FROM fingerprint_sweep_states
-             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          const state = await client.query<{
+            last_published_at: Date | null;
+            resume_after: string | null;
+            discovery_run_id: string | null;
+          }>(
+            `SELECT state.last_published_at, state.resume_after,
+                    snapshot.discovery_run_id
+             FROM fingerprint_sweep_states state
+             LEFT JOIN snapshots snapshot ON snapshot.id = state.resume_snapshot_id
+             WHERE state.region = $1 AND state.realm_slug = $2
+               AND state.normalized_name = $3`,
             [admission.region, admission.realm_slug, admission.normalized_name]
           );
+          const liveContinuation =
+            state.rows[0]?.resume_after !== null &&
+            state.rows[0]?.discovery_run_id === runId;
           if (
+            !liveContinuation &&
             state.rows[0]?.last_published_at &&
             state.rows[0].last_published_at > admission.cadence_cutoff
           ) {
@@ -3100,7 +3136,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const result = await admitFingerprintWaitingRun(
             client,
             admission.id,
-            at
+            at,
+            liveContinuation ? admission.id : undefined
           );
           await client.query("COMMIT");
           return result.kind === "admitted" ? { kind: "admitted" } : result;
@@ -3487,12 +3524,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await client.query(
               `INSERT INTO character_mythic_kills
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
-                 boss_name, journal_boss_id, boss_order, is_final_boss, killed_at,
-                 report_url, fight_url, guild_name, guild_realm, uploader, historic_world_rank,
+                 boss_name, journal_boss_id, boss_order, killed_at,
+                 report_url, fight_url, guild_name, guild_realm, uploader,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
               [
                 runId,
                 kill.fightUrl,
@@ -3502,14 +3539,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.bossName,
                 kill.journalBossId,
                 kill.bossOrder,
-                kill.isFinalBoss,
                 kill.killedAt,
                 kill.reportUrl,
                 kill.fightUrl,
                 kill.guild?.name ?? null,
                 kill.guild?.realm ?? null,
                 kill.uploader ?? null,
-                kill.historicWorldRank ?? null,
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
                 performance.damage.state,
