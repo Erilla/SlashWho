@@ -295,6 +295,23 @@ and the ordinary run, retry and budget machinery drains the backlog across as
 many hourly windows as it takes. It deletes nothing, so the stored evidence
 stays readable until its replacement arrives.
 
+For a reviewed cohort whose reports need their Warcraft Logs uploader
+provenance re-read, put one canonical Raider.IO character URL on each line of a
+local input file (comments beginning with `#` are allowed), then run the
+operator-only paced backfill. The explicit limit is a second confirmation that
+the input is the intended cohort; the interval spaces queue admission while the
+worker's existing points budget continues to limit upstream work:
+
+```bash
+corepack pnpm ops:backfill-uploader-provenance -- \
+  --input issue-410.urls --interval-ms 60000 --limit 59
+```
+
+The input file is operational data and must not be committed. The command
+stops on its first error instead of continuing with an unreviewed remainder.
+It uses the same rebuild path as the one-character command, so it preserves
+currently visible evidence while terminal tiers are recollected.
+
 The dossier refresh control cannot reach a rebuild. It stays `full` outside the
 cooldown and `light` inside it, one run per press, whatever it is sent.
 `/api/dossiers/.../refresh` is unauthenticated, which is tolerable at one run
