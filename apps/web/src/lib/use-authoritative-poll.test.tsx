@@ -36,6 +36,13 @@ async function flushPromises() {
   });
 }
 
+async function startFirstPoll() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  await flushPromises();
+}
+
 describe("useAuthoritativePoll", () => {
   afterEach(() => {
     cleanup();
@@ -69,8 +76,37 @@ describe("useAuthoritativePoll", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it("waits one second before its first active read", async () => {
+    // Break caught: mounting an active resource could bypass the bounded cadence.
+    vi.useFakeTimers();
+    const read = vi
+      .fn<(signal: AbortSignal) => Promise<PollReadResult<string>>>()
+      .mockResolvedValue({ kind: "snapshot", value: "partial" });
+
+    renderHook(() =>
+      useAuthoritativePoll({
+        active: true,
+        read,
+        onSnapshot: vi.fn(),
+        onTerminalError: vi.fn()
+      })
+    );
+
+    expect(read).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(read).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts an older request and ignores its response after a newer snapshot", async () => {
     // Break caught: a late response could replace a snapshot fetched after visibility returns.
+    vi.useFakeTimers();
     const older = deferred<PollReadResult<string>>();
     const signals: AbortSignal[] = [];
     const read = vi
@@ -90,7 +126,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError: vi.fn()
       })
     );
-    await flushPromises();
+    await startFirstPoll();
 
     setVisibilityState("hidden");
     setVisibilityState("visible");
@@ -124,7 +160,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError: vi.fn()
       })
     );
-    await flushPromises();
+    await startFirstPoll();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(14_999);
@@ -152,7 +188,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError: vi.fn()
       })
     );
-    await flushPromises();
+    await startFirstPoll();
 
     setVisibilityState("hidden");
     await act(async () => {
@@ -184,7 +220,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError
       })
     );
-    await flushPromises();
+    await startFirstPoll();
 
     expect(onTerminalError).toHaveBeenCalledWith(
       expect.objectContaining({ status })
@@ -213,7 +249,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError: vi.fn()
       })
     );
-    await flushPromises();
+    await startFirstPoll();
 
     setVisibilityState("hidden");
     setVisibilityState("visible");
@@ -241,7 +277,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError: vi.fn()
       })
     );
-    await flushPromises();
+    await startFirstPoll();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(9_999);
@@ -272,7 +308,7 @@ describe("useAuthoritativePoll", () => {
         onTerminalError: vi.fn()
       })
     );
-    await flushPromises();
+    await startFirstPoll();
     unmount();
 
     expect(signal?.aborted).toBe(true);

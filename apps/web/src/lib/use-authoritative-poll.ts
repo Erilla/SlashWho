@@ -142,7 +142,7 @@ export function useAuthoritativePoll<T>(
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     if (options.active && document.visibilityState !== "hidden") {
-      void readSnapshot();
+      scheduleRead(nextPollDelay());
     }
 
     return () => {
