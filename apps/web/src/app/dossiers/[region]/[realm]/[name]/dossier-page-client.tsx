@@ -385,15 +385,16 @@ function DossierPageState({
           schedulePoll();
           return;
         }
+        appliedSequence.current = sequence;
         setError(apiError(response, body));
         setStatus(null);
         return;
       }
       const parsed = applicantDossierSchema.safeParse(body);
+      appliedSequence.current = sequence;
       if (!parsed.success) {
         setError("The dossier returned an unexpected response.");
       } else {
-        appliedSequence.current = sequence;
         hasExpandedDossier.current = true;
         setDossier(parsed.data);
         setInitialError(null);

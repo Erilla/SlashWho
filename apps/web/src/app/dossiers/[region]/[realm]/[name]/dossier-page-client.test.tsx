@@ -459,6 +459,50 @@ describe("DossierPageClient live evidence", () => {
     }
   );
 
+  it.each([401, 403, 404, 200])(
+    "retains a newer terminal discovery response %s when an older live snapshot arrives",
+    async (status) => {
+      vi.useFakeTimers();
+      let resolveOlder!: (response: Response) => void;
+      const older = new Promise<Response>((resolve) => {
+        resolveOlder = resolve;
+      });
+      let reads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string) => {
+          if (input === `/api/dossiers/jobs/${jobId}`) {
+            return Promise.resolve(
+              Response.json({ status: "complete", error: null })
+            );
+          }
+          reads += 1;
+          return reads === 1
+            ? older
+            : Promise.resolve(Response.json({}, { status }));
+        })
+      );
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={withEvidenceState(initial, "scanning")}
+          jobId={jobId}
+        />
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const terminalMessage = screen.getByRole("alert").textContent;
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      await act(async () => {
+        resolveOlder(Response.json(withEvidenceState(expanded, "complete")));
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent(terminalMessage!);
+      expect(screen.getByText("Initial evidence")).toBeVisible();
+      expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
+    }
+  );
+
   it("does not let an older dossier response replace a newer terminal response", async () => {
     vi.useFakeTimers();
     let resolveOlder!: (response: Response) => void;

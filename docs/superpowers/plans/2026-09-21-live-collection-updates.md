@@ -25,10 +25,12 @@
 ### Task 1: Build the authoritative polling hook
 
 **Files:**
+
 - Create: `apps/web/src/lib/use-authoritative-poll.ts`
 - Create: `apps/web/src/lib/use-authoritative-poll.test.tsx`
 
 **Interfaces:**
+
 - Produces `useAuthoritativePoll<T>(options: AuthoritativePollOptions<T>): void`.
 - `AuthoritativePollOptions<T>` has `active: boolean`, `read(signal): Promise<PollReadResult<T>>`, `onSnapshot(snapshot): void`, and `onTerminalError(response): void`.
 - `PollReadResult<T>` is `{ kind: "snapshot"; value: T } | { kind: "retry"; retryAfterMs?: number } | { kind: "terminal"; response: Response }`.
@@ -38,13 +40,17 @@
 
 ```tsx
 it("does not read an initially terminal resource", () => {
-  renderHook(() => useAuthoritativePoll({ active: false, read, onSnapshot, onTerminalError }));
+  renderHook(() =>
+    useAuthoritativePoll({ active: false, read, onSnapshot, onTerminalError })
+  );
   expect(read).not.toHaveBeenCalled();
 });
 
 it("keeps one in-flight read and ignores an older response after a newer snapshot", async () => {
   const older = deferred<PollReadResult<string>>();
-  read.mockReturnValueOnce(older.promise).mockResolvedValueOnce({ kind: "snapshot", value: "complete" });
+  read
+    .mockReturnValueOnce(older.promise)
+    .mockResolvedValueOnce({ kind: "snapshot", value: "complete" });
   // Trigger the replacement generation, resolve it, then resolve `older` as partial.
   expect(onSnapshot).toHaveBeenLastCalledWith("complete");
 });
@@ -78,18 +84,29 @@ it("uses Retry-After for a 429 before the next request", async () => {
 });
 
 it("pauses while hidden and refreshes once when visible", async () => {
-  Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+  Object.defineProperty(document, "visibilityState", {
+    value: "hidden",
+    configurable: true
+  });
   document.dispatchEvent(new Event("visibilitychange"));
   await vi.advanceTimersByTimeAsync(10_000);
   expect(read).toHaveBeenCalledTimes(1);
-  Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  Object.defineProperty(document, "visibilityState", {
+    value: "visible",
+    configurable: true
+  });
   document.dispatchEvent(new Event("visibilitychange"));
   expect(read).toHaveBeenCalledTimes(2);
 });
 
 it.each([401, 403, 404])("reports %i once as terminal", async (status) => {
-  read.mockResolvedValueOnce({ kind: "terminal", response: new Response(null, { status }) });
-  expect(onTerminalError).toHaveBeenCalledWith(expect.objectContaining({ status }));
+  read.mockResolvedValueOnce({
+    kind: "terminal",
+    response: new Response(null, { status })
+  });
+  expect(onTerminalError).toHaveBeenCalledWith(
+    expect.objectContaining({ status })
+  );
   await vi.advanceTimersByTimeAsync(20_000);
   expect(read).toHaveBeenCalledTimes(1);
 });
@@ -124,6 +141,7 @@ git commit -m "feat: add authoritative polling hook"
 ### Task 2: Make monitor liveness server-owned
 
 **Files:**
+
 - Modify: `packages/contracts/src/collection-monitor.ts`
 - Modify: `packages/contracts/src/contracts.test.ts`
 - Modify: `apps/web/src/server/collection-monitor.ts`
@@ -131,6 +149,7 @@ git commit -m "feat: add authoritative polling hook"
 - Modify: `apps/web/src/app/api/operations/collection-monitor/route.test.ts`
 
 **Interfaces:**
+
 - Adds required `hasActiveRuns: boolean` to `CollectionMonitorResponse`.
 - `createCollectionMonitorService().list()` calculates it from the same evidence-run lifecycle branch that fills `inFlight`.
 - The existing monitor route serializes the enriched validated response unchanged.
@@ -138,8 +157,9 @@ git commit -m "feat: add authoritative polling hook"
 - [ ] **Step 1: Write failing contract and service tests**
 
 ```ts
-expect(collectionMonitorResponseSchema.parse({ ...monitor, hasActiveRuns: true }))
-  .toMatchObject({ hasActiveRuns: true });
+expect(
+  collectionMonitorResponseSchema.parse({ ...monitor, hasActiveRuns: true })
+).toMatchObject({ hasActiveRuns: true });
 expect(service.list()).resolves.toMatchObject({ hasActiveRuns: false });
 // Use a queued, running, and retrying fixture to assert true; complete,
 // partial, and failed-only fixtures assert false.
@@ -154,10 +174,19 @@ Expected: FAIL because `hasActiveRuns` is absent.
 - [ ] **Step 3: Add the contract field and calculate it in the service**
 
 ```ts
-const hasActiveRuns = rows.some((row) =>
-  row.status === "queued" || row.status === "running" || row.status === "retrying"
+const hasActiveRuns = rows.some(
+  (row) =>
+    row.status === "queued" ||
+    row.status === "running" ||
+    row.status === "retrying"
 );
-const response: CollectionMonitorResponse = { generatedAt, hasActiveRuns, inFlight: [], completed: [], failed: [] };
+const response: CollectionMonitorResponse = {
+  generatedAt,
+  hasActiveRuns,
+  inFlight: [],
+  completed: [],
+  failed: []
+};
 ```
 
 - [ ] **Step 4: Update route fixtures and add a no-store authenticated response assertion**
@@ -183,12 +212,14 @@ git commit -m "feat: expose collection monitor liveness"
 ### Task 3: Convert the collection monitor to a live client view
 
 **Files:**
+
 - Create: `apps/web/src/app/operations/collection-monitor/collection-monitor-client.tsx`
 - Create: `apps/web/src/app/operations/collection-monitor/collection-monitor-client.test.tsx`
 - Modify: `apps/web/src/app/operations/collection-monitor/page.tsx`
 - Modify: `apps/web/src/app/operations/collection-monitor/page.test.tsx`
 
 **Interfaces:**
+
 - `CollectionMonitorClient({ initialMonitor }: { initialMonitor: CollectionMonitorResponse })` owns monitor state and invokes `useAuthoritativePoll` with `active: monitor.hasActiveRuns`.
 - The server page still authorizes before reading and passes the initial monitor snapshot into the client component.
 
@@ -226,7 +257,10 @@ const [monitor, setMonitor] = useState(initialMonitor);
 useAuthoritativePoll({
   active: monitor.hasActiveRuns,
   async read(signal) {
-    const response = await fetch("/api/operations/collection-monitor", { cache: "no-store", signal });
+    const response = await fetch("/api/operations/collection-monitor", {
+      cache: "no-store",
+      signal
+    });
     return parseMonitorPollResponse(response);
   },
   onSnapshot: setMonitor,
@@ -237,7 +271,9 @@ useAuthoritativePoll({
 - [ ] **Step 4: Add restrained monitor announcements and terminal/error tests**
 
 ```tsx
-<p className="visually-hidden" aria-live="polite" role="status">{announcement}</p>
+<p className="visually-hidden" aria-live="polite" role="status">
+  {announcement}
+</p>
 // Derive announcement from the previous and next monitor snapshots only when
 // a matching row becomes complete, partial, or failed. Assert identical
 // snapshots and generatedAt-only changes produce no announcement.
@@ -246,7 +282,9 @@ useAuthoritativePoll({
 - [ ] **Step 5: Keep the server authorization boundary intact**
 
 ```tsx
-return <CollectionMonitorClient initialMonitor={await collectionMonitor.list()} />;
+return (
+  <CollectionMonitorClient initialMonitor={await collectionMonitor.list()} />
+);
 ```
 
 Update page tests to verify unauthenticated requests still redirect before
@@ -268,10 +306,12 @@ git commit -m "feat: refresh active collection monitor"
 ### Task 4: Refactor dossier evidence refresh onto the shared hook
 
 **Files:**
+
 - Modify: `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.tsx`
 - Modify: `apps/web/src/app/dossiers/[region]/[realm]/[name]/dossier-page-client.test.tsx`
 
 **Interfaces:**
+
 - `hasLiveEvidence(dossier: ApplicantDossier | null): boolean` returns true when a non-excluded dossier character has `evidenceState` `waiting`, `scanning`, or `partial`.
 - Dossier reading continues to validate with `applicantDossierSchema` and supplies `credentialHeaders(readStoredCredentials())`.
 
@@ -279,7 +319,13 @@ git commit -m "feat: refresh active collection monitor"
 
 ```tsx
 it("does not poll an initially terminal evidence snapshot", () => {
-  render(<DossierPageClient identity={identity} initialDossier={expanded} jobId={null} />);
+  render(
+    <DossierPageClient
+      identity={identity}
+      initialDossier={expanded}
+      jobId={null}
+    />
+  );
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -287,14 +333,22 @@ it("updates partial evidence to complete without using research.state", async ()
   const partial = withEvidenceState(initial, "partial", "complete");
   const complete = withEvidenceState(expanded, "complete", "complete");
   fetch.mockResolvedValueOnce(Response.json(complete));
-  render(<DossierPageClient identity={identity} initialDossier={partial} jobId={null} />);
+  render(
+    <DossierPageClient
+      identity={identity}
+      initialDossier={partial}
+      jobId={null}
+    />
+  );
   await vi.advanceTimersByTimeAsync(1_000);
   expect(screen.getByText("Expanded evidence")).toBeVisible();
 });
 
 it("does not let an older dossier response replace a newer terminal response", async () => {
   const older = deferred<Response>();
-  fetch.mockReturnValueOnce(older.promise).mockResolvedValueOnce(Response.json(expanded));
+  fetch
+    .mockReturnValueOnce(older.promise)
+    .mockResolvedValueOnce(Response.json(expanded));
   // Trigger the newer generation, resolve it, then resolve the older request.
   older.resolve(Response.json(partiallyExpanded));
   expect(screen.getByText("Expanded evidence")).toBeVisible();
@@ -311,12 +365,20 @@ Expected: FAIL because the page still derives polling from `research.state`.
 
 ```tsx
 const hasLiveEvidence = (value: ApplicantDossier | null) =>
-  value?.characters.some((character) =>
-    !character.excluded &&
-    (character.evidenceState === "waiting" || character.evidenceState === "scanning" || character.evidenceState === "partial")
+  value?.characters.some(
+    (character) =>
+      !character.excluded &&
+      (character.evidenceState === "waiting" ||
+        character.evidenceState === "scanning" ||
+        character.evidenceState === "partial")
   ) ?? false;
 
-useAuthoritativePoll({ active: canAddCharacters && hasLiveEvidence(dossier), read: readDossierPoll, onSnapshot: applyFreshDossier, onTerminalError: applyDossierError });
+useAuthoritativePoll({
+  active: canAddCharacters && hasLiveEvidence(dossier),
+  read: readDossierPoll,
+  onSnapshot: applyFreshDossier,
+  onTerminalError: applyDossierError
+});
 ```
 
 Preserve the distinct discovery-job polling effect. Replace `research.state ===
@@ -327,19 +389,45 @@ evidence-state requirement applies; leave user-facing research copy unchanged.
 
 ```tsx
 it("keeps credential headers on a live dossier read", async () => {
-  writeStoredCredentials({ blizzardClientId: "id", blizzardClientSecret: "secret", raiderIoAccessKey: "", wclClientId: "", wclClientSecret: "" });
-  render(<DossierPageClient identity={identity} initialDossier={withEvidenceState(initial, "scanning", "complete")} jobId={null} />);
+  writeStoredCredentials({
+    blizzardClientId: "id",
+    blizzardClientSecret: "secret",
+    raiderIoAccessKey: "",
+    wclClientId: "",
+    wclClientSecret: ""
+  });
+  render(
+    <DossierPageClient
+      identity={identity}
+      initialDossier={withEvidenceState(initial, "scanning", "complete")}
+      jobId={null}
+    />
+  );
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(fetch).toHaveBeenCalledWith(dossierPath, expect.objectContaining({ headers: expect.objectContaining({ "x-blizzard-client-id": "id", "x-blizzard-client-secret": "secret" }) }));
+  expect(fetch).toHaveBeenCalledWith(
+    dossierPath,
+    expect.objectContaining({
+      headers: expect.objectContaining({
+        "x-blizzard-client-id": "id",
+        "x-blizzard-client-secret": "secret"
+      })
+    })
+  );
 });
 it("honors Retry-After without clearing visible evidence", async () => {
-  fetch.mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "15" } }));
+  fetch.mockResolvedValueOnce(
+    new Response(null, { status: 429, headers: { "retry-after": "15" } })
+  );
   await vi.advanceTimersByTimeAsync(14_999);
   expect(screen.getByText("Initial evidence")).toBeVisible();
 });
 it("announces a complete or partial evidence change once", async () => {
-  expect(await screen.findByRole("status", { name: /evidence collection complete/i })).toBeVisible();
-  expect(screen.getAllByRole("status", { name: /evidence collection complete/i })).toHaveLength(1);
+  expect(
+    await screen.findByRole("status", { name: /evidence collection complete/i })
+  ).toBeVisible();
+  expect(
+    screen.getAllByRole("status", { name: /evidence collection complete/i })
+  ).toHaveLength(1);
 });
 ```
 
@@ -359,9 +447,11 @@ git commit -m "feat: refresh live dossier evidence"
 ### Task 5: Validate the integrated behavior
 
 **Files:**
+
 - Modify only if verification exposes a defect in a file from Tasks 1-4.
 
 **Interfaces:**
+
 - All client code consumes the same `useAuthoritativePoll` lifecycle and the monitor consumes server-provided `hasActiveRuns`.
 
 - [ ] **Step 1: Run formatting, linting, types, and all unit tests**
