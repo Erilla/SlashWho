@@ -1400,7 +1400,7 @@ it("shows first-kill and best parse summaries before evidence details are opened
     within(firstKillParses).getByRole("group", { name: "Ryii parses" })
   ).toBeVisible();
   expect(
-    within(bestParses).getByRole("link", { name: "Damage 99.2 percentile" })
+    within(bestParses).getByRole("link", { name: "Damage 99 percentile" })
   ).toHaveAttribute(
     "href",
     "https://www.warcraftlogs.com/reports/best#fight=9"

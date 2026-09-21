@@ -20,8 +20,9 @@ type DossierParseListProps = Readonly<{
 type MetricName = "Damage" | "Healing" | "Boss Dam";
 
 function displayPercentileValue(percentile: number): string {
-  const truncated = Math.trunc(percentile * 10) / 10;
-  return Number.isInteger(truncated) ? `${truncated}` : truncated.toFixed(1);
+  // Parse source values remain fractional through contracts and persistence.
+  // The dossier alone presents them as nearest whole numbers.
+  return `${Math.round(percentile)}`;
 }
 
 function ParseMetric({
