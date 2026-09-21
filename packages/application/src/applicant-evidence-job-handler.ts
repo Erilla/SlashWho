@@ -985,6 +985,15 @@ export function createApplicantEvidenceJobHandler(
         record.requestCapUsed = requestCap;
         record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
+        const historyScanResumeOptions =
+          storedEvidence.historyScanResumePage &&
+          storedEvidence.historyScanResumeBoundaryReportCode
+            ? {
+                historyScanStartPage: storedEvidence.historyScanResumePage,
+                historyScanResumeBoundaryReportCode:
+                  storedEvidence.historyScanResumeBoundaryReportCode
+              }
+            : {};
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap,
@@ -994,6 +1003,7 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            ...historyScanResumeOptions,
             ...(parseOnlyResume
               ? {
                   storedKills: (storedEvidence.parseOnlyKills ?? [])
@@ -1052,6 +1062,13 @@ export function createApplicantEvidenceJobHandler(
           await stageAndPublish(
             {
               state: "partial",
+              ...(storedEvidence.historyScanResumePage !== undefined
+                ? {
+                    historyScanResumePage: storedEvidence.historyScanResumePage,
+                    historyScanResumeBoundaryReportCode:
+                      storedEvidence.historyScanResumeBoundaryReportCode ?? null
+                  }
+                : {}),
               limitationCode: response.code,
               parseLimitationCode: null,
               // The scan stopped before any parse work, so there is nothing
@@ -1107,6 +1124,30 @@ export function createApplicantEvidenceJobHandler(
           {
             state: incomplete ? "partial" : "complete",
             scanSkipped: response.scanSkipped,
+            ...(response.scanSkipped
+              ? {}
+              : response.historyScanResumePage !== undefined
+                ? {
+                    historyScanResumePage: response.historyScanResumePage,
+                    historyScanResumeBoundaryReportCode:
+                      response.historyScanResumeBoundaryReportCode ?? null
+                  }
+                : response.limitation === undefined
+                  ? storedEvidence.historyScanResumePage !== undefined
+                    ? {
+                        historyScanResumePage: null,
+                        historyScanResumeBoundaryReportCode: null
+                      }
+                    : {}
+                  : storedEvidence.historyScanResumePage !== undefined
+                    ? {
+                        historyScanResumePage:
+                          storedEvidence.historyScanResumePage,
+                        historyScanResumeBoundaryReportCode:
+                          storedEvidence.historyScanResumeBoundaryReportCode ??
+                          null
+                      }
+                    : {}),
             limitationCode: response.limitation?.code ?? null,
             parseLimitationCode: drivingParse?.code ?? null,
             parseLimitationCodesSeen: parseLimitationsSeen.map(

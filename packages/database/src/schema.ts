@@ -451,6 +451,12 @@ export const characterEvidenceRuns = pgTable(
     killScanCompletedAt: timestamp("kill_scan_completed_at", {
       withTimezone: true
     }),
+    // The next page below a capped, cleanly decoded history prefix. It is
+    // scoped to the published run so an abandoned attempt cannot advance it.
+    killScanResumePage: integer("kill_scan_resume_page"),
+    killScanResumeBoundaryReportCode: text(
+      "kill_scan_resume_boundary_report_code"
+    ),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),

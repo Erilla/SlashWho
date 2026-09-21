@@ -3192,6 +3192,200 @@ describe("applicant evidence job handler", () => {
       );
     });
 
+    it("resumes a capped history scan below its last proved page", async () => {
+      // Break caught: #394. Starting another capped attempt at page one pays for
+      // the same newest reports forever and never reaches the older history.
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () =>
+        ({
+          kills: [],
+          wipes: [],
+          // This is a test fixture for the persistence shape introduced by
+          // #394. The assertion below is the consumer-visible contract.
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        }) as unknown as Awaited<
+          ReturnType<typeof evidence.storedEvidenceTiers>
+        >;
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        parsedFightUrls: [],
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { getFirstKillReports, ...openGate } as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({ historyScanStartPage: 19 })
+      );
+    });
+
+    it("publishes the newer proved boundary from a capped continuation", async () => {
+      // Break caught: a continuation that always re-publishes its original
+      // boundary makes only the first capped chunk reachable.
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () =>
+        ({
+          kills: [],
+          wipes: [],
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        }) as unknown as Awaited<
+          ReturnType<typeof evidence.storedEvidenceTiers>
+        >;
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          ...openGate,
+          async getFirstKillReports() {
+            return {
+              kind: "evidence" as const,
+              limitation: {
+                kind: "limitation" as const,
+                code: "request_cap" as const
+              },
+              historyScanResumePage: 37,
+              historyScanResumeBoundaryReportCode: "proved-boundary-report",
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        },
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "request_cap",
+        historyScanResumePage: 37,
+        historyScanResumeBoundaryReportCode: "proved-boundary-report"
+      });
+      expect(evidence.staged.get(run.id)).toMatchObject({
+        historyScanResumePage: 37,
+        historyScanResumeBoundaryReportCode: "proved-boundary-report"
+      });
+    });
+
+    it("retains a proved boundary when the next history page is unavailable", async () => {
+      // Break caught: a failed continuation has learned nothing new, but it
+      // must not erase the page boundary an earlier clean response proved.
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () =>
+        ({
+          kills: [],
+          wipes: [],
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        }) as unknown as Awaited<
+          ReturnType<typeof evidence.storedEvidenceTiers>
+        >;
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          ...openGate,
+          async getFirstKillReports() {
+            return {
+              kind: "limitation" as const,
+              code: "unavailable" as const
+            };
+          }
+        },
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "unavailable",
+        historyScanResumePage: 19
+      });
+    });
+
+    it("clears a boundary after a clean scan can observe new reports", async () => {
+      // Break caught: retaining a cursor after a complete scan would skip a
+      // later report inserted above the old page boundary on every refresh.
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () =>
+        ({
+          kills: [],
+          wipes: [],
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        }) as unknown as Awaited<
+          ReturnType<typeof evidence.storedEvidenceTiers>
+        >;
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          ...openGate,
+          async getFirstKillReports() {
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        },
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "complete",
+        historyScanResumePage: null
+      });
+    });
+
     it("pages back to a stored wipe in a raid that was never killed in", async () => {
       // Break caught: #326. A complete publish keeps a stored wipe on the same
       // condition it keeps a stored kill -- the raid being terminal for kills

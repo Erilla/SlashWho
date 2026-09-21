@@ -423,6 +423,13 @@ export type StoredEvidenceTiers = Readonly<{
   /** When the last complete history scan was published, if known. */
   lastCleanKillScanAt?: string;
   /**
+   * The first page below a capped prefix that decoded cleanly. Absent means
+   * either no capped scan has published one, or a later clean scan completed.
+   */
+  historyScanResumePage?: number;
+  /** The final report code on the stored boundary page, used to validate its offset. */
+  historyScanResumeBoundaryReportCode?: string;
+  /**
    * Whether the newest completed run established that its only unfinished
    * collection work was parses. Absent is conservative: it does not license
    * skipping a scan.
@@ -448,6 +455,12 @@ export type TerminalTier = Readonly<{
 export interface StagedEvidenceCollection {
   state: "complete" | "partial";
   scanSkipped?: boolean;
+  /**
+   * Updates the stored history cursor: a page number resumes below a proved
+   * prefix; null clears it after a clean full scan; absent preserves it.
+   */
+  historyScanResumePage?: number | null;
+  historyScanResumeBoundaryReportCode?: string | null;
   limitationCode: string | null;
   parseLimitationCode: string | null;
   /**
@@ -541,6 +554,8 @@ export interface EvidenceRepository {
     runId: string,
     input: {
       scanSkipped?: boolean;
+      historyScanResumePage?: number | null;
+      historyScanResumeBoundaryReportCode?: string | null;
       state: "complete" | "partial";
       limitationCode: string | null;
       /** The parse limitation the run is judged by: retry, and the dossier. */
