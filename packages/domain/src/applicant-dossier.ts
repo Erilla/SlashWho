@@ -257,7 +257,7 @@ function reportsFor(
     reportUrl: kill.reportUrl!,
     source: reportSource(kill),
     uploader: kill.uploader ?? null,
-    guild: kill.guild
+    guild: kill.guild ?? null
   }));
 }
 function compareEventsLatestFirst(
