@@ -132,6 +132,108 @@ describe("Blizzard gateway", () => {
     expect(onProfileRequest).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps normalized playable-class names isolated by region and accounts for each initial read", async () => {
+    const usKey: CharacterKey = { ...key, region: "us", realm: "illidan" };
+    const classIndexReads: string[] = [];
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      if (url.pathname === "/data/wow/playable-class/index") {
+        classIndexReads.push(url.searchParams.get("namespace") ?? "");
+        return Response.json({
+          classes: [
+            {
+              id: 8,
+              name:
+                url.searchParams.get("namespace") === "static-eu"
+                  ? "Mage"
+                  : "Magus"
+            }
+          ]
+        });
+      }
+      if (url.pathname.includes("/character/")) {
+        return Response.json({
+          guild: { name: "A Guild", realm: { slug: "shared-realm" } }
+        });
+      }
+      if (url.pathname.includes("/guild/")) {
+        return Response.json({
+          members: [
+            {
+              character: {
+                name: "Alt",
+                realm: { slug: "shared-realm" },
+                playable_class: { id: 8 },
+                level: 80
+              }
+            }
+          ]
+        });
+      }
+      throw new Error(`unexpected endpoint: ${url.pathname}`);
+    });
+    const observed = vi.fn();
+
+    await expect(
+      gateway.getGuildRoster(key, undefined, observed)
+    ).resolves.toMatchObject([{ className: "Mage" }]);
+    await expect(
+      gateway.getGuildRoster(usKey, undefined, observed)
+    ).resolves.toMatchObject([{ className: "Magus" }]);
+    await gateway.getGuildRoster(key, undefined, observed);
+
+    expect(classIndexReads).toEqual(["static-eu", "static-us"]);
+    // Profile, static class index, roster; then the other region; then the
+    // warm EU profile and roster. The first static read in each region counts.
+    expect(observed).toHaveBeenCalledTimes(8);
+  });
+
+  it("refreshes a region's static class names after the patch-bounded lifetime", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-21T00:00:00.000Z"));
+    let classIndexReads = 0;
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      if (url.pathname === "/data/wow/playable-class/index") {
+        classIndexReads++;
+        return Response.json({
+          classes: [{ id: 8, name: classIndexReads === 1 ? "Mage" : "Magus" }]
+        });
+      }
+      if (url.pathname.includes("/character/")) {
+        return Response.json({
+          guild: { name: "A Guild", realm: { slug: "silvermoon" } }
+        });
+      }
+      if (url.pathname.includes("/guild/")) {
+        return Response.json({
+          members: [
+            {
+              character: {
+                name: "Alt",
+                realm: { slug: "silvermoon" },
+                playable_class: { id: 8 },
+                level: 80
+              }
+            }
+          ]
+        });
+      }
+      throw new Error(`unexpected endpoint: ${url.pathname}`);
+    });
+
+    await expect(gateway.getGuildRoster(key)).resolves.toMatchObject([
+      { className: "Mage" }
+    ]);
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1_000);
+    await expect(gateway.getGuildRoster(key)).resolves.toMatchObject([
+      { className: "Magus" }
+    ]);
+
+    expect(classIndexReads).toBe(2);
+    vi.useRealTimers();
+  });
+
   it("skips an unusable roster member instead of failing the sweep", async () => {
     // Break caught: one member the key space cannot represent made every member
     // null, which raised schema_drift and abandoned the whole sweep.

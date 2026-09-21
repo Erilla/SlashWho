@@ -1,4 +1,8 @@
-import type { Repositories, DiscoveryQueue } from "@slashwho/database";
+import type {
+  Repositories,
+  DiscoveryQueue,
+  EvidenceCollectionDomain
+} from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 
 import { measuredRepositories } from "./measured-repositories";
@@ -12,6 +16,69 @@ export type RefreshCharacterResult = Readonly<{
   /** Terminal marks a rebuild forgot; 0 on an ordinary refresh. */
   clearedTiers: number;
 }>;
+
+async function lightCollectionIsSettled(options: {
+  key: CharacterKey;
+  at: Date;
+  cooldownMs: number;
+  evidence: Pick<
+    Repositories["evidence"],
+    | "getCompleted"
+    | "storedEvidenceTiers"
+    | "terminalTiers"
+    | "hydratedFightUrls"
+    | "collectedTierZones"
+    | "listStatus"
+  >;
+}): Promise<boolean> {
+  const [completed, stored, terminal, status] = await Promise.all([
+    options.evidence.getCompleted(options.key),
+    options.evidence.storedEvidenceTiers(options.key),
+    options.evidence.terminalTiers(options.key),
+    options.evidence.listStatus([options.key])
+  ]);
+  if (
+    completed === null ||
+    status.some((run) =>
+      ["queued", "running", "retrying"].includes(run.status)
+    ) ||
+    completed.run.limitationCode !== null ||
+    completed.run.parseLimitationCode !== null ||
+    stored.lastCleanKillScanAt === undefined ||
+    new Date(stored.lastCleanKillScanAt).getTime() <
+      options.at.getTime() - options.cooldownMs
+  )
+    return false;
+
+  const kills = completed.kills;
+  const raidIds = new Set(kills.map((kill) => kill.raidId));
+  const terminalByDomain = new Map<EvidenceCollectionDomain, Set<string>>();
+  for (const tier of terminal) {
+    const raids = terminalByDomain.get(tier.domain) ?? new Set<string>();
+    raids.add(tier.raidId);
+    terminalByDomain.set(tier.domain, raids);
+  }
+  if (
+    !(["kills", "parses", "tier_bests"] as const).every((domain) =>
+      [...raidIds].every((raidId) => terminalByDomain.get(domain)?.has(raidId))
+    )
+  )
+    return false;
+
+  const settledBefore = new Date(options.at.getTime() - options.cooldownMs);
+  const [hydrated, collectedZones] = await Promise.all([
+    options.evidence.hydratedFightUrls(options.key, settledBefore),
+    options.evidence.collectedTierZones(options.key)
+  ]);
+  const hydratedUrls = new Set(hydrated);
+  if (!kills.every((kill) => hydratedUrls.has(kill.fightUrl))) return false;
+
+  const zones = new Map(collectedZones);
+  return kills.every((kill) => {
+    const collectedAt = zones.get(kill.raidId);
+    return collectedAt !== undefined && collectedAt > kill.killedAt;
+  });
+}
 
 /**
  * Re-collects one character on demand, without the evidence-version bump that
@@ -40,6 +107,8 @@ export async function refreshCharacter(options: {
    * unauthenticated dossier refresh route.
    */
   rebuild?: boolean;
+  /** Emits only static operational facts; callers must not include identity. */
+  logger?: { info(value: Record<string, unknown>): void };
 }): Promise<RefreshCharacterResult> {
   const evidence = options.scope
     ? measuredRepositories(
@@ -62,6 +131,23 @@ export async function refreshCharacter(options: {
   const clearedTiers = options.rebuild
     ? await evidence.clearTerminalTiers(options.key)
     : 0;
+
+  if (
+    mode === "light" &&
+    !options.rebuild &&
+    (await lightCollectionIsSettled({
+      key: options.key,
+      at: options.at,
+      cooldownMs: options.cooldownMs,
+      evidence
+    }))
+  ) {
+    options.logger?.info({
+      event: "light_collection_skipped",
+      reason: "all_domains_fresh_terminal"
+    });
+    return { mode, lastCollectedAt, clearedTiers };
+  }
 
   const reservation = await evidence.reserve({
     key: options.key,
