@@ -1,5 +1,6 @@
 import type {
   CharacterMythicKillInput,
+  CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
   EvidenceRunCost,
@@ -13,8 +14,7 @@ import type {
   WarcraftLogsGateway,
   WarcraftLogsLimitationCode,
   WarcraftLogsQueryType,
-  WarcraftLogsRateLimit,
-  WarcraftLogsWipeEvidence
+  WarcraftLogsRateLimit
 } from "@slashwho/warcraftlogs";
 
 import { decryptCredential } from "./credential-encryption";
@@ -62,7 +62,7 @@ export type ApplicantEvidenceStore = {
       parseLimitationCode: EvidenceLimitationCode | null;
       retryAfterAt?: Date | null;
       kills: readonly CharacterMythicKillInput[];
-      wipes: readonly WarcraftLogsWipeEvidence[];
+      wipes: readonly CharacterMythicWipeInput[];
       tierBests: readonly CharacterTierBestParseInput[];
       /**
        * Fight URLs this run asked about and got an answer for. Named here
@@ -265,6 +265,7 @@ function toCharacterMythicKillInput(
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild,
+    uploader: kill.uploader,
     historicWorldRank: kill.historicWorldRank,
     performance: kill.performance
   };
@@ -510,6 +511,7 @@ function storedKillForParse(
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild ? { ...kill.guild, region } : null,
+    uploader: kill.uploader ?? null,
     historicWorldRank: kill.historicWorldRank ?? null
   };
 }

@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 
-import { recoverAbandonedEvidenceRuns } from "../../packages/application/src";
+import {
+  createApplicantEvidenceJobHandler,
+  recoverAbandonedEvidenceRuns
+} from "../../packages/application/src";
 import type { CharacterKey } from "@slashwho/domain";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +17,7 @@ import {
   type SnapshotCharacterInput,
   type StoredSnapshot
 } from "../../packages/database/src";
+import type { WarcraftLogsGateway } from "../../packages/warcraftlogs/src";
 import { startPostgres } from "./postgres";
 
 /**
@@ -348,14 +352,11 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
-  it("carries a fight's newest parses forward, not an arbitrary run's", async () => {
-    // Break caught: the carry-forward loader returned one row per fight *per
-    // run* in its window, every copy tied on `(killed_at, source_fight_key)`.
-    // Seeding the merge from that list therefore picked an arbitrary run's
-    // copy of each fight, and PostgreSQL stops preserving insertion order for
-    // tied rows once the set is more than a handful -- so a publish reseeded
-    // fights from the blank baseline and wrote their percentiles away. Enough
-    // fights here that the pick cannot come out right by luck.
+  it("replaces stored parse rows with newly available specialization data", async () => {
+    // Break caught: an old parse row without specialization data can only be
+    // repaired if the refreshed answer wins the per-fight merge. Enough fights
+    // here that the carry-forward path cannot accidentally preserve a richer
+    // arbitrary prior copy instead.
     const fights = 30;
     const start = Date.parse("2026-08-04T12:00:00.000Z");
     const blank = Array.from({ length: fights }, (_, index) =>
@@ -371,7 +372,11 @@ describe("PostgreSQL repositories", () => {
         killedAt: kill.killedAt,
         fightUrl: kill.fightUrl,
         performance: {
-          spec: null,
+          spec: {
+            name: "Assassination",
+            iconUrl:
+              "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+          },
           damage: { state: "available", percentile: 77 },
           healing: { state: "unavailable" },
           bossDamage: { state: "unavailable" }
@@ -418,6 +423,11 @@ describe("PostgreSQL repositories", () => {
         (kill) => kill.performance.damage.state === "available"
       )
     ).toHaveLength(fights);
+    expect(stored?.kills[0]?.performance.spec).toEqual({
+      name: "Assassination",
+      iconUrl:
+        "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+    });
   });
 
   it("agrees with the dossier on which run is newest when two tie", async () => {
@@ -671,7 +681,11 @@ describe("PostgreSQL repositories", () => {
     const hydrated = mythicKill({
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=hydrated",
       performance: {
-        spec: null,
+        spec: {
+          name: "Assassination",
+          iconUrl:
+            "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+        },
         damage: { state: "available", percentile: 91 },
         healing: { state: "unavailable" },
         bossDamage: { state: "unavailable" }
@@ -705,6 +719,166 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toEqual([
       "https://www.warcraftlogs.com/reports/example#fight=hydrated"
     ]);
+  });
+
+  it("reopens stored parse metrics that have no specialization data", async () => {
+    // Break caught: the parse-tier version bump reopens the tier, but the
+    // per-fight hydration list could still skip its old spec-less row before
+    // Warcraft Logs had a chance to supply the missing specialization.
+    const oldParse = mythicKill({
+      performance: {
+        spec: null,
+        damage: { state: "available", percentile: 91 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    });
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved") {
+      throw new Error("evidence_not_reserved");
+    }
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [oldParse],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [oldParse.fightUrl],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.hydratedFightUrls(
+        rootKey,
+        new Date("2026-09-18T00:00:00.000Z")
+      )
+    ).resolves.toEqual([]);
+  });
+
+  it("recollects an old terminal parse through the bounded collection path", async () => {
+    // Break caught: the parse-tier version bump is only useful when it reaches
+    // the request selector. A spec-less row must be fetched again, persisted
+    // with the new specialization, and must not reopen kills or tier bests.
+    const oldParse = mythicKill({
+      performance: {
+        spec: null,
+        damage: { state: "available", percentile: 91 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    });
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [oldParse],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [oldParse.fightUrl],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+    await pool.query(
+      `INSERT INTO character_terminal_tiers
+         (region, realm_slug, normalized_name, raid_id, domain, collection_version)
+       VALUES ($1, $2, $3, $4, 'parses', 1),
+              ($1, $2, $3, $4, 'kills', 1),
+              ($1, $2, $3, $4, 'tier_bests', 1)`,
+      [rootKey.region, rootKey.realm, rootKey.name, oldParse.raidId]
+    );
+    const next = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (next.kind !== "reserved") throw new Error("evidence_not_reserved");
+
+    const refreshed = mythicKill({
+      performance: {
+        spec: {
+          name: "Assassination",
+          iconUrl:
+            "https://wow.zamimg.com/images/wow/icons/medium/ability_rogue_deadlybrew.jpg"
+        },
+        damage: { state: "available", percentile: 91 },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    });
+    const getFirstKillReports = async (
+      _key: typeof rootKey,
+      options: {
+        hydratedFightUrls?: ReadonlySet<string>;
+        terminalRaidIds?: {
+          kills: ReadonlySet<string>;
+          parses: ReadonlySet<string>;
+          tierBests: ReadonlySet<string>;
+        };
+      }
+    ) => {
+      expect(options.hydratedFightUrls).not.toContain(oldParse.fightUrl);
+      expect(options.terminalRaidIds).toEqual({
+        kills: new Set([oldParse.raidId]),
+        parses: new Set(),
+        tierBests: new Set([oldParse.raidId])
+      });
+      return {
+        kind: "evidence" as const,
+        parsedFightUrls: [refreshed.fightUrl],
+        kills: [refreshed],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      };
+    };
+    const handler = createApplicantEvidenceJobHandler({
+      evidence: repositories.evidence,
+      warcraftLogs: {
+        getRateLimit: async () => ({
+          kind: "rate_limit" as const,
+          limitPerHour: 18_000,
+          pointsSpentThisHour: 0,
+          pointsResetInSeconds: 949
+        }),
+        getFirstKillReports
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getRateLimit" | "getFirstKillReports"
+      >,
+      requestCap: 500,
+      parseRequestCap: 24,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      now: () => new Date("2026-09-18T12:00:00.000Z")
+    });
+
+    await handler.execute(next.run.id);
+
+    await expect(
+      repositories.evidence.getCompleted(rootKey)
+    ).resolves.toMatchObject({
+      kills: [
+        {
+          performance: {
+            spec: { name: "Assassination" }
+          }
+        }
+      ]
+    });
   });
 
   it("reports a fight asked about and answered with nothing as needing nothing further", async () => {
@@ -1299,7 +1473,7 @@ describe("PostgreSQL repositories", () => {
         status: "partial",
         limitationCode: "request_cap"
       }),
-      evidenceVersion: 13,
+      evidenceVersion: 14,
       kills: [
         expect.objectContaining({ bossId: "1234", bossOrder: 8 }),
         expect.objectContaining({ bossId: "1235", bossOrder: 7 })
@@ -1849,11 +2023,10 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toHaveLength(1);
   });
 
-  it("omits a terminal tier recorded below its domain's collection version", async () => {
-    // Per-domain versions: a parse fix bumps `parses` and re-collects parses
-    // alone, leaving kills and tier bests settled. A global bump cannot serve
-    // this -- it invalidates everything, which is ruinous once the whole point
-    // is to stop re-querying.
+  it("reopens only terminal parse tiers recorded before the specialization refresh", async () => {
+    // Break caught: bumping the global evidence version would unbound every
+    // settled tier, while leaving parses at version 1 would keep their old
+    // specialization-free rows permanently out of collection.
     const key = {
       region: "eu",
       realm: "silvermoon",
@@ -1862,12 +2035,15 @@ describe("PostgreSQL repositories", () => {
     await pool.query(
       `INSERT INTO character_terminal_tiers
          (region, realm_slug, normalized_name, raid_id, domain, collection_version)
-       VALUES ($1, $2, $3, '42', 'parses', 0), ($1, $2, $3, '42', 'kills', 1)`,
+       VALUES ($1, $2, $3, '42', 'parses', 1),
+              ($1, $2, $3, '42', 'kills', 1),
+              ($1, $2, $3, '42', 'tier_bests', 1)`,
       [key.region, key.realm, key.name]
     );
 
     await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([
-      { raidId: "42", domain: "kills" }
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "tier_bests" }
     ]);
   });
 

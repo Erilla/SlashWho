@@ -3738,6 +3738,7 @@ describe("Warcraft Logs gateway", () => {
                       {
                         code: "guildReport",
                         startTime: 1_728_086_400_000,
+                        owner: { name: "Dorian" },
                         guild: {
                           name: "Example Guild",
                           server: {
@@ -3794,7 +3795,8 @@ describe("Warcraft Logs gateway", () => {
             name: "Example Guild",
             region: "eu",
             realm: "silvermoon"
-          }
+          },
+          uploader: "Dorian"
         }
       ]
     });

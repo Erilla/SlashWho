@@ -19,6 +19,8 @@ const allowlist = new Set([
   "raiderIoRankingsMs",
   "raiderIoRankingsCalls",
   "raiderIoRankingsMaxCallMs",
+  "raiderIoRankingLogicalKeys",
+  "raiderIoRankingPhysicalCalls",
   "raiderIoCharacterMs",
   "raiderIoCharacterCalls",
   "raiderIoCharacterMaxCallMs",
@@ -43,7 +45,9 @@ const allowlist = new Set([
   "cacheMisses",
   "cacheShared",
   "cacheFailures",
-  "cacheCapacity"
+  "cacheCapacity",
+  // Static collection-gate outcome; never a character identifier or query.
+  "reason"
 ]);
 
 // Exported so the logger test can assert every listed field actually

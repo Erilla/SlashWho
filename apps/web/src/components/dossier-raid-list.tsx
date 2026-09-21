@@ -1,9 +1,11 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierParseList } from "./dossier-parse-list";
-import { UpstreamIconLink } from "./upstream-icon-link";
+import { UpstreamIcon, UpstreamIconLink } from "./upstream-icon-link";
 import { GuildProfileLinks } from "./profile-links";
 
 type Raid = ApplicantDossier["raids"][number];
@@ -11,9 +13,11 @@ type Boss = Raid["bosses"][number];
 type KillBoss = Extract<Boss, { state: "kill" }>;
 type WipeEvidence = Extract<Boss, { state: "wipe" }>["wipe"];
 type WipeCharacter = WipeEvidence["characters"][number];
+type DossierReport = NonNullable<KillBoss["firstKill"]["reports"]>[number];
 type WipeGroup = Readonly<{
   attemptedAt: string;
   reportUrls: readonly string[];
+  reports: readonly DossierReport[];
   characters: readonly WipeCharacter[];
 }>;
 
@@ -23,44 +27,169 @@ type DossierRaidListProps = Readonly<{
   loading?: boolean;
 }>;
 
-function ReportLinks({
-  evidence,
-  wipes = []
-}: {
-  evidence: KillBoss["firstKill"];
-  wipes?: readonly WipeEvidence[];
-}) {
+function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
   const urls =
     evidence.reportUrls ?? (evidence.reportUrl ? [evidence.reportUrl] : []);
-  const wipeUrls = groupWipes(wipes).flatMap((wipe) => wipe.reportUrls);
-  if (urls.length === 0 && wipes.length === 0) return <>Report: —</>;
+  const reports =
+    evidence.reports ??
+    urls.map((reportUrl) => ({
+      reportUrl,
+      source:
+        evidence.guild !== null && reportUrl === evidence.reportUrl
+          ? ("guild_log" as const)
+          : ("personal_log" as const),
+      uploader: null
+    }));
+  if (reports.length === 0) return <>Report: —</>;
   return (
     <ul className="dossier-report-links">
-      {urls.map((url, index) => (
-        <li key={url}>
-          <UpstreamIconLink
-            evidenceState="kill"
-            href={url}
-            label={
-              urls.length === 1
-                ? "View Warcraft Logs report"
-                : `View Warcraft Logs report ${index + 1}`
-            }
-            source="warcraft_logs"
-          />
-        </li>
-      ))}
-      {wipeUrls.map((url) => (
-        <li key={url}>
-          <UpstreamIconLink
-            evidenceState="wipe"
-            href={url}
-            label="View Warcraft Logs wipe report"
-            source="warcraft_logs"
-          />
-        </li>
-      ))}
+      <li>
+        <ReportControl evidenceState="kill" reports={reports} />
+      </li>
     </ul>
+  );
+}
+
+function ReportControl({
+  evidenceState,
+  reports
+}: {
+  evidenceState: "kill" | "wipe";
+  reports: readonly DossierReport[];
+}) {
+  if (reports.length === 1) {
+    return (
+      <UpstreamIconLink
+        evidenceState={evidenceState}
+        href={reports[0]!.reportUrl}
+        label={`View Warcraft Logs ${evidenceState === "wipe" ? "wipe " : ""}report`}
+        source="warcraft_logs"
+      />
+    );
+  }
+  return <ReportMenu evidenceState={evidenceState} reports={reports} />;
+}
+
+function reportLabel(report: {
+  source: "guild_log" | "personal_log";
+  uploader: string | null;
+}) {
+  const source = report.source === "guild_log" ? "Guild log" : "Personal log";
+  return `${source} uploaded by ${report.uploader ?? "Unknown uploader"}`;
+}
+
+function ReportMenu({
+  evidenceState,
+  reports
+}: {
+  evidenceState: "kill" | "wipe";
+  reports: readonly DossierReport[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
+  const [isBrowser, setIsBrowser] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+  const tooltipId = useId();
+  const count = reports.length;
+
+  useEffect(() => setIsBrowser(true), []);
+
+  useEffect(() => {
+    if (!open) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const positionMenu = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+
+      const bounds = trigger.getBoundingClientRect();
+      const gutter = 16;
+      const width = Math.min(320, window.innerWidth - gutter * 2);
+      const height = Math.min(
+        window.innerHeight - gutter * 2,
+        Math.max(160, count * 64 + 16)
+      );
+      const left = Math.max(
+        width / 2 + gutter,
+        Math.min(
+          bounds.left + bounds.width / 2,
+          window.innerWidth - width / 2 - gutter
+        )
+      );
+      const below = bounds.bottom + 6;
+      const top =
+        below + height <= window.innerHeight - gutter ||
+        bounds.top < height + gutter
+          ? below
+          : Math.max(gutter, bounds.top - height - 6);
+      setMenuPosition({ left, top });
+    };
+
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [count, open]);
+
+  return (
+    <span className="dossier-report-menu">
+      <button
+        aria-controls={menuId}
+        aria-describedby={tooltipId}
+        aria-expanded={open}
+        aria-label={`Choose from ${count} ${evidenceState} reports`}
+        className={`upstream-icon-link upstream-icon-link--warcraft-logs upstream-icon-link--evidence-${evidenceState} dossier-report-menu-trigger`}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false);
+        }}
+        ref={triggerRef}
+        type="button"
+      >
+        <UpstreamIcon evidenceState={evidenceState} source="warcraft_logs" />
+      </button>
+      <span
+        className="dossier-report-menu-tooltip"
+        id={tooltipId}
+        role="tooltip"
+      >
+        {count} reports found
+      </span>
+      {open && isBrowser && menuPosition
+        ? createPortal(
+            <ul
+              aria-label={`${evidenceState === "kill" ? "Kill" : "Wipe"} reports`}
+              className="dossier-report-menu-list"
+              id={menuId}
+              style={menuPosition}
+            >
+              {reports.map((report) => (
+                <li key={report.reportUrl}>
+                  <a
+                    aria-label={reportLabel(report)}
+                    href={report.reportUrl}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    <span>{report.uploader ?? "Unknown uploader"}</span>
+                    <small>{reportLabel(report)}</small>
+                  </a>
+                </li>
+              ))}
+            </ul>,
+            document.body
+          )
+        : null}
+    </span>
   );
 }
 
@@ -138,16 +267,12 @@ function WipeEvidenceList({
               <dt>Report</dt>
               <dd>
                 <ul className="dossier-report-links">
-                  {wipe.reportUrls.map((url) => (
-                    <li key={url}>
-                      <UpstreamIconLink
-                        evidenceState="wipe"
-                        href={url}
-                        label="View Warcraft Logs wipe report"
-                        source="warcraft_logs"
-                      />
-                    </li>
-                  ))}
+                  <li>
+                    <ReportControl
+                      evidenceState="wipe"
+                      reports={wipe.reports}
+                    />
+                  </li>
                 </ul>
               </dd>
             </div>
@@ -190,6 +315,7 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
     {
       attemptedAt: string;
       reportUrls: string[];
+      reports: DossierReport[];
       characters: WipeCharacter[];
       characterKeys: Set<string>;
     }
@@ -201,6 +327,7 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
     const group = groups.get(date) ?? {
       attemptedAt: wipe.attemptedAt,
       reportUrls: [],
+      reports: [],
       characters: [],
       characterKeys: new Set<string>()
     };
@@ -208,6 +335,11 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
     if (!reportKeys.has(wipeReport)) {
       reportKeys.add(wipeReport);
       group.reportUrls.push(wipe.reportUrl);
+      group.reports.push({
+        reportUrl: wipe.reportUrl,
+        source: wipe.source ?? "personal_log",
+        uploader: wipe.uploader ?? null
+      });
     }
     for (const character of wipe.characters) {
       const characterKey = `${character.region}/${character.realm}/${character.name}`;
@@ -221,9 +353,12 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
 
   return [...groups.values()]
     .sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt))
-    .map(({ attemptedAt, reportUrls, characters }) => ({
+    .map(({ attemptedAt, reportUrls, reports, characters }) => ({
       attemptedAt,
       reportUrls,
+      reports: [...reports].sort((a, b) =>
+        a.source === b.source ? 0 : a.source === "guild_log" ? -1 : 1
+      ),
       characters
     }));
 }
@@ -326,7 +461,20 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                     <div>
                       <dt>Reports</dt>
                       <dd>
-                        <ReportLinks evidence={evidence} wipes={wipes} />
+                        <ReportLinks evidence={evidence} />
+                        {groupWipes(wipes).map((wipe) => (
+                          <ul
+                            className="dossier-report-links"
+                            key={wipe.attemptedAt}
+                          >
+                            <li>
+                              <ReportControl
+                                evidenceState="wipe"
+                                reports={wipe.reports}
+                              />
+                            </li>
+                          </ul>
+                        ))}
                       </dd>
                     </div>
                     <div>

@@ -1,13 +1,11 @@
 import type {
   CharacterMythicKillInput,
+  CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   StagedEvidenceCollection,
   TerminalTier
 } from "@slashwho/database";
-import type {
-  WarcraftLogsLimitationCode,
-  WarcraftLogsWipeEvidence
-} from "@slashwho/warcraftlogs";
+import type { WarcraftLogsLimitationCode } from "@slashwho/warcraftlogs";
 
 import { terminalTiersFrom } from "./terminal-tiers";
 
@@ -47,7 +45,7 @@ export type EvidencePublication = Readonly<{
   parseLimitationCodesSeen: readonly EvidenceLimitationCode[];
   retryAfterAt?: Date | null;
   kills: readonly CharacterMythicKillInput[];
-  wipes: readonly WarcraftLogsWipeEvidence[];
+  wipes: readonly CharacterMythicWipeInput[];
   tierBests: readonly CharacterTierBestParseInput[];
   /**
    * Fight URLs this run asked Warcraft Logs about and got an answer for,

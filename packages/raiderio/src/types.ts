@@ -92,6 +92,9 @@ export type MythicBossRankingsResult =
       observedAt?: string;
     };
 
+/** Receives no request identity, payload, or credential information. */
+export type RaiderIoPhysicalRequestObserver = () => void;
+
 export interface RaiderIoGateway {
   getCharacter(
     key: CharacterKey,
@@ -112,6 +115,7 @@ export interface RaiderIoGateway {
   ): Promise<HistoricMythicKillResult>;
   getMythicBossRankings(
     options: MythicBossRankingsOptions,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
   ): Promise<MythicBossRankingsResult>;
 }

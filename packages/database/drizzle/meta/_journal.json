@@ -222,8 +222,15 @@
     {
       "idx": 31,
       "version": "7",
+      "when": 1790510582000,
+      "tag": "0032_report_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
       "when": 1790575200000,
-      "tag": "0032_history_scan_resume_page",
+      "tag": "0033_history_scan_resume_boundary",
       "breakpoints": true
     }
   ]

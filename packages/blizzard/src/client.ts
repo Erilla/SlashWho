@@ -24,6 +24,16 @@ type AccessToken = Readonly<{
   expiresAt: number;
 }>;
 
+type CachedPlayableClassNames = Readonly<{
+  names: ReadonlyMap<number, string>;
+  expiresAt: number;
+}>;
+
+// Playable classes are static data, but a live patch can change them. A daily
+// refresh bounds the maximum patch staleness without retaining any profile,
+// roster, or fingerprint material.
+const PLAYABLE_CLASS_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+
 function createBlizzardError(failure: BlizzardFailure): BlizzardError {
   return Object.assign(
     new Error(`blizzard_${failure.kind}`),
@@ -202,7 +212,10 @@ export function createBlizzardClient(
 ): BlizzardGateway {
   let cachedToken: AccessToken | undefined;
   let tokenRequest: Promise<string> | undefined;
-  let cachedClassNames: ReadonlyMap<number, string> | undefined;
+  const cachedClassNames = new Map<
+    CharacterKey["region"],
+    CachedPlayableClassNames
+  >();
 
   async function accessToken(signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
@@ -337,9 +350,13 @@ export function createBlizzardClient(
     signal?: AbortSignal,
     onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<ReadonlyMap<number, string>> {
-    // The class list changes at most once per expansion, so one lookup per
-    // process serves every sweep. It is still accounted as a request.
-    cachedClassNames ??= await request(
+    const cached = cachedClassNames.get(region);
+    if (cached && cached.expiresAt > Date.now()) return cached.names;
+
+    // Names are static only within a region. Each first read is requested with
+    // the sweep observer, so it remains accounted for like every other
+    // upstream call. The daily expiry bounds staleness across a live patch.
+    const names = await request(
       playableClassIndexUrl(region),
       (value) => {
         const body = valueRecord(value);
@@ -356,7 +373,11 @@ export function createBlizzardClient(
       signal,
       onProfileRequest
     );
-    return cachedClassNames;
+    cachedClassNames.set(region, {
+      names,
+      expiresAt: Date.now() + PLAYABLE_CLASS_CACHE_TTL_MS
+    });
+    return names;
   }
 
   function rosterUrl(

@@ -624,6 +624,7 @@ export const characterMythicKills = pgTable(
     fightUrl: text("fight_url").notNull(),
     guildName: text("guild_name"),
     guildRealm: text("guild_realm"),
+    uploader: text("uploader"),
     historicWorldRank: integer("historic_world_rank"),
     specName: text("spec_name"),
     specIconUrl: text("spec_icon_url"),
@@ -765,14 +766,21 @@ export const characterMythicWipes = pgTable(
     bossOrder: integer("boss_order").notNull(),
     attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull(),
     reportUrl: text("report_url").notNull(),
-    fightUrl: text("fight_url").notNull()
+    fightUrl: text("fight_url").notNull(),
+    guildName: text("guild_name"),
+    guildRealm: text("guild_realm"),
+    uploader: text("uploader")
   },
   (table) => [
     uniqueIndex("character_mythic_wipes_run_fight_idx").on(
       table.evidenceRunId,
       table.fightUrl
     ),
-    index("character_mythic_wipes_run_idx").on(table.evidenceRunId)
+    index("character_mythic_wipes_run_idx").on(table.evidenceRunId),
+    check(
+      "character_mythic_wipes_guild_identity_check",
+      sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
+    )
   ]
 );
 

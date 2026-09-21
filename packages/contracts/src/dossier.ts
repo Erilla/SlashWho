@@ -32,6 +32,14 @@ export const dossierGuildSchema = z
   })
   .strict();
 
+export const dossierReportSchema = z
+  .object({
+    reportUrl: z.url(),
+    source: z.enum(["guild_log", "personal_log"]),
+    uploader: z.string().min(1).nullable()
+  })
+  .strict();
+
 export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
@@ -86,6 +94,7 @@ export const dossierFirstKillSchema = z
     historicWorldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable(),
     reportUrls: z.array(z.url()).optional(),
+    reports: z.array(dossierReportSchema).optional(),
     characters: z.array(characterKeySchema),
     parses: z.array(applicantDossierCharacterParsesSchema)
   })
@@ -102,6 +111,8 @@ const dossierWipeSchema = z
   .object({
     attemptedAt: z.iso.datetime(),
     reportUrl: z.url(),
+    source: z.enum(["guild_log", "personal_log"]).optional(),
+    uploader: z.string().min(1).nullable().optional(),
     characters: z.array(characterKeySchema).min(1)
   })
   .strict();

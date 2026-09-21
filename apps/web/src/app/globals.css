@@ -1345,6 +1345,83 @@ a {
   list-style: none;
 }
 
+.dossier-report-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.dossier-report-menu-trigger {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.dossier-report-menu-tooltip {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 0.4rem);
+  left: 50%;
+  width: max-content;
+  max-width: 12rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 0.75rem;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 0.2rem);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.dossier-report-menu:focus-within .dossier-report-menu-tooltip,
+.dossier-report-menu:hover .dossier-report-menu-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.dossier-report-menu-list {
+  position: fixed;
+  z-index: 10;
+  display: grid;
+  width: max-content;
+  min-width: 15rem;
+  max-width: min(20rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface-raised);
+  box-shadow: 0 0.7rem 1.6rem rgb(0 0 0 / 0.26);
+  list-style: none;
+  overflow-y: auto;
+  transform: translateX(-50%);
+}
+
+.dossier-report-menu-list a {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.25rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.dossier-report-menu-list a:hover,
+.dossier-report-menu-list a:focus-visible {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.dossier-report-menu-list small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .dossier-limitations {
   grid-column: 1 / -1;
 }

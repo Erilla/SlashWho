@@ -368,7 +368,12 @@ describe("applicant dossier service", () => {
       bossOrder: 5,
       attemptedAt: "2024-09-01T20:00:00.000Z",
       reportUrl: "https://www.warcraftlogs.com/reports/wipe",
-      fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5"
+      fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5",
+      guild: { name: "Example Guild", realm: "silvermoon" },
+      uploader: "Dorian"
+    } as StoredCharacterMythicWipe & {
+      guild: { name: string; realm: string };
+      uploader: string;
     };
     const complete = await fixture({
       includeCachedKills: false,
@@ -384,7 +389,11 @@ describe("applicant dossier service", () => {
       )
     ).toMatchObject({
       state: "wipe",
-      wipe: { characters: [root, alt] }
+      wipe: {
+        characters: [root, alt],
+        source: "guild_log",
+        uploader: "Dorian"
+      }
     });
     expect(nerubar.bosses.find((boss) => boss.bossOrder === 1)).toMatchObject({
       state: "no_logs"
@@ -1280,24 +1289,29 @@ describe("applicant dossier service", () => {
       ]
     });
     vi.mocked(raiderio.getMythicBossRankings).mockImplementation(
-      async (request) => ({
-        kind: "rankings",
-        rows: (request.guild?.name === "Other Guild"
-          ? [{ bossSlug: "ulgrax-the-devourer", rank: 741 }]
-          : [
-              { bossSlug: "queen-ansurek", rank: 371 },
-              { bossSlug: "the-silken-court", rank: 412 }
-            ]
-        ).map((row) => ({
-          ...row,
-          guildName: request.guild!.name,
-          guildRealm: "silvermoon",
-          guildRegion: "eu",
-          firstDefeated: "2024-10-01T20:00:00.000Z"
-        }))
-      })
+      async (request, _signal, onPhysicalRequest) => {
+        onPhysicalRequest?.();
+        onPhysicalRequest?.();
+        return {
+          kind: "rankings",
+          rows: (request.guild?.name === "Other Guild"
+            ? [{ bossSlug: "ulgrax-the-devourer", rank: 741 }]
+            : [
+                { bossSlug: "queen-ansurek", rank: 371 },
+                { bossSlug: "the-silken-court", rank: 412 }
+              ]
+          ).map((row) => ({
+            ...row,
+            guildName: request.guild!.name,
+            guildRealm: "silvermoon",
+            guildRegion: "eu",
+            firstDefeated: "2024-10-01T20:00:00.000Z"
+          }))
+        };
+      }
     );
-    const result = await dossiers.read(root);
+    const scope = createMeasurementScope();
+    const result = await dossiers.read(root, undefined, undefined, scope);
     expect(result.kind).toBe("ready");
     if (result.kind !== "ready") throw new Error("Expected dossier");
     expect(
@@ -1307,6 +1321,10 @@ describe("applicant dossier service", () => {
         .map((boss) => boss.firstKill.historicWorldRank)
         .sort()
     ).toEqual([371, 412, 741]);
+    expect(scope.totals()).toMatchObject({
+      raiderIoRankingLogicalKeys: 2,
+      raiderIoRankingPhysicalCalls: 4
+    });
     await dossiers.read(root);
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
   });
@@ -1345,7 +1363,8 @@ describe("applicant dossier service", () => {
         bossSlug: "queen-ansurek",
         guild: { name: "Example Guild", realm: "silvermoon", region: "eu" }
       },
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      expect.any(Function)
     );
   });
 
