@@ -507,6 +507,69 @@ describe("DossierPageClient live evidence", () => {
     expect(screen.queryByText("Partial evidence")).not.toBeInTheDocument();
   });
 
+  it("announces both completions in a scanning complete scanning complete cycle", async () => {
+    const user = userEvent.setup();
+    let resolveSecondCompletion!: (response: Response) => void;
+    const secondCompletion = new Promise<Response>((resolve) => {
+      resolveSecondCompletion = resolve;
+    });
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.endsWith("/refresh")) {
+          return Promise.resolve(Response.json({ mode: "full" }));
+        }
+        reads += 1;
+        if (reads === 3) return secondCompletion;
+        return Promise.resolve(
+          Response.json(
+            withEvidenceState(expanded, reads === 1 ? "complete" : "scanning")
+          )
+        );
+      })
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    expect(
+      screen.getByRole("status", { name: "Evidence collection updates" })
+    ).toBeEmptyDOMElement();
+    const announcement = await screen.findByRole("status", {
+      name: "Evidence collection complete"
+    });
+    const messages: (string | null)[] = [];
+    const observer = new MutationObserver(() =>
+      messages.push(announcement.textContent)
+    );
+    observer.observe(announcement, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(
+        screen.getByRole("status", { name: "Evidence collection updates" })
+      ).toBeEmptyDOMElement();
+      await act(async () => {
+        resolveSecondCompletion(
+          Response.json(withEvidenceState(expanded, "complete"))
+        );
+      });
+      expect(
+        screen.getByRole("status", { name: "Evidence collection complete" })
+      ).toHaveTextContent("Evidence collection complete");
+      expect(messages).toEqual(["", "Evidence collection complete"]);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it("announces partial and complete evidence changes once", async () => {
     vi.useFakeTimers();
     const partial = withEvidenceState(partiallyExpanded, "partial");

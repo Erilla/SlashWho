@@ -140,8 +140,8 @@ function DossierPageState({
 
   useEffect(() => {
     const publication = evidencePublication(dossier);
-    if (publication && publication !== previousPublication.current) {
-      setAnnouncement(`Evidence collection ${publication}`);
+    if (publication !== previousPublication.current) {
+      setAnnouncement(publication ? `Evidence collection ${publication}` : "");
     }
     previousPublication.current = publication;
   }, [dossier]);
