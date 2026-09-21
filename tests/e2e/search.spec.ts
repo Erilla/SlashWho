@@ -290,7 +290,7 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(firstKillParses).toBeVisible();
   await expect(bestParses).toBeVisible();
   await expect(
-    firstKillParses.getByRole("link", { name: "Damage 99.2 percentile (Fire)" })
+    firstKillParses.getByRole("link", { name: "Damage 99 percentile (Fire)" })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
   await expect(
     firstKillParses.getByAltText("Fire specialization").first()
@@ -327,7 +327,7 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   ).toHaveAttribute("href", /e2eLaterReport#fight=11$/);
   await expect(
     firstEventParses.getByRole("link", {
-      name: "Damage 99.2 percentile (Fire)"
+      name: "Damage 99 percentile (Fire)"
     })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
   await expect(
@@ -360,7 +360,7 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(firstKillParses).toBeVisible();
   await expect(firstKillParses).toBeInViewport();
   await expect(
-    firstKillParses.getByRole("link", { name: "Damage 99.2 percentile (Fire)" })
+    firstKillParses.getByRole("link", { name: "Damage 99 percentile (Fire)" })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
 
   await bestParses.scrollIntoViewIfNeeded();
@@ -383,7 +383,7 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
   await expect(firstEventParses).toBeInViewport();
   await expect(
     firstEventParses.getByRole("link", {
-      name: "Damage 99.2 percentile (Fire)"
+      name: "Damage 99 percentile (Fire)"
     })
   ).toHaveAttribute("href", /e2eReport#fight=10$/);
   expect(

@@ -44,7 +44,7 @@ it("presents every character name and metric with source links and accessible un
   expect(screen.queryByText("Paladin")).not.toBeInTheDocument();
   expect(screen.getByText("Ryii")).toBeVisible();
   const damage = screen.getByRole("link", {
-    name: "Damage 87.1 percentile (Fire)"
+    name: "Damage 87 percentile (Fire)"
   });
   expect(damage).toHaveAttribute(
     "href",
@@ -101,6 +101,31 @@ it("renders whole-number percentile values without the percentile suffix", () =>
     screen.getByRole("link", { name: "Damage 100 percentile (Fire)" })
   ).toHaveClass("dossier-parse-metric--gold");
   expect(screen.getByText("100", { exact: true })).toBeVisible();
+});
+
+it("rounds half-up fractional parse values in visible and accessible text", () => {
+  // Break caught: a value at the half boundary could be truncated or retain a
+  // decimal in either the displayed value or the link label.
+  render(
+    <DossierParseList
+      label="Best parses"
+      parses={[
+        {
+          ...parses[0],
+          damage: {
+            state: "available",
+            percentile: 87.5,
+            reportUrl: "https://www.warcraftlogs.com/reports/rounded#fight=9"
+          }
+        }
+      ]}
+    />
+  );
+
+  expect(
+    screen.getByRole("link", { name: "Damage 88 percentile (Fire)" })
+  ).toBeVisible();
+  expect(screen.getByText("88", { exact: true })).toBeVisible();
 });
 
 it("shows a spinner for unavailable metrics while research is gathering", () => {
