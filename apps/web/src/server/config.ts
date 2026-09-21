@@ -47,7 +47,7 @@ function operatorOrigin(
     // deliberately unavailable outside Node's test runtime; production still
     // accepts an exact HTTPS origin only, keeping Secure/__Host cookie policy.
     if (
-      nodeEnvironment === "test" &&
+      nodeEnvironment === "development" &&
       url.protocol === "http:" &&
       url.hostname === "127.0.0.1" &&
       url.origin === value

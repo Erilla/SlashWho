@@ -147,7 +147,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
-      NODE_ENV: "test",
+      NODE_ENV: "development",
       DATABASE_URL: databaseUrl,
       BOT_API_KEY: "e2e-bot-key-that-is-longer-than-32-characters",
       RATE_LIMIT_HASH_SECRET:

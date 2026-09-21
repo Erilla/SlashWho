@@ -44,18 +44,18 @@ it.each([
   );
 });
 
-it("accepts only the dynamic loopback HTTP origin under the test runtime", () => {
+it("accepts only the dynamic loopback HTTP origin under the development runtime", () => {
   expect(
     loadWebConfig({
       ...validEnv,
-      NODE_ENV: "test",
+      NODE_ENV: "development",
       OPERATOR_ORIGIN: "http://127.0.0.1:41053"
     }).operatorAuth.origin
   ).toBe("http://127.0.0.1:41053");
   expect(() =>
     loadWebConfig({
       ...validEnv,
-      NODE_ENV: "development",
+      NODE_ENV: "production",
       OPERATOR_ORIGIN: "http://127.0.0.1:41053"
     })
   ).toThrow("invalid_operator_origin");
