@@ -4255,14 +4255,17 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 2,
       parseRequestCap: 10,
-      historyScanStartPage: 19
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
     });
 
-    expect(historyPages).toEqual([19, 20]);
+    // The proved boundary page is the validation request. It counts toward
+    // the same physical-request budget as the page that advances the scan.
+    expect(historyPages).toEqual([18, 19]);
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "request_cap" },
-      historyScanResumePage: 21
+      historyScanResumePage: 20
     });
   });
 
@@ -4307,10 +4310,55 @@ describe("Warcraft Logs gateway", () => {
       requestCap: 1,
       parseRequestCap: 10,
       historyScanStartPage: 19,
-      historyScanResumeHeadReportCode: "report-that-was-replaced"
+      historyScanResumeBoundaryReportCode: "report-that-was-replaced"
     });
 
-    expect(historyPages).toEqual([1, 1]);
+    expect(historyPages).toEqual([18]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "request_cap" },
+      historyScanResumePage: 1
+    });
+  });
+
+  it("restarts when a late report shifts a boundary below an unchanged head", async () => {
+    // Break caught: checking only page one misses a backdated upload below an
+    // unchanged newest report. The last code on the proved boundary page must
+    // still be present at that exact page offset before resuming below it.
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0];
+    const shiftedBoundary = structuredClone(page) as {
+      data: {
+        characterData: {
+          character: { recentReports: { data: Array<{ code: string }> } };
+        };
+      };
+    };
+    shiftedBoundary.data.characterData.character.recentReports.data[0]!.code =
+      "late-backdated-report";
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        const requestedPage = body.variables.page ?? 0;
+        historyPages.push(requestedPage);
+        return jsonResponse(requestedPage === 18 ? shiftedBoundary : page);
+      }
+      return jsonResponse(page);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 2,
+      parseRequestCap: 10,
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    expect(historyPages).toEqual([18, 1]);
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "request_cap" },

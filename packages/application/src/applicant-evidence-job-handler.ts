@@ -983,6 +983,15 @@ export function createApplicantEvidenceJobHandler(
         record.requestCapUsed = requestCap;
         record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
+        const historyScanResumeOptions =
+          storedEvidence.historyScanResumePage &&
+          storedEvidence.historyScanResumeBoundaryReportCode
+            ? {
+                historyScanStartPage: storedEvidence.historyScanResumePage,
+                historyScanResumeBoundaryReportCode:
+                  storedEvidence.historyScanResumeBoundaryReportCode
+              }
+            : {};
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap,
@@ -992,19 +1001,7 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
-            ...(storedEvidence.historyScanResumePage &&
-            storedEvidence.historyScanResumeHeadReportCode
-              ? {
-                  historyScanStartPage: storedEvidence.historyScanResumePage
-                }
-              : {}),
-            ...(storedEvidence.historyScanResumePage &&
-            storedEvidence.historyScanResumeHeadReportCode
-              ? {
-                  historyScanResumeHeadReportCode:
-                    storedEvidence.historyScanResumeHeadReportCode
-                }
-              : {}),
+            ...historyScanResumeOptions,
             ...(parseOnlyResume
               ? {
                   storedKills: (storedEvidence.parseOnlyKills ?? [])
@@ -1066,8 +1063,8 @@ export function createApplicantEvidenceJobHandler(
               ...(storedEvidence.historyScanResumePage !== undefined
                 ? {
                     historyScanResumePage: storedEvidence.historyScanResumePage,
-                    historyScanResumeHeadReportCode:
-                      storedEvidence.historyScanResumeHeadReportCode ?? null
+                    historyScanResumeBoundaryReportCode:
+                      storedEvidence.historyScanResumeBoundaryReportCode ?? null
                   }
                 : {}),
               limitationCode: response.code,
@@ -1130,22 +1127,23 @@ export function createApplicantEvidenceJobHandler(
               : response.historyScanResumePage !== undefined
                 ? {
                     historyScanResumePage: response.historyScanResumePage,
-                    historyScanResumeHeadReportCode:
-                      response.historyScanResumeHeadReportCode ?? null
+                    historyScanResumeBoundaryReportCode:
+                      response.historyScanResumeBoundaryReportCode ?? null
                   }
                 : response.limitation === undefined
                   ? storedEvidence.historyScanResumePage !== undefined
                     ? {
                         historyScanResumePage: null,
-                        historyScanResumeHeadReportCode: null
+                        historyScanResumeBoundaryReportCode: null
                       }
                     : {}
                   : storedEvidence.historyScanResumePage !== undefined
                     ? {
                         historyScanResumePage:
                           storedEvidence.historyScanResumePage,
-                        historyScanResumeHeadReportCode:
-                          storedEvidence.historyScanResumeHeadReportCode ?? null
+                        historyScanResumeBoundaryReportCode:
+                          storedEvidence.historyScanResumeBoundaryReportCode ??
+                          null
                       }
                     : {}),
             limitationCode: response.limitation?.code ?? null,

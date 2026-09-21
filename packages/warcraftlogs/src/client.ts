@@ -1348,7 +1348,7 @@ function hasMoreReportPages(value: unknown): boolean | null {
     : null;
 }
 
-function newestReportCode(value: unknown): string | null {
+function lastReportCode(value: unknown): string | null {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
   const characterData = data && record(data.characterData);
@@ -1356,7 +1356,7 @@ function newestReportCode(value: unknown): string | null {
   const recentReports = character && record(character.recentReports);
   const reports = recentReports && recentReports.data;
   if (!Array.isArray(reports) || reports.length === 0) return null;
-  return nonEmptyString(record(reports[0])?.code);
+  return nonEmptyString(record(reports.at(-1))?.code);
 }
 
 export function createWarcraftLogsClient(
@@ -1504,7 +1504,7 @@ export function createWarcraftLogsClient(
       requestCap: number;
       parseRequestCap: number;
       historyScanStartPage?: number;
-      historyScanResumeHeadReportCode?: string;
+      historyScanResumeBoundaryReportCode?: string;
       storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       className?: string;
       /**
@@ -1596,34 +1596,48 @@ export function createWarcraftLogsClient(
     const scanSkipped = options.requestCap === 0;
     let historyScanStartPage = options.historyScanStartPage ?? 1;
     let lastDecodedHistoryPage: number | undefined;
-    let historyScanResumeHeadReportCode =
-      options.historyScanResumeHeadReportCode;
+    let historyScanRequests = 0;
+    let invalidatedStoredBoundary = false;
+    let historyScanResumeBoundaryReportCode =
+      options.historyScanResumeBoundaryReportCode;
     if (
       historyScanStartPage > 1 &&
-      options.historyScanResumeHeadReportCode !== undefined
+      options.historyScanResumeBoundaryReportCode !== undefined
     ) {
+      // Page offsets are not stable when a report is uploaded (including a
+      // backdated one). The final report code on the last proved page is an
+      // anchor: any insertion above the resume point moves it. This probe is
+      // a history request and therefore belongs to the same hard budget.
       const probe = counted(
         "history_scan",
         await graphql(
           recentReportsQuery,
-          { name: key.name, realm: key.realm, region: key.region, page: 1 },
+          {
+            name: key.name,
+            realm: key.realm,
+            region: key.region,
+            page: historyScanStartPage - 1
+          },
           options.signal
         )
       );
+      historyScanRequests += 1;
       if (probe.kind !== "success") return probe;
       const decodedProbe = firstKillReports(probe.value, key);
       if (decodedProbe.kind === "limitation") return decodedProbe;
       if (decodedProbe.limitation) return decodedProbe.limitation;
       if (
-        newestReportCode(probe.value) !==
-        options.historyScanResumeHeadReportCode
+        lastReportCode(probe.value) !==
+        options.historyScanResumeBoundaryReportCode
       ) {
         historyScanStartPage = 1;
+        historyScanResumeBoundaryReportCode = undefined;
+        invalidatedStoredBoundary = true;
       }
     }
     for (
       let page = historyScanStartPage;
-      page < historyScanStartPage + options.requestCap;
+      historyScanRequests < options.requestCap;
       page++
     ) {
       const result = counted(
@@ -1637,6 +1651,7 @@ export function createWarcraftLogsClient(
           return { kind: "limitation" as const, code: "unavailable" as const };
         })
       );
+      historyScanRequests += 1;
       if (result.kind !== "success") {
         scanLimitation = result;
         break;
@@ -1677,17 +1692,23 @@ export function createWarcraftLogsClient(
         scanLimitation = { kind: "limitation", code: "schema_drift" };
         break;
       }
-      if (page === 1)
-        historyScanResumeHeadReportCode =
-          newestReportCode(result.value) ?? undefined;
+      historyScanResumeBoundaryReportCode =
+        lastReportCode(result.value) ?? undefined;
       // A resume boundary is a fact about a fully decoded page, never about a
       // response that was unavailable or structurally suspect. It is safe to
       // carry this forward even if a later page is limited.
       lastDecodedHistoryPage = page;
       if (!hasMorePages) break;
-      if (page === historyScanStartPage + options.requestCap - 1) {
+      if (historyScanRequests === options.requestCap) {
         scanLimitation = { kind: "limitation", code: "request_cap" };
       }
+    }
+    if (
+      scanLimitation === undefined &&
+      historyScanRequests === options.requestCap &&
+      lastDecodedHistoryPage === undefined
+    ) {
+      scanLimitation = { kind: "limitation", code: "request_cap" };
     }
 
     let parseLimitation: WarcraftLogsLimitation | undefined;
@@ -2172,7 +2193,7 @@ export function createWarcraftLogsClient(
         wipes: readonly WarcraftLogsWipeEvidence[];
         limitation?: WarcraftLogsLimitation;
         historyScanResumePage?: number;
-        historyScanResumeHeadReportCode?: string;
+        historyScanResumeBoundaryReportCode?: string;
       }>
     ) => ({
       kind: "evidence" as const,
@@ -2185,10 +2206,10 @@ export function createWarcraftLogsClient(
       ...(result.historyScanResumePage !== undefined
         ? { historyScanResumePage: result.historyScanResumePage }
         : {}),
-      ...(result.historyScanResumeHeadReportCode !== undefined
+      ...(result.historyScanResumeBoundaryReportCode !== undefined
         ? {
-            historyScanResumeHeadReportCode:
-              result.historyScanResumeHeadReportCode
+            historyScanResumeBoundaryReportCode:
+              result.historyScanResumeBoundaryReportCode
           }
         : {}),
       ...(result.limitation ? { limitation: result.limitation } : {}),
@@ -2205,8 +2226,8 @@ export function createWarcraftLogsClient(
           ...(scanLimitation && lastDecodedHistoryPage !== undefined
             ? { historyScanResumePage: lastDecodedHistoryPage + 1 }
             : {}),
-          ...(historyScanResumeHeadReportCode
-            ? { historyScanResumeHeadReportCode }
+          ...(historyScanResumeBoundaryReportCode
+            ? { historyScanResumeBoundaryReportCode }
             : {})
         })
       : scanLimitation && lastDecodedHistoryPage !== undefined
@@ -2215,14 +2236,24 @@ export function createWarcraftLogsClient(
             wipes: [],
             limitation: scanLimitation,
             historyScanResumePage: lastDecodedHistoryPage + 1,
-            ...(historyScanResumeHeadReportCode
-              ? { historyScanResumeHeadReportCode }
+            ...(historyScanResumeBoundaryReportCode
+              ? { historyScanResumeBoundaryReportCode }
               : {})
           })
-        : (scanLimitation ??
-          reportedParseLimitation ?? {
-            ...evidenceResult({ kills: [], wipes: [] })
-          });
+        : scanLimitation && invalidatedStoredBoundary
+          ? evidenceResult({
+              kills: [],
+              wipes: [],
+              limitation: scanLimitation,
+              // A one-request budget may be spent entirely proving that the
+              // old offset moved. Clear its anchor so the next run starts at
+              // page one instead of validating the stale page forever.
+              historyScanResumePage: 1
+            })
+          : (scanLimitation ??
+            reportedParseLimitation ?? {
+              ...evidenceResult({ kills: [], wipes: [] })
+            });
   }
 
   return { getRateLimit, resolveCharacter, getFirstKillReports };

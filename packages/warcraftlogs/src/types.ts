@@ -164,8 +164,11 @@ export type WarcraftLogsReportResult =
        * limited scan. It is absent unless a cleanly decoded page proves it.
        */
       historyScanResumePage?: number;
-      /** The newest report code on the proved prefix, used to detect new reports. */
-      historyScanResumeHeadReportCode?: string;
+      /**
+       * The last report code on the final proved page. It validates that the
+       * page offset has not moved before a later run resumes below it.
+       */
+      historyScanResumeBoundaryReportCode?: string;
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
@@ -252,8 +255,8 @@ export interface WarcraftLogsGateway {
        * prefix a prior capped scan decoded cleanly.
        */
       historyScanStartPage?: number;
-      /** The newest report code observed when the stored page boundary was proved. */
-      historyScanResumeHeadReportCode?: string;
+      /** The final report code on the stored boundary page. */
+      historyScanResumeBoundaryReportCode?: string;
       storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       /** The character's known class, used to settle shared specialisation names. */
       className?: string;

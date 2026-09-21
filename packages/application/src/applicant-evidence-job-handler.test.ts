@@ -3203,7 +3203,7 @@ describe("applicant evidence job handler", () => {
           // This is a test fixture for the persistence shape introduced by
           // #394. The assertion below is the consumer-visible contract.
           historyScanResumePage: 19,
-          historyScanResumeHeadReportCode: "newest-proved-report"
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
@@ -3248,7 +3248,7 @@ describe("applicant evidence job handler", () => {
           kills: [],
           wipes: [],
           historyScanResumePage: 19,
-          historyScanResumeHeadReportCode: "newest-proved-report"
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
@@ -3264,6 +3264,7 @@ describe("applicant evidence job handler", () => {
                 code: "request_cap" as const
               },
               historyScanResumePage: 37,
+              historyScanResumeBoundaryReportCode: "proved-boundary-report",
               parsedFightUrls: [],
               kills: [],
               wipes: [],
@@ -3287,7 +3288,12 @@ describe("applicant evidence job handler", () => {
       expect(evidence.published[0]?.result).toMatchObject({
         state: "partial",
         limitationCode: "request_cap",
-        historyScanResumePage: 37
+        historyScanResumePage: 37,
+        historyScanResumeBoundaryReportCode: "proved-boundary-report"
+      });
+      expect(evidence.staged.get(run.id)).toMatchObject({
+        historyScanResumePage: 37,
+        historyScanResumeBoundaryReportCode: "proved-boundary-report"
       });
     });
 
@@ -3300,7 +3306,7 @@ describe("applicant evidence job handler", () => {
           kills: [],
           wipes: [],
           historyScanResumePage: 19,
-          historyScanResumeHeadReportCode: "newest-proved-report"
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
@@ -3343,7 +3349,7 @@ describe("applicant evidence job handler", () => {
           kills: [],
           wipes: [],
           historyScanResumePage: 19,
-          historyScanResumeHeadReportCode: "newest-proved-report"
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
