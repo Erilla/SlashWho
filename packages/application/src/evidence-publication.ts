@@ -28,6 +28,7 @@ export type EvidencePublication = Readonly<{
   scanSkipped?: boolean;
   /** See StagedEvidenceCollection.historyScanResumePage. */
   historyScanResumePage?: number | null;
+  historyScanResumeHeadReportCode?: string | null;
   limitationCode: EvidenceLimitationCode | null;
   /**
    * The parse limitation this run is judged by: the one that decides whether
@@ -82,6 +83,12 @@ export function toStagedCollection(
     ...(Object.hasOwn(publication, "historyScanResumePage")
       ? { historyScanResumePage: publication.historyScanResumePage }
       : {}),
+    ...(Object.hasOwn(publication, "historyScanResumeHeadReportCode")
+      ? {
+          historyScanResumeHeadReportCode:
+            publication.historyScanResumeHeadReportCode
+        }
+      : {}),
     limitationCode: publication.limitationCode,
     parseLimitationCode: publication.parseLimitationCode,
     parseLimitationCodesSeen: publication.parseLimitationCodesSeen,
@@ -105,6 +112,12 @@ export function fromStagedCollection(
     ...(staged.scanSkipped ? { scanSkipped: true } : {}),
     ...(Object.hasOwn(staged, "historyScanResumePage")
       ? { historyScanResumePage: staged.historyScanResumePage }
+      : {}),
+    ...(Object.hasOwn(staged, "historyScanResumeHeadReportCode")
+      ? {
+          historyScanResumeHeadReportCode:
+            staged.historyScanResumeHeadReportCode
+        }
       : {}),
     limitationCode: staged.limitationCode as EvidenceLimitationCode | null,
     parseLimitationCode:

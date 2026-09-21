@@ -992,9 +992,17 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
-            ...(storedEvidence.historyScanResumePage
+            ...(storedEvidence.historyScanResumePage &&
+            storedEvidence.historyScanResumeHeadReportCode
               ? {
                   historyScanStartPage: storedEvidence.historyScanResumePage
+                }
+              : {}),
+            ...(storedEvidence.historyScanResumePage &&
+            storedEvidence.historyScanResumeHeadReportCode
+              ? {
+                  historyScanResumeHeadReportCode:
+                    storedEvidence.historyScanResumeHeadReportCode
                 }
               : {}),
             ...(parseOnlyResume
@@ -1057,7 +1065,9 @@ export function createApplicantEvidenceJobHandler(
               state: "partial",
               ...(storedEvidence.historyScanResumePage !== undefined
                 ? {
-                    historyScanResumePage: storedEvidence.historyScanResumePage
+                    historyScanResumePage: storedEvidence.historyScanResumePage,
+                    historyScanResumeHeadReportCode:
+                      storedEvidence.historyScanResumeHeadReportCode ?? null
                   }
                 : {}),
               limitationCode: response.code,
@@ -1118,15 +1128,24 @@ export function createApplicantEvidenceJobHandler(
             ...(response.scanSkipped
               ? {}
               : response.historyScanResumePage !== undefined
-                ? { historyScanResumePage: response.historyScanResumePage }
+                ? {
+                    historyScanResumePage: response.historyScanResumePage,
+                    historyScanResumeHeadReportCode:
+                      response.historyScanResumeHeadReportCode ?? null
+                  }
                 : response.limitation === undefined
                   ? storedEvidence.historyScanResumePage !== undefined
-                    ? { historyScanResumePage: null }
+                    ? {
+                        historyScanResumePage: null,
+                        historyScanResumeHeadReportCode: null
+                      }
                     : {}
                   : storedEvidence.historyScanResumePage !== undefined
                     ? {
                         historyScanResumePage:
-                          storedEvidence.historyScanResumePage
+                          storedEvidence.historyScanResumePage,
+                        historyScanResumeHeadReportCode:
+                          storedEvidence.historyScanResumeHeadReportCode ?? null
                       }
                     : {}),
             limitationCode: response.limitation?.code ?? null,

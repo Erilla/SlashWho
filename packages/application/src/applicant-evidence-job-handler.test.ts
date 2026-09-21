@@ -3202,7 +3202,8 @@ describe("applicant evidence job handler", () => {
           wipes: [],
           // This is a test fixture for the persistence shape introduced by
           // #394. The assertion below is the consumer-visible contract.
-          historyScanResumePage: 19
+          historyScanResumePage: 19,
+          historyScanResumeHeadReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
@@ -3246,7 +3247,8 @@ describe("applicant evidence job handler", () => {
         ({
           kills: [],
           wipes: [],
-          historyScanResumePage: 19
+          historyScanResumePage: 19,
+          historyScanResumeHeadReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
@@ -3297,7 +3299,8 @@ describe("applicant evidence job handler", () => {
         ({
           kills: [],
           wipes: [],
-          historyScanResumePage: 19
+          historyScanResumePage: 19,
+          historyScanResumeHeadReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
@@ -3339,7 +3342,8 @@ describe("applicant evidence job handler", () => {
         ({
           kills: [],
           wipes: [],
-          historyScanResumePage: 19
+          historyScanResumePage: 19,
+          historyScanResumeHeadReportCode: "newest-proved-report"
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;

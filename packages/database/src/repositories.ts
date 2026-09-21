@@ -421,6 +421,8 @@ export type StoredEvidenceTiers = Readonly<{
    * either no capped scan has published one, or a later clean scan completed.
    */
   historyScanResumePage?: number;
+  /** The newest report code that proves the stored page offset is still aligned. */
+  historyScanResumeHeadReportCode?: string;
   /**
    * Whether the newest completed run established that its only unfinished
    * collection work was parses. Absent is conservative: it does not license
@@ -452,6 +454,7 @@ export interface StagedEvidenceCollection {
    * prefix; null clears it after a clean full scan; absent preserves it.
    */
   historyScanResumePage?: number | null;
+  historyScanResumeHeadReportCode?: string | null;
   limitationCode: string | null;
   parseLimitationCode: string | null;
   /**
@@ -546,6 +549,7 @@ export interface EvidenceRepository {
     input: {
       scanSkipped?: boolean;
       historyScanResumePage?: number | null;
+      historyScanResumeHeadReportCode?: string | null;
       state: "complete" | "partial";
       limitationCode: string | null;
       /** The parse limitation the run is judged by: retry, and the dossier. */

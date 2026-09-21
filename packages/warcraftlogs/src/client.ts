@@ -1348,6 +1348,17 @@ function hasMoreReportPages(value: unknown): boolean | null {
     : null;
 }
 
+function newestReportCode(value: unknown): string | null {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const characterData = data && record(data.characterData);
+  const character = characterData && record(characterData.character);
+  const recentReports = character && record(character.recentReports);
+  const reports = recentReports && recentReports.data;
+  if (!Array.isArray(reports) || reports.length === 0) return null;
+  return nonEmptyString(record(reports[0])?.code);
+}
+
 export function createWarcraftLogsClient(
   options: CreateWarcraftLogsClientOptions
 ): WarcraftLogsGateway {
@@ -1493,6 +1504,7 @@ export function createWarcraftLogsClient(
       requestCap: number;
       parseRequestCap: number;
       historyScanStartPage?: number;
+      historyScanResumeHeadReportCode?: string;
       storedKills?: readonly WarcraftLogsFirstKillEvidence[];
       className?: string;
       /**
@@ -1582,8 +1594,33 @@ export function createWarcraftLogsClient(
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
     const scanSkipped = options.requestCap === 0;
-    const historyScanStartPage = options.historyScanStartPage ?? 1;
+    let historyScanStartPage = options.historyScanStartPage ?? 1;
     let lastDecodedHistoryPage: number | undefined;
+    let historyScanResumeHeadReportCode =
+      options.historyScanResumeHeadReportCode;
+    if (
+      historyScanStartPage > 1 &&
+      options.historyScanResumeHeadReportCode !== undefined
+    ) {
+      const probe = counted(
+        "history_scan",
+        await graphql(
+          recentReportsQuery,
+          { name: key.name, realm: key.realm, region: key.region, page: 1 },
+          options.signal
+        )
+      );
+      if (probe.kind !== "success") return probe;
+      const decodedProbe = firstKillReports(probe.value, key);
+      if (decodedProbe.kind === "limitation") return decodedProbe;
+      if (decodedProbe.limitation) return decodedProbe.limitation;
+      if (
+        newestReportCode(probe.value) !==
+        options.historyScanResumeHeadReportCode
+      ) {
+        historyScanStartPage = 1;
+      }
+    }
     for (
       let page = historyScanStartPage;
       page < historyScanStartPage + options.requestCap;
@@ -1640,6 +1677,9 @@ export function createWarcraftLogsClient(
         scanLimitation = { kind: "limitation", code: "schema_drift" };
         break;
       }
+      if (page === 1)
+        historyScanResumeHeadReportCode =
+          newestReportCode(result.value) ?? undefined;
       // A resume boundary is a fact about a fully decoded page, never about a
       // response that was unavailable or structurally suspect. It is safe to
       // carry this forward even if a later page is limited.
@@ -2126,52 +2166,62 @@ export function createWarcraftLogsClient(
       tierBests: [...troubledTierBestRaidIds].sort()
     };
     const parsed = [...parsedFightUrls].sort();
+    const evidenceResult = (
+      result: Readonly<{
+        kills: readonly WarcraftLogsFirstKillEvidence[];
+        wipes: readonly WarcraftLogsWipeEvidence[];
+        limitation?: WarcraftLogsLimitation;
+        historyScanResumePage?: number;
+        historyScanResumeHeadReportCode?: string;
+      }>
+    ) => ({
+      kind: "evidence" as const,
+      scanSkipped,
+      kills: result.kills,
+      wipes: result.wipes,
+      tierBests,
+      parsedFightUrls: parsed,
+      troubledRaidIds: troubled,
+      ...(result.historyScanResumePage !== undefined
+        ? { historyScanResumePage: result.historyScanResumePage }
+        : {}),
+      ...(result.historyScanResumeHeadReportCode !== undefined
+        ? {
+            historyScanResumeHeadReportCode:
+              result.historyScanResumeHeadReportCode
+          }
+        : {}),
+      ...(result.limitation ? { limitation: result.limitation } : {}),
+      ...(reportedParseLimitation
+        ? { parseLimitation: reportedParseLimitation }
+        : {}),
+      ...(parseLimitations.length > 0 ? { parseLimitations } : {})
+    });
     return sortedKills.length || sortedWipes.length
-      ? {
-          kind: "evidence",
-          scanSkipped,
+      ? evidenceResult({
           kills: sortedKills,
           wipes: sortedWipes,
-          tierBests,
-          parsedFightUrls: parsed,
-          troubledRaidIds: troubled,
+          limitation: scanLimitation,
           ...(scanLimitation && lastDecodedHistoryPage !== undefined
             ? { historyScanResumePage: lastDecodedHistoryPage + 1 }
             : {}),
-          ...(scanLimitation ? { limitation: scanLimitation } : {}),
-          ...(reportedParseLimitation
-            ? { parseLimitation: reportedParseLimitation }
-            : {}),
-          ...(parseLimitations.length > 0 ? { parseLimitations } : {})
-        }
+          ...(historyScanResumeHeadReportCode
+            ? { historyScanResumeHeadReportCode }
+            : {})
+        })
       : scanLimitation && lastDecodedHistoryPage !== undefined
-        ? {
-            kind: "evidence",
-            scanSkipped,
+        ? evidenceResult({
             kills: [],
             wipes: [],
-            tierBests: [],
-            parsedFightUrls: parsed,
-            troubledRaidIds: troubled,
             limitation: scanLimitation,
             historyScanResumePage: lastDecodedHistoryPage + 1,
-            ...(reportedParseLimitation
-              ? { parseLimitation: reportedParseLimitation }
-              : {}),
-            ...(parseLimitations.length > 0 ? { parseLimitations } : {})
-          }
+            ...(historyScanResumeHeadReportCode
+              ? { historyScanResumeHeadReportCode }
+              : {})
+          })
         : (scanLimitation ??
           reportedParseLimitation ?? {
-            kind: "evidence",
-            scanSkipped,
-            kills: [],
-            wipes: [],
-            tierBests: [],
-            parsedFightUrls: parsed,
-            troubledRaidIds: troubled,
-            ...(scanLimitation && lastDecodedHistoryPage !== undefined
-              ? { historyScanResumePage: lastDecodedHistoryPage + 1 }
-              : {})
+            ...evidenceResult({ kills: [], wipes: [] })
           });
   }
 

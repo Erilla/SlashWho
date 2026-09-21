@@ -454,6 +454,7 @@ export const characterEvidenceRuns = pgTable(
     // The next page below a capped, cleanly decoded history prefix. It is
     // scoped to the published run so an abandoned attempt cannot advance it.
     killScanResumePage: integer("kill_scan_resume_page"),
+    killScanResumeHeadReportCode: text("kill_scan_resume_head_report_code"),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),

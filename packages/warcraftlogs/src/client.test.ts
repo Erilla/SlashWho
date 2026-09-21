@@ -4285,6 +4285,39 @@ describe("Warcraft Logs gateway", () => {
     expect(JSON.stringify(result)).not.toContain("schema-envelope-marker");
   });
 
+  it("restarts at the newest page when a new report shifts a saved boundary", async () => {
+    // Break caught: a report uploaded after the cap moves page boundaries. A
+    // stale offset must not skip it and publish a false complete history.
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0];
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        historyPages.push(body.variables.page ?? 0);
+      }
+      return jsonResponse(page);
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10,
+      historyScanStartPage: 19,
+      historyScanResumeHeadReportCode: "report-that-was-replaced"
+    });
+
+    expect(historyPages).toEqual([1, 1]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "request_cap" },
+      historyScanResumePage: 2
+    });
+  });
+
   it("retains collected kills if a later report page is malformed", async () => {
     const firstPage = (
       fixture("character-report-valid") as { pages: unknown[] }

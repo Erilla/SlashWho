@@ -3209,6 +3209,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                    WHEN $10 THEN $11::integer
                    ELSE kill_scan_resume_page
                  END,
+                 kill_scan_resume_head_report_code = CASE
+                   WHEN $10 THEN $12::text
+                   ELSE kill_scan_resume_head_report_code
+                 END,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -3227,7 +3231,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 (input.parseLimitationCode ? [input.parseLimitationCode] : []),
               input.scanSkipped ?? false,
               Object.hasOwn(input, "historyScanResumePage"),
-              input.historyScanResumePage ?? null
+              input.historyScanResumePage ?? null,
+              input.historyScanResumeHeadReportCode ?? null
             ]
           );
           if (publication.rowCount !== 1) {
@@ -3373,8 +3378,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
         const resume = await pool.query<{
           kill_scan_resume_page: number | null;
+          kill_scan_resume_head_report_code: string | null;
         }>(
-          `SELECT kill_scan_resume_page
+          `SELECT kill_scan_resume_page, kill_scan_resume_head_report_code
              FROM character_evidence_runs
             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
               AND status IN ('complete', 'partial')
@@ -3408,6 +3414,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             : {}),
           ...(resume.rows[0]?.kill_scan_resume_page
             ? { historyScanResumePage: resume.rows[0].kill_scan_resume_page }
+            : {}),
+          ...(resume.rows[0]?.kill_scan_resume_head_report_code
+            ? {
+                historyScanResumeHeadReportCode:
+                  resume.rows[0].kill_scan_resume_head_report_code
+              }
             : {})
         };
       },
