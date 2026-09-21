@@ -2,7 +2,6 @@ import {
   createPostgresRepositories,
   type OperatorAuthRepository
 } from "@slashwho/database";
-import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
@@ -112,17 +111,38 @@ export async function runOperatorOperation(
   return { action: "rotate", operatorId: operator.id };
 }
 
-async function readCredential(): Promise<string> {
-  const terminal = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-    terminal: true
+export async function readHiddenCredential(
+  options: Readonly<{
+    input: Pick<NodeJS.ReadStream, "isTTY" | "setRawMode" | "on" | "off">;
+    output: Pick<NodeJS.WriteStream, "write">;
+  }>
+): Promise<string> {
+  const { input, output } = options;
+  if (!input.isTTY || !input.setRawMode)
+    throw new Error("operator_tty_required");
+  output.write("Credential: ");
+  input.setRawMode(true);
+  return new Promise((resolve, reject) => {
+    let credential = "";
+    const finish = (error?: Error) => {
+      input.off("data", receive);
+      input.setRawMode!(false);
+      output.write("\n");
+      if (error) reject(error);
+      else resolve(credential);
+    };
+    const receive = (chunk: string | Buffer) => {
+      for (const character of chunk.toString()) {
+        if (character === "\u0003")
+          return finish(new Error("operator_prompt_cancelled"));
+        if (character === "\r" || character === "\n") return finish();
+        if (character === "\b" || character === "\u007f") {
+          credential = credential.slice(0, -1);
+        } else credential += character;
+      }
+    };
+    input.on("data", receive);
   });
-  try {
-    return await terminal.question("Credential: ");
-  } finally {
-    terminal.close();
-  }
 }
 
 async function hashCredential(credential: string): Promise<CredentialHash> {
@@ -139,7 +159,8 @@ async function main(): Promise<void> {
   try {
     const result = await runOperatorOperation(operation, {
       repository: createPostgresRepositories(pool).operatorAuth,
-      readCredential,
+      readCredential: () =>
+        readHiddenCredential({ input: process.stdin, output: process.stderr }),
       hashCredential,
       now: () => new Date()
     });

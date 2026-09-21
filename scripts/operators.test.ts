@@ -1,8 +1,27 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
-import { parseOperatorOperation, runOperatorOperation } from "./operators.mts";
+import {
+  parseOperatorOperation,
+  readHiddenCredential,
+  runOperatorOperation
+} from "./operators.mts";
 
 describe("operator lifecycle command", () => {
+  it("reads a credential without echo and restores terminal mode", async () => {
+    const input = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      setRawMode: vi.fn()
+    });
+    const output = { write: vi.fn() };
+    const credential = readHiddenCredential({ input, output });
+    input.emit("data", Buffer.from("secret\\r"));
+    await expect(credential).resolves.toBe("secret");
+    expect(input.setRawMode.mock.calls).toEqual([[true], [false]]);
+    expect(output.write).toHaveBeenCalledWith("Credential: ");
+    expect(output.write).not.toHaveBeenCalledWith("secret");
+  });
+
   it("parses provision without accepting a credential on the command line", () => {
     expect(parseOperatorOperation(["--", "provision", "Admin"])).toEqual({
       command: "provision",
