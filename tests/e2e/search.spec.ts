@@ -392,3 +392,75 @@ test("presents parse evidence with exact fight sources at desktop and mobile wid
     )
   ).toBe(true);
 });
+
+test("keeps parse metrics aligned beside a wrapped long character name", async ({
+  page
+}) => {
+  // Break caught: a long name could consume the flexible space before the
+  // metrics, making every parse column begin at a different position or wrap
+  // below the name on a narrow screen.
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "parsealignment"
+  } as const;
+  const longKey = {
+    region: "eu",
+    realm: "draenor",
+    name: "unusuallylongparsecharactername"
+  } as const;
+  const longName = "Unusuallylongparsecharactername";
+  await seedSnapshot({
+    key,
+    displayName: "Parsealignment",
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z"),
+    characters: [
+      { key, displayName: "Parsealignment", className: "Mage", level: 80 },
+      { key: longKey, displayName: longName, className: "Priest", level: 80 }
+    ]
+  });
+  await seedCharacterEvidence(key);
+  await seedCharacterEvidence(longKey, {
+    withLaterParseEvent: true,
+    laterParseEventOnly: true
+  });
+
+  await page.goto("/dossiers/eu/silvermoon/parsealignment");
+  const bestParses = page.getByRole("region", { name: "Best parses" });
+  const shortRow = bestParses.getByRole("group", {
+    name: "Parsealignment parses"
+  });
+  const longRow = bestParses.getByRole("group", {
+    name: `${longName} parses`
+  });
+
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await longRow.scrollIntoViewIfNeeded();
+    await expect(longRow).toBeVisible();
+
+    const [shortMetricsLeft, longMetricsLeft, shortNameHeight, longNameHeight] =
+      await Promise.all([
+        shortRow
+          .locator(".dossier-parse-metrics")
+          .evaluate((element) => element.getBoundingClientRect().left),
+        longRow
+          .locator(".dossier-parse-metrics")
+          .evaluate((element) => element.getBoundingClientRect().left),
+        shortRow
+          .locator(".dossier-parse-character")
+          .evaluate((element) => element.getBoundingClientRect().height),
+        longRow
+          .locator(".dossier-parse-character")
+          .evaluate((element) => element.getBoundingClientRect().height)
+      ]);
+
+    expect(Math.abs(shortMetricsLeft - longMetricsLeft)).toBeLessThanOrEqual(1);
+    expect(longNameHeight).toBeGreaterThan(shortNameHeight);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth
+      )
+    ).toBe(true);
+  }
+});

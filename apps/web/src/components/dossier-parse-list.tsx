@@ -86,7 +86,10 @@ export function DossierParseList({
   showCharacterName = true
 }: DossierParseListProps) {
   return (
-    <section aria-label={label} className="dossier-parse-list">
+    <section
+      aria-label={label}
+      className={`dossier-parse-list${showCharacterName ? " dossier-parse-list--with-character-name" : ""}`}
+    >
       <h5>{label}</h5>
       {parses.length === 0 ? (
         <p className="dossier-parse-empty">No parse values were available.</p>
