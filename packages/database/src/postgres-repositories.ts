@@ -3315,14 +3315,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 // value we have reason to believe is wrong.
                 kill.killedAt < settledBeforeIso &&
                 (kill.performance.damage.state === "available" ||
-                  kill.performance.healing.state === "available" ||
-                  kill.performance.bossDamage.state === "available" ||
-                  // Asked and answered with nothing is finished too. Without
-                  // this half the parse budget goes on re-reading reports
-                  // that have already said no -- and the hydration order
-                  // sorts those failed groups to the front, so they are what
-                  // it spends the budget on first (#297).
-                  kill.parsesReadAt !== null)
+                kill.performance.healing.state === "available" ||
+                kill.performance.bossDamage.state === "available"
+                  ? // Metrics collected before specialization support are not
+                    // hydrated: the parse-tier version bump must let Warcraft
+                    // Logs replace them with its now-available spec data.
+                    kill.performance.spec !== null
+                  : // Asked and answered with nothing is finished too. Without
+                    // this half the parse budget goes on re-reading reports
+                    // that have already said no -- and the hydration order
+                    // sorts those failed groups to the front, so they are what
+                    // it spends the budget on first (#297).
+                    kill.parsesReadAt !== null)
             )
             .map((kill) => kill.fightUrl)
         );
