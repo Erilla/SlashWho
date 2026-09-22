@@ -5,6 +5,7 @@ import {
   recoverPendingSearches,
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
+  fullEvidencePhasePlan,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -494,7 +495,8 @@ export async function createWorkerRuntime(
         const reservation = await repositories.evidence.reserve({
           key,
           freshnessCutoff: at,
-          at
+          at,
+          phasePlan: fullEvidencePhasePlan()
         });
         if (reservation.kind !== "reserved") return;
         const queueJobId = await initializedQueue.enqueueCharacterEvidence(

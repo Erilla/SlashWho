@@ -3551,6 +3551,8 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_tier_bests",
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
           id,

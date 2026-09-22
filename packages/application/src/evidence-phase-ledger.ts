@@ -105,6 +105,17 @@ export const evidencePhasePlans = {
   }
 } as const;
 
+/** Every ordinary evidence reservation uses these real worker stages. */
+export function fullEvidencePhasePlan(): EvidencePhasePlan {
+  return evidencePhasePlans.collection({
+    scan: true,
+    tierBests: true,
+    fightParses: true,
+    raiderIo: true,
+    blizzard: true
+  });
+}
+
 export function createEvidencePhaseLedger(options: {
   plan: EvidencePhasePlan;
   now: () => Date;

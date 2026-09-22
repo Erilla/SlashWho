@@ -48,7 +48,7 @@ import {
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 import {
   createEvidencePhaseLedger,
-  evidencePhasePlans,
+  fullEvidencePhasePlan,
   type EvidencePhase
 } from "./evidence-phase-ledger";
 
@@ -1007,14 +1007,9 @@ export function createApplicantEvidenceJobHandler(
         record.requestCapUsed = requestCap;
         record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
-        const phasePlan = evidencePhasePlans.warcraftLogs({
-          // Reservation fixes the ordered plan before queueing. A parse-only
-          // retry therefore retains the history row and records the fact that
-          // this attempt intentionally did not run that boundary.
-          scan: true,
-          tierBests: true,
-          fightParses: true
-        });
+        // This must match reservation exactly. Rebuilding only the WCL subset
+        // makes real provider ids unknown to the ledger that owns them.
+        const phasePlan = fullEvidencePhasePlan();
         const reservedPhaseIds = new Set(
           (await evidence.listPhases?.(run.id))?.map((phase) => phase.id) ?? []
         );
@@ -1257,7 +1252,8 @@ export function createApplicantEvidenceJobHandler(
                 limitation ? "limited" : "completed",
                 limitation?.code
               );
-            } catch {
+            } catch (error) {
+              if (activeContext.signal.aborted) throw error;
               await phaseLedger?.transition(
                 "raiderio_rankings",
                 "limited",
@@ -1284,7 +1280,8 @@ export function createApplicantEvidenceJobHandler(
                 completedAt: achievement.completedAt
               }));
             await phaseLedger?.transition("blizzard_achievements", "completed");
-          } catch {
+          } catch (error) {
+            if (activeContext.signal.aborted) throw error;
             await phaseLedger?.transition(
               "blizzard_achievements",
               "limited",

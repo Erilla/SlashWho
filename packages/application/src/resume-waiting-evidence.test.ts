@@ -51,7 +51,16 @@ describe("resumeWaitingEvidence", () => {
     expect(evidence.reserve).toHaveBeenCalledWith({
       key: ryii,
       freshnessCutoff,
-      at
+      at,
+      phasePlan: [
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "raiderio_rankings",
+        "blizzard_achievements",
+        "publication"
+      ]
     });
     expect(queue.enqueueCharacterEvidence).toHaveBeenCalledTimes(2);
     expect(evidence.markEnqueued).toHaveBeenCalledWith("r-1", "job-1");
@@ -92,7 +101,16 @@ describe("resumeWaitingEvidence", () => {
     expect(evidence.reserve).toHaveBeenCalledWith({
       key: ryii,
       freshnessCutoff,
-      at
+      at,
+      phasePlan: [
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "raiderio_rankings",
+        "blizzard_achievements",
+        "publication"
+      ]
     });
   });
 

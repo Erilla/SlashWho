@@ -1,4 +1,5 @@
 import type { CharacterKey } from "@slashwho/domain";
+import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 
 /** The part of the evidence repository a resume sweep needs. */
 export type ResumableEvidenceStore = {
@@ -7,6 +8,7 @@ export type ResumableEvidenceStore = {
     key: CharacterKey;
     freshnessCutoff: Date;
     at: Date;
+    phasePlan?: readonly string[];
   }): Promise<{ kind: string; run: { id: string } }>;
   markEnqueued(runId: string, queueJobId: string): Promise<void>;
 };
@@ -59,7 +61,8 @@ export async function resumeWaitingEvidence(
       const reservation = await evidence.reserve({
         key,
         freshnessCutoff: options.freshnessCutoff,
-        at
+        at,
+        phasePlan: fullEvidencePhasePlan()
       });
       // Anything but `reserved` means a read beat the sweep to this character,
       // or its evidence turned out to be fresh after all. Either way the work

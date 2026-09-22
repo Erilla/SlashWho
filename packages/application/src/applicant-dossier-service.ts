@@ -40,7 +40,7 @@ import type {
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { encryptCredential } from "./credential-encryption";
-import { evidencePhasePlans } from "./evidence-phase-ledger";
+import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 import {
   refreshCharacter,
   type RefreshCharacterResult
@@ -409,16 +409,7 @@ async function gatherCharacterEvidence(
           )
         }
       : null,
-    phasePlan: evidencePhasePlans.collection({
-      scan: true,
-      tierBests: true,
-      fightParses: true,
-      // These stages are collected by the evidence worker, not by the read
-      // path that reserved the run. They belong in its durable plan before
-      // enqueueing so a never-claimed run still has an honest ledger.
-      raiderIo: true,
-      blizzard: true
-    })
+    phasePlan: fullEvidencePhasePlan()
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
