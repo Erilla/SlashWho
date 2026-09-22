@@ -3601,5 +3601,62 @@ describe("applicant evidence job handler", () => {
       finish();
       await collecting;
     });
+
+    it("skips parse-only prerequisites before activating fight parsing", async () => {
+      const transitions: Array<{ id: string; state: string }> = [];
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        lastCleanKillScanAt: "2026-09-18T11:00:00.000Z",
+        parseWorkOutstanding: true,
+        parseOnlyKills: []
+      });
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) =>
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+      await handler.execute(run.id);
+      expect(transitions).toEqual(
+        expect.arrayContaining([
+          { id: "warcraft_logs_history", state: "skipped" },
+          { id: "warcraft_logs_tier_bests", state: "skipped" },
+          { id: "warcraft_logs_fight_parses", state: "active" }
+        ])
+      );
+      expect(evidence.published).toHaveLength(1);
+    });
   });
 });
