@@ -38,6 +38,11 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
+import {
+  createEvidencePhaseLedger,
+  evidencePhasePlans,
+  type EvidencePhase
+} from "./evidence-phase-ledger";
 
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
@@ -54,6 +59,14 @@ export type { EvidenceLimitationCode };
 export type ApplicantEvidenceStore = {
   find(runId: string): Promise<ApplicantEvidenceRun | null>;
   claim(runId: string, attempt: number): Promise<ApplicantEvidenceRun | null>;
+  seedPhases?(
+    runId: string,
+    phases: readonly { id: string; ordinal: number }[]
+  ): Promise<void>;
+  recordPhaseTransitions?(
+    runId: string,
+    phases: readonly EvidencePhase[]
+  ): Promise<void>;
   publish(
     runId: string,
     result: Readonly<{
@@ -716,6 +729,7 @@ export function createApplicantEvidenceJobHandler(
       // by the budget, so it outlives the `try` that decides it.
       let usesVisitorCredentials = false;
       let sampleSpend: (() => Promise<void>) | undefined;
+      let phaseLedger: ReturnType<typeof createEvidencePhaseLedger> | undefined;
 
       try {
         const run = await evidence.claim(job.runId, activeContext.attempt);
@@ -981,6 +995,60 @@ export function createApplicantEvidenceJobHandler(
         record.requestCapUsed = requestCap;
         record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
+        const phasePlan = evidencePhasePlans.warcraftLogs({
+          scan: !parseOnlyResume,
+          tierBests: true,
+          fightParses: true
+        });
+        phaseLedger =
+          evidence.seedPhases && evidence.recordPhaseTransitions
+            ? createEvidencePhaseLedger({
+                plan: phasePlan,
+                now,
+                persist: async (phases) => {
+                  const ordinal = new Map(
+                    phasePlan.map((id, index) => [id, index])
+                  );
+                  const pending = phases.filter(
+                    (item) => item.state === "pending"
+                  );
+                  if (pending.length)
+                    await evidence.seedPhases!(
+                      run.id,
+                      pending.map((item) => ({
+                        id: item.id,
+                        ordinal: ordinal.get(item.id)!
+                      }))
+                    );
+                  const changed = phases.filter(
+                    (item) => item.state !== "pending"
+                  );
+                  if (changed.length)
+                    await evidence.recordPhaseTransitions!(run.id, changed);
+                }
+              })
+            : undefined;
+        await phaseLedger?.seed();
+        let activePhase: EvidencePhase["id"] | undefined;
+        let phaseWrites = Promise.resolve();
+        const observePhase = (query: WarcraftLogsQueryType) => {
+          const ledger = phaseLedger;
+          const next: EvidencePhase["id"] =
+            query === "history_scan"
+              ? "warcraft_logs_history"
+              : query === "zone_rankings"
+                ? "warcraft_logs_tier_bests"
+                : query === "fight_parses"
+                  ? "warcraft_logs_fight_parses"
+                  : "warcraft_logs_ranking_identities";
+          if (!ledger || activePhase === next) return;
+          phaseWrites = phaseWrites.then(async () => {
+            if (activePhase)
+              await ledger.transition(activePhase, "completed");
+            await ledger.transition(next, "active");
+            activePhase = next;
+          });
+        };
         const historyScanResumeOptions =
           storedEvidence.historyScanResumePage &&
           storedEvidence.historyScanResumeBoundaryReportCode
@@ -1015,6 +1083,7 @@ export function createApplicantEvidenceJobHandler(
             // makes a run's points attributable to the history scan or to
             // rankings, rather than a total nobody can act on (#303).
             onRequest: (event) => {
+              observePhase(event.query);
               scope.increment(`${REQUEST_COUNTER_PREFIX[event.query]}Requests`);
               if (event.limited) {
                 scope.increment(
@@ -1031,6 +1100,10 @@ export function createApplicantEvidenceJobHandler(
             signal: activeContext.signal
           })
         );
+        await phaseWrites;
+        if (activePhase)
+          await phaseLedger?.transition(activePhase, "completed");
+        await phaseLedger?.skipPending();
         activeContext.signal.throwIfAborted();
 
         // What the run actually cost. This is the measurement that replaces the
@@ -1178,6 +1251,7 @@ export function createApplicantEvidenceJobHandler(
         }
       } catch (error) {
         const aborted = activeContext.signal.aborted;
+        if (aborted) await phaseLedger?.cancelActive();
         record.outcome = aborted
           ? "cancelled"
           : isPointsBudgetRefusal(error)

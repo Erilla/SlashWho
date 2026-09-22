@@ -284,6 +284,23 @@ export type EvidenceMonitorRun = Readonly<{
   completedAt: Date | null;
 }>;
 
+/** A privacy-safe operational projection; provider payloads never enter it. */
+export type EvidenceRunPhase = Readonly<{
+  id: string;
+  ordinal: number;
+  state:
+    | "pending"
+    | "active"
+    | "completed"
+    | "skipped"
+    | "limited"
+    | "failed"
+    | "cancelled";
+  startedAt: Date | null;
+  completedAt: Date | null;
+  limitationCode: string | null;
+}>;
+
 export type CharacterMythicKillParseMetric =
   | Readonly<{ state: "available"; percentile: number }>
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
@@ -568,6 +585,15 @@ export interface EvidenceRepository {
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
   markEnqueued(id: string, queueJobId: string): Promise<void>;
+  seedPhases?(
+    runId: string,
+    phases: readonly { id: string; ordinal: number }[]
+  ): Promise<void>;
+  recordPhaseTransitions?(
+    runId: string,
+    phases: readonly Omit<EvidenceRunPhase, "ordinal">[]
+  ): Promise<void>;
+  listPhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
   publish(
     runId: string,
     input: {

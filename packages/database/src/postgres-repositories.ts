@@ -18,6 +18,7 @@ import type {
   CreateSnapshotInput,
   DiscoveryRun,
   EvidenceCollectionDomain,
+  EvidenceRunPhase,
   FingerprintAdmission,
   FingerprintContinuationAdmission,
   Operator,
@@ -3379,6 +3380,65 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
+      async seedPhases(runId, phases) {
+        if (phases.length === 0) return;
+        const result = await pool.query(
+          `INSERT INTO character_evidence_run_phases
+             (run_id, phase_id, ordinal, state)
+           SELECT $1, item.phase_id, item.ordinal, 'pending'
+             FROM unnest($2::text[], $3::integer[]) AS item(phase_id, ordinal)
+           ON CONFLICT (run_id, phase_id) DO NOTHING`,
+          [
+            runId,
+            phases.map((phase) => phase.id),
+            phases.map((phase) => phase.ordinal)
+          ]
+        );
+        if ((result.rowCount ?? 0) !== phases.length) {
+          const count = await pool.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM character_evidence_run_phases WHERE run_id = $1`,
+            [runId]
+          );
+          if (Number(count.rows[0]?.count) !== phases.length) {
+            throw new Error("character_evidence_phase_plan_conflict");
+          }
+        }
+      },
+
+      async recordPhaseTransitions(runId, phases) {
+        for (const phase of phases) {
+          const result = await pool.query(
+            `UPDATE character_evidence_run_phases
+                SET state = $3, started_at = $4, completed_at = $5,
+                    limitation_code = $6
+              WHERE run_id = $1 AND phase_id = $2`,
+            [
+              runId,
+              phase.id,
+              phase.state,
+              phase.startedAt,
+              phase.completedAt,
+              phase.limitationCode
+            ]
+          );
+          if (result.rowCount !== 1)
+            throw new Error("character_evidence_phase_not_found");
+        }
+      },
+
+      async listPhases(runId) {
+        const result = await pool.query<
+          EvidenceRunPhase & { phase_id: string }
+        >(
+          `SELECT phase_id AS id, ordinal, state, started_at AS "startedAt",
+                  completed_at AS "completedAt", limitation_code AS "limitationCode"
+             FROM character_evidence_run_phases
+            WHERE run_id = $1 ORDER BY ordinal`,
+          [runId]
+        );
+        return result.rows;
+      },
+
       async publish(runId, input) {
         // A partial run must name what it fell short of. There are three
         // answers, not one, and each was added by a run this guard had already
@@ -3695,6 +3755,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               ]
             );
           }
+          // The terminal publication marker belongs to this transaction, not
+          // to the worker's finally block: evidence a reader can see must not
+          // ever say its final phase is still pending after a crash.
+          await client.query(
+            `UPDATE character_evidence_run_phases
+                SET state = 'completed',
+                    started_at = COALESCE(started_at, $2),
+                    completed_at = $2,
+                    limitation_code = NULL
+              WHERE run_id = $1 AND phase_id = 'publication'`,
+            [runId, input.completedAt]
+          );
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,

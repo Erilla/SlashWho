@@ -603,6 +603,35 @@ export const characterEvidenceRuns = pgTable(
   ]
 );
 
+export const characterEvidenceRunPhases = pgTable(
+  "character_evidence_run_phases",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    phaseId: text("phase_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    state: text("state").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    limitationCode: text("limitation_code")
+  },
+  (table) => [
+    primaryKey({
+      name: "character_evidence_run_phases_pk",
+      columns: [table.runId, table.phaseId]
+    }),
+    check(
+      "character_evidence_run_phases_state_check",
+      sql`${table.state} in ('pending', 'active', 'completed', 'skipped', 'limited', 'failed', 'cancelled')`
+    ),
+    uniqueIndex("character_evidence_run_phases_order_idx").on(
+      table.runId,
+      table.ordinal
+    )
+  ]
+);
+
 /**
  * One run's collected evidence, staged between a finished Warcraft Logs scan
  * and a successful publication.

@@ -35,6 +35,7 @@ export type {
   EvidenceRunCost,
   EvidenceReservationResult,
   EvidenceRunStatus,
+  EvidenceRunPhase,
   FingerprintAdmission,
   FingerprintAdmissionDispatch,
   FingerprintSweepCursor,
