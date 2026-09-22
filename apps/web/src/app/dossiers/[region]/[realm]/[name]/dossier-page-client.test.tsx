@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
@@ -594,7 +600,7 @@ describe("DossierPageClient live evidence", () => {
   });
 
   it("announces both completions in a scanning complete scanning complete cycle", async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers();
     let resolveSecondCompletion!: (response: Response) => void;
     const secondCompletion = new Promise<Response>((resolve) => {
       resolveSecondCompletion = resolve;
@@ -625,7 +631,7 @@ describe("DossierPageClient live evidence", () => {
     expect(
       screen.getByRole("status", { name: "Evidence collection updates" })
     ).toBeEmptyDOMElement();
-    await waitForFirstLiveEvidenceRead();
+    await startFirstLiveEvidenceRead();
     const announcement = screen.getByRole("status", {
       name: "Ryii evidence collection is complete."
     });
@@ -639,11 +645,14 @@ describe("DossierPageClient live evidence", () => {
       subtree: true
     });
     try {
-      await user.click(screen.getByRole("button", { name: "Refresh" }));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await flushAsyncWork();
       expect(
         screen.getByRole("status", { name: "Evidence collection updates" })
       ).toBeEmptyDOMElement();
-      await waitForFirstLiveEvidenceRead();
+      // Advance the poll deliberately. With a real wall-clock wait, a poll can
+      // race the click and consume this response before the refresh does.
+      await startFirstLiveEvidenceRead();
       await act(async () => {
         resolveSecondCompletion(
           Response.json(withEvidenceState(expanded, "complete"))
