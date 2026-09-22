@@ -382,6 +382,11 @@ export interface StoredCharacterMythicWipe extends CharacterMythicWipeInput {
   id: string;
 }
 
+export type CharacterCuttingEdgeInput = Readonly<{
+  achievementId: string;
+  completedAt: string;
+}>;
+
 export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
   /** Internal cache generation used to invalidate evidence after a parser fix. */
@@ -389,6 +394,7 @@ export interface CompletedCharacterEvidence {
   kills: readonly StoredCharacterMythicKill[];
   wipes: readonly StoredCharacterMythicWipe[];
   tierBests: readonly StoredCharacterTierBestParse[];
+  cuttingEdges: readonly CharacterCuttingEdgeInput[];
   wipeCapable: boolean;
 }
 
@@ -623,6 +629,7 @@ export interface EvidenceRepository {
        * character's previous evidence rather than written back blank.
        */
       tierBests: readonly CharacterTierBestParseInput[];
+      cuttingEdges?: readonly CharacterCuttingEdgeInput[];
       /**
        * Fight URLs this run asked about and got an answer for, whatever the
        * answer was. Stamped onto those kills so a later run can tell them

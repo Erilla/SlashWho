@@ -632,6 +632,24 @@ export const characterEvidenceRunPhases = pgTable(
   ]
 );
 
+/** Normalized Blizzard achievements collected as part of one evidence run. */
+export const characterEvidenceCuttingEdges = pgTable(
+  "character_evidence_cutting_edges",
+  {
+    evidenceRunId: uuid("evidence_run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    achievementId: text("achievement_id").notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_evidence_cutting_edges_pk",
+      columns: [table.evidenceRunId, table.achievementId]
+    })
+  ]
+);
+
 /**
  * One run's collected evidence, staged between a finished Warcraft Logs scan
  * and a successful publication.

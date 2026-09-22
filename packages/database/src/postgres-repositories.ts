@@ -12,6 +12,7 @@ import type {
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicKillInput,
+  CharacterCuttingEdgeInput,
   CharacterTierBestParseInput,
   CompletedCharacterEvidence,
   EvidenceReservationResult,
@@ -765,12 +766,26 @@ async function loadCompletedEvidence(
      ORDER BY raid_id, boss_id`,
     [run.id]
   );
+  const cuttingEdgesResult = await client.query<{
+    achievement_id: string;
+    completed_at: Date;
+  }>(
+    `SELECT achievement_id, completed_at
+       FROM character_evidence_cutting_edges
+      WHERE evidence_run_id = $1
+      ORDER BY achievement_id`,
+    [run.id]
+  );
   return {
     run: mapEvidenceRun(run),
     evidenceVersion: run.evidence_version,
     kills: killsResult.rows.map(mapCharacterMythicKill),
     wipes: wipesResult.rows.map(mapCharacterMythicWipe),
     tierBests: tierBestsResult.rows.map(mapCharacterTierBestParse),
+    cuttingEdges: cuttingEdgesResult.rows.map((row) => ({
+      achievementId: row.achievement_id,
+      completedAt: row.completed_at.toISOString()
+    })),
     wipeCapable: run.evidence_version >= 2
   };
 }
@@ -3773,6 +3788,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 wipe.guild?.realm ?? null,
                 wipe.uploader ?? null
               ]
+            );
+          }
+          for (const cuttingEdge of input.cuttingEdges ?? []) {
+            await client.query(
+              `INSERT INTO character_evidence_cutting_edges
+                (evidence_run_id, achievement_id, completed_at)
+               VALUES ($1, $2, $3)`,
+              [runId, cuttingEdge.achievementId, cuttingEdge.completedAt]
             );
           }
           // The terminal publication marker belongs to this transaction, not

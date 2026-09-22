@@ -20,6 +20,7 @@ export type {
 export type {
   CallerClass,
   CharacterEvidenceRun,
+  CharacterCuttingEdgeInput,
   CharacterMythicKillInput,
   CharacterTierBestParseInput,
   CharacterMythicKillParseMetric,

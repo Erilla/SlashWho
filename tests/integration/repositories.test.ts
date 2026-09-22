@@ -402,6 +402,37 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("publishes normalized Blizzard achievements with the evidence run", async () => {
+    // Break caught: a provider phase that does not publish its normalized
+    // result only recreates the same network call on every dossier read.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      cuttingEdges: [
+        { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+      ],
+      completedAt: new Date("2026-09-22T11:05:00.000Z")
+    } as never);
+
+    expect(
+      ((await repositories.evidence.getCompleted(rootKey)) as any).cuttingEdges
+    ).toEqual([
+      { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+    ]);
+  });
+
   it("keeps enriched parses when a later complete run did not re-fetch them", async () => {
     // Break caught: collection deliberately skips fights whose parses are
     // already stored, but the merge only ran for a partial publish. A complete
