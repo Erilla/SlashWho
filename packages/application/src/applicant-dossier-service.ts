@@ -141,7 +141,7 @@ export interface ApplicantDossierService {
     scope?: MeasurementScope
   ): Promise<RefreshCharacterResult>;
   /** Backend-only progress projection for the dossier and operator monitor. */
-  readEvidencePhases(runId: string): Promise<readonly EvidenceRunPhase[]>;
+  readEvidencePhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
