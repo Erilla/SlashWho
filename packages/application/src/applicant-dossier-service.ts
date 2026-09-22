@@ -5,6 +5,7 @@ import {
 } from "@slashwho/contracts";
 import type {
   DiscoveryQueue,
+  EvidenceRunPhase,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -139,6 +140,8 @@ export interface ApplicantDossierService {
     key: CharacterKey,
     scope?: MeasurementScope
   ): Promise<RefreshCharacterResult>;
+  /** Backend-only progress projection for the dossier and operator monitor. */
+  readEvidencePhases(runId: string): Promise<readonly EvidenceRunPhase[]>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -1175,6 +1178,9 @@ export function createApplicantDossierService(options: {
     };
   }
   return {
+    async readEvidencePhases(runId) {
+      return options.repositories.evidence.listPhases?.(runId) ?? [];
+    },
     async start(input, scope) {
       // start does real database and queue work through search.create, so its
       // scope is threaded through rather than discarded: this is the endpoint

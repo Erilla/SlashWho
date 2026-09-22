@@ -71,6 +71,16 @@ export const evidencePhasePlans = {
         : []),
       "publication"
     ];
+  },
+  providers(input: {
+    raiderIo: boolean;
+    blizzard: boolean;
+  }): EvidencePhasePlan {
+    return [
+      ...(input.raiderIo ? (["raiderio_rankings"] as const) : []),
+      ...(input.blizzard ? (["blizzard_achievements"] as const) : []),
+      "publication"
+    ];
   }
 } as const;
 

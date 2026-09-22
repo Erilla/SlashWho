@@ -3411,7 +3411,17 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `UPDATE character_evidence_run_phases
                 SET state = $3, started_at = $4, completed_at = $5,
                     limitation_code = $6
-              WHERE run_id = $1 AND phase_id = $2`,
+              WHERE run_id = $1 AND phase_id = $2
+                AND EXISTS (
+                  SELECT 1 FROM character_evidence_runs run
+                   WHERE run.id = $1
+                     AND run.status IN ('queued', 'running', 'retrying')
+                )
+                AND (
+                  state = $3 OR
+                  (state = 'pending' AND $3 IN ('active', 'skipped')) OR
+                  (state = 'active' AND $3 IN ('completed', 'limited', 'failed', 'cancelled'))
+                )`,
             [
               runId,
               phase.id,

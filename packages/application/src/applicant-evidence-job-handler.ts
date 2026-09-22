@@ -1043,8 +1043,7 @@ export function createApplicantEvidenceJobHandler(
                   : "warcraft_logs_ranking_identities";
           if (!ledger || activePhase === next) return;
           phaseWrites = phaseWrites.then(async () => {
-            if (activePhase)
-              await ledger.transition(activePhase, "completed");
+            if (activePhase) await ledger.transition(activePhase, "completed");
             await ledger.transition(next, "active");
             activePhase = next;
           });
@@ -1096,6 +1095,15 @@ export function createApplicantEvidenceJobHandler(
             },
             onLimitation: (query, code) => {
               if (code === "schema_drift") record.limitationQuery = query;
+              observePhase(query);
+              const ledger = phaseLedger;
+              if (ledger) {
+                phaseWrites = phaseWrites.then(async () => {
+                  if (!activePhase) return;
+                  await ledger.transition(activePhase, "limited", code);
+                  activePhase = undefined;
+                });
+              }
             },
             signal: activeContext.signal
           })
@@ -1252,6 +1260,7 @@ export function createApplicantEvidenceJobHandler(
       } catch (error) {
         const aborted = activeContext.signal.aborted;
         if (aborted) await phaseLedger?.cancelActive();
+        else await phaseLedger?.failActive("collection_failed");
         record.outcome = aborted
           ? "cancelled"
           : isPointsBudgetRefusal(error)
