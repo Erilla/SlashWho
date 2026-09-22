@@ -4123,7 +4123,8 @@ describe("PostgreSQL repositories", () => {
       // The run that published the snapshot, and so the only one allowed to
       // continue this chain.
       runId: run.id,
-      limitationCode: "privacy_hidden"
+      limitationCode: "privacy_hidden",
+      historicalGuilds: []
     });
   });
 
