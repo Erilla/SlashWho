@@ -15,6 +15,7 @@ const webBaseUrl = `http://127.0.0.1:${webPort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
   // The critical journey waits on real worker discovery behind a client poll

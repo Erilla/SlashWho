@@ -209,6 +209,33 @@ describe("applicant dossier", () => {
     ).toMatchObject({ state: "kill" });
   });
 
+  it("backfills a raid-scoped legacy boss name without a special-case mapping", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "24",
+          raidName: "Ny'alotha, the Waking City",
+          bossId: "2329",
+          bossName: "Wrathion",
+          journalBossId: null,
+          killedAt: "2020-02-04T19:45:00.000Z"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(
+      dossier.raids
+        .find((raid) => raid.raidId === "1180")
+        ?.bosses.find((boss) => boss.bossId === "2368")
+    ).toMatchObject({
+      state: "kill",
+      bossName: "Wrathion, the Black Emperor"
+    });
+  });
+
   it("stays silent about a Mythic dungeon it already knows is not a raid", () => {
     // Break caught: `unmatched_encounter` was live on all eight collected
     // characters, and it was Mythic dungeons raising it -- a dungeon boss
