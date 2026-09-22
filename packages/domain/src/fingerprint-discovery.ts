@@ -356,7 +356,11 @@ export async function discoverFingerprintMatches(
     for (const candidate of candidates) {
       throwIfAborted();
       const candidateId = canonicalCharacterId(candidate.key);
-      if (candidateId === rootId || seen.has(candidateId)) {
+      if (
+        candidateId === rootId ||
+        seen.has(candidateId) ||
+        candidate.key.region !== root.region
+      ) {
         continue;
       }
       seen.add(candidateId);
