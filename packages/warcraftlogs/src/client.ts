@@ -48,6 +48,7 @@ const recentReportsQuery = `
     characterData {
       character(name: $name, serverSlug: $realm, serverRegion: $region) {
         server { normalizedName }
+        guilds { name server { slug region { slug } } }
         recentReports(limit: ${REPORTS_PER_PAGE}, page: $page) {
           data {
             code
@@ -69,6 +70,38 @@ const recentReportsQuery = `
             }
           }
           has_more_pages
+        }
+      }
+    }
+  }
+`;
+
+const guildAttendanceQuery = `
+  query GuildAttendance($name: String!, $realm: String!, $region: String!, $page: Int!) {
+    guildData {
+      guild(name: $name, serverSlug: $realm, serverRegion: $region) {
+        attendance(limit: 25, page: $page) {
+          data { code }
+          has_more_pages
+        }
+      }
+    }
+  }
+`;
+
+const reportByCodeQuery = `
+  query ReportByCode($code: String!) {
+    reportData {
+      report(code: $code) {
+        code
+        startTime
+        owner { name }
+        guild { name server { slug region { slug } } }
+        zone { id name encounters { id journalID } }
+        masterData { actors { id name server type } }
+        fights {
+          id encounterID name startTime endTime kill difficulty friendlyPlayers
+          gameZone { id name }
         }
       }
     }
@@ -365,6 +398,82 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
     return { kind: "limitation", code: "schema_drift" };
   }
   return { kind: "identity", key, displayName };
+}
+
+type WarcraftLogsGuild = Readonly<{
+  name: string;
+  realm: string;
+  region: CharacterKey["region"];
+}>;
+
+function characterGuilds(value: unknown): readonly WarcraftLogsGuild[] {
+  const character = record(
+    record(record(value)?.data)?.characterData
+  )?.character;
+  const guilds = record(character)?.guilds;
+  if (!Array.isArray(guilds)) return [];
+  const found = new Map<string, WarcraftLogsGuild>();
+  for (const value of guilds) {
+    const guild = record(value);
+    const server = guild && record(guild.server);
+    const region = server && record(server.region);
+    const name = guild && nonEmptyString(guild.name);
+    const realm = server && nonEmptyString(server.slug);
+    const regionSlug = region && nonEmptyString(region.slug);
+    const normalizedRegion = regionSlug?.toLocaleLowerCase("en-US");
+    if (
+      !name ||
+      !realm ||
+      !normalizedRegion ||
+      !supportedRegions.includes(normalizedRegion as CharacterKey["region"])
+    )
+      continue;
+    const item = {
+      name,
+      realm,
+      region: normalizedRegion as CharacterKey["region"]
+    };
+    found.set(`${item.region}\0${item.realm}\0${item.name}`, item);
+  }
+  return [...found.values()];
+}
+
+function guildAttendanceCodes(value: unknown): readonly string[] | null {
+  const guild = record(record(record(value)?.data)?.guildData)?.guild;
+  const attendance = record(record(guild)?.attendance);
+  const reports = attendance?.data;
+  if (!Array.isArray(reports)) return null;
+  const codes: string[] = [];
+  for (const value of reports) {
+    const code = nonEmptyString(record(value)?.code);
+    if (!code) return null;
+    codes.push(code);
+  }
+  return codes;
+}
+
+function decodedHydratedReport(
+  value: unknown,
+  key: CharacterKey
+): WarcraftLogsReportResult {
+  const report = record(record(value)?.data)?.reportData;
+  const reportValue = report && record(report)?.report;
+  return firstKillReports(
+    {
+      data: {
+        characterData: {
+          character: {
+            server: { normalizedName: key.realm },
+            recentReports: {
+              data: reportValue === null ? [] : [reportValue],
+              has_more_pages: false
+            }
+          }
+        }
+      }
+    },
+    key
+  );
 }
 
 function firstKillReports(
@@ -1596,6 +1705,7 @@ export function createWarcraftLogsClient(
       (options.storedKills ?? []).map((kill) => [kill.fightUrl, kill])
     );
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
+    const discoveredGuilds = new Map<string, WarcraftLogsGuild>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
     const scanSkipped = options.requestCap === 0;
     let historyScanStartPage = options.historyScanStartPage ?? 1;
@@ -1673,6 +1783,12 @@ export function createWarcraftLogsClient(
       for (const wipe of normalized.wipes) {
         wipes.set(wipe.fightUrl, wipe);
       }
+      for (const guild of characterGuilds(result.value)) {
+        discoveredGuilds.set(
+          `${guild.region}\0${guild.realm}\0${guild.name}`,
+          guild
+        );
+      }
       if (normalized.limitation) {
         options.onLimitation?.("history_scan", normalized.limitation.code);
         scanLimitation = normalized.limitation;
@@ -1713,6 +1829,62 @@ export function createWarcraftLogsClient(
       lastDecodedHistoryPage === undefined
     ) {
       scanLimitation = { kind: "limitation", code: "request_cap" };
+    }
+
+    // Character histories can omit reports that are still listed in a known
+    // guild's attendance history. Attendance is discovery only: every code is
+    // hydrated and run through the same actor/fight attribution decoder above.
+    for (const guild of discoveredGuilds.values()) {
+      if (historyScanRequests >= options.requestCap) {
+        scanLimitation ??= { kind: "limitation", code: "request_cap" };
+        break;
+      }
+      const attendance = counted(
+        "history_scan",
+        await graphql(
+          guildAttendanceQuery,
+          {
+            name: guild.name,
+            realm: guild.realm,
+            region: guild.region,
+            page: 1
+          },
+          options.signal
+        )
+      );
+      historyScanRequests += 1;
+      if (attendance.kind !== "success") {
+        scanLimitation ??= attendance;
+        continue;
+      }
+      const codes = guildAttendanceCodes(attendance.value);
+      if (codes === null) {
+        scanLimitation ??= { kind: "limitation", code: "schema_drift" };
+        continue;
+      }
+      for (const code of codes) {
+        if (historyScanRequests >= options.requestCap) {
+          scanLimitation ??= { kind: "limitation", code: "request_cap" };
+          break;
+        }
+        const report = counted(
+          "history_scan",
+          await graphql(reportByCodeQuery, { code }, options.signal)
+        );
+        historyScanRequests += 1;
+        if (report.kind !== "success") {
+          scanLimitation ??= report;
+          continue;
+        }
+        const decoded = decodedHydratedReport(report.value, key);
+        if (decoded.kind === "limitation") {
+          scanLimitation ??= decoded;
+          continue;
+        }
+        for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
+        for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
+        if (decoded.limitation) scanLimitation ??= decoded.limitation;
+      }
     }
 
     let parseLimitation: WarcraftLogsLimitation | undefined;

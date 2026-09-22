@@ -3,6 +3,7 @@ import type { CharacterGuild, CharacterKey } from "./character-key";
 import { formatCharacterDisplayName } from "./display-name";
 import {
   lookupJournalEncounter,
+  lookupRaidBossByLegacyName,
   lookupRaidBossByName,
   lookupRaidByName,
   currentContentEligibilityByRaidId,
@@ -333,21 +334,13 @@ function catalogueEncounter(evidence: {
     raid !== null && journalEncounter?.raidId === raid.raidId;
   const legacyWarcraftLogsEncounter =
     raid !== null && !journalEncounterMatchesRaid && namedEncounter === null
-      ? lookupLegacyWarcraftLogsEncounter(evidence.raidName, evidence.bossName)
+      ? lookupRaidBossByLegacyName(raid.raidId, evidence.bossName)
       : null;
   return raid
     ? (namedEncounter ??
         (journalEncounterMatchesRaid ? journalEncounter : null) ??
         legacyWarcraftLogsEncounter)
     : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
-}
-
-function lookupLegacyWarcraftLogsEncounter(
-  raidName: string,
-  bossName: string
-): RaidCatalogueEncounter | null {
-  if (raidName !== "The Eternal Palace" || bossName !== "Za'qul") return null;
-  return lookupJournalEncounter("2349");
 }
 
 function currentness(killedAt: string, raidId: string): boolean | null {

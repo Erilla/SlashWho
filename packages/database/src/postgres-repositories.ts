@@ -252,7 +252,7 @@ const CURRENT_EVIDENCE_VERSION = 14;
 const CURRENT_COLLECTION_VERSIONS: Readonly<
   Record<EvidenceCollectionDomain, number>
 > = {
-  kills: 1,
+  kills: 2,
   parses: 2,
   tier_bests: 1
 };

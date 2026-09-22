@@ -3225,6 +3225,134 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("recovers participant-attributed kills and wipes from guild attendance", async () => {
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string };
+      };
+      if (body.query.includes("RecentReports")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                server: { normalizedName: "Silvermoon" },
+                guilds: [
+                  {
+                    name: "SeriouslyCasual",
+                    server: { slug: "silvermoon", region: { slug: "EU" } }
+                  }
+                ],
+                recentReports: { data: [], has_more_pages: false }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("GuildAttendance")) {
+        return jsonResponse({
+          data: {
+            guildData: {
+              guild: {
+                attendance: {
+                  data: [{ code: "omittedReport" }],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("ReportByCode")) {
+        return jsonResponse({
+          data: {
+            reportData: {
+              report: {
+                code: "omittedReport",
+                startTime: 1_579_633_885_132,
+                owner: { name: "Abradix" },
+                guild: {
+                  name: "SeriouslyCasual",
+                  server: { slug: "silvermoon", region: { slug: "EU" } }
+                },
+                zone: {
+                  id: 23,
+                  name: "The Eternal Palace",
+                  encounters: [
+                    { id: 2299, journalID: 0 },
+                    { id: 2293, journalID: 0 }
+                  ]
+                },
+                masterData: {
+                  actors: [
+                    {
+                      id: 12,
+                      name: "Sentinel",
+                      server: "Silvermoon",
+                      type: "Player"
+                    }
+                  ]
+                },
+                fights: [
+                  {
+                    id: 8,
+                    encounterID: 2299,
+                    name: "Queen Azshara",
+                    startTime: 1_000,
+                    endTime: 2_000,
+                    kill: true,
+                    difficulty: 5,
+                    friendlyPlayers: [12]
+                  },
+                  {
+                    id: 7,
+                    encounterID: 2293,
+                    name: "Za'qul",
+                    startTime: 3_000,
+                    endTime: 4_000,
+                    kill: false,
+                    difficulty: 5,
+                    friendlyPlayers: [12]
+                  },
+                  {
+                    id: 6,
+                    encounterID: 2298,
+                    name: "The Queen's Court",
+                    startTime: 5_000,
+                    endTime: 6_000,
+                    kill: true,
+                    difficulty: 5,
+                    friendlyPlayers: [99]
+                  }
+                ]
+              }
+            }
+          }
+        });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    await expect(
+      client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 1 })
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          bossName: "Queen Azshara",
+          fightUrl: "https://www.warcraftlogs.com/reports/omittedReport#fight=8"
+        }
+      ],
+      wipes: [
+        {
+          bossName: "Za'qul",
+          fightUrl: "https://www.warcraftlogs.com/reports/omittedReport#fight=7"
+        }
+      ]
+    });
+  });
+
   it("uses each fight's game zone when the report zone names another instance", async () => {
     // Break caught: Warcraft Logs pins one zone to a whole report, and a raid
     // night that also ran Mythic+ is filed under the dungeon season. Stamping

@@ -819,7 +819,7 @@ describe("PostgreSQL repositories", () => {
       `INSERT INTO character_terminal_tiers
          (region, realm_slug, normalized_name, raid_id, domain, collection_version)
        VALUES ($1, $2, $3, $4, 'parses', 1),
-              ($1, $2, $3, $4, 'kills', 1),
+              ($1, $2, $3, $4, 'kills', 2),
               ($1, $2, $3, $4, 'tier_bests', 1)`,
       [rootKey.region, rootKey.realm, rootKey.name, oldParse.raidId]
     );
@@ -2063,7 +2063,7 @@ describe("PostgreSQL repositories", () => {
       `INSERT INTO character_terminal_tiers
          (region, realm_slug, normalized_name, raid_id, domain, collection_version)
        VALUES ($1, $2, $3, '42', 'parses', 1),
-              ($1, $2, $3, '42', 'kills', 1),
+              ($1, $2, $3, '42', 'kills', 2),
               ($1, $2, $3, '42', 'tier_bests', 1)`,
       [key.region, key.realm, key.name]
     );
@@ -2072,6 +2072,22 @@ describe("PostgreSQL repositories", () => {
       { raidId: "42", domain: "kills" },
       { raidId: "42", domain: "tier_bests" }
     ]);
+  });
+
+  it("reopens terminal kill tiers recorded before guild-attendance recovery", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "guildattendancebump"
+    } as const;
+    await pool.query(
+      `INSERT INTO character_terminal_tiers
+         (region, realm_slug, normalized_name, raid_id, domain, collection_version)
+       VALUES ($1, $2, $3, '23', 'kills', 1)`,
+      [key.region, key.realm, key.name]
+    );
+
+    await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
   });
 
   it("recovers complete evidence hidden behind a legacy partial refresh", async () => {

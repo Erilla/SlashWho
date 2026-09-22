@@ -496,6 +496,26 @@ export function lookupRaidBossByName(
 }
 
 /**
+ * Warcraft Logs occasionally omits a Journal encounter's descriptive suffix.
+ * A shortened name is usable only within a known raid and only when it names
+ * exactly one encounter there; `Grong`, for example, deliberately stays
+ * ambiguous in Battle of Dazar'alor.
+ */
+export function lookupRaidBossByLegacyName(
+  raidId: string,
+  bossName: string
+): RaidCatalogueEncounter | null {
+  const key = normalizedName(bossName);
+  if (key.length === 0) return null;
+  const matches = [...encounters.values()].filter(
+    (encounter) =>
+      encounter.raidId === raidId &&
+      normalizedName(encounter.bossName).startsWith(key)
+  );
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/**
  * Warcraft Logs sometimes reports a combined raid-zone label. A boss name can
  * still restore the Journal raid only when it is unique in the catalogue.
  */
