@@ -916,6 +916,50 @@ describe("discovery job handler", () => {
     expect(enqueueFullEvidence).toHaveBeenCalledWith(match);
   });
 
+  it("queues full evidence before publishing a newly admitted fingerprint match", async () => {
+    // Break caught: publishing first exposed the match to readers even if its
+    // full evidence collection could not be admitted to the queue.
+    const match = {
+      region: "eu",
+      realm: "draenor",
+      name: "mistakinus"
+    } as const;
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const blizzard = new MutableBlizzardGateway();
+    blizzard.roster = [candidate(match)];
+    blizzard.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    blizzard.fingerprints.set(keyId(match), achievementFingerprint());
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation",
+      requestCap: 300
+    });
+    const sideEffects: string[] = [];
+    const publish = repositories.snapshots.createAndFinishFingerprintSweep.bind(
+      repositories.snapshots
+    );
+    repositories.snapshots.createAndFinishFingerprintSweep = async (
+      input,
+      fingerprint,
+      cursor,
+      options
+    ) => {
+      sideEffects.push("snapshot");
+      return publish(input, fingerprint, cursor, options);
+    };
+    const enqueueFullEvidence = vi.fn(async () => {
+      sideEffects.push("evidence");
+    });
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway: blizzard,
+      enqueueFullEvidence
+    }).execute(run.id, delivery());
+
+    expect(sideEffects).toEqual(["evidence", "snapshot"]);
+  });
+
   it("seeds discovery from stored reverse declared-main relationships", async () => {
     // Break caught: the repository could know that an alt declared this root
     // while the worker neither included it nor needlessly hydrated it upstream.

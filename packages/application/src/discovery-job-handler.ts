@@ -161,7 +161,7 @@ export type DiscoveryJobHandlerOptions = {
     minimumIdenticalPercent: number;
   };
   enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
-  /** Schedules a full WCL collection after a newly admitted fingerprint match. */
+  /** Queues full WCL collection before a newly admitted fingerprint match is published. */
   enqueueFullEvidence?: (key: CharacterKey) => Promise<unknown>;
   requestCap: number;
   now?: () => Date;
@@ -721,6 +721,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     advanced: stillSweeping || sweep.kind === "matched"
                   };
 
+                  // A fingerprint-derived relationship is only observable
+                  // after its evidence work has been admitted. This also
+                  // applies to continuations, which amend their already
+                  // published snapshot with newly discovered members.
+                  for (const character of newlyAdmittedFingerprintMatches) {
+                    await options.enqueueFullEvidence?.(character.key);
+                  }
+
                   if (resume) {
                     const amended =
                       await repositories.snapshots.amendAndFinishFingerprintSweep(
@@ -809,9 +817,6 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     limitationCode === null ? "complete" : "partial";
                   record.limitationCode = limitationCode;
                   reservationActive = false;
-                  for (const character of newlyAdmittedFingerprintMatches) {
-                    await options.enqueueFullEvidence?.(character.key);
-                  }
                   // Only `matched` seals the chain. A continuation therefore
                   // re-enqueues on any other result -- including a `capped`
                   // that swept nothing and so carries no new cursor, which
