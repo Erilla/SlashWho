@@ -5,29 +5,34 @@ type FakeRaiderIo = Readonly<{
   close(): Promise<void>;
 }>;
 
-const ownerCharacters = [
-  {
-    name: "Ryii",
-    level: 80,
-    className: "Mage",
-    realm: "Silvermoon",
-    region: "EU"
-  },
-  {
-    name: "Frostalt",
-    level: 80,
-    className: "Paladin",
-    realm: "Silvermoon",
-    region: "EU"
-  },
-  {
-    name: "Nightalt",
-    level: 77,
-    className: "Druid",
-    realm: "Tarren-Mill",
-    region: "EU"
-  }
-] as const;
+const ryii = {
+  name: "Ryii",
+  level: 90,
+  className: "Warrior",
+  realm: "Silvermoon",
+  region: "EU"
+} as const;
+
+const queuedCharacter = {
+  ...ryii,
+  name: "Queued"
+} as const;
+
+const frostalt = {
+  name: "Frostalt",
+  level: 80,
+  className: "Paladin",
+  realm: "Silvermoon",
+  region: "EU"
+} as const;
+
+const nightalt = {
+  name: "Nightalt",
+  level: 77,
+  className: "Druid",
+  realm: "Tarren-Mill",
+  region: "EU"
+} as const;
 
 function upstreamCharacter(
   character: Readonly<{
@@ -72,14 +77,14 @@ async function listen(server: Server): Promise<number> {
 
 export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
   // The refreshing state is only observable while an upstream read is still in
-  // flight. Hold the owner list so discovery stays pending while the initial
+  // flight. Hold Queued's declared related-character read so the initial
   // dossier can independently check the root's tournament eligibility.
-  let released = false;
+  let holdingRelatedCharacterRead = false;
   let discoveryWebhooks = 0;
   const characterRequests = new Map<string, number>();
   const held: Array<() => void> = [];
   const releaseAll = () => {
-    released = true;
+    holdingRelatedCharacterRead = false;
     while (held.length > 0) held.shift()?.();
   };
 
@@ -113,13 +118,13 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
 
     if (url.pathname === "/__control/release") {
       releaseAll();
-      json(response, 200, { released: true });
+      json(response, 200, { holdingRelatedCharacterRead: false });
       return;
     }
 
     if (url.pathname === "/__control/hold") {
-      released = false;
-      json(response, 200, { released: false });
+      holdingRelatedCharacterRead = true;
+      json(response, 200, { holdingRelatedCharacterRead: true });
       return;
     }
 
@@ -200,45 +205,46 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       );
     }
 
-    if (
-      url.pathname === "/api/characters/eu/silvermoon/ryii" ||
-      url.pathname === "/api/characters/eu/silvermoon/queued"
-    ) {
-      const queued = url.pathname.endsWith("/queued");
-      const send = () =>
-        json(response, 200, {
-          characterDetails: {
-            character: upstreamCharacter(
-              queued
-                ? { ...ownerCharacters[0], name: "Queued" }
-                : ownerCharacters[0]
-            ),
-            user: { name: "fixture-owner" },
-            characterCustomizations: {
-              discord_profile: null,
-              main_character: null
-            }
-          }
-        });
-      send();
+    const declaredCharacter = (
+      character: Parameters<typeof upstreamCharacter>[0],
+      main: { name: string; path: string } | null
+    ) =>
+      json(response, 200, {
+        characterDetails: {
+          character: upstreamCharacter(character),
+          ...(main ? { characterCustomizations: { main_character: main } } : {})
+        }
+      });
+
+    if (url.pathname === "/api/characters/eu/silvermoon/ryii") {
+      declaredCharacter(ryii, {
+        name: frostalt.name,
+        path: "/characters/eu/silvermoon/Frostalt"
+      });
       return;
     }
 
-    if (
-      url.pathname === "/api/user/view-characters" &&
-      url.searchParams.get("name") === "fixture-owner"
-    ) {
+    if (url.pathname === "/api/characters/eu/silvermoon/frostalt") {
       const send = () =>
-        json(response, 200, {
-          viewUserCharactersApi: {
-            name: "fixture-owner",
-            characters: ownerCharacters.map((character) => ({
-              character: upstreamCharacter(character)
-            }))
-          }
+        declaredCharacter(frostalt, {
+          name: nightalt.name,
+          path: "/characters/eu/tarren-mill/Nightalt"
         });
-      if (released) send();
-      else held.push(send);
+      if (holdingRelatedCharacterRead) held.push(send);
+      else send();
+      return;
+    }
+
+    if (url.pathname === "/api/characters/eu/tarren-mill/nightalt") {
+      declaredCharacter(nightalt, null);
+      return;
+    }
+
+    if (url.pathname === "/api/characters/eu/silvermoon/queued") {
+      declaredCharacter(queuedCharacter, {
+        name: frostalt.name,
+        path: "/characters/eu/silvermoon/Frostalt"
+      });
       return;
     }
 

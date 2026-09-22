@@ -107,6 +107,18 @@ for (const applicantUrl of applicantUrls) {
       /raider\.io\/characters\/eu\/silvermoon\/ryii$/
     );
     await expect(raiderIoLink).toHaveAttribute("target", "_blank");
+    const connectedCharacters = page.getByRole("list", {
+      name: "Connected characters"
+    });
+    await expect(
+      connectedCharacters.getByText("Ryii", { exact: true })
+    ).toBeVisible();
+    await expect(
+      connectedCharacters.getByText("Frostalt", { exact: true })
+    ).toBeVisible();
+    await expect(
+      connectedCharacters.getByText("Nightalt", { exact: true })
+    ).toBeVisible();
     await expect(page.getByText("Queen Ansurek")).toBeVisible();
     const evidence = page.getByRole("group", {
       name: "Queen Ansurek evidence"
@@ -144,7 +156,7 @@ for (const applicantUrl of applicantUrls) {
   });
 }
 
-test("shows submitted-character evidence while queued discovery is held", async ({
+test("shows submitted-character evidence while privacy-safe discovery is held", async ({
   page
 }) => {
   await seedCharacterEvidence({
@@ -171,7 +183,10 @@ test("shows submitted-character evidence while queued discovery is held", async 
   await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/release`);
 
   await expect(
-    page.getByText("Linked-character research is complete.", { exact: true })
+    page.getByText(
+      "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive.",
+      { exact: true }
+    )
   ).toBeVisible({ timeout: 15_000 });
   await expect(initialDisclosure).not.toBeVisible();
   await evidence.getByText("View kill evidence").click();

@@ -142,6 +142,10 @@ jobs:
         if: steps.scope.outputs.run_full == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=6144
+      - run: corepack pnpm exec vitest run --project unit tests/e2e/support
+        if: steps.scope.outputs.run_full == 'true'
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
       - run: corepack pnpm test:integration
         if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm build
