@@ -16,6 +16,13 @@ The prior Railway project has been retired. These instructions assume no existin
 6. Generate public domains for web and worker. The worker domain exists only so the scheduled live smoke can read `/health`, `/ready`, and the aggregate `/probe`; do not add application routes to it. Do not expose PostgreSQL publicly.
 7. Configure both services to deploy `main` in `test` and `prod` in `prod`. Disable direct production deploys from feature branches. Do not migrate or reuse resources from the retired project.
 
+The checked-in service configs use Railway watch patterns to avoid deploying an
+unaffected service. An application-source edit confined to `apps/web/` deploys
+only the web service; one confined to `apps/worker/` deploys only the worker.
+Changes to a shared runtime package, migrations, workspace dependency inputs
+(including either app's package manifest), or a service's Dockerfile/config
+deploy every service that consumes that input.
+
 Steps 3 and 4 have no Railway CLI flag. Set the config-as-code path from each service's settings page, or through the public API:
 
 ```bash

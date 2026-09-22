@@ -1,6 +1,25 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.web"
+watchPatterns = [
+  "/apps/web/**",
+  "/apps/worker/package.json",
+  "/packages/application/**",
+  "/packages/blizzard/**",
+  "/packages/contracts/**",
+  "/packages/database/**",
+  "/packages/domain/**",
+  "/packages/raiderio/**",
+  "/packages/warcraftlogs/**",
+  "/.dockerignore",
+  "/.npmrc",
+  "/Dockerfile.web",
+  "/package.json",
+  "/pnpm-lock.yaml",
+  "/pnpm-workspace.yaml",
+  "/railway.web.toml",
+  "/tsconfig.base.json",
+]
 
 [deploy]
 preDeployCommand = "/app/migrate/node_modules/.bin/tsx /app/migrate/src/cli-migrate.ts"
