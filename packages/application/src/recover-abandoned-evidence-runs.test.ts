@@ -349,6 +349,9 @@ describe("recoverAbandonedEvidenceRuns", () => {
       kills: [],
       wipes: [],
       tierBests: [],
+      // Old stages never carried Blizzard results; recovery republishes that
+      // fact as an empty set rather than inventing provider evidence.
+      cuttingEdges: [],
       // Likewise: a stage from before this field recorded no attempts, and
       // reading its silence as "none" only costs a re-request.
       parsedFightUrls: [],
