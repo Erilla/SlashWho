@@ -29,6 +29,7 @@ describe("database migrations", () => {
 
     expect(result.rows.map(({ name }) => name)).toEqual([
       "character_evidence_collections",
+      "character_evidence_cutting_edges",
       "character_evidence_run_costs",
       "character_evidence_run_phases",
       "character_evidence_runs",
@@ -113,7 +114,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-15).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
       { idx: 25, tag: "0026_unstick_parse_drift_runs" },
       { idx: 26, tag: "0027_kill_parses_read_at" },
@@ -127,7 +127,8 @@ describe("database migrations", () => {
       { idx: 34, tag: "0035_operator_auth" },
       { idx: 35, tag: "0036_kill_guild_region" },
       { idx: 36, tag: "0037_fingerprint_historical_guilds" },
-      { idx: 37, tag: "0038_evidence_run_phases" }
+      { idx: 37, tag: "0038_evidence_run_phases" },
+      { idx: 38, tag: "0039_evidence_cutting_edges" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

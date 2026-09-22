@@ -1621,6 +1621,7 @@ describe("PostgreSQL repositories", () => {
       ],
       wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })],
       tierBests: [],
+      cuttingEdges: [],
       wipeCapable: true
     });
   });
