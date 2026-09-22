@@ -5,14 +5,20 @@ type FakeRaiderIo = Readonly<{
   close(): Promise<void>;
 }>;
 
+const ryii = {
+  name: "Ryii",
+  level: 90,
+  className: "Warrior",
+  realm: "Silvermoon",
+  region: "EU"
+} as const;
+
+const queuedCharacter = {
+  ...ryii,
+  name: "Queued"
+} as const;
+
 const ownerCharacters = [
-  {
-    name: "Ryii",
-    level: 80,
-    className: "Mage",
-    realm: "Silvermoon",
-    region: "EU"
-  },
   {
     name: "Frostalt",
     level: 80,
@@ -208,16 +214,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       const send = () =>
         json(response, 200, {
           characterDetails: {
-            character: upstreamCharacter(
-              queued
-                ? { ...ownerCharacters[0], name: "Queued" }
-                : ownerCharacters[0]
-            ),
-            user: { name: "fixture-owner" },
-            characterCustomizations: {
-              discord_profile: null,
-              main_character: null
-            }
+            character: upstreamCharacter(queued ? queuedCharacter : ryii)
           }
         });
       send();
@@ -245,24 +242,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     if (url.pathname.endsWith("/raid-progress")) {
       json(response, 200, {
         characterRaidProgress: {
-          raidProgress: [
-            {
-              raid: { id: "nerub-ar-palace", name: "Nerub-ar Palace" },
-              encountersDefeated: {
-                mythic: [
-                  {
-                    slug: "queen-ansurek",
-                    name: "Queen Ansurek",
-                    ordinal: 8,
-                    isFinalBoss: true,
-                    firstDefeated: "2025-01-14T20:30:00.000Z",
-                    guild: { name: "Arachnid", realm: { slug: "Silvermoon" } },
-                    historicWorldRank: 147
-                  }
-                ]
-              }
-            }
-          ]
+          raidProgress: []
         }
       });
       return;
