@@ -83,7 +83,7 @@ function mythicKill(
     killedAt: "2026-08-04T12:00:00.000Z",
     reportUrl: "https://www.warcraftlogs.com/reports/example",
     fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
-    guild: { name: "Example Guild", realm: "silvermoon" },
+    guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
     performance: {
       spec: null,
       damage: { state: "unavailable" },
@@ -317,6 +317,39 @@ describe("PostgreSQL repositories", () => {
         source: "declared_main"
       })
     ]);
+  });
+
+  it("round-trips a Mythic kill's Warcraft Logs guild region", async () => {
+    // Historical-guild traversal can only safely call Blizzard when the
+    // region was observed with the public report; a realm alone is ambiguous.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [
+        mythicKill({
+          guild: { name: "Rancour", region: "eu", realm: "draenor" }
+        })
+      ],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    expect(
+      (await repositories.evidence.getCompleted(rootKey))?.kills[0]?.guild
+    ).toEqual({
+      name: "Rancour",
+      region: "eu",
+      realm: "draenor"
+    });
   });
 
   it("keeps enriched parses when a later complete run did not re-fetch them", async () => {

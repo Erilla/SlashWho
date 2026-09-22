@@ -41,6 +41,10 @@ export function createBlizzardFingerprintAdapter(
   return {
     getGuildRoster: (root, signal) =>
       request(() => gateway.getGuildRoster(root, signal, recordProfileRequest)),
+    getGuildRosterByIdentity: (guild, signal) =>
+      request(() =>
+        gateway.getGuildRosterByIdentity(guild, signal, recordProfileRequest)
+      ),
     getAchievementFingerprint: (key, signal) =>
       request(() =>
         gateway.getAchievementFingerprint(key, signal, recordProfileRequest)

@@ -480,6 +480,27 @@ export async function createWorkerRuntime(
       ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
       enqueueFingerprintAdmission: (runId) =>
         initializedQueue.enqueueFingerprintAdmission(runId),
+      enqueueFullEvidence: async (key) => {
+        const at = new Date();
+        // A fingerprint admission is a genuinely new dossier connection, so
+        // use `at` as the cutoff and collect its complete public log history.
+        // `reserve` coalesces an already active collection instead of queuing
+        // duplicate work.
+        const reservation = await repositories.evidence.reserve({
+          key,
+          freshnessCutoff: at,
+          at
+        });
+        if (reservation.kind !== "reserved") return;
+        const queueJobId = await initializedQueue.enqueueCharacterEvidence(
+          reservation.run.id,
+          { enqueuedAt: at.toISOString(), mode: "full" }
+        );
+        await repositories.evidence.markEnqueued(
+          reservation.run.id,
+          queueJobId
+        );
+      },
       requestCap: config.discoveryRequestCap,
       negativeCacheTtlMs: config.negativeCacheTtlMs,
       ...(logger ? { logger } : {})

@@ -410,6 +410,7 @@ export const fingerprintSweepStates = pgTable(
     }),
     resumeAfter: text("resume_after"),
     resumeLimitationCode: text("resume_limitation_code"),
+    resumeHistoricalGuilds: jsonb("resume_historical_guilds"),
     resumeSnapshotId: uuid("resume_snapshot_id").references(
       () => snapshots.id,
       {
@@ -734,6 +735,7 @@ export const characterMythicKills = pgTable(
     reportUrl: text("report_url").notNull(),
     fightUrl: text("fight_url").notNull(),
     guildName: text("guild_name"),
+    guildRegion: text("guild_region"),
     guildRealm: text("guild_realm"),
     uploader: text("uploader"),
     specName: text("spec_name"),

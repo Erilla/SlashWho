@@ -2,6 +2,7 @@ import type { PublicErrorCode } from "@slashwho/contracts";
 import {
   isNonRaidZone,
   toRaiderIoUrl,
+  type CharacterGuild,
   type CharacterKey
 } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
@@ -182,6 +183,7 @@ interface CharacterMythicKillRow {
   report_url: string;
   fight_url: string;
   guild_name: string | null;
+  guild_region: CharacterKey["region"] | null;
   guild_realm: string | null;
   uploader: string | null;
   spec_name: string | null;
@@ -535,7 +537,11 @@ function mapCharacterMythicKill(
     guild:
       row.guild_name === null
         ? null
-        : { name: row.guild_name, realm: row.guild_realm! },
+        : {
+            name: row.guild_name,
+            realm: row.guild_realm!,
+            ...(row.guild_region === null ? {} : { region: row.guild_region })
+          },
     ...(row.uploader === null ? {} : { uploader: row.uploader }),
     performance: {
       spec:
@@ -678,6 +684,39 @@ function mapCharacterMythicWipe(
   };
 }
 
+function historicalGuildsFromDatabase(
+  value: unknown
+): readonly CharacterGuild[] {
+  if (!Array.isArray(value)) return [];
+  const guilds = new Map<string, CharacterGuild>();
+  for (const guild of value) {
+    if (
+      typeof guild !== "object" ||
+      guild === null ||
+      !("name" in guild) ||
+      !("region" in guild) ||
+      !("realm" in guild) ||
+      typeof guild.name !== "string" ||
+      typeof guild.realm !== "string" ||
+      !["us", "eu", "kr", "tw"].includes(String(guild.region))
+    ) {
+      continue;
+    }
+    const normalized = {
+      name: guild.name,
+      region: guild.region as CharacterKey["region"],
+      realm: guild.realm
+    };
+    guilds.set(
+      `${normalized.region}/${normalized.realm}/${normalized.name}`,
+      normalized
+    );
+  }
+  return [...guilds.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, guild]) => guild);
+}
+
 async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
@@ -701,7 +740,7 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_realm, uploader, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -918,7 +957,7 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_realm, uploader, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
@@ -927,7 +966,7 @@ async function loadPositiveEvidenceForPartial(
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
               k.journal_boss_id, k.boss_order, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_realm, k.uploader, k.spec_name, k.spec_icon_url,
+              k.guild_region, k.guild_realm, k.uploader, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -1225,6 +1264,7 @@ async function finishFingerprintSweep(
     cursor?: {
       resumeAfter: string | null;
       resumeLimitationCode: string | null;
+      historicalGuilds?: readonly CharacterGuild[];
       resumeSnapshotId: string | null;
       advanced: boolean;
     };
@@ -1279,9 +1319,10 @@ async function finishFingerprintSweep(
   await client.query(
     `INSERT INTO fingerprint_sweep_states
       (region, realm_slug, normalized_name, last_published_at,
-       resume_after, resume_limitation_code, resume_snapshot_id,
+       resume_after, resume_limitation_code, resume_historical_guilds,
+       resume_snapshot_id,
        continuation_failures)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 0)
      ON CONFLICT (region, realm_slug, normalized_name)
      DO UPDATE SET
        last_published_at = greatest(
@@ -1290,9 +1331,10 @@ async function finishFingerprintSweep(
        ),
        resume_after = EXCLUDED.resume_after,
        resume_limitation_code = EXCLUDED.resume_limitation_code,
+       resume_historical_guilds = EXCLUDED.resume_historical_guilds,
        resume_snapshot_id = EXCLUDED.resume_snapshot_id,
        continuation_failures = CASE
-         WHEN $8 THEN 0
+         WHEN $9 THEN 0
          ELSE fingerprint_sweep_states.continuation_failures
        END`,
     [
@@ -1302,6 +1344,9 @@ async function finishFingerprintSweep(
       input.at,
       cursor.resumeAfter,
       cursor.resumeLimitationCode,
+      cursor.resumeAfter === null
+        ? null
+        : JSON.stringify(cursor.historicalGuilds ?? []),
       cursor.resumeSnapshotId,
       cursor.advanced
     ]
@@ -2101,6 +2146,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               resumeAfter: cursor.resumeAfter,
               resumeLimitationCode:
                 cursor.resumeAfter === null ? null : cursor.limitationCode,
+              historicalGuilds: cursor.historicalGuilds,
               resumeSnapshotId:
                 cursor.resumeAfter === null ? null : snapshot.id,
               advanced: cursor.advanced
@@ -2286,6 +2332,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               resumeAfter: cursor.resumeAfter,
               resumeLimitationCode:
                 cursor.resumeAfter === null ? null : cursor.limitationCode,
+              historicalGuilds: cursor.historicalGuilds,
               resumeSnapshotId: cursor.resumeAfter === null ? null : snapshotId,
               advanced: cursor.advanced
             }
@@ -2756,6 +2803,24 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     fingerprintSweeps: {
+      async isDueForVisit(key, cadenceCutoff) {
+        const result = await pool.query<{
+          last_published_at: Date | null;
+          resume_after: string | null;
+        }>(
+          `SELECT last_published_at, resume_after
+           FROM fingerprint_sweep_states
+           WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        const state = result.rows[0];
+        return (
+          (state?.resume_after ?? null) === null &&
+          (state?.last_published_at === null ||
+            state.last_published_at <= cadenceCutoff)
+        );
+      },
+
       async requestAdmission(input): Promise<FingerprintAdmission> {
         assertFingerprintAdmissionInput(input);
         const client = await pool.connect();
@@ -2982,10 +3047,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const result = await pool.query<{
           resume_after: string | null;
           resume_limitation_code: string | null;
+          resume_historical_guilds: unknown;
           resume_snapshot_id: string | null;
           discovery_run_id: string | null;
         }>(
           `SELECT state.resume_after, state.resume_limitation_code,
+                  state.resume_historical_guilds,
                   state.resume_snapshot_id, snapshot.discovery_run_id
            FROM fingerprint_sweep_states state
            LEFT JOIN snapshots snapshot
@@ -3005,7 +3072,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           resumeAfter: row.resume_after,
           snapshotId: row.resume_snapshot_id,
           runId: row.discovery_run_id,
-          limitationCode: row.resume_limitation_code
+          limitationCode: row.resume_limitation_code,
+          historicalGuilds: historicalGuildsFromDatabase(
+            row.resume_historical_guilds
+          )
         };
       },
 
@@ -3525,11 +3595,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               `INSERT INTO character_mythic_kills
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, killed_at,
-                 report_url, fight_url, guild_name, guild_realm, uploader,
+                 report_url, fight_url, guild_name, guild_region, guild_realm, uploader,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
               [
                 runId,
                 kill.fightUrl,
@@ -3543,6 +3613,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.reportUrl,
                 kill.fightUrl,
                 kill.guild?.name ?? null,
+                kill.guild?.region ?? null,
                 kill.guild?.realm ?? null,
                 kill.uploader ?? null,
                 performance.spec?.name ?? null,

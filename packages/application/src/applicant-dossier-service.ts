@@ -947,7 +947,7 @@ export function createApplicantDossierService(options: {
     "snapshots" | "evidence" | "manualConnections"
   >;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-  search: Pick<SearchService, "create">;
+  search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
   config: ApplicationConfig;
@@ -1331,6 +1331,10 @@ export function createApplicantDossierService(options: {
         if (!completed) return { kind: "not_ready" };
         return readRootOnly(key, true, repositories, signal, overrides, scope);
       }
+
+      // The existing dossier stays readable while this cadence-gated background
+      // sweep checks for members who joined current or historical guilds.
+      await options.search.scheduleConnectedCharacterSweep?.(key, scope);
 
       const seen = new Set(
         snapshot.characters.map((character) =>

@@ -110,7 +110,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-12).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-14).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
@@ -123,7 +123,9 @@ describe("database migrations", () => {
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
-      { idx: 34, tag: "0035_operator_auth" }
+      { idx: 34, tag: "0035_operator_auth" },
+      { idx: 35, tag: "0036_kill_guild_region" },
+      { idx: 36, tag: "0037_fingerprint_historical_guilds" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
@@ -290,11 +292,13 @@ describe("database migrations", () => {
        FROM information_schema.columns
        WHERE table_name = 'fingerprint_sweep_states'
          AND column_name IN
-           ('resume_after', 'resume_limitation_code', 'resume_snapshot_id')
+           ('resume_after', 'resume_limitation_code',
+            'resume_historical_guilds', 'resume_snapshot_id')
        ORDER BY column_name`
     );
     expect(columns.rows).toEqual([
       { column_name: "resume_after", is_nullable: "YES" },
+      { column_name: "resume_historical_guilds", is_nullable: "YES" },
       { column_name: "resume_limitation_code", is_nullable: "YES" },
       { column_name: "resume_snapshot_id", is_nullable: "YES" }
     ]);

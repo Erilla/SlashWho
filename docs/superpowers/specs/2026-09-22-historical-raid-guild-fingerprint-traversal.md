@@ -67,9 +67,10 @@ remain in force.
 
 ## Evidence collection
 
-No evidence work is queued merely because a known dossier is visited or a known
-character is considered. After a fingerprint candidate is newly admitted to the
-snapshot, the worker reserves and queues one full evidence collection for that
+This feature queues no *additional* evidence work merely because a known
+character is considered; the dossier's existing evidence-refresh behaviour is
+unchanged. After a fingerprint candidate is newly admitted to the snapshot, the
+worker additionally reserves and queues one full evidence collection for that
 specific character. Its resulting public Mythic-kill guild observations become
 eligible on a later visit; existing collection coalescing prevents duplicates.
 

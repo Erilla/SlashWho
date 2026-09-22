@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Find new direct fingerprint matches through every cached historical raid guild without recollecting known characters.
+**Goal:** Find new direct fingerprint matches through every cached historical raid guild without adding new evidence work for known characters.
 
 **Architecture:** Persist region-qualified report guilds, freeze every eligible guild from the starting snapshot into continuation state, and use the existing Blizzard reservation for every roster and fingerprint request. Dossier reads coalesce cadence-due discovery; only a new fingerprint admission receives evidence collection.
 
@@ -15,7 +15,7 @@
 - Never infer a missing historical guild region or expose/log source guilds.
 - Preserve direct-root fingerprint floors, suppression, reservation accounting, and atomic continuation ownership.
 - A visit returns the current snapshot promptly; it can enqueue only one cadence-due sweep.
-- Queue full evidence only after a newly admitted fingerprint match.
+- Preserve existing evidence-refresh behaviour; queue an additional full collection only after a newly admitted fingerprint match.
 
 ---
 

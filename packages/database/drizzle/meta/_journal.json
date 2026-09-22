@@ -246,6 +246,20 @@
       "when": 1790575201001,
       "tag": "0035_operator_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790668800000,
+      "tag": "0036_kill_guild_region",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790668800001,
+      "tag": "0037_fingerprint_historical_guilds",
+      "breakpoints": true
     }
   ]
 }

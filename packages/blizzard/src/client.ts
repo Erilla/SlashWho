@@ -1,4 +1,8 @@
-import { supportedRegions, type CharacterKey } from "@slashwho/domain";
+import {
+  supportedRegions,
+  type CharacterGuild,
+  type CharacterKey
+} from "@slashwho/domain";
 
 import type {
   AchievementFingerprint,
@@ -98,6 +102,17 @@ function validCharacterKey(value: CharacterKey): CharacterKey {
     value.realm === value.realm.toLocaleLowerCase("en-US") &&
     value.name === value.name.toLocaleLowerCase("en-US");
   if (!valid) throw new Error("invalid_character_key");
+  return value;
+}
+
+function validGuild(value: CharacterGuild): CharacterGuild {
+  const valid =
+    supportedRegions.includes(value.region) &&
+    /^[a-z0-9-]+$/.test(value.realm) &&
+    value.realm === value.realm.toLocaleLowerCase("en-US") &&
+    typeof value.name === "string" &&
+    value.name.trim().length > 0;
+  if (!valid) throw new Error("invalid_guild_identity");
   return value;
 }
 
@@ -415,14 +430,31 @@ export function createBlizzardClient(
     if (!name || !realmSlug)
       throw createBlizzardError({ kind: "schema_drift" });
 
+    return getGuildRosterByIdentity(
+      { name, region: key.region, realm: realmSlug },
+      signal,
+      onProfileRequest
+    );
+  }
+
+  async function getGuildRosterByIdentity(
+    guild: CharacterGuild,
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
+  ): Promise<readonly BlizzardRosterCharacter[]> {
+    const validGuildIdentity = validGuild(guild);
     const classNames = await playableClassNames(
-      key.region,
+      validGuildIdentity.region,
       signal,
       onProfileRequest
     );
 
     return request(
-      rosterUrl(key.region, realmSlug, name),
+      rosterUrl(
+        validGuildIdentity.region,
+        validGuildIdentity.realm,
+        validGuildIdentity.name
+      ),
       (value) => {
         const roster = valueRecord(value);
         if (!roster || !Array.isArray(roster.members)) return null;
@@ -431,14 +463,12 @@ export function createBlizzardClient(
         // members array is structural change.
         return roster.members
           .map((member) =>
-            normalizedRosterCharacter(member, key.region, classNames, {
-              name,
-              // A guild lives in its root's region: the roster is fetched from
-              // that region's namespace, so there is no other region it could
-              // be in.
-              region: key.region,
-              realm: realmSlug
-            })
+            normalizedRosterCharacter(
+              member,
+              validGuildIdentity.region,
+              classNames,
+              validGuildIdentity
+            )
           )
           .filter(
             (member): member is BlizzardRosterCharacter => member !== null
@@ -479,6 +509,7 @@ export function createBlizzardClient(
 
   return {
     getGuildRoster,
+    getGuildRosterByIdentity,
     getAchievementFingerprint,
     getCompletedAchievements
   };

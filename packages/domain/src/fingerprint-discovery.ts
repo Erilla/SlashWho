@@ -27,6 +27,15 @@ export interface FingerprintGateway {
     root: CharacterKey,
     signal?: AbortSignal
   ): Promise<readonly FingerprintCandidate[]>;
+  /**
+   * Reads a guild selected by public historical raid evidence. It is separate
+   * from `getGuildRoster` because no character-profile lookup should be needed
+   * to rediscover a historical guild's current roster.
+   */
+  getGuildRosterByIdentity(
+    guild: CharacterGuild,
+    signal?: AbortSignal
+  ): Promise<readonly FingerprintCandidate[]>;
   getAchievementFingerprint(
     key: CharacterKey,
     signal?: AbortSignal
@@ -68,6 +77,12 @@ export type DiscoverFingerprintMatchesOptions = {
    * strictly greater than this, so a candidate is never swept twice.
    */
   resumeAfter?: string;
+  /**
+   * Region-qualified public report guilds from the snapshot that began this
+   * sweep. The caller freezes this list before a continuation can amend the
+   * snapshot, which keeps this a one-hop traversal.
+   */
+  historicalGuilds?: readonly CharacterGuild[];
 };
 
 function isNotFound(error: unknown): boolean {
@@ -133,6 +148,14 @@ function compareCandidates(
   return canonicalCharacterId(left.key).localeCompare(
     canonicalCharacterId(right.key)
   );
+}
+
+function canonicalGuildId(guild: CharacterGuild): string {
+  return `${guild.region}/${guild.realm}/${guild.name}`;
+}
+
+function compareGuilds(left: CharacterGuild, right: CharacterGuild): number {
+  return canonicalGuildId(left).localeCompare(canonicalGuildId(right));
 }
 
 function fingerprintMatches(
@@ -283,8 +306,45 @@ export async function discoverFingerprintMatches(
     }
     if (!isFingerprint(rootFingerprint)) throw { kind: "schema_drift" };
 
+    const historicalRosters: FingerprintCandidate[] = [];
+    const seenGuilds = new Set<string>();
+    for (const guild of [...(options.historicalGuilds ?? [])].sort(
+      compareGuilds
+    )) {
+      throwIfAborted();
+      const guildId = canonicalGuildId(guild);
+      if (seenGuilds.has(guildId)) continue;
+      seenGuilds.add(guildId);
+
+      try {
+        const historicalRoster = await request(() =>
+          gateway.getGuildRosterByIdentity(guild, options.signal)
+        );
+        if (historicalRoster === budgetExhausted) break;
+        if (!isCandidateList(historicalRoster)) throw { kind: "schema_drift" };
+        historicalRosters.push(
+          ...historicalRoster.map((candidate) => ({
+            ...candidate,
+            guild: candidate.guild ?? guild
+          }))
+        );
+      } catch (error) {
+        // A guild can be renamed or disbanded after its public report. It is an
+        // exhausted source, not a fault that invalidates every other guild.
+        if (isNotFound(error)) continue;
+        throw error;
+      }
+    }
+
     const rootId = canonicalCharacterId(root);
-    const sorted = [...roster].sort(compareCandidates);
+    const candidatesById = new Map<string, FingerprintCandidate>();
+    for (const candidate of [...roster, ...historicalRosters]) {
+      const candidateId = canonicalCharacterId(candidate.key);
+      if (!candidatesById.has(candidateId)) {
+        candidatesById.set(candidateId, candidate);
+      }
+    }
+    const sorted = [...candidatesById.values()].sort(compareCandidates);
     const candidates = options.resumeAfter
       ? sorted.filter(
           (item) =>
@@ -296,11 +356,7 @@ export async function discoverFingerprintMatches(
     for (const candidate of candidates) {
       throwIfAborted();
       const candidateId = canonicalCharacterId(candidate.key);
-      if (
-        candidateId === rootId ||
-        seen.has(candidateId) ||
-        candidate.key.region !== root.region
-      ) {
+      if (candidateId === rootId || seen.has(candidateId)) {
         continue;
       }
       seen.add(candidateId);

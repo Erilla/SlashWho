@@ -8,6 +8,7 @@ import type {
   StoredSnapshot
 } from "@slashwho/database";
 import type {
+  CharacterGuild,
   CharacterKey,
   RaiderIoCharacter,
   RaiderIoGateway,
@@ -106,6 +107,8 @@ const rosterGuild = {
 
 class MutableBlizzardGateway implements BlizzardGateway {
   roster: readonly BlizzardRosterCharacter[] = [];
+  historicalRosters = new Map<string, readonly BlizzardRosterCharacter[]>();
+  historicalGuildRosterCalls: string[] = [];
   fingerprints = new Map<string, ReadonlyMap<number, number>>();
 
   async getGuildRoster(
@@ -116,6 +119,17 @@ class MutableBlizzardGateway implements BlizzardGateway {
     await onProfileRequest?.();
     if (this.roster.length > 0) await onProfileRequest?.();
     return this.roster;
+  }
+
+  async getGuildRosterByIdentity(
+    guild: CharacterGuild,
+    _signal?: AbortSignal,
+    onProfileRequest?: () => Promise<void> | void
+  ): Promise<readonly BlizzardRosterCharacter[]> {
+    await onProfileRequest?.();
+    const id = `${guild.region}/${guild.realm}/${guild.name}`;
+    this.historicalGuildRosterCalls.push(id);
+    return this.historicalRosters.get(id) ?? [];
   }
 
   async getAchievementFingerprint(
@@ -147,6 +161,7 @@ function createMemoryRepositories(): Repositories {
       snapshotId: string;
       runId: string;
       limitationCode: string | null;
+      historicalGuilds: readonly CharacterGuild[];
     }
   >();
   // Mirrors `fingerprint_sweep_states.continuation_failures`: incremented by a
@@ -544,7 +559,8 @@ function createMemoryRepositories(): Repositories {
       resumeAfter: cursor.resumeAfter,
       snapshotId,
       runId,
-      limitationCode: cursor.limitationCode
+      limitationCode: cursor.limitationCode,
+      historicalGuilds: cursor.historicalGuilds ?? []
     });
   }
 
@@ -840,6 +856,66 @@ describe("discovery job handler", () => {
     });
   });
 
+  it("sweeps every region-qualified guild from completed Mythic kill evidence", async () => {
+    // Break caught: historical raid guilds used to enrich only the dossier,
+    // leaving their current rosters invisible to connected-character discovery.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.evidence.getCompleted = async () =>
+      ({
+        kills: [
+          {
+            guild: { name: "Rancour", region: "eu", realm: "draenor" }
+          },
+          // Legacy rows cannot safely name a Blizzard namespace.
+          { guild: { name: "Missing Region", realm: "draenor" } }
+        ]
+      }) as never;
+    const blizzard = new MutableBlizzardGateway();
+    blizzard.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation",
+      requestCap: 300
+    });
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway: blizzard
+    }).execute(run.id, delivery());
+
+    expect(blizzard.historicalGuildRosterCalls).toEqual(["eu/draenor/Rancour"]);
+  });
+
+  it("queues a full evidence collection only for a newly admitted fingerprint match", async () => {
+    // Break caught: a match could become visible in the dossier with no report
+    // collection, while known characters would unnecessarily be recollected.
+    const match = {
+      region: "eu",
+      realm: "draenor",
+      name: "mistakinus"
+    } as const;
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const blizzard = new MutableBlizzardGateway();
+    blizzard.roster = [candidate(match)];
+    blizzard.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    blizzard.fingerprints.set(keyId(match), achievementFingerprint());
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "reservation",
+      requestCap: 300
+    });
+    const enqueueFullEvidence = vi.fn(async () => {});
+
+    await handlerFor(repositories, new MutableGateway(), {
+      blizzardGateway: blizzard,
+      enqueueFullEvidence
+    }).execute(run.id, delivery());
+
+    expect(enqueueFullEvidence).toHaveBeenCalledTimes(1);
+    expect(enqueueFullEvidence).toHaveBeenCalledWith(match);
+  });
+
   it("seeds discovery from stored reverse declared-main relationships", async () => {
     // Break caught: the repository could know that an alt declared this root
     // while the worker neither included it nor needlessly hydrated it upstream.
@@ -1064,7 +1140,12 @@ describe("discovery job handler", () => {
         reservationId: "reservation-1",
         limitationCode: null
       }),
-      { resumeAfter: null, limitationCode: null, advanced: true },
+      {
+        resumeAfter: null,
+        limitationCode: null,
+        historicalGuilds: [],
+        advanced: true
+      },
       expect.any(Object)
     );
   });
@@ -1116,7 +1197,12 @@ describe("discovery job handler", () => {
         reservationId: "reservation-capped",
         limitationCode: "fingerprint_sweep_capped"
       }),
-      { resumeAfter: null, limitationCode: null, advanced: false },
+      {
+        resumeAfter: null,
+        limitationCode: null,
+        historicalGuilds: [],
+        advanced: false
+      },
       expect.any(Object)
     );
   });
