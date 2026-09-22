@@ -67,7 +67,7 @@ remain in force.
 
 ## Evidence collection
 
-This feature queues no *additional* evidence work merely because a known
+This feature queues no _additional_ evidence work merely because a known
 character is considered; the dossier's existing evidence-refresh behaviour is
 unchanged. After a fingerprint candidate is newly admitted to the snapshot, the
 worker additionally reserves and queues one full evidence collection for that

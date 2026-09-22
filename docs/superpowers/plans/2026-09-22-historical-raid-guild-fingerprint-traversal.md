@@ -29,7 +29,9 @@
 
 ```ts
 expect(completed.kills[0]?.guild).toEqual({
-  name: "Rancour", region: "eu", realm: "draenor"
+  name: "Rancour",
+  region: "eu",
+  realm: "draenor"
 });
 ```
 
@@ -48,11 +50,17 @@ expect(completed.kills[0]?.guild).toEqual({
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-await expect(gateway.getGuildRosterByIdentity({
-  name: "Rancour", region: "eu", realm: "draenor"
-})).resolves.toContainEqual(expect.objectContaining({
-  key: { region: "eu", realm: "draenor", name: "mistakinus" }
-}));
+await expect(
+  gateway.getGuildRosterByIdentity({
+    name: "Rancour",
+    region: "eu",
+    realm: "draenor"
+  })
+).resolves.toContainEqual(
+  expect.objectContaining({
+    key: { region: "eu", realm: "draenor", name: "mistakinus" }
+  })
+);
 ```
 
 - [ ] **Step 2: Run `corepack pnpm exec vitest run packages/blizzard/src/client.test.ts` and verify the method is missing.**
@@ -71,7 +79,8 @@ await expect(gateway.getGuildRosterByIdentity({
 
 ```ts
 expect(outcome.characters.map((item) => item.key.name)).toEqual([
-  "boptinus", "mistakinus"
+  "boptinus",
+  "mistakinus"
 ]);
 ```
 
@@ -90,9 +99,11 @@ expect(outcome.characters.map((item) => item.key.name)).toEqual([
 - [ ] **Step 1: Write the failing continuation test**
 
 ```ts
-expect(await repositories.fingerprintSweeps.getResumeState(root)).toMatchObject({
-  historicalGuilds: [{ name: "Rancour", region: "eu", realm: "draenor" }]
-});
+expect(await repositories.fingerprintSweeps.getResumeState(root)).toMatchObject(
+  {
+    historicalGuilds: [{ name: "Rancour", region: "eu", realm: "draenor" }]
+  }
+);
 ```
 
 - [ ] **Step 2: Run integration/handler tests and verify state only holds `resumeAfter`.**
@@ -125,7 +136,9 @@ expect(await repositories.fingerprintSweeps.getResumeState(root)).toMatchObject(
 
 ```ts
 await dossiers.read(ictinus);
-expect(queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ key: ictinus }));
+expect(queue.enqueue).toHaveBeenCalledWith(
+  expect.objectContaining({ key: ictinus })
+);
 await dossiers.read(ictinus);
 expect(queue.enqueue).toHaveBeenCalledTimes(1);
 ```
