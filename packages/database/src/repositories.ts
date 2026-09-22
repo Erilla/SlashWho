@@ -577,6 +577,8 @@ export interface EvidenceRepository {
     key: CharacterKey;
     freshnessCutoff: Date;
     at: Date;
+    /** The ordered collection plan fixed when a new run is reserved. */
+    phasePlan?: readonly string[];
     credentials?: {
       wclClientIdEncrypted: string;
       wclClientSecretEncrypted: string;

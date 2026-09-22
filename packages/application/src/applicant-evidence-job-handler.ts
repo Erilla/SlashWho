@@ -1001,44 +1001,28 @@ export function createApplicantEvidenceJobHandler(
           tierBests: true,
           fightParses: true
         });
-        phaseLedger =
-          evidence.seedPhases && evidence.recordPhaseTransitions
-            ? createEvidencePhaseLedger({
-                plan: phasePlan,
-                now,
-                persist: async (phases) => {
-                  const ordinal = new Map(
-                    phasePlan.map((id, index) => [id, index])
+        phaseLedger = evidence.recordPhaseTransitions
+          ? createEvidencePhaseLedger({
+              plan: phasePlan,
+              now,
+              persist: async (phases) => {
+                const changed = phases.filter(
+                  (item) => item.state !== "pending"
+                );
+                if (changed.length)
+                  await evidence.recordPhaseTransitions!(
+                    run.id,
+                    changed.map((item) => ({
+                      id: item.id,
+                      state: item.state,
+                      startedAt: item.startedAt ?? null,
+                      completedAt: item.completedAt ?? null,
+                      limitationCode: item.limitationCode ?? null
+                    }))
                   );
-                  const pending = phases.filter(
-                    (item) => item.state === "pending"
-                  );
-                  if (pending.length)
-                    await evidence.seedPhases!(
-                      run.id,
-                      pending.map((item) => ({
-                        id: item.id,
-                        ordinal: ordinal.get(item.id)!
-                      }))
-                    );
-                  const changed = phases.filter(
-                    (item) => item.state !== "pending"
-                  );
-                  if (changed.length)
-                    await evidence.recordPhaseTransitions!(
-                      run.id,
-                      changed.map((item) => ({
-                        id: item.id,
-                        state: item.state,
-                        startedAt: item.startedAt ?? null,
-                        completedAt: item.completedAt ?? null,
-                        limitationCode: item.limitationCode ?? null
-                      }))
-                    );
-                }
-              })
-            : undefined;
-        await phaseLedger?.seed();
+              }
+            })
+          : undefined;
         let activePhase: EvidencePhase["id"] | undefined;
         let phaseWrites = Promise.resolve();
         const observePhase = (query: WarcraftLogsQueryType) => {

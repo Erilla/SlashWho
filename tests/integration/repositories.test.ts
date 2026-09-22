@@ -352,6 +352,56 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("commits an evidence run with its reserved phase plan", async () => {
+    // Break caught: a process dying after reservation but before worker claim
+    // used to leave no ledger at all, so an operator could not distinguish a
+    // queued run from one whose progress writer had failed.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: [
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "publication"
+      ]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "warcraft_logs_history",
+        ordinal: 1,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_tier_bests",
+        ordinal: 2,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_fight_parses",
+        ordinal: 3,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_ranking_identities",
+        ordinal: 4,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "publication",
+        ordinal: 5,
+        state: "pending"
+      })
+    ]);
+  });
+
   it("keeps enriched parses when a later complete run did not re-fetch them", async () => {
     // Break caught: collection deliberately skips fights whose parses are
     // already stored, but the merge only ran for a partial publish. A complete

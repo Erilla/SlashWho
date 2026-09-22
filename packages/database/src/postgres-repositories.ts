@@ -3239,7 +3239,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
-      async reserve({ key, freshnessCutoff, at, credentials }) {
+      async reserve({ key, freshnessCutoff, at, credentials, phasePlan }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -3318,6 +3318,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]
           );
           const reservedRun = mapEvidenceRun(inserted.rows[0]!);
+          if (phasePlan && phasePlan.length > 0) {
+            await client.query(
+              `INSERT INTO character_evidence_run_phases
+                 (run_id, phase_id, ordinal, state)
+               SELECT $1, item.phase_id, item.ordinal, 'pending'
+                 FROM unnest($2::text[]) WITH ORDINALITY
+                   AS item(phase_id, ordinal)`,
+              [reservedRun.id, phasePlan]
+            );
+          }
           await client.query("COMMIT");
           return {
             kind: "reserved",

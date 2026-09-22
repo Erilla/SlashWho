@@ -352,6 +352,26 @@ function raidWithKill(firstKill: Record<string, unknown>) {
 }
 
 describe("applicant dossier service", () => {
+  it("reserves the complete collection phase plan before evidence can be queued", async () => {
+    // Break caught: creating phase rows only after a worker claimed the run
+    // leaves a reserved or enqueue-failed run with no truthful progress plan.
+    const { dossiers, repositories } = fixture({ storedEvidence: false });
+
+    await dossiers.read(root);
+
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phasePlan: [
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "publication"
+        ]
+      })
+    );
+  });
+
   it("maps fresh cached wipes and complete scans into aggregate boss states", async () => {
     // Break caught: a durable wipe could be discarded at the application
     // boundary, or a partial scan could be misrepresented as no logs.

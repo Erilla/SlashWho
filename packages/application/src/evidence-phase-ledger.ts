@@ -81,6 +81,27 @@ export const evidencePhasePlans = {
       ...(input.blizzard ? (["blizzard_achievements"] as const) : []),
       "publication"
     ];
+  },
+  collection(input: {
+    scan: boolean;
+    tierBests: boolean;
+    fightParses: boolean;
+    raiderIo: boolean;
+    blizzard: boolean;
+  }): EvidencePhasePlan {
+    return [
+      ...(input.scan ? (["warcraft_logs_history"] as const) : []),
+      ...(input.tierBests ? (["warcraft_logs_tier_bests"] as const) : []),
+      ...(input.fightParses
+        ? ([
+            "warcraft_logs_fight_parses",
+            "warcraft_logs_ranking_identities"
+          ] as const)
+        : []),
+      ...(input.raiderIo ? (["raiderio_rankings"] as const) : []),
+      ...(input.blizzard ? (["blizzard_achievements"] as const) : []),
+      "publication"
+    ];
   }
 } as const;
 

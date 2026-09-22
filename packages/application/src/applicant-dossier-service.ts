@@ -40,6 +40,7 @@ import type {
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { encryptCredential } from "./credential-encryption";
+import { evidencePhasePlans } from "./evidence-phase-ledger";
 import {
   refreshCharacter,
   type RefreshCharacterResult
@@ -407,7 +408,14 @@ async function gatherCharacterEvidence(
             options.encryptionKey
           )
         }
-      : null
+      : null,
+    phasePlan: evidencePhasePlans.collection({
+      scan: true,
+      tierBests: true,
+      fightParses: true,
+      raiderIo: false,
+      blizzard: false
+    })
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
