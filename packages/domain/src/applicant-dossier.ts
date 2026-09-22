@@ -329,10 +329,25 @@ function catalogueEncounter(evidence: {
     evidence.raidName,
     evidence.bossName
   );
+  const journalEncounterMatchesRaid =
+    raid !== null && journalEncounter?.raidId === raid.raidId;
+  const legacyWarcraftLogsEncounter =
+    raid !== null && !journalEncounterMatchesRaid && namedEncounter === null
+      ? lookupLegacyWarcraftLogsEncounter(evidence.raidName, evidence.bossName)
+      : null;
   return raid
     ? (namedEncounter ??
-        (journalEncounter?.raidId === raid.raidId ? journalEncounter : null))
+        (journalEncounterMatchesRaid ? journalEncounter : null) ??
+        legacyWarcraftLogsEncounter)
     : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
+}
+
+function lookupLegacyWarcraftLogsEncounter(
+  raidName: string,
+  bossName: string
+): RaidCatalogueEncounter | null {
+  if (raidName !== "The Eternal Palace" || bossName !== "Za'qul") return null;
+  return lookupJournalEncounter("2349");
 }
 
 function currentness(killedAt: string, raidId: string): boolean | null {
