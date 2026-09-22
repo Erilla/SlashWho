@@ -678,23 +678,25 @@ function DossierPageState({
             <CharacterProfileLinks
               character={{ key: identity, displayName: rootDisplayName }}
             />
-            <DossierRefreshControl
-              busy={hasLiveEvidence(dossier) && !pollUnavailable}
-              lastCollectedAt={dossier?.lastCollectedAt ?? null}
-              onRefresh={async () => {
-                setAnnouncement("");
-                const response = await fetch(
-                  `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
-                  { method: "POST" }
-                );
-                if (!response.ok) throw new Error("refresh_failed");
-                const result = (await response.json()) as {
-                  mode: "full" | "light";
-                };
-                await refreshDossier();
-                return result;
-              }}
-            />
+            {canAddCharacters ? (
+              <DossierRefreshControl
+                busy={hasLiveEvidence(dossier) && !pollUnavailable}
+                lastCollectedAt={dossier?.lastCollectedAt ?? null}
+                onRefresh={async () => {
+                  setAnnouncement("");
+                  const response = await fetch(
+                    `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
+                    { method: "POST" }
+                  );
+                  if (!response.ok) throw new Error("refresh_failed");
+                  const result = (await response.json()) as {
+                    mode: "full" | "light";
+                  };
+                  await refreshDossier();
+                  return result;
+                }}
+              />
+            ) : null}
           </div>
         </header>
         {identityHidden && identitySlot
