@@ -998,7 +998,10 @@ export function createApplicantEvidenceJobHandler(
         record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
         const phasePlan = evidencePhasePlans.warcraftLogs({
-          scan: !parseOnlyResume,
+          // Reservation fixes the ordered plan before queueing. A parse-only
+          // retry therefore retains the history row and records the fact that
+          // this attempt intentionally did not run that boundary.
+          scan: true,
           tierBests: true,
           fightParses: true
         });
@@ -1031,6 +1034,8 @@ export function createApplicantEvidenceJobHandler(
                 }
               })
             : undefined;
+        if (parseOnlyResume)
+          await phaseLedger?.transition("warcraft_logs_history", "skipped");
         let activePhase: EvidencePhase["id"] | undefined;
         let phaseWrites = Promise.resolve();
         const observePhase = (query: WarcraftLogsQueryType) => {
