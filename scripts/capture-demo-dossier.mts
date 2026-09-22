@@ -1,11 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { applicantDossierSchema } from "@slashwho/contracts";
+import { resolve } from "node:path";
+
+import { captureDemoDossier } from "./demo-dossier-capture.mts";
 
 /**
- * Captures the live dossier for the demo character and stores the response
- * verbatim, so that re-running this script is how `/demo` picks up any new
- * shape or content the API has started returning.
+ * Captures the live dossier for the demo character, redacting personal email
+ * uploader values before storing it for `/demo`.
  */
 
 const defaultBaseUrl = "https://web-test-7765.up.railway.app";
@@ -14,7 +14,6 @@ const defaultOutput = resolve(
   "../apps/web/src/app/demo/ryii-dossier.json"
 );
 const demoCharacter = { region: "eu", realm: "silvermoon", name: "ryii" };
-
 async function main() {
   const baseUrl =
     process.env.SLASHWHO_DEMO_DOSSIER_BASE_URL?.trim() || defaultBaseUrl;
@@ -23,21 +22,13 @@ async function main() {
   const { region, realm, name } = demoCharacter;
   const source = new URL(`/api/dossiers/${region}/${realm}/${name}`, baseUrl);
 
-  const response = await fetch(source, { cache: "no-store" });
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(`demo_dossier_request_failed_${response.status}`);
-  }
+  const dossier = await captureDemoDossier(source, output, {
+    fetch,
+    mkdir,
+    writeFile
+  });
 
-  const parsed = applicantDossierSchema.safeParse(body);
-  if (!parsed.success) {
-    throw new Error("demo_dossier_response_unexpected");
-  }
-
-  await mkdir(dirname(output), { recursive: true });
-  await writeFile(output, `${JSON.stringify(body, null, 2)}\n`, "utf8");
-
-  const { research, characters, raids, cuttingEdges } = parsed.data;
+  const { research, characters, raids, cuttingEdges } = dossier;
   process.stdout.write(
     `Captured ${region}/${realm}/${name} from ${baseUrl} ` +
       `(research ${research.state}, ${String(characters.length)} characters, ` +
