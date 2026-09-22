@@ -1119,9 +1119,6 @@ export function createApplicantEvidenceJobHandler(
           })
         );
         await phaseWrites;
-        if (activePhase)
-          await phaseLedger?.transition(activePhase, "completed");
-        await phaseLedger?.skipPending();
         activeContext.signal.throwIfAborted();
 
         // What the run actually cost. This is the measurement that replaces the
@@ -1136,6 +1133,13 @@ export function createApplicantEvidenceJobHandler(
         await sampleSpend();
 
         if (response.kind === "limitation") {
+          if (activePhase)
+            await phaseLedger?.transition(
+              activePhase,
+              "limited",
+              response.code
+            );
+          await phaseLedger?.skipPending();
           record.outcome = "limitation";
           record.limitationCode = response.code;
           const limitationRetryMs = retryDelayMs(response);
@@ -1189,6 +1193,15 @@ export function createApplicantEvidenceJobHandler(
           transientRetryMs: options.transientRetryMs,
           capRetryMs: options.capRetryMs
         });
+        if (activePhase) {
+          const limitation = response.limitation ?? drivingParse;
+          await phaseLedger?.transition(
+            activePhase,
+            limitation ? "limited" : "completed",
+            limitation?.code
+          );
+        }
+        await phaseLedger?.skipPending();
         // Whichever limitation asks to wait longest decides, because the run
         // is not collectable again until both are. A limitation with no answer
         // at all contributes nothing rather than forcing a retry the code was
@@ -1270,7 +1283,6 @@ export function createApplicantEvidenceJobHandler(
       } catch (error) {
         const aborted = activeContext.signal.aborted;
         if (aborted) await phaseLedger?.cancelActive();
-        else await phaseLedger?.failActive("collection_failed");
         record.outcome = aborted
           ? "cancelled"
           : isPointsBudgetRefusal(error)
@@ -1304,6 +1316,9 @@ export function createApplicantEvidenceJobHandler(
         });
         record.retryDecision = decision.action;
         record.retryReason = decision.reason;
+
+        if (decision.action !== "retry" && !aborted)
+          await phaseLedger?.failActive("collection_failed");
 
         // Rethrowing is what schedules the retry. A run this attempt never
         // claimed has nothing to publish onto either way.
