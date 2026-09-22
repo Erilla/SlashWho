@@ -191,6 +191,15 @@ export function createEvidencePhaseLedger(options: {
         if (id !== "publication" && phases.get(id)!.state === "pending")
           await this.transition(id, "skipped");
       }
+    },
+
+    /** Settles only the planned work before a later provider boundary. */
+    async skipPendingBefore(until: EvidencePhaseId): Promise<void> {
+      for (const id of options.plan) {
+        if (id === until) return;
+        if (id !== "publication" && phases.get(id)!.state === "pending")
+          await this.transition(id, "skipped");
+      }
     }
   };
 }

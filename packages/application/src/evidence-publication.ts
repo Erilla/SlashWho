@@ -2,6 +2,7 @@ import type {
   CharacterMythicKillInput,
   CharacterMythicWipeInput,
   CharacterTierBestParseInput,
+  CharacterCuttingEdgeInput,
   StagedEvidenceCollection,
   TerminalTier
 } from "@slashwho/database";
@@ -47,6 +48,7 @@ export type EvidencePublication = Readonly<{
   kills: readonly CharacterMythicKillInput[];
   wipes: readonly CharacterMythicWipeInput[];
   tierBests: readonly CharacterTierBestParseInput[];
+  cuttingEdges: readonly CharacterCuttingEdgeInput[];
   /**
    * Fight URLs this run asked Warcraft Logs about and got an answer for,
    * whatever the answer was. Storage stamps those kills so a later run can
@@ -96,6 +98,7 @@ export function toStagedCollection(
     kills: publication.kills,
     wipes: publication.wipes,
     tierBests: publication.tierBests,
+    cuttingEdges: publication.cuttingEdges,
     parsedFightUrls: publication.parsedFightUrls,
     completedAt: publication.completedAt.toISOString(),
     ...(troubledRaidIds ? { troubledRaidIds } : {})
@@ -132,6 +135,7 @@ export function fromStagedCollection(
     kills: staged.kills,
     wipes: staged.wipes,
     tierBests: staged.tierBests,
+    cuttingEdges: staged.cuttingEdges ?? [],
     // A stage written before this field existed recorded no attempts. Absent
     // is read as empty, which costs the republished run a re-request of the
     // fights it had already answered and nothing else -- unlike

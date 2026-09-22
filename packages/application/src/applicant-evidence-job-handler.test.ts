@@ -300,6 +300,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: null,
           parseLimitationCode: null,
           parseLimitationCodesSeen: [],
+          cuttingEdges: [],
           parsedFightUrls: [],
           tierBests: [],
           kills: [
@@ -361,6 +362,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: "rate_limited",
           parseLimitationCode: null,
           parseLimitationCodesSeen: [],
+          cuttingEdges: [],
           parsedFightUrls: [],
           retryAfterAt: new Date("2026-09-13T12:02:30.000Z"),
           kills: [],
@@ -445,6 +447,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: null,
           parseLimitationCode: "parse_request_cap",
           parseLimitationCodesSeen: ["parse_request_cap"],
+          cuttingEdges: [],
           parsedFightUrls: [],
           retryAfterAt: new Date("2026-09-13T12:31:00.000Z"),
           tierBests: [],
@@ -2996,13 +2999,17 @@ describe("applicant evidence job handler", () => {
 
     function handlerFor(
       evidence: ReturnType<typeof store>,
-      response: Record<string, unknown>
+      response: Record<string, unknown>,
+      warcraftLogsOverrides: Partial<
+        Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">
+      > = {}
     ) {
       return createApplicantEvidenceJobHandler({
         evidence,
         warcraftLogs: {
           getFirstKillReports: vi.fn(async () => response),
-          ...openGate
+          ...openGate,
+          ...warcraftLogsOverrides
         } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
@@ -3526,6 +3533,71 @@ describe("applicant evidence job handler", () => {
       expect(evidence.settleCutoffs).toEqual([
         new Date("2026-09-11T12:00:00.000Z")
       ]);
+    });
+
+    it("persists an active WCL phase before its gateway call completes", async () => {
+      // The request observer is the gateway boundary. Waiting for the whole
+      // collection promise used to make a long report scan indistinguishable
+      // from a queued run to readers.
+      let finish!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const transitions: Array<{ id: string; state: string }> = [];
+      const evidence = store();
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            await waiting;
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+
+      const collecting = handler.execute(run.id);
+      await vi.waitFor(() =>
+        expect(transitions).toContainEqual({
+          id: "warcraft_logs_history",
+          state: "active"
+        })
+      );
+      finish();
+      await collecting;
     });
   });
 });

@@ -1,5 +1,6 @@
 import type {
   CharacterMythicKillInput,
+  CharacterCuttingEdgeInput,
   CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
@@ -9,7 +10,13 @@ import type {
   StoredEvidenceTiers,
   TerminalTier
 } from "@slashwho/database";
+import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
+import {
+  isAccountWideCuttingEdgeAchievement,
+  lookupRaiderIoBoss
+} from "@slashwho/domain";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
@@ -79,6 +86,7 @@ export type ApplicantEvidenceStore = {
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly CharacterMythicWipeInput[];
       tierBests: readonly CharacterTierBestParseInput[];
+      cuttingEdges?: readonly CharacterCuttingEdgeInput[];
       /**
        * Fight URLs this run asked about and got an answer for. Named here
        * rather than left to structural typing so an implementation cannot
@@ -187,6 +195,8 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
     WarcraftLogsGateway,
     "getFirstKillReports" | "getRateLimit"
   >;
+  blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
+  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
@@ -279,7 +289,7 @@ function toCharacterMythicKillInput(
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild,
-    uploader: kill.uploader,
+    ...(kill.uploader === undefined ? {} : { uploader: kill.uploader }),
     performance: kill.performance
   };
 }
@@ -1064,6 +1074,14 @@ export function createApplicantEvidenceJobHandler(
                   storedEvidence.historyScanResumeBoundaryReportCode
               }
             : {};
+        // The history scan is the first real upstream boundary for a normal
+        // collection. Persist it before entering the gateway, rather than
+        // after its promise settles: an interrupted long scan is then plainly
+        // active, not a run that merely looks queued to readers.
+        if (!parseOnlyResume) {
+          await phaseLedger?.transition("warcraft_logs_history", "active");
+          activePhase = phaseLedger ? "warcraft_logs_history" : undefined;
+        }
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap,
@@ -1166,6 +1184,7 @@ export function createApplicantEvidenceJobHandler(
               kills: [],
               wipes: [],
               tierBests: [],
+              cuttingEdges: [],
               // The scan stopped before any parse work, so no fight was
               // asked about.
               parsedFightUrls: [],
@@ -1198,6 +1217,81 @@ export function createApplicantEvidenceJobHandler(
             limitation?.code
           );
         }
+        // The remaining providers are part of this run, not dossier-read
+        // embellishments. Each phase is entered at its own gateway boundary
+        // and terminalised before the next one begins.
+        await phaseLedger?.skipPendingBefore("raiderio_rankings");
+        if (options.raiderio) {
+          const requests = new Map<
+            string,
+            Parameters<RaiderIoGateway["getMythicBossRankings"]>[0]
+          >();
+          for (const kill of response.kills) {
+            if (!kill.guild) continue;
+            const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+            if (!boss) continue;
+            const request = {
+              ...boss,
+              guild: { ...kill.guild, region: run.key.region }
+            };
+            requests.set(JSON.stringify(request), request);
+          }
+          if (requests.size === 0) {
+            await phaseLedger?.transition("raiderio_rankings", "skipped");
+          } else {
+            await phaseLedger?.transition("raiderio_rankings", "active");
+            try {
+              const results = await Promise.all(
+                [...requests.values()].map((request) =>
+                  options.raiderio!.getMythicBossRankings(
+                    request,
+                    activeContext.signal
+                  )
+                )
+              );
+              const limitation = results.find(
+                (result) => result.kind === "limitation"
+              );
+              await phaseLedger?.transition(
+                "raiderio_rankings",
+                limitation ? "limited" : "completed",
+                limitation?.code
+              );
+            } catch {
+              await phaseLedger?.transition(
+                "raiderio_rankings",
+                "limited",
+                "unavailable"
+              );
+            }
+          }
+        }
+        let cuttingEdges: readonly CharacterCuttingEdgeInput[] = [];
+        if (options.blizzard) {
+          await phaseLedger?.transition("blizzard_achievements", "active");
+          try {
+            cuttingEdges = (
+              await options.blizzard.getCompletedAchievements(
+                run.key,
+                activeContext.signal
+              )
+            )
+              .filter((achievement) =>
+                isAccountWideCuttingEdgeAchievement(achievement.achievementId)
+              )
+              .map((achievement) => ({
+                achievementId: achievement.achievementId,
+                completedAt: achievement.completedAt
+              }));
+            await phaseLedger?.transition("blizzard_achievements", "completed");
+          } catch {
+            await phaseLedger?.transition(
+              "blizzard_achievements",
+              "limited",
+              "unavailable"
+            );
+          }
+        }
         await phaseLedger?.skipPending();
         // Whichever limitation asks to wait longest decides, because the run
         // is not collectable again until both are. A limitation with no answer
@@ -1220,7 +1314,7 @@ export function createApplicantEvidenceJobHandler(
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
-            scanSkipped: response.scanSkipped,
+            ...(response.scanSkipped ? { scanSkipped: true } : {}),
             ...(response.scanSkipped
               ? {}
               : response.historyScanResumePage !== undefined
@@ -1256,6 +1350,7 @@ export function createApplicantEvidenceJobHandler(
             kills: response.kills.map(toCharacterMythicKillInput),
             wipes: response.wipes,
             tierBests: response.tierBests,
+            cuttingEdges,
             parsedFightUrls: response.parsedFightUrls,
             completedAt: now()
           },
@@ -1336,6 +1431,7 @@ export function createApplicantEvidenceJobHandler(
           kills: [],
           wipes: [],
           tierBests: [],
+          cuttingEdges: [],
           // Whatever this attempt read is lost with the error that stopped
           // it: the fights it answered are not in hand to be recorded, so
           // they stay eligible and the next attempt asks again.

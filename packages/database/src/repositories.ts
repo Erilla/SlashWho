@@ -514,6 +514,8 @@ export interface StagedEvidenceCollection {
   kills: readonly CharacterMythicKillInput[];
   wipes: readonly CharacterMythicWipeInput[];
   tierBests: readonly CharacterTierBestParseInput[];
+  /** Blizzard cutting-edge facts collected with this run. */
+  cuttingEdges?: readonly CharacterCuttingEdgeInput[];
   /**
    * Fight URLs the run got a ranking answer about, so a republished stage
    * records the attempts it paid for rather than making the next run pay

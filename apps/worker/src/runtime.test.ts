@@ -14,7 +14,7 @@ import type {
   Repositories,
   StagedEvidenceCollection
 } from "@slashwho/database";
-import type { RaiderIoGateway } from "@slashwho/domain";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 

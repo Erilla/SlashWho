@@ -413,8 +413,11 @@ async function gatherCharacterEvidence(
       scan: true,
       tierBests: true,
       fightParses: true,
-      raiderIo: false,
-      blizzard: false
+      // These stages are collected by the evidence worker, not by the read
+      // path that reserved the run. They belong in its durable plan before
+      // enqueueing so a never-claimed run still has an honest ledger.
+      raiderIo: true,
+      blizzard: true
     })
   });
   if (reservation.kind === "reserved") {

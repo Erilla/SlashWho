@@ -366,6 +366,8 @@ describe("applicant dossier service", () => {
           "warcraft_logs_tier_bests",
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
           "publication"
         ]
       })

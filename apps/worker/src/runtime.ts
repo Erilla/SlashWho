@@ -24,8 +24,11 @@ import {
   type DiscoveryQueue,
   type Repositories
 } from "@slashwho/database";
-import type { RaiderIoGateway } from "@slashwho/domain";
-import { createRaiderIoClient } from "@slashwho/raiderio";
+import type { RaiderIoGateway as DiscoveryRaiderIoGateway } from "@slashwho/domain";
+import {
+  createRaiderIoClient,
+  type RaiderIoGateway as EvidenceRaiderIoGateway
+} from "@slashwho/raiderio";
 import {
   createWarcraftLogsClient,
   type WarcraftLogsGateway
@@ -108,7 +111,8 @@ export type WorkerRuntimeDependencies = {
   createGateway: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
-  ) => RaiderIoGateway;
+  ) => DiscoveryRaiderIoGateway &
+    Pick<EvidenceRaiderIoGateway, "getMythicBossRankings">;
   createEvidenceGateway: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
@@ -378,7 +382,8 @@ export function createFingerprintAlertNotifier(
 export function createRaiderIoGateway(
   config: WorkerConfig,
   logger?: DiscoveryLogger
-): RaiderIoGateway {
+): DiscoveryRaiderIoGateway &
+  Pick<EvidenceRaiderIoGateway, "getMythicBossRankings"> {
   return createRaiderIoClient({
     fetch: globalThis.fetch,
     baseUrl: config.raiderIoBaseUrl,
@@ -520,6 +525,13 @@ export async function createWorkerRuntime(
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
       warcraftLogs: dependencies.createEvidenceGateway(config, logger),
+      // These are collection dependencies too: the dossier reader only reads
+      // the facts this worker publishes, so progress and publication share
+      // one durable run.
+      raiderio: gateway,
+      ...(fingerprintIntegration?.blizzardGateway
+        ? { blizzard: fingerprintIntegration.blizzardGateway }
+        : {}),
       // A run carrying a visitor's own credentials gets its own client, and it
       // reports throttling exactly as the shared one does: the record names the
       // provider and the delay only, never whose key was in use.
