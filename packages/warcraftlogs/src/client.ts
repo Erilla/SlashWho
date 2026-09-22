@@ -3,6 +3,7 @@ import {
   isNonRaidZone,
   raidOffersMythicRankings,
   supportedRegions,
+  type CharacterGuild,
   type CharacterKey
 } from "@slashwho/domain";
 
@@ -400,19 +401,13 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   return { kind: "identity", key, displayName };
 }
 
-type WarcraftLogsGuild = Readonly<{
-  name: string;
-  realm: string;
-  region: CharacterKey["region"];
-}>;
-
-function characterGuilds(value: unknown): readonly WarcraftLogsGuild[] {
+function characterGuilds(value: unknown): readonly CharacterGuild[] {
   const character = record(
     record(record(value)?.data)?.characterData
   )?.character;
   const guilds = record(character)?.guilds;
   if (!Array.isArray(guilds)) return [];
-  const found = new Map<string, WarcraftLogsGuild>();
+  const found = new Map<string, CharacterGuild>();
   for (const value of guilds) {
     const guild = record(value);
     const server = guild && record(guild.server);
@@ -438,18 +433,21 @@ function characterGuilds(value: unknown): readonly WarcraftLogsGuild[] {
   return [...found.values()];
 }
 
-function guildAttendanceCodes(value: unknown): readonly string[] | null {
+function guildAttendancePage(
+  value: unknown
+): Readonly<{ codes: readonly string[]; hasMorePages: boolean }> | null {
   const guild = record(record(record(value)?.data)?.guildData)?.guild;
   const attendance = record(record(guild)?.attendance);
   const reports = attendance?.data;
-  if (!Array.isArray(reports)) return null;
+  const hasMorePages = attendance?.has_more_pages;
+  if (!Array.isArray(reports) || typeof hasMorePages !== "boolean") return null;
   const codes: string[] = [];
   for (const value of reports) {
     const code = nonEmptyString(record(value)?.code);
     if (!code) return null;
     codes.push(code);
   }
-  return codes;
+  return { codes, hasMorePages };
 }
 
 function decodedHydratedReport(
@@ -488,13 +486,13 @@ function firstKillReports(
 
   const entry = record(character);
   const characterServer = entry && record(entry.server);
-  const normalizedRealm =
+  const characterRealm =
     characterServer && nonEmptyString(characterServer.normalizedName);
   const recentReports = entry && record(entry.recentReports);
   const reports = recentReports && recentReports.data;
   const hasMorePages = recentReports && recentReports.has_more_pages;
   if (
-    !normalizedRealm ||
+    !characterRealm ||
     !Array.isArray(reports) ||
     typeof hasMorePages !== "boolean"
   ) {
@@ -595,8 +593,7 @@ function firstKillReports(
       if (!actorId || !name || !server) continue;
       if (
         name.toLocaleLowerCase("en-US") === requestedKey.name &&
-        server.toLocaleLowerCase("en-US") ===
-          normalizedRealm.toLocaleLowerCase("en-US")
+        normalizedRealm(server) === normalizedRealm(requestedKey.realm)
       ) {
         participantIds.add(actorId);
       }
@@ -1705,7 +1702,7 @@ export function createWarcraftLogsClient(
       (options.storedKills ?? []).map((kill) => [kill.fightUrl, kill])
     );
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
-    const discoveredGuilds = new Map<string, WarcraftLogsGuild>();
+    const discoveredGuilds = new Map<string, CharacterGuild>();
     let scanLimitation: WarcraftLogsLimitation | undefined;
     const scanSkipped = options.requestCap === 0;
     let historyScanStartPage = options.historyScanStartPage ?? 1;
@@ -1839,51 +1836,58 @@ export function createWarcraftLogsClient(
         scanLimitation ??= { kind: "limitation", code: "request_cap" };
         break;
       }
-      const attendance = counted(
-        "history_scan",
-        await graphql(
-          guildAttendanceQuery,
-          {
-            name: guild.name,
-            realm: guild.realm,
-            region: guild.region,
-            page: 1
-          },
-          options.signal
-        )
-      );
-      historyScanRequests += 1;
-      if (attendance.kind !== "success") {
-        scanLimitation ??= attendance;
-        continue;
-      }
-      const codes = guildAttendanceCodes(attendance.value);
-      if (codes === null) {
-        scanLimitation ??= { kind: "limitation", code: "schema_drift" };
-        continue;
-      }
-      for (const code of codes) {
+      for (let page = 1; ; page++) {
         if (historyScanRequests >= options.requestCap) {
           scanLimitation ??= { kind: "limitation", code: "request_cap" };
           break;
         }
-        const report = counted(
+        const attendance = counted(
           "history_scan",
-          await graphql(reportByCodeQuery, { code }, options.signal)
+          await graphql(
+            guildAttendanceQuery,
+            {
+              name: guild.name,
+              realm: guild.realm,
+              region: guild.region,
+              page
+            },
+            options.signal
+          )
         );
         historyScanRequests += 1;
-        if (report.kind !== "success") {
-          scanLimitation ??= report;
-          continue;
+        if (attendance.kind !== "success") {
+          scanLimitation ??= attendance;
+          break;
         }
-        const decoded = decodedHydratedReport(report.value, key);
-        if (decoded.kind === "limitation") {
-          scanLimitation ??= decoded;
-          continue;
+        const attendancePage = guildAttendancePage(attendance.value);
+        if (attendancePage === null) {
+          scanLimitation ??= { kind: "limitation", code: "schema_drift" };
+          break;
         }
-        for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
-        for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
-        if (decoded.limitation) scanLimitation ??= decoded.limitation;
+        for (const code of attendancePage.codes) {
+          if (historyScanRequests >= options.requestCap) {
+            scanLimitation ??= { kind: "limitation", code: "request_cap" };
+            break;
+          }
+          const report = counted(
+            "history_scan",
+            await graphql(reportByCodeQuery, { code }, options.signal)
+          );
+          historyScanRequests += 1;
+          if (report.kind !== "success") {
+            scanLimitation ??= report;
+            continue;
+          }
+          const decoded = decodedHydratedReport(report.value, key);
+          if (decoded.kind === "limitation") {
+            scanLimitation ??= decoded;
+            continue;
+          }
+          for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
+          for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
+          if (decoded.limitation) scanLimitation ??= decoded.limitation;
+        }
+        if (!attendancePage.hasMorePages || scanLimitation !== undefined) break;
       }
     }
 

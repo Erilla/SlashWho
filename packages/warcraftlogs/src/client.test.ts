@@ -3226,22 +3226,28 @@ describe("Warcraft Logs gateway", () => {
   });
 
   it("recovers participant-attributed kills and wipes from guild attendance", async () => {
+    const attendancePages: number[] = [];
+    const multiwordRealmKey: CharacterKey = {
+      region: "eu",
+      realm: "aerie-peak",
+      name: "sentinel"
+    };
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
       const body = JSON.parse(String(init?.body)) as {
         query: string;
-        variables: { code?: string };
+        variables: { code?: string; page?: number };
       };
       if (body.query.includes("RecentReports")) {
         return jsonResponse({
           data: {
             characterData: {
               character: {
-                server: { normalizedName: "Silvermoon" },
+                server: { normalizedName: "AeriePeak" },
                 guilds: [
                   {
                     name: "SeriouslyCasual",
-                    server: { slug: "silvermoon", region: { slug: "EU" } }
+                    server: { slug: "aerie-peak", region: { slug: "EU" } }
                   }
                 ],
                 recentReports: { data: [], has_more_pages: false }
@@ -3251,13 +3257,14 @@ describe("Warcraft Logs gateway", () => {
         });
       }
       if (body.query.includes("GuildAttendance")) {
+        attendancePages.push(body.variables.page!);
         return jsonResponse({
           data: {
             guildData: {
               guild: {
                 attendance: {
                   data: [{ code: "omittedReport" }],
-                  has_more_pages: false
+                  has_more_pages: body.variables.page === 1
                 }
               }
             }
@@ -3274,7 +3281,7 @@ describe("Warcraft Logs gateway", () => {
                 owner: { name: "Abradix" },
                 guild: {
                   name: "SeriouslyCasual",
-                  server: { slug: "silvermoon", region: { slug: "EU" } }
+                  server: { slug: "aerie-peak", region: { slug: "EU" } }
                 },
                 zone: {
                   id: 23,
@@ -3289,7 +3296,7 @@ describe("Warcraft Logs gateway", () => {
                     {
                       id: 12,
                       name: "Sentinel",
-                      server: "Silvermoon",
+                      server: "AeriePeak",
                       type: "Player"
                     }
                   ]
@@ -3335,7 +3342,10 @@ describe("Warcraft Logs gateway", () => {
     });
 
     await expect(
-      client.getFirstKillReports(key, { requestCap: 10, parseRequestCap: 1 })
+      client.getFirstKillReports(multiwordRealmKey, {
+        requestCap: 10,
+        parseRequestCap: 1
+      })
     ).resolves.toMatchObject({
       kind: "evidence",
       kills: [
@@ -3351,6 +3361,7 @@ describe("Warcraft Logs gateway", () => {
         }
       ]
     });
+    expect(attendancePages).toEqual([1, 2]);
   });
 
   it("uses each fight's game zone when the report zone names another instance", async () => {
