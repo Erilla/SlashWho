@@ -1333,8 +1333,14 @@ export function createApplicantDossierService(options: {
       }
 
       // The existing dossier stays readable while this cadence-gated background
-      // sweep checks for members who joined current or historical guilds.
-      await options.search.scheduleConnectedCharacterSweep?.(key, scope);
+      // sweep checks for members who joined current or historical guilds. Its
+      // dispatch must not turn a usable cached dossier into an HTTP failure.
+      // Do not retain the request's measurement scope after the response ends.
+      void Promise.resolve()
+        .then(() => options.search.scheduleConnectedCharacterSweep?.(key))
+        .catch(() => {
+          options.logger?.info({ event: "fingerprint_sweep_schedule_failed" });
+        });
 
       const seen = new Set(
         snapshot.characters.map((character) =>
