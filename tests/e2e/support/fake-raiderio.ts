@@ -18,11 +18,6 @@ const queuedCharacter = {
   name: "Queued"
 } as const;
 
-const queuedAlt = {
-  ...queuedCharacter,
-  name: "Queuedalt"
-} as const;
-
 const frostalt = {
   name: "Frostalt",
   level: 80,
@@ -84,12 +79,12 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
   // The refreshing state is only observable while an upstream read is still in
   // flight. Hold Queued's declared related-character read so the initial
   // dossier can independently check the root's tournament eligibility.
-  let released = false;
+  let holdingRelatedCharacterRead = false;
   let discoveryWebhooks = 0;
   const characterRequests = new Map<string, number>();
   const held: Array<() => void> = [];
   const releaseAll = () => {
-    released = true;
+    holdingRelatedCharacterRead = false;
     while (held.length > 0) held.shift()?.();
   };
 
@@ -123,13 +118,13 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
 
     if (url.pathname === "/__control/release") {
       releaseAll();
-      json(response, 200, { released: true });
+      json(response, 200, { holdingRelatedCharacterRead: false });
       return;
     }
 
     if (url.pathname === "/__control/hold") {
-      released = false;
-      json(response, 200, { released: false });
+      holdingRelatedCharacterRead = true;
+      json(response, 200, { holdingRelatedCharacterRead: true });
       return;
     }
 
@@ -230,10 +225,13 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     }
 
     if (url.pathname === "/api/characters/eu/silvermoon/frostalt") {
-      declaredCharacter(frostalt, {
-        name: nightalt.name,
-        path: "/characters/eu/tarren-mill/Nightalt"
-      });
+      const send = () =>
+        declaredCharacter(frostalt, {
+          name: nightalt.name,
+          path: "/characters/eu/tarren-mill/Nightalt"
+        });
+      if (holdingRelatedCharacterRead) held.push(send);
+      else send();
       return;
     }
 
@@ -244,23 +242,33 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
 
     if (url.pathname === "/api/characters/eu/silvermoon/queued") {
       declaredCharacter(queuedCharacter, {
-        name: queuedAlt.name,
-        path: "/characters/eu/silvermoon/Queuedalt"
+        name: frostalt.name,
+        path: "/characters/eu/silvermoon/Frostalt"
       });
-      return;
-    }
-
-    if (url.pathname === "/api/characters/eu/silvermoon/queuedalt") {
-      const send = () => declaredCharacter(queuedAlt, null);
-      if (released) send();
-      else held.push(send);
       return;
     }
 
     if (url.pathname.endsWith("/raid-progress")) {
       json(response, 200, {
         characterRaidProgress: {
-          raidProgress: []
+          raidProgress: [
+            {
+              raid: { id: "nerub-ar-palace", name: "Nerub-ar Palace" },
+              encountersDefeated: {
+                mythic: [
+                  {
+                    slug: "queen-ansurek",
+                    name: "Queen Ansurek",
+                    ordinal: 8,
+                    isFinalBoss: true,
+                    firstDefeated: "2025-01-14T20:30:00.000Z",
+                    guild: { name: "Arachnid", realm: { slug: "Silvermoon" } },
+                    historicWorldRank: 147
+                  }
+                ]
+              }
+            }
+          ]
         }
       });
       return;
