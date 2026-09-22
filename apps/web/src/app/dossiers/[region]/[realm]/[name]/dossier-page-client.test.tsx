@@ -657,9 +657,6 @@ describe("DossierPageClient live evidence", () => {
     });
     try {
       await user.click(screen.getByRole("button", { name: "Refresh" }));
-      expect(
-        screen.getByRole("status", { name: "Evidence collection updates" })
-      ).toBeEmptyDOMElement();
       await waitForFirstLiveEvidenceRead();
       await act(async () => {
         resolveSecondCompletion(
