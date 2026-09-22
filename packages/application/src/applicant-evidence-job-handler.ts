@@ -4,6 +4,7 @@ import type {
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
   EvidenceRunCost,
+  EvidenceRunPhase,
   StagedEvidenceCollection,
   StoredEvidenceTiers,
   TerminalTier
@@ -65,7 +66,7 @@ export type ApplicantEvidenceStore = {
   ): Promise<void>;
   recordPhaseTransitions?(
     runId: string,
-    phases: readonly EvidencePhase[]
+    phases: readonly Omit<EvidenceRunPhase, "ordinal">[]
   ): Promise<void>;
   publish(
     runId: string,
@@ -1024,7 +1025,16 @@ export function createApplicantEvidenceJobHandler(
                     (item) => item.state !== "pending"
                   );
                   if (changed.length)
-                    await evidence.recordPhaseTransitions!(run.id, changed);
+                    await evidence.recordPhaseTransitions!(
+                      run.id,
+                      changed.map((item) => ({
+                        id: item.id,
+                        state: item.state,
+                        startedAt: item.startedAt ?? null,
+                        completedAt: item.completedAt ?? null,
+                        limitationCode: item.limitationCode ?? null
+                      }))
+                    );
                 }
               })
             : undefined;
