@@ -99,6 +99,11 @@ export interface SearchService {
     key: CharacterKey,
     snapshotId: string
   ): Promise<HistoricalSnapshot | null>;
+  /** Queues a bounded connected-character refresh without blocking the dossier. */
+  scheduleConnectedCharacterSweep?(
+    key: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<void>;
   cleanupExpired(now?: Date): Promise<CleanupCounts>;
 }
 
@@ -445,6 +450,30 @@ export function createSearchService(options: {
       return snapshot && sameKey(snapshot.rootKey, key)
         ? serializeSnapshot(snapshot)
         : null;
+    },
+
+    async scheduleConnectedCharacterSweep(key, scope) {
+      const repositories = scope
+        ? measuredRepositories(options.repositories, scope)
+        : options.repositories;
+      const isDueForVisit = repositories.fingerprintSweeps.isDueForVisit;
+      if (!isDueForVisit) return;
+      const at = now();
+      const due = await isDueForVisit.call(
+        repositories.fingerprintSweeps,
+        key,
+        new Date(
+          at.getTime() -
+            options.config.FINGERPRINT_SWEEP_CADENCE_HOURS * 60 * 60 * 1_000
+        )
+      );
+      if (!due) return;
+      const run = await repositories.runs.createOrReuse(key, "anonymous");
+      await options.queue.enqueue({
+        runId: run.id,
+        key,
+        enqueuedAt: at.toISOString()
+      });
     },
 
     async cleanupExpired(at = now()) {

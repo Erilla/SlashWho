@@ -318,6 +318,48 @@ describe("Blizzard gateway", () => {
     });
   });
 
+  it("reads a known historical guild directly without first resolving a member profile", async () => {
+    // Historical WCL observations already carry a guild identity. Requiring a
+    // current member profile would make an old or departed guild undiscoverable.
+    const { gateway } = clientFor((url) => {
+      if (url.hostname === "oauth.battle.net") return tokenResponse();
+      if (url.pathname === "/data/wow/playable-class/index") {
+        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
+      }
+      if (url.pathname.endsWith("/guild/draenor/rancour/roster")) {
+        return Response.json({
+          members: [
+            {
+              character: {
+                name: "Mistakinus",
+                realm: { slug: "Draenor" },
+                playable_class: { id: 8 },
+                level: 80
+              }
+            }
+          ]
+        });
+      }
+      throw new Error(`unexpected endpoint: ${url.pathname}`);
+    });
+
+    await expect(
+      gateway.getGuildRosterByIdentity({
+        name: "Rancour",
+        region: "eu",
+        realm: "draenor"
+      })
+    ).resolves.toEqual([
+      {
+        key: { region: "eu", realm: "draenor", name: "mistakinus" },
+        displayName: "Mistakinus",
+        className: "Mage",
+        level: 80,
+        guild: { name: "Rancour", region: "eu", realm: "draenor" }
+      }
+    ]);
+  });
+
   it("returns an empty roster when the root has no guild", async () => {
     const { gateway } = clientFor((url) => {
       if (url.hostname === "oauth.battle.net") return tokenResponse();

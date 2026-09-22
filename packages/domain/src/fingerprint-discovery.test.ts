@@ -47,11 +47,22 @@ function keyId(key: CharacterKey): string {
 
 function gatewayFor(
   roster: readonly FingerprintCandidate[],
-  fingerprints: Readonly<Record<string, ReadonlyMap<number, number>>>
+  fingerprints: Readonly<Record<string, ReadonlyMap<number, number>>>,
+  historicalRosters: Readonly<
+    Record<string, readonly FingerprintCandidate[]>
+  > = {}
 ): FingerprintGateway {
   return {
     async getGuildRoster() {
       return roster;
+    },
+    async getGuildRosterByIdentity(guild) {
+      const value =
+        historicalRosters[`${guild.region}/${guild.realm}/${guild.name}`];
+      if (value === undefined) {
+        throw Object.assign(new Error("missing"), { kind: "not_found" });
+      }
+      return value;
     },
     async getAchievementFingerprint(key) {
       const value = fingerprints[keyId(key)];
@@ -70,6 +81,47 @@ const options = {
 };
 
 describe("discoverFingerprintMatches", () => {
+  it("finds a direct fingerprint match through a connected character's historical raid guild", async () => {
+    // Break caught: discovery could read only the root's current guild and
+    // permanently miss a matching character reachable through Boptinus's
+    // public Rancour raid observation.
+    const boptinus: CharacterKey = {
+      region: "eu",
+      realm: "tarren-mill",
+      name: "boptinus"
+    };
+    const mistakinus: CharacterKey = {
+      region: "eu",
+      realm: "tarren-mill",
+      name: "mistakinus"
+    };
+    const rancour = {
+      name: "Rancour",
+      region: "eu" as const,
+      realm: "draenor"
+    };
+    const identical = fingerprint(3_196);
+
+    const outcome = await discoverFingerprintMatches(
+      root,
+      gatewayFor(
+        [candidate(boptinus)],
+        {
+          [keyId(root)]: identical,
+          [keyId(boptinus)]: identical,
+          [keyId(mistakinus)]: identical
+        },
+        { "eu/draenor/Rancour": [candidate(mistakinus, rancour)] }
+      ),
+      { ...options, requestCap: 10, historicalGuilds: [rancour] }
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "matched",
+      characters: [{ key: boptinus }, { key: mistakinus, guild: rancour }]
+    });
+  });
+
   it("carries the roster's guild onto every fingerprint match", async () => {
     // The sweep reads one roster, the root's own, so a match is in that guild by
     // construction. Asserted here because the guild costs no extra request and
@@ -192,6 +244,9 @@ describe("discoverFingerprintMatches", () => {
         {
           async getGuildRoster() {
             throw Object.assign(new Error("missing"), { kind: "not_found" });
+          },
+          async getGuildRosterByIdentity() {
+            throw new Error("unreachable");
           },
           async getAchievementFingerprint() {
             throw new Error("unreachable");

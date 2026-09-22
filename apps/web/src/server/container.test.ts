@@ -69,6 +69,7 @@ it("migrates and initializes the durable queue before serving searches", async (
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
+        FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_PROVIDER_CONCURRENCY: 4,
         NEGATIVE_CACHE_TTL_MS: 300_000
@@ -213,6 +214,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
+        FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_PROVIDER_CONCURRENCY: 4,
         NEGATIVE_CACHE_TTL_MS: 300_000
@@ -329,6 +331,7 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
         BOT_SEARCHES_PER_HOUR: 60,
         PUBLIC_READS_PER_MINUTE: 300,
         FRESHNESS_HOURS: 24,
+        FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
         DOSSIER_CHARACTER_CAP: 12,
         DOSSIER_PROVIDER_CONCURRENCY: 4,
         NEGATIVE_CACHE_TTL_MS: 300_000
@@ -440,6 +443,7 @@ it.each([
           BOT_SEARCHES_PER_HOUR: 60,
           PUBLIC_READS_PER_MINUTE: 300,
           FRESHNESS_HOURS: 24,
+          FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
           DOSSIER_CHARACTER_CAP: 12,
           DOSSIER_PROVIDER_CONCURRENCY: 4,
           NEGATIVE_CACHE_TTL_MS: 300_000

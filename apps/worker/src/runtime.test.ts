@@ -84,6 +84,10 @@ function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
   const pendingDispatches: DiscoverCharacterJob[] = [];
   const recoveredDispatches: string[] = [];
   const enqueued: DiscoverCharacterJob[] = [];
+  const evidenceEnqueues: Array<{
+    runId: string;
+    meta: unknown;
+  }> = [];
   const fingerprintAdmissions: string[] = [];
   const waitingFingerprintRuns: string[] = [];
   const admittedFingerprintRuns = new Set<string>();
@@ -108,7 +112,8 @@ function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
       fingerprintAdmissions.push(runId);
       return runId;
     },
-    async enqueueCharacterEvidence(runId) {
+    async enqueueCharacterEvidence(runId, meta) {
+      evidenceEnqueues.push({ runId, meta });
       return runId;
     },
     async work(handler) {
@@ -318,6 +323,7 @@ function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
     pendingDispatches,
     recoveredDispatches,
     enqueued,
+    evidenceEnqueues,
     fingerprintAdmissions,
     waitingFingerprintRuns,
     admittedFingerprintRuns,
@@ -900,6 +906,45 @@ describe("worker runtime", () => {
         minimumIdenticalPercent: 20
       }
     });
+    await runtime.stop();
+  });
+
+  it("wires newly discovered fingerprint characters to a full evidence collection", async () => {
+    // Break caught: discovery could publish a new connection but leave it with
+    // no WCL run, so its historical guilds would never become sweep sources.
+    const fakes = runtimeFakes();
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.evidenceReserve.mockResolvedValueOnce({
+      kind: "reserved",
+      run: { id: "evidence-run" }
+    });
+    fakes.dependencies.createHandler = (options) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    await handlerOptions?.enqueueFullEvidence?.({
+      region: "eu",
+      realm: "draenor",
+      name: "mistakinus"
+    });
+
+    expect(fakes.evidenceReserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: { region: "eu", realm: "draenor", name: "mistakinus" }
+      })
+    );
+    expect(fakes.evidenceEnqueues).toEqual([
+      {
+        runId: "evidence-run",
+        meta: expect.objectContaining({ mode: "full" })
+      }
+    ]);
+    expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+      "evidence-run",
+      "evidence-run"
+    );
     await runtime.stop();
   });
 

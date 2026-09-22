@@ -180,7 +180,21 @@ function policyFixture(
     },
     runs: {
       async createOrReuse() {
-        throw new Error("not used");
+        return {
+          id: "00000000-0000-4000-8000-000000000099",
+          rootKey: key,
+          rootCharacterId: null,
+          queueJobId: null,
+          status: "queued",
+          callerClass: "anonymous",
+          attempt: 0,
+          nextRetryAt: null,
+          errorCode: null,
+          createdAt: now,
+          startedAt: null,
+          completedAt: null,
+          snapshotId: null
+        };
       },
       async claim() {
         return null;
@@ -340,6 +354,9 @@ function policyFixture(
       }
     },
     fingerprintSweeps: {
+      async isDueForVisit() {
+        return true;
+      },
       async requestAdmission() {
         return { kind: "not_due" };
       },
@@ -404,6 +421,17 @@ function policyFixture(
 }
 
 describe("search freshness policy", () => {
+  it("queues a cadence-due connected-character sweep without reading the root upstream", async () => {
+    const fixture = policyFixture({ current: snapshot(now) });
+
+    await fixture.service.scheduleConnectedCharacterSweep?.(key);
+
+    expect(fixture.enqueuedPayloads).toEqual([
+      expect.objectContaining({ key, runId: expect.any(String) })
+    ]);
+    expect(fixture.getCharacter).not.toHaveBeenCalled();
+  });
+
   it("authorizes public reads through the independent read bucket", async () => {
     // Break caught: direct character/history reads could bypass auth and read limits.
     const fixture = policyFixture({ readLimit: 1 });

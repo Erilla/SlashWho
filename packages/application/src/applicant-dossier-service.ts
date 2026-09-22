@@ -947,7 +947,7 @@ export function createApplicantDossierService(options: {
     "snapshots" | "evidence" | "manualConnections"
   >;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-  search: Pick<SearchService, "create">;
+  search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
   config: ApplicationConfig;
@@ -1331,6 +1331,16 @@ export function createApplicantDossierService(options: {
         if (!completed) return { kind: "not_ready" };
         return readRootOnly(key, true, repositories, signal, overrides, scope);
       }
+
+      // The existing dossier stays readable while this cadence-gated background
+      // sweep checks for members who joined current or historical guilds. Its
+      // dispatch must not turn a usable cached dossier into an HTTP failure.
+      // Do not retain the request's measurement scope after the response ends.
+      void Promise.resolve()
+        .then(() => options.search.scheduleConnectedCharacterSweep?.(key))
+        .catch(() => {
+          options.logger?.info({ event: "fingerprint_sweep_schedule_failed" });
+        });
 
       const seen = new Set(
         snapshot.characters.map((character) =>

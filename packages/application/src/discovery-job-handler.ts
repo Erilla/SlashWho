@@ -13,6 +13,8 @@ import {
   deduplicateCharacters,
   discoverCharacter,
   discoverFingerprintMatches,
+  type CharacterGuild,
+  type CharacterKey,
   type DiscoveryOutcome,
   type RaiderIoGateway
 } from "@slashwho/domain";
@@ -74,6 +76,14 @@ function scopedBlizzardGateway(
       scope.time("blizzard", (excluded) =>
         gateway.getGuildRoster(
           root,
+          signal,
+          excludeObserver(excluded, onProfileRequest)
+        )
+      ),
+    getGuildRosterByIdentity: (guild, signal, onProfileRequest) =>
+      scope.time("blizzard", (excluded) =>
+        gateway.getGuildRosterByIdentity(
+          guild,
           signal,
           excludeObserver(excluded, onProfileRequest)
         )
@@ -151,6 +161,8 @@ export type DiscoveryJobHandlerOptions = {
     minimumIdenticalPercent: number;
   };
   enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
+  /** Queues full WCL collection before a newly admitted fingerprint match is published. */
+  enqueueFullEvidence?: (key: CharacterKey) => Promise<unknown>;
   requestCap: number;
   now?: () => Date;
   random?: () => number;
@@ -247,6 +259,33 @@ function isFingerprintReleaseRetryableError(
  * resumes from where the chain stopped instead of restarting at candidate one.
  */
 const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
+
+function historicalGuildsFromEvidence(
+  evidenceSets: readonly Awaited<
+    ReturnType<Repositories["evidence"]["getCompleted"]>
+  >[]
+): readonly CharacterGuild[] {
+  const guilds = new Map<string, CharacterGuild>();
+  for (const evidence of evidenceSets) {
+    for (const kill of evidence?.kills ?? []) {
+      const guild = kill.guild;
+      // Rows stored before WCL supplied a guild region cannot safely address a
+      // Blizzard namespace. They remain display evidence, just not sweep input.
+      if (!guild?.region) continue;
+      const id = `${guild.region}/${guild.realm}/${guild.name}`;
+      if (!guilds.has(id)) {
+        guilds.set(id, {
+          name: guild.name,
+          region: guild.region,
+          realm: guild.realm
+        });
+      }
+    }
+  }
+  return [...guilds.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, guild]) => guild);
+}
 
 export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   const now = options.now ?? (() => new Date());
@@ -582,6 +621,15 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     }
                   }
                 );
+                const historicalGuilds = resume
+                  ? resume.historicalGuilds
+                  : historicalGuildsFromEvidence(
+                      await Promise.all(
+                        outcome.characters.map((character) =>
+                          repositories.evidence.getCompleted(character.key)
+                        )
+                      )
+                    );
                 const sweep = await discoverFingerprintMatches(
                   run.rootKey,
                   adaptedGateway,
@@ -593,6 +641,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     isSuppressed: (key) =>
                       repositories.suppressions.isActive(key),
                     signal: context.signal,
+                    historicalGuilds,
                     ...(resume ? { resumeAfter: resume.resumeAfter } : {})
                   }
                 );
@@ -613,6 +662,29 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   }
                   fingerprintFailure = sweep;
                 } else {
+                  const knownCharacterIds = new Set(
+                    outcome.characters.map((character) =>
+                      canonicalCharacterId(character.key)
+                    )
+                  );
+                  if (resume) {
+                    const published = await repositories.snapshots.find(
+                      resume.snapshotId
+                    );
+                    for (const character of published?.characters ?? []) {
+                      knownCharacterIds.add(
+                        canonicalCharacterId(character.key)
+                      );
+                    }
+                  }
+                  const newlyAdmittedFingerprintMatches = deduplicateCharacters(
+                    [...sweep.characters]
+                  ).filter(
+                    (character) =>
+                      !knownCharacterIds.has(
+                        canonicalCharacterId(character.key)
+                      )
+                  );
                   context.signal.throwIfAborted();
                   const fingerprintPersistenceTime = now();
                   if (!withinJobLifetime(fingerprintPersistenceTime)) {
@@ -642,11 +714,20 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                         ? (resume?.resumeAfter ?? null)
                         : null,
                     limitationCode: raiderIoLimitation,
+                    historicalGuilds,
                     // Progress is a cursor that moved or a roster exhausted.
                     // A `capped` that swept nothing re-stores the cursor it
                     // was given, and must not reset the give-up counter.
                     advanced: stillSweeping || sweep.kind === "matched"
                   };
+
+                  // A fingerprint-derived relationship is only observable
+                  // after its evidence work has been admitted. This also
+                  // applies to continuations, which amend their already
+                  // published snapshot with newly discovered members.
+                  for (const character of newlyAdmittedFingerprintMatches) {
+                    await options.enqueueFullEvidence?.(character.key);
+                  }
 
                   if (resume) {
                     const amended =

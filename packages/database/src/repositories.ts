@@ -86,6 +86,12 @@ export interface FingerprintSweepCursor {
    */
   limitationCode: string | null;
   /**
+   * Region-qualified public guild observations frozen when the sweep begins.
+   * They are carried through continuations so a later evidence refresh cannot
+   * turn this one-hop sweep into an expanding graph traversal.
+   */
+  historicalGuilds?: readonly CharacterGuild[];
+  /**
    * True when this cycle moved the sweep forward -- it swept at least one new
    * candidate, or it exhausted the roster. False only for a cycle that swept
    * nothing new (the budget ran out before the first candidate), which is what
@@ -299,7 +305,12 @@ export interface CharacterMythicKillInput {
   killedAt: string;
   reportUrl: string;
   fightUrl: string;
-  guild: { name: string; realm: string } | null;
+  /** Region is absent only on evidence stored before report guild regions. */
+  guild: {
+    name: string;
+    realm: string;
+    region?: CharacterKey["region"];
+  } | null;
   /** Absent on evidence collected before Warcraft Logs exposed report owners. */
   uploader?: string | null;
   performance: CharacterMythicKillPerformance;
@@ -806,6 +817,8 @@ export type FingerprintAdmissionDispatch =
   | { kind: "settled" };
 
 export interface FingerprintSweepRepository {
+  /** True when a dossier visit may start a new cadence-gated sweep. */
+  isDueForVisit?(key: CharacterKey, cadenceCutoff: Date): Promise<boolean>;
   requestAdmission(input: {
     runId: string;
     key: CharacterKey;
@@ -828,6 +841,7 @@ export interface FingerprintSweepRepository {
   release(reservationId: string, at: Date): Promise<void>;
   getResumeState(key: CharacterKey): Promise<{
     resumeAfter: string;
+    historicalGuilds: readonly CharacterGuild[];
     snapshotId: string;
     /**
      * The run that published `snapshotId`, and so the only run allowed to

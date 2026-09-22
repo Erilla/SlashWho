@@ -29,6 +29,12 @@ export interface BlizzardGateway {
     signal?: AbortSignal,
     onProfileRequest?: BlizzardProfileRequestObserver
   ): Promise<readonly BlizzardRosterCharacter[]>;
+  /** Reads a roster from a previously observed public guild identity. */
+  getGuildRosterByIdentity(
+    guild: CharacterGuild,
+    signal?: AbortSignal,
+    onProfileRequest?: BlizzardProfileRequestObserver
+  ): Promise<readonly BlizzardRosterCharacter[]>;
   getAchievementFingerprint(
     key: CharacterKey,
     signal?: AbortSignal,
