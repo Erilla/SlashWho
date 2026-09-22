@@ -682,6 +682,7 @@ function DossierPageState({
               busy={hasLiveEvidence(dossier) && !pollUnavailable}
               lastCollectedAt={dossier?.lastCollectedAt ?? null}
               onRefresh={async () => {
+                setAnnouncement("");
                 const response = await fetch(
                   `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
                   { method: "POST" }
