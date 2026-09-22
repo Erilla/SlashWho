@@ -107,6 +107,18 @@ for (const applicantUrl of applicantUrls) {
       /raider\.io\/characters\/eu\/silvermoon\/ryii$/
     );
     await expect(raiderIoLink).toHaveAttribute("target", "_blank");
+    const connectedCharacters = page.getByRole("list", {
+      name: "Connected characters"
+    });
+    await expect(
+      connectedCharacters.getByText("Ryii", { exact: true })
+    ).toBeVisible();
+    await expect(
+      connectedCharacters.getByText("Frostalt", { exact: true })
+    ).toBeVisible();
+    await expect(
+      connectedCharacters.getByText("Nightalt", { exact: true })
+    ).toBeVisible();
     await expect(page.getByText("Queen Ansurek")).toBeVisible();
     const evidence = page.getByRole("group", {
       name: "Queen Ansurek evidence"

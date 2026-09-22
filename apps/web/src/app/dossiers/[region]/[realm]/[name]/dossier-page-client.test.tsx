@@ -184,6 +184,23 @@ function withCharacterEvidenceStates(
 }
 
 describe("DossierPageClient live evidence", () => {
+  it("hides the Refresh control for a read-only dossier", () => {
+    // Break caught: the frozen demo can expose a refresh action even though it
+    // has no writable data source or character-management controls.
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={expanded}
+        jobId={null}
+        canAddCharacters={false}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Refresh" })
+    ).not.toBeInTheDocument();
+  });
+
   it("cancels the old dossier read when navigating to another character", async () => {
     vi.useFakeTimers();
     let resolveOld!: (response: Response) => void;
