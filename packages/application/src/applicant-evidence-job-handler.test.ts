@@ -3629,8 +3629,9 @@ describe("applicant evidence job handler", () => {
           completedAt: null,
           limitationCode: null
         }));
-      evidence.recordPhaseTransitions = async (_runId, phases) =>
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
         transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
       const handler = handlerFor(
         evidence,
         {},
