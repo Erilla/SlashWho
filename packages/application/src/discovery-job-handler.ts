@@ -261,21 +261,25 @@ function isFingerprintReleaseRetryableError(
 const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
 
 function historicalGuildsFromEvidence(
-  evidence: Awaited<ReturnType<Repositories["evidence"]["getCompleted"]>>
+  evidenceSets: readonly Awaited<
+    ReturnType<Repositories["evidence"]["getCompleted"]>
+  >[]
 ): readonly CharacterGuild[] {
   const guilds = new Map<string, CharacterGuild>();
-  for (const kill of evidence?.kills ?? []) {
-    const guild = kill.guild;
-    // Rows stored before WCL supplied a guild region cannot safely address a
-    // Blizzard namespace. They remain display evidence, just not sweep input.
-    if (!guild?.region) continue;
-    const id = `${guild.region}/${guild.realm}/${guild.name}`;
-    if (!guilds.has(id)) {
-      guilds.set(id, {
-        name: guild.name,
-        region: guild.region,
-        realm: guild.realm
-      });
+  for (const evidence of evidenceSets) {
+    for (const kill of evidence?.kills ?? []) {
+      const guild = kill.guild;
+      // Rows stored before WCL supplied a guild region cannot safely address a
+      // Blizzard namespace. They remain display evidence, just not sweep input.
+      if (!guild?.region) continue;
+      const id = `${guild.region}/${guild.realm}/${guild.name}`;
+      if (!guilds.has(id)) {
+        guilds.set(id, {
+          name: guild.name,
+          region: guild.region,
+          realm: guild.realm
+        });
+      }
     }
   }
   return [...guilds.entries()]
@@ -620,7 +624,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 const historicalGuilds = resume
                   ? resume.historicalGuilds
                   : historicalGuildsFromEvidence(
-                      await repositories.evidence.getCompleted(run.rootKey)
+                      await Promise.all(
+                        outcome.characters.map((character) =>
+                          repositories.evidence.getCompleted(character.key)
+                        )
+                      )
                     );
                 const sweep = await discoverFingerprintMatches(
                   run.rootKey,
