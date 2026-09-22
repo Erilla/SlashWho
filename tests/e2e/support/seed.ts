@@ -89,6 +89,7 @@ export async function seedCharacterEvidence(
     laterParseEventOnly?: boolean;
     withSampleKills?: boolean;
     withSecondRaid?: boolean;
+    historicWorldRank?: number;
   }> = {}
 ): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl() });
@@ -125,6 +126,7 @@ export async function seedCharacterEvidence(
                       journalBossId: null,
                       bossOrder: 8,
                       killedAt: "2025-01-13T21:31:40.000Z",
+                      historicWorldRank: options.historicWorldRank,
                       reportUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport",
                       fightUrl:
@@ -148,6 +150,7 @@ export async function seedCharacterEvidence(
                       journalBossId: null,
                       bossOrder: 8,
                       killedAt: "2025-01-13T22:31:40.000Z",
+                      historicWorldRank: options.historicWorldRank,
                       reportUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport",
                       fightUrl:

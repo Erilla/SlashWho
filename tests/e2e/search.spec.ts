@@ -75,11 +75,14 @@ for (const applicantUrl of applicantUrls) {
       displayName: "Ryii",
       refreshedAt: new Date("2026-09-11T00:00:00.000Z")
     });
-    await seedCharacterEvidence({
-      region: "eu",
-      realm: "silvermoon",
-      name: "ryii"
-    });
+    await seedCharacterEvidence(
+      {
+        region: "eu",
+        realm: "silvermoon",
+        name: "ryii"
+      },
+      { historicWorldRank: 147 }
+    );
     await page.goto("/");
     await page.getByLabel("Character/URL").fill(applicantUrl);
     await page.getByRole("button", { name: "Research applicant" }).click();
