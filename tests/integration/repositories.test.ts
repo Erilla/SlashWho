@@ -84,6 +84,7 @@ function mythicKill(
     reportUrl: "https://www.warcraftlogs.com/reports/example",
     fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
     guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
+    historicWorldRank: null,
     performance: {
       spec: null,
       damage: { state: "unavailable" },

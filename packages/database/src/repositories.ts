@@ -330,6 +330,8 @@ export interface CharacterMythicKillInput {
   } | null;
   /** Absent on evidence collected before Warcraft Logs exposed report owners. */
   uploader?: string | null;
+  /** Raider.IO's confirmed world rank for this kill, if available. */
+  historicWorldRank?: number | null;
   performance: CharacterMythicKillPerformance;
 }
 

@@ -16,7 +16,11 @@ import {
   isAccountWideCuttingEdgeAchievement,
   lookupRaiderIoBoss
 } from "@slashwho/domain";
-import type { RaiderIoGateway } from "@slashwho/raiderio";
+import type {
+  MythicBossRanking,
+  MythicBossRankingsOptions,
+  RaiderIoGateway
+} from "@slashwho/raiderio";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
@@ -194,13 +198,15 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   warcraftLogs: Pick<
     WarcraftLogsGateway,
     "getFirstKillReports" | "getRateLimit"
-  >;
+  > &
+    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
-  }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">;
+  }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
+    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   decryptionKey?: Buffer;
   requestCap: number;
   parseRequestCap: number;
@@ -293,6 +299,65 @@ function toCharacterMythicKillInput(
     performance: kill.performance
   };
 }
+
+function normalizedProviderIdentity(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLocaleLowerCase("en-US");
+}
+
+function normalizedProviderRealm(value: string): string {
+  return normalizedProviderIdentity(value).replace(/^connected/, "");
+}
+
+function historicWorldRankForKill(
+  kill: CharacterMythicKillInput,
+  region: CharacterKey["region"],
+  rankings: readonly MythicBossRanking[]
+): number | null {
+  if (!kill.guild) return null;
+  const killedAt = Date.parse(kill.killedAt);
+  if (!Number.isFinite(killedAt)) return null;
+  const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+  const matches = rankings.filter(
+    (ranking) =>
+      (!ranking.bossSlug || ranking.bossSlug === boss?.bossSlug) &&
+      normalizedProviderIdentity(ranking.guildName) ===
+        normalizedProviderIdentity(kill.guild!.name) &&
+      normalizedProviderRealm(ranking.guildRealm) ===
+        normalizedProviderRealm(kill.guild!.realm) &&
+      normalizedProviderIdentity(ranking.guildRegion) ===
+        normalizedProviderIdentity(region) &&
+      Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <= 120_000
+  );
+  return matches.length === 1 ? matches[0]!.rank : null;
+}
+
+function raiderIoRankingRequest(
+  kill: CharacterMythicKillInput,
+  region: CharacterKey["region"]
+): MythicBossRankingsOptions | null {
+  if (!kill.guild) return null;
+  const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+  return boss ? { ...boss, guild: { ...kill.guild, region } } : null;
+}
+
+function rankingRequestKey(request: MythicBossRankingsOptions): string {
+  return JSON.stringify(
+    request.guild
+      ? [
+          request.raidSlug,
+          request.guild.region,
+          request.guild.realm,
+          request.guild.name
+        ]
+      : [request.raidSlug, request.bossSlug]
+  );
+}
+
+const MAX_RAIDER_IO_RANKING_REQUESTS_PER_RUN = 50;
+const RAIDER_IO_RANKING_CONCURRENCY = 4;
 
 /**
  * Log-field prefix per class of upstream Warcraft Logs request. A closed map
@@ -1039,6 +1104,35 @@ export function createApplicantEvidenceJobHandler(
                 }
               })
             : undefined;
+        if (gateway.resolveCharacter) {
+          await phaseLedger?.transition(
+            "warcraft_logs_identity_resolution",
+            "active"
+          );
+          try {
+            const identity = await gateway.resolveCharacter(
+              run.key,
+              activeContext.signal
+            );
+            await phaseLedger?.transition(
+              "warcraft_logs_identity_resolution",
+              identity.kind === "identity" ? "completed" : "limited",
+              identity.kind === "limitation" ? identity.code : undefined
+            );
+          } catch (error) {
+            if (activeContext.signal.aborted) throw error;
+            await phaseLedger?.transition(
+              "warcraft_logs_identity_resolution",
+              "limited",
+              "unavailable"
+            );
+          }
+        } else {
+          await phaseLedger?.transition(
+            "warcraft_logs_identity_resolution",
+            "skipped"
+          );
+        }
         if (parseOnlyResume) {
           await phaseLedger?.transition("warcraft_logs_history", "skipped");
           // A parse-only retry neither scans history nor reads tier bests.
@@ -1221,41 +1315,72 @@ export function createApplicantEvidenceJobHandler(
         // embellishments. Each phase is entered at its own gateway boundary
         // and terminalised before the next one begins.
         await phaseLedger?.skipPendingBefore("raiderio_rankings");
+        const publishedKills = response.kills.map(toCharacterMythicKillInput);
         if (options.raiderio) {
-          const requests = new Map<
-            string,
-            Parameters<RaiderIoGateway["getMythicBossRankings"]>[0]
-          >();
-          for (const kill of response.kills) {
-            if (!kill.guild) continue;
-            const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
-            if (!boss) continue;
-            const request = {
-              ...boss,
-              guild: { ...kill.guild, region: run.key.region }
-            };
-            requests.set(JSON.stringify(request), request);
+          const requests = new Map<string, MythicBossRankingsOptions>();
+          for (const kill of publishedKills) {
+            const request = raiderIoRankingRequest(kill, run.key.region);
+            if (request) requests.set(rankingRequestKey(request), request);
           }
           if (requests.size === 0) {
             await phaseLedger?.transition("raiderio_rankings", "skipped");
           } else {
             await phaseLedger?.transition("raiderio_rankings", "active");
             try {
-              const results = await Promise.all(
-                [...requests.values()].map((request) =>
-                  options.raiderio!.getMythicBossRankings(
-                    request,
-                    activeContext.signal
-                  )
-                )
+              const cappedRequests = [...requests.entries()].slice(
+                0,
+                MAX_RAIDER_IO_RANKING_REQUESTS_PER_RUN
               );
-              const limitation = results.find(
-                (result) => result.kind === "limitation"
-              );
+              const results = new Map<string, readonly MythicBossRanking[]>();
+              let limitationCode: string | undefined =
+                requests.size > cappedRequests.length
+                  ? "request_cap"
+                  : undefined;
+              for (
+                let offset = 0;
+                offset < cappedRequests.length;
+                offset += RAIDER_IO_RANKING_CONCURRENCY
+              ) {
+                const batch = cappedRequests.slice(
+                  offset,
+                  offset + RAIDER_IO_RANKING_CONCURRENCY
+                );
+                const settled = await Promise.all(
+                  batch.map(async ([key, request]) => ({
+                    key,
+                    result: await options.raiderio!.getMythicBossRankings(
+                      request,
+                      activeContext.signal
+                    )
+                  }))
+                );
+                for (const item of settled) {
+                  if (item.result.kind === "rankings")
+                    results.set(item.key, item.result.rows);
+                  else limitationCode ??= item.result.code;
+                }
+              }
+              for (let index = 0; index < publishedKills.length; index += 1) {
+                const kill = publishedKills[index]!;
+                const request = raiderIoRankingRequest(kill, run.key.region);
+                const rows = request
+                  ? results.get(rankingRequestKey(request))
+                  : undefined;
+                if (rows) {
+                  publishedKills[index] = {
+                    ...kill,
+                    historicWorldRank: historicWorldRankForKill(
+                      kill,
+                      run.key.region,
+                      rows
+                    )
+                  };
+                }
+              }
               await phaseLedger?.transition(
                 "raiderio_rankings",
-                limitation ? "limited" : "completed",
-                limitation?.code
+                limitationCode ? "limited" : "completed",
+                limitationCode
               );
             } catch (error) {
               if (activeContext.signal.aborted) throw error;
@@ -1350,7 +1475,7 @@ export function createApplicantEvidenceJobHandler(
             ...(retryAfterMs > 0
               ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
               : {}),
-            kills: response.kills.map(toCharacterMythicKillInput),
+            kills: publishedKills,
             wipes: response.wipes,
             tierBests: response.tierBests,
             cuttingEdges,

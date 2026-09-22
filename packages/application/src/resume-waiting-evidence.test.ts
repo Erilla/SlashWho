@@ -53,6 +53,7 @@ describe("resumeWaitingEvidence", () => {
       freshnessCutoff,
       at,
       phasePlan: [
+        "warcraft_logs_identity_resolution",
         "warcraft_logs_history",
         "warcraft_logs_tier_bests",
         "warcraft_logs_fight_parses",
@@ -103,6 +104,7 @@ describe("resumeWaitingEvidence", () => {
       freshnessCutoff,
       at,
       phasePlan: [
+        "warcraft_logs_identity_resolution",
         "warcraft_logs_history",
         "warcraft_logs_tier_bests",
         "warcraft_logs_fight_parses",

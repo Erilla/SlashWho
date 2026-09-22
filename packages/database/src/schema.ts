@@ -785,6 +785,7 @@ export const characterMythicKills = pgTable(
     guildRegion: text("guild_region"),
     guildRealm: text("guild_realm"),
     uploader: text("uploader"),
+    historicWorldRank: integer("historic_world_rank"),
     specName: text("spec_name"),
     specIconUrl: text("spec_icon_url"),
     damageParseState:
@@ -831,6 +832,10 @@ export const characterMythicKills = pgTable(
     check(
       "character_mythic_kills_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
+    ),
+    check(
+      "character_mythic_kills_historic_world_rank_check",
+      sql`${table.historicWorldRank} IS NULL OR ${table.historicWorldRank} > 0`
     ),
     check(
       "character_mythic_kills_damage_parse_check",

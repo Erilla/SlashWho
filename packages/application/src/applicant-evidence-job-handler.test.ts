@@ -6,6 +6,7 @@ import type {
   TerminalTier
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -3001,11 +3002,18 @@ describe("applicant evidence job handler", () => {
       evidence: ReturnType<typeof store>,
       response: Record<string, unknown>,
       warcraftLogsOverrides: Partial<
-        Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">
-      > = {}
+        Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit" | "resolveCharacter"
+        >
+      > = {},
+      integrations: {
+        raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
+      } = {}
     ) {
       return createApplicantEvidenceJobHandler({
         evidence,
+        ...integrations,
         warcraftLogs: {
           getFirstKillReports: vi.fn(async () => response),
           ...openGate,
@@ -3547,6 +3555,7 @@ describe("applicant evidence job handler", () => {
       const evidence = store();
       evidence.listPhases = async () =>
         [
+          "warcraft_logs_identity_resolution",
           "warcraft_logs_history",
           "warcraft_logs_tier_bests",
           "warcraft_logs_fight_parses",
@@ -3614,6 +3623,7 @@ describe("applicant evidence job handler", () => {
       });
       evidence.listPhases = async () =>
         [
+          "warcraft_logs_identity_resolution",
           "warcraft_logs_history",
           "warcraft_logs_tier_bests",
           "warcraft_logs_fight_parses",
@@ -3658,6 +3668,118 @@ describe("applicant evidence job handler", () => {
         ])
       );
       expect(evidence.published).toHaveLength(1);
+    });
+
+    it("deduplicates Raider.IO ranking requests and persists matched historic ranks", async () => {
+      const evidence = store();
+      const firstKill = {
+        ...concludedKill,
+        raidName: "The Venomous Abyss",
+        bossName: "Sszorak",
+        killedAt: "2026-09-12T20:00:00.000Z",
+        guild: { name: "Guild", region: "eu", realm: "Silvermoon" }
+      };
+      const secondKill = {
+        ...firstKill,
+        killedAt: "2026-09-13T20:00:00.000Z",
+        fightUrl: "https://www.warcraftlogs.com/reports/abc#fight=2"
+      };
+      const getMythicBossRankings = vi.fn(async () => ({
+        kind: "rankings" as const,
+        rows: [
+          {
+            bossSlug: "sszorak",
+            rank: 3,
+            guildName: "Guild",
+            guildRealm: "Silvermoon",
+            guildRegion: "eu",
+            firstDefeated: firstKill.killedAt
+          },
+          {
+            bossSlug: "sszorak",
+            rank: 4,
+            guildName: "Guild",
+            guildRealm: "Silvermoon",
+            guildRegion: "eu",
+            firstDefeated: secondKill.killedAt
+          }
+        ]
+      }));
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [firstKill, secondKill],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {},
+        { raiderio: { getMythicBossRankings } }
+      );
+
+      await handler.execute(run.id);
+
+      expect(getMythicBossRankings).toHaveBeenCalledTimes(1);
+      expect(
+        evidence.published[0]?.result.kills.map(
+          (kill) => kill.historicWorldRank
+        )
+      ).toEqual([3, 4]);
+    });
+
+    it("resolves the Warcraft Logs identity as its own persisted phase", async () => {
+      const evidence = store();
+      const transitions: Array<{ id: string; state: string }> = [];
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      const resolveCharacter = vi.fn(async () => ({
+        kind: "identity" as const,
+        key,
+        displayName: "Rinn-Silvermoon"
+      }));
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        { resolveCharacter }
+      );
+
+      await handler.execute(run.id);
+
+      expect(resolveCharacter).toHaveBeenCalledWith(key, expect.anything());
+      expect(transitions).toEqual(
+        expect.arrayContaining([
+          { id: "warcraft_logs_identity_resolution", state: "active" },
+          { id: "warcraft_logs_identity_resolution", state: "completed" }
+        ])
+      );
     });
   });
 });

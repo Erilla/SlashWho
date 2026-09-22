@@ -4,6 +4,7 @@
  * can ask for a state change, but cannot manufacture a ledger row.
  */
 export type EvidencePhaseId =
+  | "warcraft_logs_identity_resolution"
   | "warcraft_logs_history"
   | "warcraft_logs_tier_bests"
   | "warcraft_logs_fight_parses"
@@ -61,6 +62,7 @@ export const evidencePhasePlans = {
     fightParses: boolean;
   }): EvidencePhasePlan {
     return [
+      "warcraft_logs_identity_resolution",
       ...(input.scan ? (["warcraft_logs_history"] as const) : []),
       ...(input.tierBests ? (["warcraft_logs_tier_bests"] as const) : []),
       ...(input.fightParses
@@ -90,6 +92,7 @@ export const evidencePhasePlans = {
     blizzard: boolean;
   }): EvidencePhasePlan {
     return [
+      "warcraft_logs_identity_resolution",
       ...(input.scan ? (["warcraft_logs_history"] as const) : []),
       ...(input.tierBests ? (["warcraft_logs_tier_bests"] as const) : []),
       ...(input.fightParses

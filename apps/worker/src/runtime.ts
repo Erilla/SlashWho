@@ -117,7 +117,8 @@ export type WorkerRuntimeDependencies = {
   createEvidenceGateway: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
-  ) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">;
+  ) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
+    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   createFingerprintIntegration?: (
     config: WorkerConfig,
     logger?: DiscoveryLogger

@@ -21,17 +21,20 @@ describe("evidence phase ledger", () => {
     });
 
     await ledger.seed();
+    await ledger.transition("warcraft_logs_identity_resolution", "active");
+    await ledger.transition("warcraft_logs_identity_resolution", "completed");
     await ledger.transition("warcraft_logs_history", "active");
     await ledger.transition("warcraft_logs_history", "active");
 
-    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenCalledTimes(4);
     expect(persist).toHaveBeenNthCalledWith(1, [
+      { id: "warcraft_logs_identity_resolution", state: "pending" },
       { id: "warcraft_logs_history", state: "pending" },
       { id: "warcraft_logs_fight_parses", state: "pending" },
       { id: "warcraft_logs_ranking_identities", state: "pending" },
       { id: "publication", state: "pending" }
     ]);
-    expect(persist).toHaveBeenNthCalledWith(2, [
+    expect(persist).toHaveBeenNthCalledWith(4, [
       {
         id: "warcraft_logs_history",
         state: "active",
@@ -76,6 +79,7 @@ describe("evidence phase ledger", () => {
       persist
     });
     await ledger.seed();
+    await ledger.transition("warcraft_logs_identity_resolution", "skipped");
     await ledger.transition("warcraft_logs_history", "active");
     await ledger.unknownStop();
     await ledger.cancelActive();

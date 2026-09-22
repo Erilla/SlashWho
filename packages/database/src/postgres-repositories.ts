@@ -187,6 +187,7 @@ interface CharacterMythicKillRow {
   guild_region: CharacterKey["region"] | null;
   guild_realm: string | null;
   uploader: string | null;
+  historic_world_rank: number | null;
   spec_name: string | null;
   spec_icon_url: string | null;
   damage_parse_state: CharacterMythicKillParseMetric["state"];
@@ -544,6 +545,7 @@ function mapCharacterMythicKill(
             ...(row.guild_region === null ? {} : { region: row.guild_region })
           },
     ...(row.uploader === null ? {} : { uploader: row.uploader }),
+    historicWorldRank: row.historic_world_rank,
     performance: {
       spec:
         row.spec_name === null || row.spec_icon_url === null
@@ -741,7 +743,7 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_region, guild_realm, uploader, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -972,7 +974,7 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_region, guild_realm, uploader, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
@@ -981,7 +983,7 @@ async function loadPositiveEvidenceForPartial(
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
               k.journal_boss_id, k.boss_order, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_region, k.guild_realm, k.uploader, k.spec_name, k.spec_icon_url,
+              k.guild_region, k.guild_realm, k.uploader, k.historic_world_rank, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -3602,6 +3604,26 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               )
             ).rows.map((row) => [row.fight_url, row.collected_at] as const)
           );
+          const storedHistoricWorldRanks = new Map(
+            (
+              await client.query<{
+                fight_url: string;
+                historic_world_rank: number | null;
+              }>(
+                `SELECT DISTINCT ON (k.fight_url)
+                        k.fight_url, k.historic_world_rank
+                   FROM character_mythic_kills k
+                   JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+                  WHERE r.region = $1 AND r.realm_slug = $2
+                    AND r.normalized_name = $3
+                    AND r.status IN ('complete', 'partial')
+                  ORDER BY k.fight_url, r.completed_at DESC NULLS LAST, r.id DESC`,
+                [activeKey.region, activeKey.realm, activeKey.name]
+              )
+            ).rows.map(
+              (row) => [row.fight_url, row.historic_world_rank] as const
+            )
+          );
           const incomingFightUrls = new Set(
             input.kills.map((kill) => kill.fightUrl)
           );
@@ -3690,10 +3712,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, killed_at,
                  report_url, fight_url, guild_name, guild_region, guild_realm, uploader,
+                 historic_world_rank,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+               VALUES (${Array.from({ length: 26 }, (_, index) => `$${index + 1}`).join(", ")})`,
               [
                 runId,
                 kill.fightUrl,
@@ -3710,6 +3733,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.guild?.region ?? null,
                 kill.guild?.realm ?? null,
                 kill.uploader ?? null,
+                kill.historicWorldRank !== undefined
+                  ? kill.historicWorldRank
+                  : (storedHistoricWorldRanks.get(kill.fightUrl) ?? null),
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
                 performance.damage.state,
