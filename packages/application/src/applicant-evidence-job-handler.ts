@@ -1039,8 +1039,13 @@ export function createApplicantEvidenceJobHandler(
                 }
               })
             : undefined;
-        if (parseOnlyResume)
+        if (parseOnlyResume) {
           await phaseLedger?.transition("warcraft_logs_history", "skipped");
+          // A parse-only retry neither scans history nor reads tier bests.
+          // Both precede fight parsing in the durable plan and must settle
+          // before the first parse request can become active.
+          await phaseLedger?.transition("warcraft_logs_tier_bests", "skipped");
+        }
         let activePhase: EvidencePhase["id"] | undefined;
         let phaseWrites = Promise.resolve();
         const observePhase = (query: WarcraftLogsQueryType) => {
@@ -1290,6 +1295,7 @@ export function createApplicantEvidenceJobHandler(
           }
         }
         await phaseLedger?.skipPending();
+        activeContext.signal.throwIfAborted();
         // Whichever limitation asks to wait longest decides, because the run
         // is not collectable again until both are. A limitation with no answer
         // at all contributes nothing rather than forcing a retry the code was
