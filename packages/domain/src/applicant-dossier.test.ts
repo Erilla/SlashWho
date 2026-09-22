@@ -146,6 +146,96 @@ describe("applicant dossier", () => {
     );
   });
 
+  it("backfills a legacy Warcraft Logs Za'qul kill without a Journal ID", () => {
+    // WCL's The Eternal Palace metadata maps encounter 2293 to journalID 0,
+    // and calls the boss Za'qul rather than the Journal's longer name. Stored
+    // evidence must become visible once the catalogue learns that alias.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "23",
+          raidName: "The Eternal Palace",
+          bossId: "2293",
+          bossName: "Za'qul",
+          journalBossId: null,
+          killedAt: "2019-12-04T19:45:00.000Z",
+          reportUrl:
+            "https://www.warcraftlogs.com/reports/8Fgrh2QVX7v9CNdG#fight=2"
+        })
+      ],
+      limitations: []
+    });
+
+    const zaqul = dossier.raids
+      .find((raid) => raid.raidId === "1179")
+      ?.bosses.find((boss) => boss.bossId === "2349");
+
+    expect(zaqul).toMatchObject({
+      state: "kill",
+      bossName: "Za'qul, Harbinger of Ny'alotha",
+      firstKill: {
+        reportUrl:
+          "https://www.warcraftlogs.com/reports/8Fgrh2QVX7v9CNdG#fight=2"
+      }
+    });
+    expect(dossier.limitations).not.toContainEqual(
+      expect.objectContaining({ code: "unmatched_encounter" })
+    );
+  });
+
+  it("backfills a legacy Warcraft Logs Za'qul kill with an unusable Journal ID", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "23",
+          raidName: "The Eternal Palace",
+          bossId: "2293",
+          bossName: "Za'qul",
+          journalBossId: "2602",
+          killedAt: "2019-12-04T19:45:00.000Z"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(
+      dossier.raids
+        .find((raid) => raid.raidId === "1179")
+        ?.bosses.find((boss) => boss.bossId === "2349")
+    ).toMatchObject({ state: "kill" });
+  });
+
+  it("backfills a raid-scoped legacy boss name without a special-case mapping", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "24",
+          raidName: "Ny'alotha, the Waking City",
+          bossId: "2329",
+          bossName: "Wrathion",
+          journalBossId: null,
+          killedAt: "2020-02-04T19:45:00.000Z"
+        })
+      ],
+      limitations: []
+    });
+
+    expect(
+      dossier.raids
+        .find((raid) => raid.raidId === "1180")
+        ?.bosses.find((boss) => boss.bossId === "2368")
+    ).toMatchObject({
+      state: "kill",
+      bossName: "Wrathion, the Black Emperor"
+    });
+  });
+
   it("stays silent about a Mythic dungeon it already knows is not a raid", () => {
     // Break caught: `unmatched_encounter` was live on all eight collected
     // characters, and it was Mythic dungeons raising it -- a dungeon boss

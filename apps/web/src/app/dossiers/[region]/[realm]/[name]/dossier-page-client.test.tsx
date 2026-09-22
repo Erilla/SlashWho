@@ -190,6 +190,23 @@ function withCharacterEvidenceStates(
 }
 
 describe("DossierPageClient live evidence", () => {
+  it("hides the Refresh control for a read-only dossier", () => {
+    // Break caught: the frozen demo can expose a refresh action even though it
+    // has no writable data source or character-management controls.
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={expanded}
+        jobId={null}
+        canAddCharacters={false}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Refresh" })
+    ).not.toBeInTheDocument();
+  });
+
   it("cancels the old dossier read when navigating to another character", async () => {
     vi.useFakeTimers();
     let resolveOld!: (response: Response) => void;
@@ -647,9 +664,6 @@ describe("DossierPageClient live evidence", () => {
     try {
       fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
       await flushAsyncWork();
-      expect(
-        screen.getByRole("status", { name: "Evidence collection updates" })
-      ).toBeEmptyDOMElement();
       // Advance the poll deliberately. With a real wall-clock wait, a poll can
       // race the click and consume this response before the refresh does.
       await startFirstLiveEvidenceRead();

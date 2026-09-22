@@ -237,7 +237,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 // previously completed parse evidence.
 // Bump when the evidence shape or provider request strategy changes so old
 // snapshots are re-collected instead of being treated as fresh forever.
-const CURRENT_EVIDENCE_VERSION = 14;
+const CURRENT_EVIDENCE_VERSION = 15;
 
 /**
  * Per-domain collection versions, for evidence stored indefinitely.
@@ -254,7 +254,7 @@ const CURRENT_EVIDENCE_VERSION = 14;
 const CURRENT_COLLECTION_VERSIONS: Readonly<
   Record<EvidenceCollectionDomain, number>
 > = {
-  kills: 1,
+  kills: 2,
   parses: 2,
   tier_bests: 1
 };

@@ -3,6 +3,7 @@ import type { CharacterGuild, CharacterKey } from "./character-key";
 import { formatCharacterDisplayName } from "./display-name";
 import {
   lookupJournalEncounter,
+  lookupRaidBossByLegacyName,
   lookupRaidBossByName,
   lookupRaidByName,
   currentContentEligibilityByRaidId,
@@ -329,9 +330,16 @@ function catalogueEncounter(evidence: {
     evidence.raidName,
     evidence.bossName
   );
+  const journalEncounterMatchesRaid =
+    raid !== null && journalEncounter?.raidId === raid.raidId;
+  const legacyWarcraftLogsEncounter =
+    raid !== null && !journalEncounterMatchesRaid && namedEncounter === null
+      ? lookupRaidBossByLegacyName(raid.raidId, evidence.bossName)
+      : null;
   return raid
     ? (namedEncounter ??
-        (journalEncounter?.raidId === raid.raidId ? journalEncounter : null))
+        (journalEncounterMatchesRaid ? journalEncounter : null) ??
+        legacyWarcraftLogsEncounter)
     : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
 }
 
