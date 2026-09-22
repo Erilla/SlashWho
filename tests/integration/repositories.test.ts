@@ -427,7 +427,7 @@ describe("PostgreSQL repositories", () => {
     } as never);
 
     expect(
-      ((await repositories.evidence.getCompleted(rootKey)) as any).cuttingEdges
+      (await repositories.evidence.getCompleted(rootKey))?.cuttingEdges
     ).toEqual([
       { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
     ]);

@@ -12,7 +12,6 @@ import type {
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicKillInput,
-  CharacterCuttingEdgeInput,
   CharacterTierBestParseInput,
   CompletedCharacterEvidence,
   EvidenceReservationResult,
