@@ -3805,6 +3805,118 @@ describe("Warcraft Logs gateway", () => {
       }
     });
 
+    describe("reporting a night searched to the end and found empty (#434)", () => {
+      // What a verified kill's search concluded, from one attendance setup.
+      const searchWith = async (
+        attendance: (page: number) => Response,
+        options: Readonly<{
+          requestCap?: number;
+          hydration?: (code: string) => Response;
+        }> = {}
+      ) => {
+        const { client } = clientFor((url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: { page?: number; code?: string };
+          };
+          if (body.query.includes("RecentReports")) return history();
+          if (body.query.includes("GuildAttendance")) {
+            return attendance(body.variables.page!);
+          }
+          if (body.query.includes("ReportByCode")) {
+            return (
+              options.hydration?.(body.variables.code!) ??
+              jsonResponse({ data: { reportData: { report: null } } })
+            );
+          }
+          return emptyZoneRankingsResponse();
+        });
+        return client.getFirstKillReports(key, {
+          requestCap: options.requestCap ?? 20,
+          parseRequestCap: 1,
+          verifiedKills: verified
+        });
+      };
+      // Factories: a response body can be read once, and these serve many runs.
+      const pastTheNight = () =>
+        attendancePage(
+          [{ code: "monthBefore", startTime: night - hours(24 * 30) }],
+          true
+        );
+      const onTheNight = () =>
+        attendancePage(
+          [{ code: "killNight", startTime: night - hours(1) }],
+          true
+        );
+
+      it("reports a night the walk passed without finding the kill", async () => {
+        // Break caught: a kill whose first defeat was never logged has
+        // nothing to hold it, so every full run walked the guild's
+        // attendance back to its night again. Yawnersw spent 39 pages, about
+        // 1,090 of its 1,168 points, finding nothing (2026-09-23).
+        const result = await searchWith((page) =>
+          page === 1 ? onTheNight() : pastTheNight()
+        );
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
+      it("reports a guild Warcraft Logs does not have", async () => {
+        // Recorded 2026-09-23: an unknown guild is `guild: null`, no errors.
+        const result = await searchWith(() =>
+          jsonResponse({ data: { guildData: { guild: null } } })
+        );
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
+      it("reports a guild whose attendance is empty", async () => {
+        const result = await searchWith(() => attendancePage([], false));
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
+      it("does not report a kill the search recovered", async () => {
+        const result = await searchWith(
+          (page) => (page === 1 ? onTheNight() : pastTheNight()),
+          { hydration: (code) => hydratedKill(code) }
+        );
+
+        expect(result).toMatchObject({ attendanceRecoveredKills: 1 });
+        expect(result).not.toHaveProperty("attendanceSearchedEmpty");
+      });
+
+      it("proves nothing from a walk that did not finish", async () => {
+        // A transient refusal, a report that could not be read, or a budget
+        // spent before the night was reached leaves the kill unproven: it is
+        // searched for again rather than forgotten.
+        for (const run of [
+          () =>
+            searchWith(
+              () => new Response("upstream-body-marker", { status: 503 })
+            ),
+          () =>
+            searchWith((page) => (page === 1 ? onTheNight() : pastTheNight()), {
+              hydration: () =>
+                new Response("upstream-body-marker", { status: 503 })
+            }),
+          () =>
+            searchWith(
+              () =>
+                attendancePage(
+                  [{ code: "weekLater", startTime: night + hours(24 * 7) }],
+                  true
+                ),
+              { requestCap: 3 }
+            )
+        ]) {
+          const result = await run();
+          expect(result).not.toHaveProperty("attendanceSearchedEmpty");
+        }
+      });
+    });
+
     it("reports no search when the budget was spent before recovery began", async () => {
       // Break caught: a run whose history scan used the whole cap still read
       // `attendanceRecoveredKills: 0`, a measured zero for a search that

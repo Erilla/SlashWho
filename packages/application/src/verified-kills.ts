@@ -116,3 +116,27 @@ export function storedKillReportCodes(
   }
   return [...codes];
 }
+
+/**
+ * How long a night searched to the end and found empty is left alone (#434).
+ * A kill whose first defeat was never logged would otherwise be searched for
+ * on every full run -- Yawnersw spent 39 attendance pages, about 1,090 of a
+ * 1,168-point run, finding nothing (2026-09-23). A week, not forever: a log
+ * can be uploaded late, and attendance fills in when it is.
+ */
+export const EMPTY_SEARCH_RECHECK_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/** One verified kill's identity for remembering its search, time normalised. */
+export function emptySearchKey(
+  search: Readonly<{
+    at: string;
+    guild: Readonly<{ name: string; realm: string; region: string }>;
+  }>
+): string {
+  return [
+    search.guild.region,
+    search.guild.realm,
+    search.guild.name,
+    String(Date.parse(search.at))
+  ].join("\0");
+}

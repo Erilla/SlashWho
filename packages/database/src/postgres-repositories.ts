@@ -4190,6 +4190,70 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
         return result.rowCount ?? 0;
       },
+      async emptyAttendanceSearches(key, searchedSince) {
+        if (Number.isNaN(searchedSince.valueOf())) {
+          throw new RangeError("character_attendance_search_time_invalid");
+        }
+        const result = await pool.query<{
+          guild_region: string;
+          guild_realm: string;
+          guild_name: string;
+          verified_at: Date;
+        }>(
+          `SELECT guild_region, guild_realm, guild_name, verified_at
+             FROM character_attendance_searches
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND searched_at >= $4
+              AND collection_version >= $5`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            searchedSince,
+            CURRENT_COLLECTION_VERSIONS.kills
+          ]
+        );
+        return result.rows.map((row) => ({
+          at: row.verified_at.toISOString(),
+          guild: {
+            name: row.guild_name,
+            realm: row.guild_realm,
+            region: row.guild_region
+          }
+        }));
+      },
+
+      async recordEmptyAttendanceSearches(key, searches, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_attendance_search_time_invalid");
+        }
+        if (searches.length === 0) return;
+        await pool.query(
+          `INSERT INTO character_attendance_searches
+             (region, realm_slug, normalized_name, guild_region, guild_realm,
+              guild_name, verified_at, collection_version, searched_at)
+           SELECT $1, $2, $3, entry.guild_region, entry.guild_realm,
+                  entry.guild_name, entry.verified_at, $8, $9
+             FROM unnest($4::text[], $5::text[], $6::text[],
+                         $7::timestamptz[])
+                  AS entry(guild_region, guild_realm, guild_name, verified_at)
+           ON CONFLICT (region, realm_slug, normalized_name, guild_region,
+                        guild_realm, guild_name, verified_at)
+           DO UPDATE SET collection_version = EXCLUDED.collection_version,
+                         searched_at = EXCLUDED.searched_at`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            searches.map((search) => search.guild.region),
+            searches.map((search) => search.guild.realm),
+            searches.map((search) => search.guild.name),
+            searches.map((search) => new Date(search.at)),
+            CURRENT_COLLECTION_VERSIONS.kills,
+            at
+          ]
+        );
+      },
 
       async listResumable(limit, at) {
         if (limit <= 0) return [];
@@ -4404,10 +4468,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              fight_parses_requests, ranking_identities_requests,
              guild_attendance_requests, report_hydration_requests,
              raiderio_historic_outcome, raiderio_historic_ms,
-             verified_kills_searched, attendance_recovered_kills
+             verified_kills_searched, attendance_recovered_kills,
+             verified_kills_skipped_empty
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                   $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                   $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -4429,7 +4494,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              raiderio_historic_outcome = EXCLUDED.raiderio_historic_outcome,
              raiderio_historic_ms = EXCLUDED.raiderio_historic_ms,
              verified_kills_searched = EXCLUDED.verified_kills_searched,
-             attendance_recovered_kills = EXCLUDED.attendance_recovered_kills`,
+             attendance_recovered_kills = EXCLUDED.attendance_recovered_kills,
+             verified_kills_skipped_empty = EXCLUDED.verified_kills_skipped_empty`,
           [
             cost.runId,
             cost.attempt,
@@ -4452,7 +4518,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             cost.recovery.raiderIoOutcome,
             cost.recovery.raiderIoMs,
             cost.recovery.verifiedKillsSearched,
-            cost.recovery.recoveredKills
+            cost.recovery.recoveredKills,
+            cost.recovery.verifiedKillsSkippedEmpty
           ]
         );
       },
