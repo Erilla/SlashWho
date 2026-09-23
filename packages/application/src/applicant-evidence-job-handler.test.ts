@@ -3671,126 +3671,173 @@ describe("applicant evidence job handler", () => {
       expect(evidence.published).toHaveLength(1);
     });
 
-    it("restores persisted phase state across retries of the same run", async () => {
-      const evidence = store();
-      const phaseIds = [
-        "warcraft_logs_identity_resolution",
-        "warcraft_logs_history",
-        "warcraft_logs_tier_bests",
-        "warcraft_logs_fight_parses",
-        "warcraft_logs_ranking_identities",
-        "raiderio_rankings",
-        "blizzard_achievements",
-        "publication"
-      ];
-      const persistedPhases: EvidenceRunPhase[] = phaseIds.map(
-        (id, ordinal) => ({
-          id,
-          ordinal,
-          state: "pending",
-          startedAt: null,
-          completedAt: null,
-          limitationCode: null
-        })
-      );
-      evidence.listPhases = async () => persistedPhases;
-      evidence.recordPhaseTransitions = async (_runId, phases) => {
-        for (const transition of phases) {
-          const persisted = persistedPhases.find(
-            (phase) => phase.id === transition.id
-          );
-          if (!persisted) throw new Error("character_evidence_phase_not_found");
-          const legal =
-            persisted.state === transition.state ||
-            (persisted.state === "pending" &&
-              (transition.state === "active" ||
-                transition.state === "skipped")) ||
-            (persisted.state === "active" &&
-              ["completed", "limited", "failed", "cancelled"].includes(
-                transition.state
-              ));
-          if (!legal)
-            throw new Error(
-              `character_evidence_phase_not_found:${transition.id}:${persisted.state}->${transition.state}`
+    it.each([
+      { name: "completed", persistedIdentityState: "completed" as const },
+      { name: "limited", persistedIdentityState: "limited" as const }
+    ])(
+      "restores persisted $name phase state across retries of the same run",
+      async ({ persistedIdentityState }) => {
+        const evidence = store();
+        const phaseIds = [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ];
+        const persistedPhases: EvidenceRunPhase[] = phaseIds.map(
+          (id, ordinal) => ({
+            id,
+            ordinal,
+            state: "pending",
+            startedAt: null,
+            completedAt: null,
+            limitationCode: null
+          })
+        );
+        evidence.listPhases = async () => persistedPhases;
+        evidence.recordPhaseTransitions = async (_runId, phases) => {
+          for (const transition of phases) {
+            const persisted = persistedPhases.find(
+              (phase) => phase.id === transition.id
             );
-          Object.assign(persisted, transition);
-        }
-      };
-
-      let collectionAttempts = 0;
-      const handler = createApplicantEvidenceJobHandler({
-        evidence,
-        warcraftLogs: {
-          ...openGate,
-          async resolveCharacter() {
-            return { kind: "identity" as const, key, displayName: "Rinn" };
-          },
-          async getFirstKillReports(_key, options) {
-            collectionAttempts += 1;
-            options.onRequest?.({ query: "history_scan", limited: false });
-            if (collectionAttempts === 1) {
-              throw Object.assign(new Error("socket reset"), {
-                code: "ECONNRESET"
-              });
-            }
-            return {
-              kind: "evidence" as const,
-              parsedFightUrls: [],
-              kills: [],
-              wipes: [],
-              tierBests: [],
-              troubledRaidIds: { parses: [], tierBests: [] }
-            };
+            if (!persisted)
+              throw new Error("character_evidence_phase_not_found");
+            const legal =
+              persisted.state === transition.state ||
+              (persisted.state === "pending" &&
+                (transition.state === "active" ||
+                  transition.state === "skipped")) ||
+              (persisted.state === "limited" &&
+                transition.state === "active") ||
+              (persisted.state === "active" &&
+                ["completed", "limited", "failed", "cancelled"].includes(
+                  transition.state
+                ));
+            if (!legal)
+              throw new Error(
+                `character_evidence_phase_not_found:${transition.id}:${persisted.state}->${transition.state}`
+              );
+            Object.assign(persisted, transition);
           }
-        },
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        now: () => new Date("2026-09-18T12:00:00.000Z")
-      });
+        };
 
-      const context = (attempt: number) => ({
-        attempt,
-        maxAttempts: 5,
-        signal: new AbortController().signal
-      });
-      await expect(handler.execute(run.id, context(1))).rejects.toMatchObject({
-        code: "ECONNRESET"
-      });
-      expect(persistedPhases).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "warcraft_logs_identity_resolution",
-            state: "completed"
-          }),
-          expect.objectContaining({
-            id: "warcraft_logs_history",
-            state: "active"
-          })
-        ])
-      );
-      await handler.execute(run.id, context(2));
+        let collectionAttempts = 0;
+        let identityAttempts = 0;
+        let currentTime = new Date("2026-09-18T12:00:00.000Z");
+        const handler = createApplicantEvidenceJobHandler({
+          evidence,
+          warcraftLogs: {
+            ...openGate,
+            async resolveCharacter() {
+              identityAttempts += 1;
+              if (
+                identityAttempts === 1 &&
+                persistedIdentityState === "limited"
+              ) {
+                return {
+                  kind: "limitation" as const,
+                  code: "not_found" as const
+                };
+              }
+              return { kind: "identity" as const, key, displayName: "Rinn" };
+            },
+            async getFirstKillReports(_key, options) {
+              collectionAttempts += 1;
+              options.onRequest?.({ query: "history_scan", limited: false });
+              if (collectionAttempts === 1) {
+                throw Object.assign(new Error("socket reset"), {
+                  code: "ECONNRESET"
+                });
+              }
+              return {
+                kind: "evidence" as const,
+                parsedFightUrls: [],
+                kills: [],
+                wipes: [],
+                tierBests: [],
+                troubledRaidIds: { parses: [], tierBests: [] }
+              };
+            }
+          },
+          requestCap: 500,
+          parseRequestCap: 24,
+          capRetryMs: 1_800_000,
+          transientRetryMs: 900_000,
+          pointsReserve: 0,
+          retryCostCeiling: 250,
+          failureCooldownMs: 1_800_000,
+          killSettleMs: 7 * 24 * 60 * 60 * 1000,
+          now: () => new Date(currentTime)
+        });
 
-      expect(collectionAttempts).toBe(2);
-      expect(persistedPhases).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "warcraft_logs_identity_resolution",
-            state: "completed"
-          }),
-          expect.objectContaining({
-            id: "warcraft_logs_history",
-            state: "completed"
-          })
-        ])
-      );
-      expect(evidence.published).toHaveLength(1);
-    });
+        const context = (attempt: number) => ({
+          attempt,
+          maxAttempts: 5,
+          signal: new AbortController().signal
+        });
+        await expect(handler.execute(run.id, context(1))).rejects.toMatchObject(
+          {
+            code: "ECONNRESET"
+          }
+        );
+        expect(persistedPhases).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "warcraft_logs_identity_resolution",
+              state: persistedIdentityState
+            }),
+            expect.objectContaining({
+              id: "warcraft_logs_history",
+              state: "active"
+            })
+          ])
+        );
+        if (persistedIdentityState === "limited") {
+          expect(
+            persistedPhases.find(
+              (phase) => phase.id === "warcraft_logs_identity_resolution"
+            )?.limitationCode
+          ).toBe("not_found");
+        }
+        const firstIdentityCompletion = persistedPhases.find(
+          (phase) => phase.id === "warcraft_logs_identity_resolution"
+        )?.completedAt;
+        currentTime = new Date("2026-09-18T12:01:00.000Z");
+        await handler.execute(run.id, context(2));
+
+        expect(collectionAttempts).toBe(2);
+        expect(persistedPhases).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "warcraft_logs_identity_resolution",
+              state: "completed"
+            }),
+            expect.objectContaining({
+              id: "warcraft_logs_history",
+              state: "completed"
+            })
+          ])
+        );
+        if (persistedIdentityState === "limited") {
+          const recoveredIdentity = persistedPhases.find(
+            (phase) => phase.id === "warcraft_logs_identity_resolution"
+          );
+          expect(recoveredIdentity?.startedAt).toEqual(
+            new Date("2026-09-18T12:00:00.000Z")
+          );
+          expect(recoveredIdentity?.completedAt).toEqual(currentTime);
+          expect(recoveredIdentity?.limitationCode).toBeNull();
+          expect(recoveredIdentity?.completedAt).not.toEqual(
+            firstIdentityCompletion
+          );
+        }
+        expect(evidence.published).toHaveLength(1);
+      }
+    );
 
     it("deduplicates Raider.IO ranking requests and persists matched historic ranks", async () => {
       const evidence = store();

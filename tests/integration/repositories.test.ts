@@ -403,6 +403,59 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("reopens a limited evidence phase on retry and records its recovered result", async () => {
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: [
+        "warcraft_logs_identity_resolution",
+        "warcraft_logs_history",
+        "publication"
+      ]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    const recordTransition = async (
+      state: "active" | "limited" | "completed",
+      at: Date,
+      limitationCode: string | null = null
+    ) =>
+      repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+        {
+          id: "warcraft_logs_identity_resolution",
+          state,
+          startedAt: new Date("2026-09-22T11:01:00.000Z"),
+          completedAt: state === "active" ? null : at,
+          limitationCode
+        }
+      ]);
+
+    await recordTransition("active", new Date("2026-09-22T11:01:00.000Z"));
+    await recordTransition(
+      "limited",
+      new Date("2026-09-22T11:02:00.000Z"),
+      "not_found"
+    );
+    await recordTransition("active", new Date("2026-09-22T11:03:00.000Z"));
+    await recordTransition("completed", new Date("2026-09-22T11:04:00.000Z"));
+
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "warcraft_logs_identity_resolution",
+          state: "completed",
+          startedAt: new Date("2026-09-22T11:01:00.000Z"),
+          completedAt: new Date("2026-09-22T11:04:00.000Z"),
+          limitationCode: null
+        })
+      ])
+    );
+  });
+
   it("publishes normalized Blizzard achievements with the evidence run", async () => {
     // Break caught: a provider phase that does not publish its normalized
     // result only recreates the same network call on every dossier read.

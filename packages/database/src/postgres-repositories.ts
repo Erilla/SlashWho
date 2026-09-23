@@ -3446,6 +3446,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 AND (
                   state = $3 OR
                   (state = 'pending' AND $3 IN ('active', 'skipped')) OR
+                  (state = 'limited' AND $3 = 'active') OR
                   (state = 'active' AND $3 IN ('completed', 'limited', 'failed', 'cancelled'))
                 )`,
             [
