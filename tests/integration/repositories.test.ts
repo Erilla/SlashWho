@@ -2164,7 +2164,9 @@ describe("PostgreSQL repositories", () => {
           {
             raidId: "43",
             raidName: "Nerub-ar Palace",
-            attemptedAt: "2026-03-01T11:00:00.000Z"
+            attemptedAt: "2026-03-01T11:00:00.000Z",
+            // So a wipe found through attendance can be re-read (#435).
+            reportUrl: "https://www.warcraftlogs.com/reports/wipe"
           }
         ]
       })
@@ -3630,6 +3632,189 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  describe("tier searches", () => {
+    // A tier search is one explicit, bounded request from the dossier (#435).
+    // Nothing but `reserveTierSearch` creates one, and it is rate limited per
+    // tier and per character where the reservation is decided: under the
+    // character's lock.
+    const tier = "1180";
+    const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+    const dayBefore = new Date(searchedAt.getTime() - 24 * 60 * 60 * 1_000);
+
+    async function publishEvidence(key: CharacterKey, at: Date) {
+      const reservation = await repositories.evidence.reserve({
+        key,
+        freshnessCutoff: at,
+        at
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("evidence_not_reserved");
+      }
+      await repositories.evidence.claim(reservation.run.id, 1);
+      await repositories.evidence.publish(reservation.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        kills: [
+          {
+            ...mythicKill(),
+            guild: { name: "Stored Guild", realm: "silvermoon", region: "eu" }
+          }
+        ],
+        wipes: [],
+        tierBests: [],
+        completedAt: at
+      });
+    }
+
+    it("refuses a character with no evidence yet to add to", async () => {
+      await expect(
+        repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: tier,
+          at: searchedAt,
+          searchedSince: dayBefore
+        })
+      ).resolves.toEqual({ kind: "no_evidence" });
+    });
+
+    it("reserves a run that stays a tier search when it is claimed", async () => {
+      // Break caught: the mode lived only in the queue payload, so a run the
+      // recovery sweep re-enqueued came back as an ordinary collection.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+
+      const reservation = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: searchedAt,
+        searchedSince: dayBefore,
+        phasePlan: ["publication"]
+      });
+      if (reservation.kind !== "reserved") {
+        throw new Error("tier_search_not_reserved");
+      }
+
+      expect(reservation.run).toMatchObject({
+        mode: "tier_search",
+        tierSearchRaidId: tier,
+        status: "queued"
+      });
+      await expect(
+        repositories.evidence.claim(reservation.run.id, 1)
+      ).resolves.toMatchObject({ mode: "tier_search", tierSearchRaidId: tier });
+      await expect(
+        repositories.evidence.listPhases!(reservation.run.id)
+      ).resolves.toEqual([expect.objectContaining({ id: "publication" })]);
+    });
+
+    it("joins nothing while any run for the character is in flight", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const ordinary = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: searchedAt,
+        at: searchedAt
+      });
+
+      await expect(
+        repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: tier,
+          at: searchedAt,
+          searchedSince: dayBefore
+        })
+      ).resolves.toMatchObject({
+        kind: "active",
+        run: { id: ordinary.run.id, mode: "full" }
+      });
+    });
+
+    it("refuses the same tier again inside the window, whatever became of the last search", async () => {
+      // Repeated clicks must not burn the hourly allowance, and a search that
+      // failed was still paid for.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const first = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: new Date("2026-09-23T06:00:00.000Z"),
+        searchedSince: new Date("2026-09-22T06:00:00.000Z")
+      });
+      if (first.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(first.run.id, 1);
+      await repositories.evidence.fail(first.run.id, "unavailable");
+
+      await expect(
+        repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: tier,
+          at: searchedAt,
+          searchedSince: dayBefore
+        })
+      ).resolves.toMatchObject({ kind: "recent", run: { id: first.run.id } });
+      // Another tier is not limited by it, and nor is the same tier once the
+      // window has passed.
+      const other = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: "1190",
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+      expect(other).toMatchObject({ kind: "reserved" });
+      if (other.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(other.run.id, 1);
+      await repositories.evidence.fail(other.run.id, "unavailable");
+      await expect(
+        repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: tier,
+          at: searchedAt,
+          searchedSince: new Date("2026-09-23T07:00:00.000Z")
+        })
+      ).resolves.toMatchObject({ kind: "reserved" });
+    });
+
+    it("keeps one character's searches from limiting another's", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      await publishEvidence(altKey, new Date("2026-09-22T12:00:00.000Z"));
+      await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+
+      await expect(
+        repositories.evidence.reserveTierSearch({
+          key: altKey,
+          raidId: tier,
+          at: searchedAt,
+          searchedSince: dayBefore
+        })
+      ).resolves.toMatchObject({ kind: "reserved" });
+    });
+
+    it("names the guilds stored kills were in, for the search to walk", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+
+      const stored = await repositories.evidence.storedEvidenceTiers(rootKey);
+
+      expect(stored.guilds).toEqual([
+        { name: "Stored Guild", realm: "silvermoon", region: "eu" }
+      ]);
+    });
+
+    it("never treats an ordinary run as a tier search", async () => {
+      await expect(
+        pool.query(
+          `INSERT INTO character_evidence_runs
+             (region, realm_slug, normalized_name, mode)
+           VALUES ('eu', 'silvermoon', 'nobody', 'tier_search')`
+        )
+      ).rejects.toThrow(/character_evidence_runs_mode_check/);
+    });
+  });
+
   describe("attendance searches found empty (#434)", () => {
     const search = {
       at: "2020-01-21T19:34:00.000Z",
@@ -3801,6 +3986,54 @@ describe("PostgreSQL repositories", () => {
       ]);
     });
 
+    it("records a tier search apart, and leaves it null on a run that searched none", async () => {
+      const ordinary = await reserveRun(rootKey, new Date());
+      await repositories.evidence.recordRunCost(cost(ordinary));
+      await pool.query(
+        `UPDATE character_evidence_runs SET status = 'failed' WHERE id = $1`,
+        [ordinary]
+      );
+      const searched = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(searched, {
+          mode: "tier_search",
+          requests: { ...cost(searched).requests, characterGuilds: 1 },
+          tierSearch: {
+            raidId: "1180",
+            outcome: "request_cap",
+            requests: 40,
+            guilds: 2,
+            reportsHydrated: 12,
+            recoveredKills: 3,
+            recoveredWipes: 0
+          }
+        })
+      );
+
+      const recorded = await rows();
+      expect(recorded.find((row) => row.run_id === ordinary)).toMatchObject({
+        mode: "full",
+        character_guilds_requests: 0,
+        tier_search_raid_id: null,
+        tier_search_outcome: null,
+        tier_search_requests: null,
+        tier_search_recovered_kills: null
+      });
+      expect(recorded.find((row) => row.run_id === searched)).toMatchObject({
+        mode: "tier_search",
+        character_guilds_requests: 1,
+        tier_search_raid_id: "1180",
+        tier_search_outcome: "request_cap",
+        tier_search_requests: 40,
+        tier_search_guilds: 2,
+        tier_search_reports_hydrated: 12,
+        tier_search_recovered_kills: 3,
+        // Zero is a search that ran and found none, never a search not made.
+        tier_search_recovered_wipes: 0
+      });
+    });
+
     it("keeps a recovery step that did not run null rather than zero", async () => {
       // Raider.IO not asked is not Raider.IO asked and answering with nothing
       // to search, and no attendance search is not one that recovered
@@ -3957,8 +4190,43 @@ describe("PostgreSQL repositories", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the three queries the document describes", () => {
-        expect(queries).toHaveLength(3);
+      it("finds exactly the four queries the document describes", () => {
+        expect(queries).toHaveLength(4);
+      });
+
+      it("reports what tier searches spent and found, apart from other runs", async () => {
+        const ordinary = await reserveRun(rootKey, new Date());
+        const searched = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(cost(ordinary));
+        await repositories.evidence.recordRunCost(
+          cost(searched, {
+            mode: "tier_search",
+            tierSearch: {
+              raidId: "1180",
+              outcome: "complete",
+              requests: 20,
+              guilds: 2,
+              reportsHydrated: 11,
+              recoveredKills: 1,
+              recoveredWipes: 4
+            }
+          })
+        );
+
+        const result = await pool.query(queries[3] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            tier_search_outcome: "complete",
+            searches: "1",
+            requests: "20",
+            guilds: "2",
+            reports_hydrated: "11",
+            kills_recovered: "1",
+            wipes_recovered: "4",
+            measured: "1"
+          })
+        ]);
       });
 
       it("reports recovery's yield without counting an unasked run as zero", async () => {

@@ -30,6 +30,9 @@ export type {
 export { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 export { refreshCharacter } from "./refresh-character";
 export type { RefreshCharacterResult } from "./refresh-character";
+export { searchCharacterTier } from "./search-character-tier";
+export type { SearchCharacterTierResult } from "./search-character-tier";
+export { TIER_SEARCH_SPACING_MS } from "./tier-search";
 export type { RefreshMode } from "./refresh-mode";
 export { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 export type { TerminalTierInput, TerminalTierKill } from "./terminal-tiers";

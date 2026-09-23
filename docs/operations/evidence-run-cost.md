@@ -292,9 +292,68 @@ the not-asked rows visible: `attempts` minus `asked` is how many attempts never
 asked Raider.IO, and `asked` minus `searches` is how many asked and had
 nothing to search.
 
+## What a tier search costs
+
+A tier search is a full collection that also walks one tier's guild
+attendance, asked for from the dossier (#435). It searches every guild known
+for the character (Raider.IO's, the stored kills', and the ones Warcraft Logs
+lists for the character) across the tier's current-content window. It hydrates
+each report there that may list the character, whether or not it holds a kill
+Raider.IO knows about, so guildless kills, wipe-only nights and kills below the
+scan floor can be found.
+
+It is reserved only by that explicit request, never by a read, a resume or a
+retry, and at most once per tier per character a day. It has its own cap,
+`EVIDENCE_TIER_SEARCH_REQUEST_CAP` (60 by default). The cap is carved out of
+the run's scan cap, and the search takes at most half of it, so the run's
+points budget is unchanged. It gallops through a guild's attendance to find
+the window, then walks it page by page, so an old tier behind years of newer
+reports costs a few requests a guild instead of one for every page in between.
+
+Its rows carry `mode = 'tier_search'`, and these columns, all null on a run that
+searched no tier:
+
+- `tier_search_raid_id` is the Journal raid id the dossier asked for. It is
+  present even when the search did not run, because the catalogue had no
+  window for the raid.
+- `tier_search_outcome` is `complete` (every guild walked across the whole
+  window), `request_cap` (the search's own cap ran out) or `incomplete` (some
+  guild's attendance or report could not be read). None of them limits the
+  run: a search only ever adds evidence. Null means it never ran.
+- `tier_search_requests`, `tier_search_guilds` and
+  `tier_search_reports_hydrated` are what it spent and walked.
+- `tier_search_recovered_kills` and `tier_search_recovered_wipes` are what it
+  added that the run had not already found. `0` is a search that found
+  nothing.
+
+Its requests are also counted in the per-class columns:
+`character_guilds_requests` (one, for the character's guild list),
+`guild_attendance_requests` and `report_hydration_requests`.
+
+```sql
+SELECT tier_search_outcome,
+       count(*) AS searches,
+       sum(tier_search_requests) AS requests,
+       sum(tier_search_guilds) AS guilds,
+       sum(tier_search_reports_hydrated) AS reports_hydrated,
+       sum(tier_search_recovered_kills) AS kills_recovered,
+       sum(tier_search_recovered_wipes) AS wipes_recovered,
+       round(avg(points_spent)::numeric, 1) AS mean_points,
+       count(points_spent) AS measured
+FROM character_evidence_run_costs
+WHERE mode = 'tier_search'
+  AND recorded_at >= now() - interval '28 days'
+GROUP BY tier_search_outcome
+ORDER BY searches DESC;
+```
+
+`mean_points` is the whole run's spend, not the search's alone. Points are not
+split by class, so weigh it against the history scan and parse requests on the
+same rows.
+
 ## Keeping this honest
 
-`tests/integration/repositories.test.ts` extracts all three queries from this file
+`tests/integration/repositories.test.ts` extracts all four queries from this file
 and runs them verbatim against a seeded database. A column renamed out from
 under them fails the integration suite rather than leaving a document that
 silently stopped being true.

@@ -31,6 +31,7 @@ const config: WorkerConfig = {
   evidenceRetryCostCeiling: 250,
   evidenceFailureCooldownMs: 1_800_000,
   evidenceParseRequestCap: 8,
+  evidenceTierSearchRequestCap: 60,
   blizzardSweepRequestCap: 300,
   blizzardHourlyRequestBudget: 28_800,
   fingerprintMinimumCommon: 200,

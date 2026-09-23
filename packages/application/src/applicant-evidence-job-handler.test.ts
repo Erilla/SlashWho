@@ -8,6 +8,7 @@ import type {
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
+import { supportedRaidCatalogue } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -2550,8 +2551,12 @@ describe("applicant evidence job handler", () => {
             // the scan scales to the reported allowance.
             requestCapUsed: 300,
             parseRequestCapUsed: 8,
+            mode: "full",
+            // No tier was asked for: null, not an empty search.
+            tierSearch: null,
             requests: {
               historyScan: 2,
+              characterGuilds: 0,
               guildAttendance: 0,
               reportHydration: 0,
               zoneRankings: 1,
@@ -4609,6 +4614,277 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
       verifiedKillsSearched: null,
       verifiedKillsSkippedEmpty: null,
       recoveredKills: null
+    });
+  });
+});
+
+describe("searching one tier from the dossier", () => {
+  const eternalPalace = supportedRaidCatalogue().find(
+    (raid) => raid.raidName === "The Eternal Palace"
+  )!;
+  const tierRun = {
+    ...run,
+    mode: "tier_search" as const,
+    tierSearchRaidId: eternalPalace.raidId
+  };
+  const verifiedAzshara = {
+    raidSlug: "the-eternal-palace",
+    bossSlug: "queen-azshara",
+    firstDefeated: "2020-01-21T19:34:00.000Z",
+    guild: { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" }
+  };
+  const searched = {
+    outcome: "complete" as const,
+    requests: 14,
+    guildsSearched: 2,
+    reportsHydrated: 9,
+    recoveredKills: 2,
+    recoveredWipes: 5
+  };
+  const evidenceFound = async () => ({
+    kind: "evidence" as const,
+    parsedFightUrls: [],
+    kills: [],
+    wipes: [],
+    tierBests: [],
+    troubledRaidIds: { parses: [], tierBests: [] },
+    tierSearch: searched
+  });
+  const handlerWith = (
+    evidence: ReturnType<typeof store>,
+    getFirstKillReports: ReturnType<typeof vi.fn>
+  ) =>
+    createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      raiderio: {
+        getMythicBossRankings: vi.fn(),
+        getHistoricMythicKills: vi.fn(async () => ({
+          kind: "evidence",
+          kills: [verifiedAzshara]
+        }))
+      } as never,
+      requestCap: 500,
+      parseRequestCap: 24,
+      tierSearchRequestCap: 60,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
+    });
+  const withStoredTier = (evidence: ReturnType<typeof store>) => {
+    evidence.storedKills.push({
+      raidId: "23",
+      raidName: "The Eternal Palace",
+      killedAt: "2020-01-21T20:34:49.222Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7"
+    });
+    evidence.stored.push(
+      { raidId: "23", domain: "kills" },
+      { raidId: "23", domain: "parses" },
+      { raidId: "23", domain: "tier_bests" }
+    );
+    const tiers = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await tiers(characterKey)),
+      guilds: [{ name: "Stored Guild", realm: "silvermoon", region: "eu" }]
+    });
+    return evidence;
+  };
+
+  it("walks the tier's attendance, out of the scan's cap, over every known guild", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const options = (
+      getFirstKillReports.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    // 18,000 points at half the allowance is 300 requests; the search takes
+    // 60 of them rather than adding its own on top.
+    expect(options.requestCap).toBe(240);
+    expect(options.tierSearch).toMatchObject({
+      requestCap: 60,
+      guilds: [
+        { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" },
+        { name: "Stored Guild", realm: "silvermoon", region: "eu" }
+      ],
+      // The stored kill's report is already decoded.
+      skipReportCodes: ["zCFtRjmLgvHxynh7"]
+    });
+    const window = options.tierSearch as { from: string; to: string };
+    expect(window.from.startsWith("2019-")).toBe(true);
+    expect(window.to.startsWith("2020-")).toBe(true);
+  });
+
+  it("ignores the tier's parse marks for the one run, and keeps its kill marks", async () => {
+    // A kill recovered in a settled tier would otherwise never be parsed;
+    // and dropping the kill marks would let a complete publish discard the
+    // tier's stored kills, and drop the scan floor to the tier's first night.
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const options = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
+      terminalRaidIds: Record<string, ReadonlySet<string>>;
+    };
+    expect(options.terminalRaidIds.kills.has("23")).toBe(true);
+    expect(options.terminalRaidIds.parses.has("23")).toBe(false);
+    expect(options.terminalRaidIds.tierBests.has("23")).toBe(false);
+  });
+
+  it("records the search on the run's cost row", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+
+    await handlerWith(evidence, vi.fn(evidenceFound)).execute(run.id);
+
+    expect(evidence.costs.at(-1)).toMatchObject({
+      mode: "tier_search",
+      tierSearch: {
+        raidId: eternalPalace.raidId,
+        outcome: "complete",
+        requests: 14,
+        guilds: 2,
+        reportsHydrated: 9,
+        recoveredKills: 2,
+        recoveredWipes: 5
+      }
+    });
+  });
+
+  it("searches nothing on an ordinary run", async () => {
+    const evidence = withStoredTier(store());
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ tierSearch: expect.anything() })
+    );
+    const options = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
+      requestCap: number;
+      terminalRaidIds: Record<string, ReadonlySet<string>>;
+    };
+    expect(options.requestCap).toBe(300);
+    expect(options.terminalRaidIds.parses.has("23")).toBe(true);
+    expect(evidence.costs.at(-1)).toMatchObject({
+      mode: "full",
+      tierSearch: null
+    });
+  });
+
+  it("scans rather than resuming parses only, because it was asked to look", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const tiers = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await tiers(characterKey)),
+      lastCleanKillScanAt: new Date().toISOString(),
+      parseWorkOutstanding: true
+    });
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        requestCap: 240,
+        tierSearch: expect.anything()
+      })
+    );
+  });
+
+  it("re-reads a stored wipe's report, so a wipe-only night it found survives", async () => {
+    // Break caught (review): only kill reports were re-read after a fresh
+    // scan, so a wipe-only night a search recovered from attendance was
+    // dropped by the next ordinary complete publish.
+    const evidence = store();
+    evidence.storedWipes.push({
+      raidId: "23",
+      raidName: "The Eternal Palace",
+      attemptedAt: "2019-08-01T19:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/wipeOnlyNight"
+    });
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({ storedKillReportCodes: ["wipeOnlyNight"] })
+    );
+  });
+
+  it("records a search its budget could not afford as capped, not as never asked", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const getFirstKillReports = vi.fn(evidenceFound);
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        getFirstKillReports,
+        getRateLimit: async () => ({
+          kind: "rate_limit" as const,
+          limitPerHour: 150,
+          pointsSpentThisHour: 0,
+          pointsResetInSeconds: 949
+        })
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      requestCap: 500,
+      parseRequestCap: 24,
+      tierSearchRequestCap: 60,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
+    });
+
+    await handler.execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ tierSearch: expect.anything() })
+    );
+    expect(evidence.costs.at(-1)?.tierSearch).toMatchObject({
+      outcome: "request_cap",
+      requests: 0,
+      recoveredKills: null
+    });
+  });
+
+  it("collects as an ordinary run for a raid with no window to search", async () => {
+    const evidence = withStoredTier(
+      store({ ...tierRun, tierSearchRaidId: "not-a-raid" } as typeof run)
+    );
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ tierSearch: expect.anything() })
+    );
+    // Asked for and not run: the tier is named, and what it found is null.
+    expect(evidence.costs.at(-1)?.tierSearch).toEqual({
+      raidId: "not-a-raid",
+      outcome: null,
+      requests: null,
+      guilds: null,
+      reportsHydrated: null,
+      recoveredKills: null,
+      recoveredWipes: null
     });
   });
 });

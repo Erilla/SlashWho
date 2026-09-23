@@ -10,6 +10,8 @@ export type { CharacterGuild, CharacterKey, Region } from "./character-key";
 export { formatCharacterDisplayName } from "./display-name";
 export {
   currentContentEligibility,
+  lookupRaidByName,
+  lookupRaidCurrentContentWindow,
   lookupRaiderIoBoss,
   raidOffersMythicRankings,
   raidTierConclusion,

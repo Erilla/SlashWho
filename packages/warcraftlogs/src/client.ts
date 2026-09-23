@@ -19,6 +19,8 @@ import type {
   WarcraftLogsRateLimitResult,
   WarcraftLogsReportResult,
   WarcraftLogsRequestEvent,
+  WarcraftLogsTierSearch,
+  WarcraftLogsTierSearchOutcome,
   WarcraftLogsVerifiedKill,
   WarcraftLogsWipeEvidence
 } from "./types";
@@ -142,6 +144,16 @@ const guildAttendanceQuery = `
           data { code startTime players { name } }
           has_more_pages
         }
+      }
+    }
+  }
+`;
+
+const characterGuildsQuery = `
+  query CharacterGuilds($name: String!, $realm: String!, $region: String!) {
+    characterData {
+      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        guilds { name server { slug region { slug } } }
       }
     }
   }
@@ -575,6 +587,38 @@ function attendanceListsCharacter(
     if (listed === wanted || listed.split("-")[0] === wanted) return true;
   }
   return unreadable ? null : false;
+}
+
+/**
+ * The guilds Warcraft Logs lists for a character. One it cannot place in a
+ * supported region is left out rather than guessed at.
+ */
+function characterGuilds(
+  value: unknown
+): readonly WarcraftLogsVerifiedKill["guild"][] {
+  const character = record(
+    record(record(value)?.data)?.characterData
+  )?.character;
+  const guilds = record(character)?.guilds;
+  if (!Array.isArray(guilds)) return [];
+  return guilds.flatMap((value) => {
+    const guild = record(value);
+    const server = guild && record(guild.server);
+    const name = guild && nonEmptyString(guild.name);
+    const realm = server && nonEmptyString(server.slug);
+    const region = nonEmptyString(
+      record(server?.region)?.slug
+    )?.toLocaleLowerCase("en-US");
+    if (
+      !name ||
+      !realm ||
+      !region ||
+      !supportedRegions.includes(region as CharacterKey["region"])
+    ) {
+      return [];
+    }
+    return [{ name, realm, region: region as CharacterKey["region"] }];
+  });
 }
 
 function decodedHydratedReport(
@@ -1817,6 +1861,8 @@ export function createWarcraftLogsClient(
        * provider, so a Raider.IO failure cannot drop what it once helped find.
        */
       storedKillReportCodes?: readonly string[];
+      /** An explicit search of one tier's guild attendance (#435). */
+      tierSearch?: WarcraftLogsTierSearch;
       /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call so the counts attribute to one run.
@@ -2234,6 +2280,218 @@ export function createWarcraftLogsClient(
         if (!found) searchedEmpty.push(verified);
       }
     }
+
+    // An explicit search of one tier, asked for from the dossier (#435). It
+    // needs no kill to look for: every known guild's attendance is walked
+    // across the tier's window, and each report there that may list the
+    // character is hydrated through the same decoder as everything else. Like
+    // recovery it is discovery only and limits nothing -- it can add evidence,
+    // never remove it -- and it spends its own cap, never the scan's.
+    async function searchTierAttendance(
+      search: WarcraftLogsTierSearch
+    ): Promise<WarcraftLogsTierSearchOutcome> {
+      const summary = {
+        outcome: "complete" as WarcraftLogsTierSearchOutcome["outcome"],
+        requests: 0,
+        guildsSearched: 0,
+        reportsHydrated: 0,
+        recoveredKills: 0,
+        recoveredWipes: 0
+      };
+      const cap =
+        Number.isSafeInteger(search.requestCap) && search.requestCap > 0
+          ? search.requestCap
+          : 0;
+      const from = Date.parse(search.from);
+      const to = Date.parse(search.to);
+      if (cap === 0) return { ...summary, outcome: "request_cap" };
+      if (Number.isNaN(from) || Number.isNaN(to) || to < from) return summary;
+      const spend = (): boolean => {
+        if (summary.requests >= cap) {
+          summary.outcome = "request_cap";
+          return false;
+        }
+        summary.requests += 1;
+        return true;
+      };
+      const skip = new Set(search.skipReportCodes ?? []);
+      // A report that opened up to a lead before the window can still hold a
+      // kill inside it, and one may open after its last kill by the clock
+      // slack a span is allowed.
+      const earliestStart = from - ATTENDANCE_REPORT_LEAD_MS;
+      const latestStart = to + REPORT_COVER_SLACK_MS;
+      const wanted = (startTime: number | null) =>
+        startTime === null ||
+        (startTime >= earliestStart && startTime <= latestStart);
+
+      const guilds = new Map<string, WarcraftLogsVerifiedKill["guild"]>();
+      const addGuild = (guild: WarcraftLogsVerifiedKill["guild"]) => {
+        const guildKey = [
+          guild.region,
+          guild.realm.toLocaleLowerCase("en-US"),
+          guild.name.normalize("NFC").toLocaleLowerCase("en-US")
+        ].join("/");
+        if (!guilds.has(guildKey)) guilds.set(guildKey, guild);
+      };
+      for (const guild of search.guilds) addGuild(guild);
+      // Warcraft Logs' own list of the character's guilds is the one source
+      // that knows a guild no kill was attributed to. A failure to read it
+      // leaves the guilds the caller knew about.
+      if (spend()) {
+        const listed = counted(
+          "character_guilds",
+          await graphql(
+            characterGuildsQuery,
+            { name: key.name, realm: key.realm, region: key.region },
+            options.signal
+          )
+        );
+        if (listed.kind === "success") {
+          for (const guild of characterGuilds(listed.value)) addGuild(guild);
+        } else {
+          summary.outcome = "incomplete";
+        }
+      }
+
+      type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
+      search: for (const guild of guilds.values()) {
+        const pages = new Map<number, Page | null>();
+        // Null when the page could not be read, so this guild's walk cannot
+        // be finished; undefined when the budget ran out first.
+        const page = async (
+          number: number
+        ): Promise<Page | null | undefined> => {
+          if (pages.has(number)) return pages.get(number);
+          if (!spend()) return undefined;
+          const attendance = counted(
+            "guild_attendance",
+            await graphql(
+              guildAttendanceQuery,
+              {
+                name: guild.name,
+                realm: guild.realm,
+                region: guild.region,
+                page: number
+              },
+              options.signal
+            )
+          );
+          // A guild Warcraft Logs says it has no record of has nothing to
+          // walk, which is a finished walk rather than an unreadable one.
+          const decoded =
+            attendance.kind !== "success"
+              ? null
+              : guildIsAbsent(attendance.value)
+                ? { reports: [], hasMorePages: false }
+                : guildAttendancePage(attendance.value, key.name);
+          pages.set(number, decoded);
+          return decoded;
+        };
+        const starts = (value: Page) =>
+          value.reports.map((report) => report.startTime);
+        // Newest first, and pages overlap by hours at a boundary, so a page is
+        // past the window only when every report on it is more than the
+        // overlap beyond it. An undated report says nothing about its reach.
+        const newerThanWindow = (value: Page) =>
+          value.reports.length > 0 &&
+          starts(value).every(
+            (start) =>
+              start !== null && start > latestStart + ATTENDANCE_PAGE_OVERLAP_MS
+          );
+        const olderThanWindow = (value: Page) =>
+          value.reports.length > 0 &&
+          starts(value).every(
+            (start) =>
+              start !== null &&
+              start < earliestStart - ATTENDANCE_PAGE_OVERLAP_MS
+          );
+        summary.guildsSearched += 1;
+
+        // Attendance is every report the guild ever logged, and an old tier
+        // sits behind years of newer ones. Galloping to the window and then
+        // bisecting for its first page costs a few requests a guild instead of
+        // one for every page in between.
+        let before = 0;
+        let first = 1;
+        for (;;) {
+          const value = await page(first);
+          if (value === undefined) break search;
+          if (value === null) {
+            summary.outcome = "incomplete";
+            continue search;
+          }
+          if (!newerThanWindow(value)) break;
+          // The whole of this guild's attendance is newer than the tier.
+          if (!value.hasMorePages) continue search;
+          before = first;
+          first *= 2;
+        }
+        while (first - before > 1) {
+          const middle = Math.floor((before + first) / 2);
+          const value = await page(middle);
+          if (value === undefined) break search;
+          if (value === null) {
+            summary.outcome = "incomplete";
+            continue search;
+          }
+          if (newerThanWindow(value)) before = middle;
+          else first = middle;
+        }
+
+        for (let number = first; ; number++) {
+          const value = await page(number);
+          if (value === undefined) break search;
+          if (value === null) {
+            summary.outcome = "incomplete";
+            continue search;
+          }
+          if (olderThanWindow(value)) continue search;
+          for (const report of value.reports) {
+            if (skip.has(report.code) || scannedReportCodes.has(report.code)) {
+              continue;
+            }
+            if (report.listsCharacter === false || !wanted(report.startTime)) {
+              continue;
+            }
+            if (!spend()) break search;
+            const hydrated = counted(
+              "report_hydration",
+              await graphql(
+                reportByCodeQuery,
+                { code: report.code },
+                options.signal
+              )
+            );
+            scannedReportCodes.add(report.code);
+            if (hydrated.kind !== "success") {
+              summary.outcome = "incomplete";
+              continue;
+            }
+            summary.reportsHydrated += 1;
+            const decoded = decodedHydratedReport(hydrated.value, key);
+            if (decoded.kind === "limitation") {
+              summary.outcome = "incomplete";
+              continue;
+            }
+            for (const kill of decoded.kills) {
+              if (!kills.has(kill.fightUrl)) summary.recoveredKills += 1;
+              kills.set(kill.fightUrl, kill);
+            }
+            for (const wipe of decoded.wipes) {
+              if (!wipes.has(wipe.fightUrl)) summary.recoveredWipes += 1;
+              wipes.set(wipe.fightUrl, wipe);
+            }
+            if (decoded.limitation) summary.outcome = "incomplete";
+          }
+          if (!value.hasMorePages) continue search;
+        }
+      }
+      return summary;
+    }
+    const tierSearchOutcome =
+      options.tierSearch === undefined
+        ? undefined
+        : await searchTierAttendance(options.tierSearch);
 
     let parseLimitation: WarcraftLogsLimitation | undefined;
     // Every distinct parse limitation raised, first occurrence wins, insertion
@@ -2758,7 +3016,8 @@ export function createWarcraftLogsClient(
       ...(recoverySearched ? { attendanceRecoveredKills } : {}),
       ...(searchedEmpty.length > 0
         ? { attendanceSearchedEmpty: searchedEmpty }
-        : {})
+        : {}),
+      ...(tierSearchOutcome ? { tierSearch: tierSearchOutcome } : {})
     });
     // A resumed scan read only the pages below its cursor, so reaching the end
     // of them is not a finished history. The pages above were read by earlier

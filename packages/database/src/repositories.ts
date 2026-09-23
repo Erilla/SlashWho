@@ -264,7 +264,30 @@ export interface CharacterEvidenceRun {
   wclClientSecretEncrypted: string | null;
   /** The character's class, carried so evidence collection can resolve shared specialisation names. */
   className: string | null;
+  /** What the run was reserved to do; see `EvidenceRunMode`. */
+  mode: EvidenceRunMode;
+  /** The Journal raid id a `tier_search` run searches, and null otherwise. */
+  tierSearchRaidId: string | null;
 }
+
+/**
+ * `full` is every collection there has always been. `tier_search` is a full
+ * collection that also walks one tier's guild attendance, reserved only by an
+ * explicit request from the dossier (#435) and never by a read, a resume or a
+ * retry.
+ */
+export type EvidenceRunMode = "full" | "tier_search";
+
+/**
+ * Why a tier search was or was not reserved. `recent` is the per-tier,
+ * per-character rate limit; `no_evidence` means there is nothing yet to add
+ * to, so an ordinary collection has to come first.
+ */
+export type TierSearchReservationResult =
+  | { kind: "reserved"; run: CharacterEvidenceRun }
+  | { kind: "active"; run: CharacterEvidenceRun }
+  | { kind: "recent"; run: CharacterEvidenceRun }
+  | { kind: "no_evidence" };
 
 /**
  * The deliberately narrow evidence-run projection available to the operator
@@ -459,6 +482,13 @@ export type StoredKillTier = Readonly<{
   reportUrl?: string;
 }>;
 
+/** A guild stored evidence places the character in. */
+export type StoredEvidenceGuild = Readonly<{
+  name: string;
+  realm: string;
+  region: CharacterKey["region"];
+}>;
+
 /** Where and when one stored wipe happened, without its evidence. */
 export type StoredWipeTier = Readonly<{
   raidId: string;
@@ -469,6 +499,12 @@ export type StoredWipeTier = Readonly<{
    */
   raidName: string;
   attemptedAt: string;
+  /**
+   * The report the wipe came from, so a wipe found through guild attendance,
+   * absent from the character's own history, can be re-read rather than
+   * dropped by the next complete publish.
+   */
+  reportUrl?: string;
 }>;
 
 /**
@@ -479,6 +515,11 @@ export type StoredWipeTier = Readonly<{
 export type StoredEvidenceTiers = Readonly<{
   kills: readonly StoredKillTier[];
   wipes: readonly StoredWipeTier[];
+  /**
+   * The guilds the stored kills were in, as places a tier search walks
+   * attendance for. Absent from an implementation that does not know them.
+   */
+  guilds?: readonly StoredEvidenceGuild[];
   /** When the last complete history scan was published, if known. */
   lastCleanKillScanAt?: string;
   /**
@@ -590,8 +631,12 @@ export type EvidenceRunCost = Readonly<{
   requestCapUsed: number;
   parseRequestCapUsed: number;
   /** Upstream requests by class, as the log line counts them. */
+  /** The run's mode; absent is `full`. */
+  mode?: EvidenceRunMode;
   requests: Readonly<{
     historyScan: number;
+    /** Absent is zero: only a tier search reads it. */
+    characterGuilds?: number;
     guildAttendance: number;
     reportHydration: number;
     zoneRankings: number;
@@ -613,6 +658,20 @@ export type EvidenceRunCost = Readonly<{
     verifiedKillsSkippedEmpty: number | null;
     recoveredKills: number | null;
   }>;
+  /**
+   * What a tier search was asked for and what it yielded. Absent or null on a
+   * run that searched no tier; its fields are null when the search itself
+   * never ran, never zero.
+   */
+  tierSearch?: Readonly<{
+    raidId: string;
+    outcome: string | null;
+    requests: number | null;
+    guilds: number | null;
+    reportsHydrated: number | null;
+    recoveredKills: number | null;
+    recoveredWipes: number | null;
+  }> | null;
 }>;
 
 export interface EvidenceRepository {
@@ -627,6 +686,19 @@ export interface EvidenceRepository {
       wclClientSecretEncrypted: string;
     } | null;
   }): Promise<EvidenceReservationResult>;
+  /**
+   * Reserves a tier search, under the same per-character lock as `reserve`.
+   * Nothing else reserves one, so it never becomes a default or a retry path.
+   * A search of the same tier created at or after `searchedSince` refuses it
+   * as `recent`, and an in-flight run of any mode as `active`.
+   */
+  reserveTierSearch(input: {
+    key: CharacterKey;
+    raidId: string;
+    at: Date;
+    searchedSince: Date;
+    phasePlan?: readonly string[];
+  }): Promise<TierSearchReservationResult>;
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
   markEnqueued(id: string, queueJobId: string): Promise<void>;

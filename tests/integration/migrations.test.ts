@@ -117,7 +117,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-17).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-18).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
@@ -135,7 +135,8 @@ describe("database migrations", () => {
       { idx: 40, tag: "0041_mythic_kill_rank_checked" },
       { idx: 41, tag: "0042_evidence_run_recovery_costs" },
       { idx: 42, tag: "0043_character_attendance_searches" },
-      { idx: 43, tag: "0044_warcraft_logs_character_ids" }
+      { idx: 43, tag: "0044_warcraft_logs_character_ids" },
+      { idx: 44, tag: "0045_tier_search_runs" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

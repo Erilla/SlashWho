@@ -45,6 +45,11 @@ export type WarcraftLogsLimitation = Readonly<{
 export type WarcraftLogsQueryType =
   /** `RecentReports`, one per page of the history scan, boundary probe included. */
   | "history_scan"
+  /**
+   * `CharacterGuilds`, at most one per tier search: the guilds Warcraft Logs
+   * lists for the character, as places to walk attendance for.
+   */
+  | "character_guilds"
   /** `GuildAttendance`, one per attendance page searched for a verified kill. */
   | "guild_attendance"
   /** `ReportByCode`, one per attendance report hydrated. */
@@ -178,6 +183,45 @@ export type WarcraftLogsVerifiedKill = Readonly<{
   }>;
 }>;
 
+/**
+ * One tier's explicit attendance search, asked for from the dossier (#435).
+ *
+ * Unlike verified-kill recovery it does not need a kill to look for: it walks
+ * every known guild's attendance across the tier's window and hydrates each
+ * report there that may list the character, so guildless kills, wipe-only
+ * nights and kills below the scan floor can be found. It has its own request
+ * cap, so it can neither starve the history scan nor be starved by it.
+ */
+export type WarcraftLogsTierSearch = Readonly<{
+  /** The tier's window as ISO instants; kills outside it are not searched for. */
+  from: string;
+  to: string;
+  /** Guilds known for the character from other sources. */
+  guilds: readonly WarcraftLogsVerifiedKill["guild"][];
+  /** Requests the search may make, attendance pages and hydrations alike. */
+  requestCap: number;
+  /**
+   * Reports whose evidence is already stored, so hydrating them again would
+   * re-read fights the character already holds.
+   */
+  skipReportCodes?: readonly string[];
+}>;
+
+/**
+ * What a tier search did. `complete` means every guild was walked across the
+ * whole window; `request_cap` that its budget ran out first; `incomplete` that
+ * some guild's attendance could not be read. None of them limits the run: a
+ * search only ever adds evidence.
+ */
+export type WarcraftLogsTierSearchOutcome = Readonly<{
+  outcome: "complete" | "request_cap" | "incomplete";
+  requests: number;
+  guildsSearched: number;
+  reportsHydrated: number;
+  recoveredKills: number;
+  recoveredWipes: number;
+}>;
+
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
@@ -273,6 +317,8 @@ export type WarcraftLogsReportResult =
        * searching for these for a while. Absent when none qualified.
        */
       attendanceSearchedEmpty?: readonly WarcraftLogsVerifiedKill[];
+      /** Present only when a tier search was asked for. */
+      tierSearch?: WarcraftLogsTierSearchOutcome;
     }>
   | WarcraftLogsLimitation;
 
@@ -368,6 +414,8 @@ export interface WarcraftLogsGateway {
        * provider, so a Raider.IO failure cannot drop what it once helped find.
        */
       storedKillReportCodes?: readonly string[];
+      /** An explicit search of one tier's guild attendance (#435). */
+      tierSearch?: WarcraftLogsTierSearch;
       /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call rather than to the client so the counts

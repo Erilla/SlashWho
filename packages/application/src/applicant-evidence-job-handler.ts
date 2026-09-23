@@ -27,7 +27,8 @@ import type {
   WarcraftLogsGateway,
   WarcraftLogsLimitationCode,
   WarcraftLogsQueryType,
-  WarcraftLogsRateLimit
+  WarcraftLogsRateLimit,
+  WarcraftLogsTierSearchOutcome
 } from "@slashwho/warcraftlogs";
 
 import { decryptCredential } from "./credential-encryption";
@@ -58,6 +59,13 @@ import {
   storedKillReportCodes
 } from "./verified-kills";
 import {
+  DEFAULT_TIER_SEARCH_REQUEST_CAP,
+  tierSearchGuilds,
+  tierSearchRequestCaps,
+  tierSearchWindow,
+  tierSearchZoneIds
+} from "./tier-search";
+import {
   createEvidencePhaseLedger,
   fullEvidencePhasePlan,
   type EvidencePhase
@@ -76,6 +84,13 @@ export type ApplicantEvidenceRun = Readonly<{
   wclClientIdEncrypted: string | null;
   wclClientSecretEncrypted: string | null;
   className?: string | null;
+  /**
+   * What the run was reserved to do. A `tier_search` run is a full collection
+   * that also walks `tierSearchRaidId`'s guild attendance (#435). Absent is
+   * `full`.
+   */
+  mode?: "full" | "tier_search";
+  tierSearchRaidId?: string | null;
 }>;
 
 export type { EvidenceLimitationCode };
@@ -247,6 +262,11 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   requestCap: number;
   parseRequestCap: number;
   /**
+   * The most requests a tier search may make. It is carved out of the scan
+   * cap, never added to it, so it cannot move the run's points budget.
+   */
+  tierSearchRequestCap?: number;
+  /**
    * How long a run that exhausted one of its own request budgets waits before
    * it is collectable again. A capped run records that work is outstanding,
    * and `retry_after_at` is the one signal that makes `reserve` hand it back:
@@ -347,6 +367,7 @@ const RAIDER_IO_RANKING_CONCURRENCY = 4;
 const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
   {
     history_scan: "warcraftLogsHistoryScan",
+    character_guilds: "warcraftLogsCharacterGuilds",
     guild_attendance: "warcraftLogsGuildAttendance",
     report_hydration: "warcraftLogsReportHydration",
     zone_rankings: "warcraftLogsZoneRankings",
@@ -776,6 +797,11 @@ export function createApplicantEvidenceJobHandler(
         verifiedKillsSearched: null,
         verifiedKillsSkippedEmpty: null,
         attendanceRecoveredKills: null,
+        // Null on a run that searched no tier, like every recovery field.
+        tierSearchRaidId: null,
+        tierSearchOutcome: null,
+        tierSearchRecoveredKills: null,
+        tierSearchRecoveredWipes: null,
         terminalTierCount: 0,
         // Overwritten with the effective cap once the allowance is read; this
         // is the value for a run that never got that far.
@@ -810,6 +836,11 @@ export function createApplicantEvidenceJobHandler(
       // The catch needs all three: which run this attempt owns, whether it got
       // as far as spending the allowance, and how to find out what it spent.
       let claimedRunId: string | undefined;
+      // The tier this run was reserved to search, read off the run itself so a
+      // re-claimed attempt is still a search. Undefined on every other run.
+      let tierSearchRaidId: string | undefined;
+      let tierSearchResult: WarcraftLogsTierSearchOutcome | undefined;
+      let tierSearchStarved = false;
       let collectionBegan = false;
       // Whose allowance this attempt spent. Read in the `finally` as well as
       // by the budget, so it outlives the `try` that decides it.
@@ -829,6 +860,11 @@ export function createApplicantEvidenceJobHandler(
         // point at which there is a character to name.
         announced = run.key;
         claimedRunId = run.id;
+        tierSearchRaidId =
+          run.mode === "tier_search" && run.tierSearchRaidId
+            ? run.tierSearchRaidId
+            : undefined;
+        record.tierSearchRaidId = tierSearchRaidId ?? null;
         try {
           await options.evidenceRunNotifier?.started({
             runId: job.runId,
@@ -1055,8 +1091,12 @@ export function createApplicantEvidenceJobHandler(
         // recent complete collection followed by a manual refresh still has
         // to look for new kills. The previous publication must also say that
         // parses were the only unfinished domain.
+        // A tier search is asked for explicitly, so it always scans: skipping
+        // the scan would publish a parse-only run for a request to look.
         const parseOnlyResume =
-          scanFresh && storedEvidence.parseWorkOutstanding === true;
+          tierSearchRaidId === undefined &&
+          scanFresh &&
+          storedEvidence.parseWorkOutstanding === true;
         const scanCap = parseOnlyResume
           ? 0
           : openingBudget
@@ -1068,7 +1108,40 @@ export function createApplicantEvidenceJobHandler(
                 pointsReserve: options.pointsReserve
               }).scanPages
             : options.requestCap;
-        const requestCap = job.mode === "light" ? 1 : scanCap;
+        // A tier search spends part of the scan cap rather than adding to it.
+        // A raid with no catalogued window has no nights to search, so the run
+        // collects as an ordinary one would.
+        const tierWindow =
+          tierSearchRaidId === undefined
+            ? null
+            : tierSearchWindow(tierSearchRaidId, now());
+        const tierCaps = tierWindow
+          ? tierSearchRequestCaps(
+              scanCap,
+              options.tierSearchRequestCap ?? DEFAULT_TIER_SEARCH_REQUEST_CAP
+            )
+          : null;
+        const requestCap =
+          job.mode === "light" ? 1 : tierCaps ? tierCaps.history : scanCap;
+        const tierSearchAsked =
+          tierWindow !== null && tierCaps !== null && tierCaps.tier > 0;
+        // Asked for, with a tier to search, and no budget to search it with.
+        // Recorded as such rather than as a search that never ran.
+        tierSearchStarved = tierWindow !== null && !tierSearchAsked;
+        // The search ignores the tier's terminal marks for its one run, so a
+        // kill it recovers there is parsed and the tier's bests re-read. The
+        // kill marks stay: they are what carries the tier's stored kills
+        // through a complete publish, and the scan floor they set is what
+        // keeps the history scan from re-reading the years below.
+        if (tierSearchRaidId !== undefined && tierWindow) {
+          for (const zone of tierSearchZoneIds(
+            tierSearchRaidId,
+            storedEvidence
+          )) {
+            terminalRaidIds.parses.delete(zone);
+            terminalRaidIds.tierBests.delete(zone);
+          }
+        }
         const parseRequestCap =
           parseOnlyResume && openingBudget
             ? parseOnlyRequestCap({
@@ -1186,6 +1259,7 @@ export function createApplicantEvidenceJobHandler(
           // Attendance recovery is part of the history phase: it reads for the
           // same kills, under the same request cap.
           query === "history_scan" ||
+          query === "character_guilds" ||
           query === "guild_attendance" ||
           query === "report_hydration"
             ? "warcraft_logs_history"
@@ -1228,7 +1302,7 @@ export function createApplicantEvidenceJobHandler(
         // history scan alone.
         const historicKills = options.raiderio?.getHistoricMythicKills;
         const verified =
-          historicKills && requestCap > 1
+          historicKills && (requestCap > 1 || tierCaps !== null)
             ? await scope.time("raiderIoHistoricKills", () =>
                 raiderIoVerifiedKills(
                   { getHistoricMythicKills: historicKills },
@@ -1298,9 +1372,27 @@ export function createApplicantEvidenceJobHandler(
             ...(requestCap > 1
               ? {
                   storedKillReportCodes: storedKillReportCodes(
-                    storedEvidence.kills,
+                    [...storedEvidence.kills, ...storedEvidence.wipes],
                     terminalRaidIds.kills
                   )
+                }
+              : {}),
+            ...(tierSearchAsked
+              ? {
+                  tierSearch: {
+                    ...tierWindow,
+                    guilds: tierSearchGuilds(
+                      verified?.guilds ?? [],
+                      storedEvidence.guilds ?? []
+                    ),
+                    requestCap: tierCaps.tier,
+                    // Every stored kill's report: one in a terminal raid is
+                    // carried by the publish, and one outside it is re-read.
+                    skipReportCodes: storedKillReportCodes(
+                      [...storedEvidence.kills, ...storedEvidence.wipes],
+                      new Set()
+                    )
+                  }
                 }
               : {}),
             ...historyScanResumeOptions,
@@ -1342,6 +1434,17 @@ export function createApplicantEvidenceJobHandler(
           })
         );
         await phaseWrites;
+        // Only a search this run asked for is the run's to record.
+        if (
+          tierSearchAsked &&
+          response.kind === "evidence" &&
+          response.tierSearch
+        ) {
+          tierSearchResult = response.tierSearch;
+          record.tierSearchOutcome = response.tierSearch.outcome;
+          record.tierSearchRecoveredKills = response.tierSearch.recoveredKills;
+          record.tierSearchRecoveredWipes = response.tierSearch.recoveredWipes;
+        }
         activeContext.signal.throwIfAborted();
 
         // What the run actually cost. This is the measurement that replaces the
@@ -1777,8 +1880,29 @@ export function createApplicantEvidenceJobHandler(
                 number | null,
               requestCapUsed: record.requestCapUsed as number,
               parseRequestCapUsed: record.parseRequestCapUsed as number,
+              mode: tierSearchRaidId === undefined ? "full" : "tier_search",
+              tierSearch:
+                tierSearchRaidId === undefined
+                  ? null
+                  : {
+                      raidId: tierSearchRaidId,
+                      outcome:
+                        tierSearchResult?.outcome ??
+                        (tierSearchStarved ? "request_cap" : null),
+                      requests:
+                        tierSearchResult?.requests ??
+                        (tierSearchStarved ? 0 : null),
+                      guilds: tierSearchResult?.guildsSearched ?? null,
+                      reportsHydrated:
+                        tierSearchResult?.reportsHydrated ?? null,
+                      recoveredKills: tierSearchResult?.recoveredKills ?? null,
+                      recoveredWipes: tierSearchResult?.recoveredWipes ?? null
+                    },
               requests: {
                 historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
+                characterGuilds: requests(
+                  REQUEST_COUNTER_PREFIX.character_guilds
+                ),
                 guildAttendance: requests(
                   REQUEST_COUNTER_PREFIX.guild_attendance
                 ),

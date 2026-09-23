@@ -19,6 +19,11 @@ const STORED_KILL_MATCH_MS = 2 * 60 * 60 * 1_000;
 export type VerifiedKillsResult = Readonly<{
   kills: readonly WarcraftLogsVerifiedKill[];
   /**
+   * Every guild Raider.IO placed a kill in, whether or not that kill is still
+   * worth searching for, as places a tier search walks attendance for.
+   */
+  guilds?: readonly WarcraftLogsVerifiedKill["guild"][];
+  /**
    * Why Raider.IO could not answer. The run is not partial for it: recovery
    * is a supplement to the history scan, and a private profile would
    * otherwise retry forever.
@@ -55,7 +60,27 @@ export async function raiderIoVerifiedKills(
   if (result.kind === "limitation") {
     return { kills: [], limitation: result.code };
   }
-  return { kills: searchableKills(result.kills, options) };
+  return {
+    kills: searchableKills(result.kills, options),
+    guilds: raiderIoGuilds(result.kills)
+  };
+}
+
+export function raiderIoGuilds(
+  kills: readonly HistoricMythicKill[]
+): readonly WarcraftLogsVerifiedKill["guild"][] {
+  const guilds = new Map<string, WarcraftLogsVerifiedKill["guild"]>();
+  for (const { guild } of kills) {
+    if (!guild) continue;
+    const region = guild.region as CharacterKey["region"];
+    if (!supportedRegions.includes(region)) continue;
+    guilds.set(`${region}/${guild.realm}/${guild.name}`, {
+      name: guild.name,
+      realm: guild.realm,
+      region
+    });
+  }
+  return [...guilds.values()];
 }
 
 export function searchableKills(
@@ -97,10 +122,13 @@ export function searchableKills(
 }
 
 /**
- * The reports stored kills outside terminal raids came from. A complete
- * publish keeps only what the run finds again there, so these are re-read
- * after a fresh scan that did not reach them -- which is how a kill recovered
- * from guild attendance, absent from the character's own history, survives.
+ * The reports stored kills -- and wipes -- outside terminal raids came from. A
+ * complete publish keeps only what the run finds again there, so these are
+ * re-read after a fresh scan that did not reach them -- which is how evidence
+ * recovered from guild attendance, absent from the character's own history,
+ * survives. A wipe-only night a tier search found (#435) has no kill to carry
+ * its report, so wipes are named here too. A report the scan read costs
+ * nothing: the gateway skips it.
  */
 export function storedKillReportCodes(
   storedKills: readonly Readonly<{ raidId: string; reportUrl?: string }>[],
