@@ -747,7 +747,28 @@ export const characterEvidenceRunCosts = pgTable(
     fightParsesRequests: integer("fight_parses_requests").default(0).notNull(),
     rankingIdentitiesRequests: integer("ranking_identities_requests")
       .default(0)
-      .notNull()
+      .notNull(),
+    /**
+     * Attendance recovery, counted apart from `history_scan_requests`, which
+     * before this column counted it too: the three share one scan cap, and a
+     * row from before the split reads zero here with its recovery inside the
+     * history count.
+     */
+    guildAttendanceRequests: integer("guild_attendance_requests")
+      .default(0)
+      .notNull(),
+    reportHydrationRequests: integer("report_hydration_requests")
+      .default(0)
+      .notNull(),
+    /**
+     * What recovery was asked to do and what it yielded. Null means the step
+     * did not run -- Raider.IO not asked, or no attendance searched -- and is
+     * never a zero, which is a step that ran and found nothing.
+     */
+    raiderIoHistoricOutcome: text("raiderio_historic_outcome"),
+    raiderIoHistoricMs: integer("raiderio_historic_ms"),
+    verifiedKillsSearched: integer("verified_kills_searched"),
+    attendanceRecoveredKills: integer("attendance_recovered_kills")
   },
   (table) => [
     primaryKey({

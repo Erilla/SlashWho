@@ -118,7 +118,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-17).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 25, tag: "0026_unstick_parse_drift_runs" },
       { idx: 26, tag: "0027_kill_parses_read_at" },
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
@@ -134,7 +133,8 @@ describe("database migrations", () => {
       { idx: 38, tag: "0039_evidence_cutting_edges" },
       { idx: 39, tag: "0040_mythic_kill_world_rank" },
       { idx: 40, tag: "0041_mythic_kill_rank_checked" },
-      { idx: 41, tag: "0042_warcraft_logs_character_ids" }
+      { idx: 41, tag: "0042_evidence_run_recovery_costs" },
+      { idx: 42, tag: "0043_warcraft_logs_character_ids" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

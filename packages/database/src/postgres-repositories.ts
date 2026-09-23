@@ -4083,7 +4083,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           kills: (completed?.kills ?? []).map((kill) => ({
             raidId: kill.raidId,
             raidName: kill.raidName,
-            killedAt: kill.killedAt
+            killedAt: kill.killedAt,
+            reportUrl: kill.reportUrl
           })),
           wipes: (completed?.wipes ?? []).map((wipe) => ({
             raidId: wipe.raidId,
@@ -4428,10 +4429,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              points_remaining_before, points_remaining_after,
              request_cap_used, parse_request_cap_used,
              history_scan_requests, zone_rankings_requests,
-             fight_parses_requests, ranking_identities_requests
+             fight_parses_requests, ranking_identities_requests,
+             guild_attendance_requests, report_hydration_requests,
+             raiderio_historic_outcome, raiderio_historic_ms,
+             verified_kills_searched, attendance_recovered_kills
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                   $13, $14, $15, $16)
+                   $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -4447,7 +4451,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              history_scan_requests = EXCLUDED.history_scan_requests,
              zone_rankings_requests = EXCLUDED.zone_rankings_requests,
              fight_parses_requests = EXCLUDED.fight_parses_requests,
-             ranking_identities_requests = EXCLUDED.ranking_identities_requests`,
+             ranking_identities_requests = EXCLUDED.ranking_identities_requests,
+             guild_attendance_requests = EXCLUDED.guild_attendance_requests,
+             report_hydration_requests = EXCLUDED.report_hydration_requests,
+             raiderio_historic_outcome = EXCLUDED.raiderio_historic_outcome,
+             raiderio_historic_ms = EXCLUDED.raiderio_historic_ms,
+             verified_kills_searched = EXCLUDED.verified_kills_searched,
+             attendance_recovered_kills = EXCLUDED.attendance_recovered_kills`,
           [
             cost.runId,
             cost.attempt,
@@ -4464,7 +4474,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             cost.requests.historyScan,
             cost.requests.zoneRankings,
             cost.requests.fightParses,
-            cost.requests.rankingIdentities
+            cost.requests.rankingIdentities,
+            cost.requests.guildAttendance,
+            cost.requests.reportHydration,
+            cost.recovery.raiderIoOutcome,
+            cost.recovery.raiderIoMs,
+            cost.recovery.verifiedKillsSearched,
+            cost.recovery.recoveredKills
           ]
         );
       },

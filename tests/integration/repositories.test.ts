@@ -3665,9 +3665,17 @@ describe("PostgreSQL repositories", () => {
         parseRequestCapUsed: 24,
         requests: {
           historyScan: 12,
+          guildAttendance: 4,
+          reportHydration: 2,
           zoneRankings: 3,
           fightParses: 24,
           rankingIdentities: 1
+        },
+        recovery: {
+          raiderIoOutcome: "evidence",
+          raiderIoMs: 840,
+          verifiedKillsSearched: 3,
+          recoveredKills: 1
         },
         ...overrides
       };
@@ -3701,9 +3709,39 @@ describe("PostgreSQL repositories", () => {
           history_scan_requests: 12,
           zone_rankings_requests: 3,
           fight_parses_requests: 24,
-          ranking_identities_requests: 1
+          ranking_identities_requests: 1,
+          guild_attendance_requests: 4,
+          report_hydration_requests: 2,
+          raiderio_historic_outcome: "evidence",
+          raiderio_historic_ms: 840,
+          verified_kills_searched: 3,
+          attendance_recovered_kills: 1
         })
       ]);
+    });
+
+    it("keeps a recovery step that did not run null rather than zero", async () => {
+      // Raider.IO not asked is not Raider.IO asked and answering with nothing
+      // to search, and no attendance search is not one that recovered
+      // nothing. Averaging the two together would misstate recovery's yield.
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(runId, {
+          recovery: {
+            raiderIoOutcome: null,
+            raiderIoMs: null,
+            verifiedKillsSearched: null,
+            recoveredKills: null
+          }
+        })
+      );
+
+      const [row] = await rows();
+      expect(row?.raiderio_historic_outcome).toBeNull();
+      expect(row?.raiderio_historic_ms).toBeNull();
+      expect(row?.verified_kills_searched).toBeNull();
+      expect(row?.attendance_recovered_kills).toBeNull();
     });
 
     it("keeps an unmeasured spend null rather than zero", async () => {
@@ -3837,8 +3875,73 @@ describe("PostgreSQL repositories", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the two queries the document describes", () => {
-        expect(queries).toHaveLength(2);
+      it("finds exactly the three queries the document describes", () => {
+        expect(queries).toHaveLength(3);
+      });
+
+      it("reports recovery's yield without counting an unasked run as zero", async () => {
+        // Three attempts, one of each state: Raider.IO answered and a search
+        // recovered a kill; Raider.IO refused; Raider.IO was never asked.
+        const found = await reserveRun(rootKey, new Date());
+        const refused = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(cost(found));
+        await repositories.evidence.recordRunCost(
+          cost(found, {
+            attempt: 2,
+            requests: {
+              historyScan: 12,
+              guildAttendance: 0,
+              reportHydration: 0,
+              zoneRankings: 3,
+              fightParses: 24,
+              rankingIdentities: 1
+            },
+            recovery: {
+              raiderIoOutcome: null,
+              raiderIoMs: null,
+              verifiedKillsSearched: null,
+              recoveredKills: null
+            }
+          })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(refused, {
+            recovery: {
+              raiderIoOutcome: "private",
+              raiderIoMs: 120,
+              verifiedKillsSearched: 0,
+              recoveredKills: null
+            }
+          })
+        );
+
+        const result = await pool.query(queries[2] as string);
+        const byOutcome = Object.fromEntries(
+          result.rows.map((row) => [String(row.raiderio_historic_outcome), row])
+        );
+
+        expect(byOutcome.evidence).toMatchObject({
+          attempts: "1",
+          asked: "1",
+          kills_searched: "3",
+          searches: "1",
+          kills_recovered: "1",
+          attendance_pages: "4",
+          reports_hydrated: "2"
+        });
+        expect(byOutcome.private).toMatchObject({
+          attempts: "1",
+          asked: "1",
+          kills_searched: "0",
+          searches: "0"
+        });
+        // Never asked: counted as an attempt, and nothing else.
+        expect(byOutcome.null).toMatchObject({
+          attempts: "1",
+          asked: "0",
+          searches: "0",
+          raiderio_p50_ms: null
+        });
       });
 
       it("returns the spend distribution grouped by the caps in force", async () => {

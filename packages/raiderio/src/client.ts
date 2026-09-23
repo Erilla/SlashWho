@@ -24,7 +24,20 @@ import type {
   RaiderIoProfile
 } from "./types";
 
-export const maximumHistoricMythicKillTiers = 8;
+/**
+ * The `raid-progress` tiers that hold every Raider.IO raid from Legion
+ * onwards, recorded by sweeping tiers 0-45 on 2026-09-23: 19 is The Emerald
+ * Nightmare, The Nighthold and Trial of Valor, and 35 is the opening Midnight
+ * tier. Pinned rather than probed because Raider.IO answers an unknown tier
+ * with the current raid instead of an error. Current raids ride along on every
+ * tier's response, so a tier added after this list still arrives.
+ */
+export const raiderIoHistoricTierOrdinals: readonly number[] = Object.freeze(
+  Array.from({ length: 17 }, (_, index) => 19 + index)
+);
+
+export const maximumHistoricMythicKillTiers =
+  raiderIoHistoricTierOrdinals.length;
 
 /**
  * What this client calls itself upstream. Raider.IO rejects requests without
@@ -35,33 +48,25 @@ export const maximumHistoricMythicKillTiers = 8;
  */
 const RAIDER_IO_USER_AGENT = "SlashWho (+https://github.com/Erilla/SlashWho)";
 
+// The recorded shape (2026-09-23): `raid` is a bare slug, and an encounter
+// carries no name, ordinal or final-boss flag. The shape this replaced was
+// guessed, and every live response failed it as schema drift.
 const historicRaidProgressResponseSchema = z.object({
   characterRaidProgress: z.object({
     raidProgress: z.array(
       z.object({
-        raid: z.object({
-          id: z.string().min(1),
-          name: z.string().min(1)
-        }),
+        raid: z.string().min(1),
         encountersDefeated: z.object({
           mythic: z.array(
             z.object({
               slug: z.string().min(1),
-              name: z.string().min(1),
-              ordinal: z.number().int().nonnegative(),
-              isFinalBoss: z.boolean(),
               firstDefeated: z.string().datetime(),
               guild: z
                 .object({
                   name: z.string().min(1),
-                  realm: z.object({ slug: z.string().min(1) })
+                  realm: z.object({ slug: z.string().min(1) }),
+                  region: z.object({ slug: z.string().min(1) })
                 })
-                .nullable()
-                .optional(),
-              historicWorldRank: z
-                .number()
-                .int()
-                .positive()
                 .nullable()
                 .optional()
             })
@@ -202,20 +207,16 @@ function normalizeHistoricRaidProgress(
   for (const raidProgress of parsed.characterRaidProgress.raidProgress) {
     for (const encounter of raidProgress.encountersDefeated.mythic) {
       kills.push({
-        raidId: raidProgress.raid.id,
-        raidName: raidProgress.raid.name,
-        bossId: encounter.slug,
-        bossName: encounter.name,
-        bossOrder: encounter.ordinal,
-        isFinalBoss: encounter.isFinalBoss,
+        raidSlug: raidProgress.raid,
+        bossSlug: encounter.slug,
         firstDefeated: encounter.firstDefeated,
         guild: encounter.guild
           ? {
               name: encounter.guild.name,
-              realm: encounter.guild.realm.slug
+              realm: encounter.guild.realm.slug,
+              region: encounter.guild.region.slug.toLocaleLowerCase("en-US")
             }
-          : null,
-        historicWorldRank: encounter.historicWorldRank ?? null
+          : null
       });
     }
   }
@@ -493,7 +494,7 @@ export function createRaiderIoClient(
       }
 
       for (const kill of kills) {
-        const identifier = `${kill.raidId}\u0000${kill.bossId}`;
+        const identifier = `${kill.raidSlug}\u0000${kill.bossSlug}`;
         const existing = earliestKills.get(identifier);
         if (!existing || kill.firstDefeated < existing.firstDefeated) {
           earliestKills.set(identifier, kill);
