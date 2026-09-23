@@ -9,7 +9,7 @@ CREATE TABLE applicant_source_counts (
   source text NOT NULL REFERENCES applicant_source_state(source),
   identity text NOT NULL,
   occurrence_count integer NOT NULL CHECK (occurrence_count >= 0),
-  deferred_observed_at timestamptz,
+  deferred_observed_ats jsonb NOT NULL DEFAULT '[]'::jsonb,
   PRIMARY KEY (source, identity)
 );
 

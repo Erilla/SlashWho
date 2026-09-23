@@ -200,6 +200,35 @@ it("settles a deferred ID using suppression from its first poll", async () => {
   expect(rows.rows).toEqual([{ observed_at: firstSeen, state: "suppressed" }]);
 });
 
+it("uses each submission time when a deferred numeric count rises again", async () => {
+  const firstSeen = new Date("2026-01-01T00:00:00.000Z");
+  const secondSeen = new Date("2026-01-02T00:00:00.000Z");
+  const numeric = "https://www.warcraftlogs.com/character/id/45";
+  await pollApplicantSheet({
+    pool,
+    readColumn: async () => [a, b, b, numeric],
+    backlogLimit: 100,
+    now: () => firstSeen,
+    isSuppressed: async () => "defer"
+  });
+  const result = await pollApplicantSheet({
+    pool,
+    readColumn: async () => [a, b, b, numeric, numeric],
+    backlogLimit: 100,
+    now: () => secondSeen,
+    isSuppressed: async (_identity, observedAt) =>
+      observedAt.getTime() === firstSeen.getTime()
+  });
+  expect(result.created).toBe(2);
+  const rows = await pool.query<{ observed_at: Date; state: string }>(
+    "SELECT observed_at, state FROM applicant_source_intents WHERE identity = 'warcraftlogs_id:45' ORDER BY sequence"
+  );
+  expect(rows.rows).toEqual([
+    { observed_at: firstSeen, state: "suppressed" },
+    { observed_at: secondSeen, state: "pending" }
+  ]);
+});
+
 it("closes an older indefinite suppression when a new policy replaces it", async () => {
   const repositories = createPostgresRepositories(pool);
   const key = { region: "eu" as const, realm: "example", name: "renewed" };

@@ -31,7 +31,7 @@ export async function wasSuppressedAt(
 type CountRow = {
   identity: string;
   occurrence_count: number;
-  deferred_observed_at: Date | null;
+  deferred_observed_ats: string[];
 };
 type IntentRow = {
   sequence: string;
@@ -76,14 +76,14 @@ export async function reconcileApplicantCounts(
       return { baseline: true, created: 0, backlog: 0 };
     }
     const existing = await client.query<CountRow>(
-      "SELECT identity, occurrence_count, deferred_observed_at FROM applicant_source_counts WHERE source = $1",
+      "SELECT identity, occurrence_count, deferred_observed_ats FROM applicant_source_counts WHERE source = $1",
       [source]
     );
     const previous = new Map(
       existing.rows.map((row) => [row.identity, row.occurrence_count])
     );
     const deferredAt = new Map(
-      existing.rows.map((row) => [row.identity, row.deferred_observed_at])
+      existing.rows.map((row) => [row.identity, row.deferred_observed_ats])
     );
     const pending = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM applicant_source_intents WHERE source = $1 AND state IN ('pending', 'claimed')",
@@ -94,38 +94,46 @@ export async function reconcileApplicantCounts(
     for (const identity of new Set([...previous.keys(), ...counts.keys()])) {
       const before = previous.get(identity) ?? 0;
       const current = counts.get(identity) ?? 0;
-      const increase = Math.max(0, current - before);
-      const observedAt = deferredAt.get(identity) ?? at;
-      const decision =
-        increase > 0 ? await isSuppressed?.(identity, observedAt) : false;
-      const admitted =
-        decision === "defer"
-          ? 0
-          : decision === true
-            ? Math.min(increase, 1_000)
-            : Math.min(increase, Math.max(0, backlogLimit - backlog));
-      for (let index = 0; index < admitted; index++) {
+      const pendingTimes =
+        current < before
+          ? []
+          : (deferredAt.get(identity) ?? [])
+              .slice(0, current - before)
+              .map((value) => new Date(value));
+      while (pendingTimes.length < current - before) pendingTimes.push(at);
+      const remaining: Date[] = [];
+      let admitted = 0;
+      let suppressedCount = 0;
+      for (const observedAt of pendingTimes) {
+        const decision = await isSuppressed?.(identity, observedAt);
+        if (
+          decision === "defer" ||
+          (decision === true && suppressedCount >= 1_000) ||
+          (decision !== true && backlog >= backlogLimit)
+        ) {
+          remaining.push(observedAt);
+          continue;
+        }
         const suppressed = decision === true;
         await client.query(
           "INSERT INTO applicant_source_intents (source, identity, observed_at, state) VALUES ($1, $2, $3, $4)",
           [source, identity, observedAt, suppressed ? "suppressed" : "pending"]
         );
-        if (suppressed) backlog--;
+        if (suppressed) suppressedCount++;
+        else backlog++;
+        admitted++;
       }
       const recorded = current < before ? current : before + admitted;
-      const stillDeferred =
-        current > recorded ? (deferredAt.get(identity) ?? at) : null;
       if (previous.has(identity))
         await client.query(
-          "UPDATE applicant_source_counts SET occurrence_count = $3, deferred_observed_at = $4 WHERE source = $1 AND identity = $2",
-          [source, identity, recorded, stillDeferred]
+          "UPDATE applicant_source_counts SET occurrence_count = $3, deferred_observed_ats = $4::jsonb WHERE source = $1 AND identity = $2",
+          [source, identity, recorded, JSON.stringify(remaining)]
         );
       else
         await client.query(
-          "INSERT INTO applicant_source_counts (source, identity, occurrence_count, deferred_observed_at) VALUES ($1, $2, $3, $4)",
-          [source, identity, recorded, stillDeferred]
+          "INSERT INTO applicant_source_counts (source, identity, occurrence_count, deferred_observed_ats) VALUES ($1, $2, $3, $4::jsonb)",
+          [source, identity, recorded, JSON.stringify(remaining)]
         );
-      backlog += admitted;
       created += admitted;
     }
     await client.query(
