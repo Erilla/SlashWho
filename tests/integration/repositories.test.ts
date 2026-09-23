@@ -217,6 +217,79 @@ describe("PostgreSQL repositories", () => {
     at
   });
 
+  it("atomically issues mail, leases retries, and removes delivered and expired ciphertext", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("mail@example.com", at)
+    );
+    const input = {
+      accountId: account.accountId!,
+      purpose: "verify" as const,
+      destination: "mail@example.com",
+      encryptedMessage: "encrypted-payload",
+      tokenDigest: "token-digest",
+      expiresAt: new Date(at.getTime() + 3600000),
+      at
+    };
+    await repositories.accountMail.issue(input);
+    expect(
+      (await pool.query("SELECT token_digest FROM account_mail_tokens")).rows
+    ).toEqual([{ token_digest: "token-digest" }]);
+    // A failure inserting the payload must roll back the token too.
+    await expect(
+      repositories.accountMail.issue({
+        ...input,
+        tokenDigest: "rollback-digest",
+        encryptedMessage: null as unknown as string
+      })
+    ).rejects.toThrow();
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_tokens"
+        )
+      ).rows[0].count
+    ).toBe(1);
+    const claims = await Promise.all([
+      repositories.accountMail.claimDue(at),
+      repositories.accountMail.claimDue(at)
+    ]);
+    const claimed = claims.find(Boolean)!;
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(
+      await repositories.accountMail.claimDue(new Date(at.getTime() + 59000))
+    ).toBeNull();
+    const retried = await repositories.accountMail.claimDue(
+      new Date(at.getTime() + 60000)
+    );
+    expect(retried).toMatchObject({
+      id: claimed.id,
+      idempotencyKey: claimed.idempotencyKey,
+      encryptedMessage: "encrypted-payload",
+      attempt: 2
+    });
+    // The second lease/backoff is longer than the first.
+    expect(
+      await repositories.accountMail.claimDue(new Date(at.getTime() + 120000))
+    ).toBeNull();
+    await repositories.accountMail.markSent(claimed.id, at);
+    expect(
+      (
+        await pool.query(
+          "SELECT encrypted_message, sent_at FROM account_mail_outbox"
+        )
+      ).rows
+    ).toEqual([{ encrypted_message: "", sent_at: at }]);
+    await repositories.accountMail.issue({ ...input, tokenDigest: "expires" });
+    expect(await repositories.accountMail.claimDue(input.expiresAt)).toBeNull();
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_outbox WHERE encrypted_message <> ''"
+        )
+      ).rows[0].count
+    ).toBe(0);
+  });
   it("rejects empty local-part dot segments at the database boundary", async () => {
     for (const canonicalEmail of [
       "a..b@example.com",

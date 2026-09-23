@@ -44,6 +44,7 @@ import {
   wasSuppressedAt
 } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
+import { startAccountMailWorker } from "./account-mail";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
 
 // Ciphertext for an abandoned evidence run's WCL credentials should not
@@ -112,6 +113,7 @@ type RuntimePool = {
 };
 
 export type WorkerRuntimeDependencies = {
+  startAccountMailWorker?: typeof startAccountMailWorker;
   createPool: (connectionString: string) => RuntimePool;
   runMigrations: (pool: RuntimePool) => Promise<void>;
   createRepositories: (pool: RuntimePool) => Repositories;
@@ -474,6 +476,7 @@ export async function createWorkerRuntime(
   let queue: DiscoveryQueue | undefined;
   let ready = false;
   let stopping: Promise<void> | undefined;
+  let mailWorker: ReturnType<typeof startAccountMailWorker> | undefined;
 
   try {
     for (let attempt = 1; ; attempt += 1) {
@@ -903,6 +906,11 @@ export async function createWorkerRuntime(
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
       await evidenceHandler.execute(payload, context);
     });
+    if (config.accountMail) {
+      mailWorker = (
+        dependencies.startAccountMailWorker ?? startAccountMailWorker
+      )(repositories.accountMail, config.accountMail, logger);
+    }
     ready = true;
 
     return {
@@ -944,6 +952,7 @@ export async function createWorkerRuntime(
         ready = false;
         stopping ??= (async () => {
           try {
+            await mailWorker?.stop();
             await initializedQueue.stop({
               graceful: true,
               timeoutMs: config.workerDrainTimeoutMs,
@@ -967,6 +976,7 @@ export async function createWorkerRuntime(
       }
     };
   } catch (error) {
+    await mailWorker?.stop();
     await Promise.allSettled([
       ...(queue
         ? [

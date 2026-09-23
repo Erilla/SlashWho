@@ -171,6 +171,17 @@ function createMemoryRepositories(): Repositories {
   let snapshotSequence = 0;
 
   return {
+    accountMail: {
+      async issue() {
+        throw new Error("not_used");
+      },
+      async claimDue() {
+        throw new Error("not_used");
+      },
+      async markSent() {
+        throw new Error("not_used");
+      }
+    },
     accountAuth: {
       async registerPending() {
         throw new Error("not_used");

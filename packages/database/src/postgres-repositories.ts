@@ -1487,6 +1487,88 @@ async function requestHistoricAliasRecollection(
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
+    accountMail: {
+      async issue(input) {
+        if (input.expiresAt <= input.at)
+          throw new Error("account_mail_expired");
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const token = await client.query<{ id: string }>(
+            `INSERT INTO account_mail_tokens
+             (account_id, purpose, token_digest, expires_at, created_at)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [
+              input.accountId,
+              input.purpose,
+              input.tokenDigest,
+              input.expiresAt,
+              input.at
+            ]
+          );
+          await client.query(
+            `INSERT INTO account_mail_outbox
+             (token_id, encrypted_message, idempotency_key, expires_at, next_attempt_at, created_at)
+             VALUES ($1, $2, gen_random_uuid()::text, $3, $4, $4)`,
+            [
+              token.rows[0]!.id,
+              input.encryptedMessage,
+              input.expiresAt,
+              input.at
+            ]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async claimDue(at) {
+        // Also purge sent metadata after expiry; token records contain digests only.
+        await pool.query(
+          "DELETE FROM account_mail_outbox WHERE expires_at <= $1",
+          [at]
+        );
+        const result = await pool.query<{
+          id: string;
+          encrypted_message: string;
+          idempotency_key: string;
+          expires_at: Date;
+          attempt: number;
+        }>(
+          `WITH due AS (
+             SELECT id FROM account_mail_outbox
+             WHERE sent_at IS NULL AND expires_at > $1 AND next_attempt_at <= $1
+             ORDER BY next_attempt_at, id FOR UPDATE SKIP LOCKED LIMIT 1
+           )
+           UPDATE account_mail_outbox AS mail
+           SET attempt = attempt + 1,
+               next_attempt_at = $1 + make_interval(secs =>
+                 LEAST(3600, 60 * power(2, LEAST(mail.attempt, 6)))::int)
+           FROM due WHERE mail.id = due.id
+           RETURNING mail.id, encrypted_message, idempotency_key, expires_at, attempt`,
+          [at]
+        );
+        const row = result.rows[0];
+        return row
+          ? {
+              id: row.id,
+              encryptedMessage: row.encrypted_message,
+              idempotencyKey: row.idempotency_key,
+              expiresAt: row.expires_at,
+              attempt: row.attempt
+            }
+          : null;
+      },
+      async markSent(id, at) {
+        await pool.query(
+          `UPDATE account_mail_outbox SET sent_at = $2, encrypted_message = '' WHERE id = $1`,
+          [id, at]
+        );
+      }
+    },
     accountAuth: {
       async registerPending(input) {
         const client = await pool.connect();

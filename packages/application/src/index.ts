@@ -95,6 +95,8 @@ export {
 } from "./serializers";
 export {
   decryptCredential,
+  encryptAccountMail,
+  decryptAccountMail,
   encryptCredential,
   parseEncryptionKey
 } from "./credential-encryption";

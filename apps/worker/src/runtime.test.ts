@@ -1867,3 +1867,28 @@ describe("createRaiderIoGateway", () => {
     }
   });
 });
+
+it("starts and drains configured account mail delivery alongside evidence work", async () => {
+  const fake = runtimeFakes();
+  const stopMail = vi.fn(async () => {
+    expect(fake.ended).toBe(false);
+  });
+  const startAccountMailWorker = vi.fn(() => ({ stop: stopMail }));
+  const accountMail = {
+    resendApiKey: "secret",
+    accountEmailFrom: "accounts@example.com",
+    accountCredentialEncryptionKey: Buffer.alloc(32, 7)
+  };
+  const runtime = await createWorkerRuntime(
+    { ...config, accountMail },
+    { ...fake.dependencies, startAccountMailWorker }
+  );
+  expect(startAccountMailWorker).toHaveBeenCalledWith(
+    fake.repositories.accountMail,
+    accountMail,
+    undefined
+  );
+  expect(await runtime.health()).toEqual({ live: true, ready: true });
+  await runtime.stop();
+  expect(stopMail).toHaveBeenCalledOnce();
+});

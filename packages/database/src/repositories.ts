@@ -1215,9 +1215,21 @@ export interface AccountAuthRepository {
     at: Date;
   }): Promise<"admitted" | "throttled">;
 }
-/** Concrete token and outbox methods are supplied with the mail implementation. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AccountMailRepository {}
+export interface AccountMailRepository {
+  issue(input: {
+    accountId: string;
+    purpose: "verify" | "reset" | "email_change_current" | "email_change_new";
+    /** Kept only inside encryptedMessage, never duplicated as plaintext. */
+    destination: string;
+    encryptedMessage: string;
+    tokenDigest: string;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<void>;
+  /** Persists a lease/backoff before returning; crashes retry the same row. */
+  claimDue(at: Date): Promise<MailOutboxRow | null>;
+  markSent(id: string, at: Date): Promise<void>;
+}
 /** Concrete key methods are supplied with the credential implementation. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface AccountCredentialRepository {}
@@ -1325,8 +1337,8 @@ export interface OperatorAuthRepository {
 
 export interface Repositories {
   accountAuth: AccountAuthRepository;
-  /** Transitional until the corresponding repository implementations land. */
-  accountMail?: AccountMailRepository;
+  accountMail: AccountMailRepository;
+  /** Transitional until the corresponding repository implementation lands. */
   accountCredentials?: AccountCredentialRepository;
   operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;
