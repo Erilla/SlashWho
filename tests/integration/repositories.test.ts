@@ -3840,6 +3840,48 @@ describe("PostgreSQL repositories", () => {
       ]);
     });
 
+    it("loads the last published ranked cursor for the same tier", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const reserved = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+      if (reserved.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(reserved.run.id, 1);
+      const cursor = {
+        journalRaidId: tier,
+        characterId: 40989140,
+        zoneIds: [23],
+        zoneIndex: 0,
+        encounterIds: [2299],
+        encountersLoaded: true,
+        encounterIndex: 0,
+        metricIndex: 0,
+        reportIndex: 3
+      };
+      await repositories.evidence.publish(reserved.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        rankedBackfillCursor: cursor,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: searchedAt
+      });
+
+      await expect(
+        repositories.evidence.storedEvidenceTiers(rootKey, tier)
+      ).resolves.toMatchObject({ rankedBackfillCursor: cursor });
+      expect(
+        (await repositories.evidence.storedEvidenceTiers(rootKey, "1190"))
+          .rankedBackfillCursor
+      ).toBeUndefined();
+    });
+
     it("never treats an ordinary run as a tier search", async () => {
       await expect(
         pool.query(
