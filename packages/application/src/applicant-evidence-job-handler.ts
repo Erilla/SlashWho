@@ -1075,8 +1075,9 @@ export function createApplicantEvidenceJobHandler(
         // This must match reservation exactly. Rebuilding only the WCL subset
         // makes real provider ids unknown to the ledger that owns them.
         const phasePlan = fullEvidencePhasePlan();
+        const reservedPhases = await evidence.listPhases?.(run.id);
         const reservedPhaseIds = new Set(
-          (await evidence.listPhases?.(run.id))?.map((phase) => phase.id) ?? []
+          reservedPhases?.map((phase) => phase.id) ?? []
         );
         const hasReservedPhasePlan = phasePlan.every((id) =>
           reservedPhaseIds.has(id)
@@ -1085,6 +1086,7 @@ export function createApplicantEvidenceJobHandler(
           hasReservedPhasePlan && evidence.recordPhaseTransitions
             ? createEvidencePhaseLedger({
                 plan: phasePlan,
+                initialPhases: reservedPhases,
                 now,
                 persist: async (phases) => {
                   const changed = phases.filter(

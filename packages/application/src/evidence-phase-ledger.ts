@@ -32,6 +32,13 @@ export type EvidencePhase = Readonly<{
 
 type EvidencePhasePlan = readonly EvidencePhaseId[];
 type Persist = (phases: readonly EvidencePhase[]) => Promise<void>;
+type PersistedEvidencePhase = Readonly<{
+  id: string;
+  state: EvidencePhaseState;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  limitationCode: string | null;
+}>;
 
 const terminalStates = new Set<EvidencePhaseState>([
   "completed",
@@ -121,11 +128,36 @@ export function fullEvidencePhasePlan(): EvidencePhasePlan {
 
 export function createEvidencePhaseLedger(options: {
   plan: EvidencePhasePlan;
+  initialPhases?: readonly PersistedEvidencePhase[];
   now: () => Date;
   persist: Persist;
 }) {
-  const phases = new Map(options.plan.map((id) => [id, phase(id)]));
-  let seeded = false;
+  const initialById = new Map<EvidencePhaseId, EvidencePhase>();
+  for (const initial of options.initialPhases ?? []) {
+    if (!options.plan.includes(initial.id as EvidencePhaseId))
+      throw new Error("evidence_phase_unknown");
+    if (initialById.has(initial.id as EvidencePhaseId))
+      throw new Error("evidence_phase_plan_invalid");
+    initialById.set(initial.id as EvidencePhaseId, {
+      id: initial.id as EvidencePhaseId,
+      state: initial.state,
+      ...(initial.startedAt ? { startedAt: initial.startedAt } : {}),
+      ...(initial.completedAt ? { completedAt: initial.completedAt } : {}),
+      ...(initial.limitationCode
+        ? { limitationCode: initial.limitationCode }
+        : {})
+    });
+  }
+  if (
+    options.initialPhases &&
+    options.plan.some((id) => !initialById.has(id))
+  ) {
+    throw new Error("evidence_phase_plan_invalid");
+  }
+  const phases = new Map(
+    options.plan.map((id) => [id, initialById.get(id) ?? phase(id)])
+  );
+  let seeded = options.initialPhases !== undefined;
 
   function ordered(ids: readonly EvidencePhaseId[]): EvidencePhase[] {
     return ids.map((id) => phases.get(id)!);
@@ -153,6 +185,9 @@ export function createEvidencePhaseLedger(options: {
     ): Promise<void> {
       const current = phases.get(id);
       if (!current) throw new Error("evidence_phase_unknown");
+      // A retry re-runs completed collection stages; completion is a durable
+      // fact from this run, not a checkpoint or a transition to reverse.
+      if (current.state === "completed" && state === "active") return;
       if (
         state !== "skipped" &&
         state !== "active" &&
