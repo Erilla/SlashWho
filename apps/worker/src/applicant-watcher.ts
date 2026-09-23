@@ -4,6 +4,10 @@ import { startApplicantCollection } from "@slashwho/application";
 import type { CharacterKey, RaiderIoGateway } from "@slashwho/domain";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { parseApplicantCandidates } from "./applicant-candidates";
+import {
+  characterIdentity,
+  decodeApplicantIdentity
+} from "./applicant-identity";
 import type { WorkerConfig } from "./config";
 
 const source = "applicant_sheet";
@@ -14,22 +18,6 @@ type IntentRow = {
   observed_at: Date;
   attempts: number;
 };
-
-function keyFromIdentity(identity: string): CharacterKey | null {
-  if (!identity.startsWith("character:")) return null;
-  const parsed: unknown = JSON.parse(identity.slice(10));
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 3 ||
-    parsed.some((part) => typeof part !== "string")
-  )
-    throw new Error("applicant_identity_invalid");
-  return {
-    region: parsed[0] as CharacterKey["region"],
-    realm: parsed[1] as string,
-    name: parsed[2] as string
-  };
-}
 
 /** Reconciliation commits all count changes and their intents together. */
 export async function reconcileApplicantCounts(
@@ -162,10 +150,7 @@ export async function pollApplicantSheet(input: {
   };
 }
 
-export async function claimNext(
-  pool: Pool,
-  perDay: number
-): Promise<IntentRow | null> {
+export async function claimNext(pool: Pool): Promise<IntentRow | null> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -173,14 +158,6 @@ export async function claimNext(
       "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
       [source + ":drain"]
     );
-    const spent = await client.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM applicant_source_intents WHERE source = $1 AND claimed_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')",
-      [source]
-    );
-    if (Number(spent.rows[0]?.count ?? 0) >= perDay) {
-      await client.query("COMMIT");
-      return null;
-    }
     const result = await client.query<IntentRow>(
       "SELECT sequence, identity, observed_at, attempts FROM applicant_source_intents WHERE source = $1 AND (state = 'pending' OR (state = 'claimed' AND claimed_until < now())) AND (retry_after IS NULL OR retry_after <= now()) ORDER BY sequence LIMIT 1 FOR UPDATE SKIP LOCKED",
       [source]
@@ -193,6 +170,72 @@ export async function claimNext(
       );
     await client.query("COMMIT");
     return intent ?? null;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Charges the daily budget once per canonical dispatch, after ID resolution. */
+export async function admitCanonicalIntent(
+  pool: Pool,
+  intent: IntentRow,
+  canonicalIdentity: string,
+  perDay: number
+): Promise<"admitted" | "duplicate" | "wait" | "daily_limit"> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [source + ":drain"]
+    );
+    const earlier = await client.query<{ state: string }>(
+      "SELECT state FROM applicant_source_intents WHERE source = $1 AND observed_at = $2 AND canonical_identity = $3 AND sequence < $4 AND state IN ('pending', 'claimed', 'done') ORDER BY sequence LIMIT 1",
+      [source, intent.observed_at, canonicalIdentity, intent.sequence]
+    );
+    if (earlier.rows[0]) {
+      if (earlier.rows[0].state === "done") {
+        await client.query(
+          "UPDATE applicant_source_intents SET canonical_identity = $2, state = 'done', claimed_until = NULL, claimed_at = NULL WHERE sequence = $1 AND state = 'claimed'",
+          [intent.sequence, canonicalIdentity]
+        );
+        await client.query("COMMIT");
+        return "duplicate";
+      }
+      await client.query(
+        "UPDATE applicant_source_intents SET canonical_identity = $2, state = 'pending', claimed_until = NULL, claimed_at = NULL, retry_after = now() + interval '1 minute' WHERE sequence = $1 AND state = 'claimed'",
+        [intent.sequence, canonicalIdentity]
+      );
+      await client.query("COMMIT");
+      return "wait";
+    }
+    const current = await client.query<{ charged_at: Date | null }>(
+      "SELECT charged_at FROM applicant_source_intents WHERE sequence = $1 FOR UPDATE",
+      [intent.sequence]
+    );
+    if (!current.rows[0]?.charged_at) {
+      const spent = await client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM applicant_source_intents WHERE source = $1 AND charged_at >= (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')",
+        [source]
+      );
+      if (Number(spent.rows[0]?.count ?? 0) >= perDay) {
+        await client.query(
+          "UPDATE applicant_source_intents SET canonical_identity = $2, state = 'pending', claimed_until = NULL, claimed_at = NULL, retry_after = (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') + interval '1 day' WHERE sequence = $1 AND state = 'claimed'",
+          [intent.sequence, canonicalIdentity]
+        );
+        await client.query("COMMIT");
+        return "daily_limit";
+      }
+    }
+    await client.query(
+      "UPDATE applicant_source_intents SET canonical_identity = $2, charged_at = COALESCE(charged_at, now()) WHERE sequence = $1 AND state = 'claimed'",
+      [intent.sequence, canonicalIdentity]
+    );
+    await client.query("COMMIT");
+    return "admitted";
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -234,26 +277,39 @@ export async function drainApplicantIntents(input: {
       policy.minimumPoints,
       Number(recentCost.rows[0]?.reserve ?? 0)
     );
+    const reserved = await input.pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM character_evidence_runs WHERE status IN ('queued', 'running', 'retrying') AND wcl_client_id_encrypted IS NULL"
+    );
+    const reservedPoints = Number(reserved.rows[0]?.count ?? 0) * neededPoints;
     const allowance = await input.warcraftlogs.getRateLimit();
     if (
       allowance.kind !== "rate_limit" ||
-      allowance.limitPerHour - allowance.pointsSpentThisHour < neededPoints
+      allowance.limitPerHour - allowance.pointsSpentThisHour - reservedPoints <
+        neededPoints
     )
       break;
-    const intent = await claimNext(input.pool, policy.perDay);
+    const intent = await claimNext(input.pool);
     if (!intent) break;
     try {
-      let key = keyFromIdentity(intent.identity);
-      if (!key) {
-        const id = Number(intent.identity.replace(/^warcraftlogs_id:/, ""));
-        if (!Number.isSafeInteger(id) || id <= 0)
-          throw new Error("applicant_identity_invalid");
-        const resolved = await input.warcraftlogs.resolveCharacterById(id);
+      const identity = decodeApplicantIdentity(intent.identity);
+      let key: CharacterKey;
+      if (identity.kind === "warcraftlogs_id") {
+        const resolved = await input.warcraftlogs.resolveCharacterById(
+          identity.id
+        );
         if (resolved.kind !== "identity")
           throw new Error("applicant_identity_unavailable");
         key = resolved.key;
-      }
-      if (!key) throw new Error("applicant_identity_invalid");
+      } else key = identity.key;
+      const canonicalIdentity = characterIdentity(key);
+      const admission = await admitCanonicalIntent(
+        input.pool,
+        intent,
+        canonicalIdentity,
+        policy.perDay
+      );
+      if (admission === "duplicate" || admission === "wait") continue;
+      if (admission === "daily_limit") break;
       const outcome = await startApplicantCollection({
         key,
         observedAt: intent.observed_at,

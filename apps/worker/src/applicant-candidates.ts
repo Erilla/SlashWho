@@ -1,9 +1,9 @@
 import {
-  canonicalCharacterId,
   parseApplicantCharacterUrl,
   parseWarcraftLogsCharacterIdUrl,
   type CharacterKey
 } from "@slashwho/domain";
+import { characterIdentity, numericIdentity } from "./applicant-identity";
 
 export type ApplicantCandidate =
   | { identity: string; kind: "character"; key: CharacterKey }
@@ -46,7 +46,7 @@ export function parseApplicantCandidates(value: unknown): CandidateParse {
     const clean = url.toString().replace(/\/$/, "");
     const id = parseWarcraftLogsCharacterIdUrl(clean);
     if (id !== undefined) {
-      const identity = `warcraftlogs_id:${id}`;
+      const identity = numericIdentity(id);
       if (!seen.has(identity))
         candidates.push({ identity, kind: "warcraftlogs_id", id });
       seen.add(identity);
@@ -54,7 +54,7 @@ export function parseApplicantCandidates(value: unknown): CandidateParse {
     }
     try {
       const key = parseApplicantCharacterUrl(clean);
-      const identity = `character:${canonicalCharacterId(key)}`;
+      const identity = characterIdentity(key);
       if (!seen.has(identity))
         candidates.push({ identity, kind: "character", key });
       seen.add(identity);

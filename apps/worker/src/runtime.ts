@@ -37,6 +37,7 @@ import {
 import { Pool } from "pg";
 
 import { createApplicantSheetClient } from "./applicant-sheet";
+import { decodeApplicantIdentity } from "./applicant-identity";
 import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
@@ -726,7 +727,8 @@ export async function createWorkerRuntime(
                 pool: pool as Pool,
                 readColumn: () => applicantSheet.readColumn(),
                 isSuppressed: async (identity) => {
-                  if (identity.startsWith("warcraftlogs_id:")) {
+                  const decoded = decodeApplicantIdentity(identity);
+                  if (decoded.kind === "warcraftlogs_id") {
                     if (
                       ++numericChecks > 4 ||
                       !evidenceGateway.resolveCharacterById
@@ -743,9 +745,7 @@ export async function createWorkerRuntime(
                       }
                       if (!numericAllowance) return "defer";
                       const resolved =
-                        await evidenceGateway.resolveCharacterById(
-                          Number(identity.slice(16))
-                        );
+                        await evidenceGateway.resolveCharacterById(decoded.id);
                       if (resolved.kind !== "identity") return "defer";
                       return repositories.suppressions.isActive(
                         resolved.key,
@@ -755,16 +755,8 @@ export async function createWorkerRuntime(
                       return "defer";
                     }
                   }
-                  if (!identity.startsWith("character:")) return "defer";
-                  const parts: unknown = JSON.parse(identity.slice(10));
-                  if (!Array.isArray(parts) || parts.length !== 3)
-                    return "defer";
                   return repositories.suppressions.isActive(
-                    {
-                      region: parts[0] as "eu",
-                      realm: parts[1] as string,
-                      name: parts[2] as string
-                    },
+                    decoded.key,
                     new Date()
                   );
                 },
@@ -773,6 +765,16 @@ export async function createWorkerRuntime(
               applicantPollFailures = 0;
               applicantNextPollAttempt = 0;
               logger?.info({ event: "applicant_sheet_poll", ...poll });
+              if (
+                poll.truncated > 0 &&
+                Date.now() - applicantAlertedAt > 3_600_000
+              ) {
+                applicantAlertedAt = Date.now();
+                await fingerprintAlertNotifier?.notify({
+                  event: "applicant_input_truncated",
+                  details: { cells: poll.truncated }
+                });
+              }
               if (
                 poll.backlog >=
                   Math.ceil(config.applicantWatcher.backlog * 0.8) &&

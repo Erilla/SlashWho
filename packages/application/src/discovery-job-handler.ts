@@ -127,7 +127,8 @@ export type FingerprintAlertNotifier = {
       | "fingerprint_reservation_pressure"
       | "fingerprint_blizzard_rate_limited"
       | "applicant_poll_failed"
-      | "applicant_backlog_pressure";
+      | "applicant_backlog_pressure"
+      | "applicant_input_truncated";
     details: Record<string, number>;
   }): Promise<void> | void;
 };

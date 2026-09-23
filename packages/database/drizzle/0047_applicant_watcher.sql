@@ -17,10 +17,12 @@ CREATE TABLE applicant_source_intents (
   sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   source text NOT NULL REFERENCES applicant_source_state(source),
   identity text NOT NULL,
+  canonical_identity text,
   observed_at timestamptz NOT NULL,
   state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'claimed', 'done', 'suppressed')),
   claimed_until timestamptz,
   claimed_at timestamptz,
+  charged_at timestamptz,
   attempts integer NOT NULL DEFAULT 0,
   retry_after timestamptz
 );
