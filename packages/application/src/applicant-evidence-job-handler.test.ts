@@ -4770,7 +4770,7 @@ describe("searching one tier from the dossier", () => {
       characterId: 40989140,
       zoneIds: [23],
       partitionIds: [1],
-      acceptedFightKeys: ["publicReport:10"],
+      acceptedFightKeys: [],
       zonesLoaded: true,
       zoneIndex: 0,
       encounterIds: [2299],
@@ -4802,6 +4802,85 @@ describe("searching one tier from the dossier", () => {
     expect(evidence.published.at(-1)?.result).toMatchObject({
       rankedBackfillCursor: successor
     });
+  });
+
+  it("publishes a previously accepted historic-name ranked kill when the resumed scan finishes", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const historicKill = {
+      raidId: eternalPalace.raidId,
+      raidName: "The Eternal Palace",
+      bossId: "2299",
+      bossName: "Queen Azshara",
+      journalBossId: "2364",
+      bossOrder: 8,
+      killedAt: "2020-01-21T20:34:49.222Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/publicReport",
+      fightUrl: "https://www.warcraftlogs.com/reports/publicReport#fight=10",
+      guild: null,
+      uploader: null,
+      performance: {
+        damage: { state: "unavailable" as const },
+        healing: { state: "unavailable" as const },
+        bossDamage: { state: "unavailable" as const }
+      }
+    };
+    const cursor = {
+      journalRaidId: eternalPalace.raidId,
+      characterId: 40989140,
+      zoneIds: [23],
+      partitionIds: [1],
+      acceptedFightKeys: ["publicReport:10"],
+      zonesLoaded: true,
+      zoneIndex: 0,
+      encounterIds: [2299],
+      encountersLoaded: true,
+      encounterIndex: 0,
+      metricIndex: 1,
+      reportIndex: 0
+    };
+    const stored = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await stored(characterKey)),
+      parseOnlyKills: [historicKill],
+      rankedBackfillCursor: cursor
+    });
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      state: "complete",
+      kills: [expect.objectContaining({ fightUrl: historicKill.fightUrl })]
+    });
+  });
+
+  it("restarts ranked discovery if an accepted fight is absent from stored evidence", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const stored = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await stored(characterKey)),
+      rankedBackfillCursor: {
+        journalRaidId: eternalPalace.raidId,
+        zoneIds: [23],
+        partitionIds: [1],
+        acceptedFightKeys: ["missingReport:10"],
+        zonesLoaded: true,
+        zoneIndex: 0,
+        encounterIds: [2299],
+        encountersLoaded: true,
+        encounterIndex: 0,
+        metricIndex: 1,
+        reportIndex: 0
+      }
+    });
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const collection = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
+      rankedBackfill: { cursor?: unknown };
+    };
+    expect(collection.rankedBackfill.cursor).toBeUndefined();
   });
 
   it("searches nothing on an ordinary run", async () => {

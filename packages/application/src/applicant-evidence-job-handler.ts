@@ -1072,6 +1072,31 @@ export function createApplicantEvidenceJobHandler(
           run.key,
           tierSearchRaidId
         );
+        // A capped ranked walk can accept an old-name fight before its cursor
+        // reaches the next metric. Keep that already attributed fight in the
+        // next publication, including when the next walk completes cleanly.
+        const savedRankedCursor = storedEvidence.rankedBackfillCursor;
+        const acceptedRankedKeys = new Set(
+          savedRankedCursor?.acceptedFightKeys ?? []
+        );
+        const carriedRankedKills = (storedEvidence.parseOnlyKills ?? [])
+          .map((kill) => storedKillForParse(kill, run.key.region))
+          .filter(
+            (kill): kill is WarcraftLogsFirstKillEvidence =>
+              kill !== null &&
+              kill.raidId === savedRankedCursor?.journalRaidId &&
+              acceptedRankedKeys.has(`${kill.reportCode}:${kill.fightId}`)
+          );
+        const carriedRankedKeys = new Set(
+          carriedRankedKills.map((kill) => `${kill.reportCode}:${kill.fightId}`)
+        );
+        // If an accepted fight is missing from storage, replay discovery so
+        // the cursor cannot skip evidence the next publish would lose.
+        const rankedCursor = [...acceptedRankedKeys].every((fightKey) =>
+          carriedRankedKeys.has(fightKey)
+        )
+          ? savedRankedCursor
+          : undefined;
         const killScanFloor = killScanFloorFrom(
           storedTerminal,
           storedEvidence.kills,
@@ -1416,9 +1441,7 @@ export function createApplicantEvidenceJobHandler(
                   rankedBackfill: {
                     journalRaidId: tierSearchRaidId,
                     requestCap: rankedCap,
-                    ...(storedEvidence.rankedBackfillCursor
-                      ? { cursor: storedEvidence.rankedBackfillCursor }
-                      : {})
+                    ...(rankedCursor ? { cursor: rankedCursor } : {})
                   }
                 }
               : {}),
@@ -1563,7 +1586,13 @@ export function createApplicantEvidenceJobHandler(
         // embellishments. Each phase is entered at its own gateway boundary
         // and terminalised before the next one begins.
         await phaseLedger?.skipPendingBefore("raiderio_rankings");
-        const publishedKills = response.kills.map(toCharacterMythicKillInput);
+        const allKills = new Map(
+          carriedRankedKills.map((kill) => [kill.fightUrl, kill] as const)
+        );
+        for (const kill of response.kills) allKills.set(kill.fightUrl, kill);
+        const publishedKills = [...allKills.values()].map(
+          toCharacterMythicKillInput
+        );
         if (options.raiderio) {
           const requests = new Map<string, MythicBossRankingsOptions>();
           for (const kill of publishedKills) {
@@ -1687,7 +1716,7 @@ export function createApplicantEvidenceJobHandler(
         record.outcome = incomplete ? "partial" : "complete";
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = drivingParse?.code ?? null;
-        record.killCount = response.kills.length;
+        record.killCount = publishedKills.length;
         record.attendanceRecoveredKills =
           response.attendanceRecoveredKills ?? null;
         if (response.attendanceSearchedEmpty?.length) {
@@ -1756,7 +1785,7 @@ export function createApplicantEvidenceJobHandler(
         const marks = terminalTiersFrom({
           at: now(),
           settleMs: options.killSettleMs,
-          kills: response.kills,
+          kills: [...allKills.values()],
           scanSkipped: response.scanSkipped === true,
           scanLimitation: response.limitation?.code ?? null,
           troubledRaidIds: response.troubledRaidIds
