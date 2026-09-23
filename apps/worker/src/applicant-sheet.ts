@@ -6,56 +6,65 @@ function base64url(value: string): string {
   return Buffer.from(value).toString("base64url");
 }
 
-/** A dedicated view-only service account; errors expose categories only. */
-export function createApplicantSheetClient(options: {
-  sheetId: string;
-  column: string;
-  email: string;
-  privateKey: string;
-  fetch?: typeof globalThis.fetch;
-}) {
+/** Reads only one configured column; errors expose categories only. */
+export function createApplicantSheetClient(
+  options: {
+    sheetId: string;
+    column: string;
+    fetch?: typeof globalThis.fetch;
+  } & (
+    | { apiKey: string; email?: never; privateKey?: never }
+    | { apiKey?: never; email: string; privateKey: string }
+  )
+) {
   const fetch = options.fetch ?? globalThis.fetch;
   const range = `'Form Responses'!${options.column}2:${options.column}`;
   return {
     async readColumn(): Promise<unknown[]> {
-      const now = Math.floor(Date.now() / 1000);
-      const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-      const payload = base64url(
-        JSON.stringify({
-          iss: options.email,
-          scope,
-          aud: "https://oauth2.googleapis.com/token",
-          iat: now,
-          exp: now + 300
-        })
-      );
-      const sign = createSign("RSA-SHA256");
-      sign.update(`${header}.${payload}`);
-      const assertion = `${header}.${payload}.${sign.sign(options.privateKey).toString("base64url")}`;
+      let headers: Record<string, string>;
       let response: Response;
-      try {
-        response = await fetch("https://oauth2.googleapis.com/token", {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            assertion
-          }),
-          signal: AbortSignal.timeout(10_000)
-        });
-      } catch {
-        throw new Error("applicant_google_auth_unavailable");
+      if (options.apiKey !== undefined) {
+        headers = { "x-goog-api-key": options.apiKey };
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+        const payload = base64url(
+          JSON.stringify({
+            iss: options.email,
+            scope,
+            aud: "https://oauth2.googleapis.com/token",
+            iat: now,
+            exp: now + 300
+          })
+        );
+        const sign = createSign("RSA-SHA256");
+        sign.update(`${header}.${payload}`);
+        const assertion = `${header}.${payload}.${sign.sign(options.privateKey).toString("base64url")}`;
+        try {
+          response = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+              assertion
+            }),
+            signal: AbortSignal.timeout(10_000)
+          });
+        } catch {
+          throw new Error("applicant_google_auth_unavailable");
+        }
+        if (!response.ok) throw new Error("applicant_google_auth_rejected");
+        const token = ((await response.json()) as { access_token?: unknown })
+          .access_token;
+        if (typeof token !== "string")
+          throw new Error("applicant_google_auth_invalid");
+        headers = { authorization: `Bearer ${token}` };
       }
-      if (!response.ok) throw new Error("applicant_google_auth_rejected");
-      const token = ((await response.json()) as { access_token?: unknown })
-        .access_token;
-      if (typeof token !== "string")
-        throw new Error("applicant_google_auth_invalid");
       try {
         response = await fetch(
           `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(options.sheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`,
           {
-            headers: { authorization: `Bearer ${token}` },
+            headers,
             signal: AbortSignal.timeout(15_000)
           }
         );

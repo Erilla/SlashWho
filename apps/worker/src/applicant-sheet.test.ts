@@ -39,3 +39,23 @@ it("requests only the configured response column with a read-only scope", async 
   expect(cells).toHaveLength(1);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it("reads a public response column with an API key and no OAuth request", async () => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    expect(url).toContain("sheets.googleapis.com/v4/spreadsheets/fake-sheet");
+    expect(decodeURIComponent(url)).toContain("'Form Responses'!F2:F");
+    expect(url).not.toContain("test-api-key");
+    expect(init?.headers).toEqual({ "x-goog-api-key": "test-api-key" });
+    return new Response(JSON.stringify({ values: [["character-link"]] }));
+  });
+
+  const cells = await createApplicantSheetClient({
+    sheetId: "fake-sheet",
+    column: "F",
+    apiKey: "test-api-key",
+    fetch: fetch as typeof globalThis.fetch
+  }).readColumn();
+
+  expect(cells).toEqual(["character-link"]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});

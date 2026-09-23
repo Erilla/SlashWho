@@ -354,11 +354,26 @@ export function createFingerprintAlertNotifier(
   return {
     async notify(alert) {
       if (!config.maintainerAlertWebhookUrl) return;
+      const discordWebhook =
+        config.maintainerAlertWebhookUrl.startsWith(
+          "https://discord.com/api/webhooks/"
+        ) ||
+        config.maintainerAlertWebhookUrl.startsWith(
+          "https://discordapp.com/api/webhooks/"
+        );
+      const body = discordWebhook
+        ? {
+            content: `⚠️ ${alert.event} — ${Object.entries(alert.details)
+              .map(([name, count]) => `${name}: ${count}`)
+              .join(" · ")}`,
+            allowed_mentions: { parse: [] }
+          }
+        : alert;
       try {
         const response = await fetch(config.maintainerAlertWebhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(alert),
+          body: JSON.stringify(body),
           signal: AbortSignal.timeout(timeoutMs)
         });
         if (!response.ok) {
@@ -475,12 +490,18 @@ export async function createWorkerRuntime(
     queue = initializedQueue;
     const gateway = dependencies.createGateway(config, logger);
     const applicantSheet = config.applicantWatcher.enabled
-      ? createApplicantSheetClient({
-          sheetId: config.applicantWatcher.sheetId!,
-          column: config.applicantWatcher.column,
-          email: config.applicantWatcher.serviceAccountEmail!,
-          privateKey: config.applicantWatcher.privateKey!
-        })
+      ? config.applicantWatcher.apiKey
+        ? createApplicantSheetClient({
+            sheetId: config.applicantWatcher.sheetId!,
+            column: config.applicantWatcher.column,
+            apiKey: config.applicantWatcher.apiKey
+          })
+        : createApplicantSheetClient({
+            sheetId: config.applicantWatcher.sheetId!,
+            column: config.applicantWatcher.column,
+            email: config.applicantWatcher.serviceAccountEmail!,
+            privateKey: config.applicantWatcher.privateKey!
+          })
       : null;
     let applicantPollFailures = 0;
     let applicantNextPollAttempt = 0;

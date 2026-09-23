@@ -719,6 +719,35 @@ describe("worker runtime", () => {
     });
   });
 
+  it("formats count-only maintainer alerts for a Discord channel webhook", async () => {
+    const fetch = vi.fn(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        expect(String(url)).toContain("discord.com/api/webhooks/");
+        expect(init?.method).toBe("POST");
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.notify({
+      event: "applicant_backlog_pressure",
+      details: { backlog: 80, limit: 100 }
+    });
+
+    const request = fetch.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({
+      content: "⚠️ applicant_backlog_pressure — backlog: 80 · limit: 100",
+      allowed_mentions: { parse: [] }
+    });
+  });
+
   it("swallows and logs a non-successful maintainer webhook response", async () => {
     // Break caught: a provider outage could reject discovery work and cause the
     // durable job to retry after its sweep had already changed state.

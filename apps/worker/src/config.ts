@@ -8,6 +8,7 @@ export type WorkerConfig = {
     enabled: boolean;
     sheetId?: string;
     column: string;
+    apiKey?: string;
     serviceAccountEmail?: string;
     privateKey?: string;
     cadenceMs: number;
@@ -147,6 +148,7 @@ export function loadWorkerConfig(
     enabled: applicantEnabled,
     sheetId: applicantSheetId(environment),
     column: applicantSheetColumn(environment.APPLICANT_SHEET_COLUMN),
+    apiKey: optionalSecret(environment.APPLICANT_GOOGLE_API_KEY),
     serviceAccountEmail: optionalSecret(
       environment.APPLICANT_GOOGLE_SERVICE_ACCOUNT_EMAIL
     ),
@@ -197,10 +199,16 @@ export function loadWorkerConfig(
     )
   };
   if (
+    applicantWatcher.apiKey &&
+    (applicantWatcher.serviceAccountEmail || applicantWatcher.privateKey)
+  )
+    throw new Error("ambiguous_applicant_google_credentials");
+  if (
     applicantEnabled &&
     (!applicantWatcher.sheetId ||
-      !applicantWatcher.serviceAccountEmail ||
-      !applicantWatcher.privateKey ||
+      (!applicantWatcher.apiKey &&
+        (!applicantWatcher.serviceAccountEmail ||
+          !applicantWatcher.privateKey)) ||
       !environment.MAINTAINER_ALERT_WEBHOOK_URL ||
       !environment.APPLICANT_POLL_CADENCE_MS ||
       !environment.APPLICANT_ADMISSIONS_PER_TICK ||
