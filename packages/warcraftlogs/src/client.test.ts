@@ -24,6 +24,19 @@ const key: CharacterKey = {
   name: "sentinel"
 };
 
+/**
+ * One verified kill in the named guild, on a night no fixture report spans,
+ * so attendance is searched for it. Attendance is read for nothing else.
+ */
+function verifiedIn(name: string, realm = "silvermoon") {
+  return [
+    {
+      at: "2001-01-01T20:00:00.000Z",
+      guild: { name, realm, region: "eu" as const }
+    }
+  ];
+}
+
 function fixture(name: FixtureName): unknown {
   return JSON.parse(
     readFileSync(resolve(fixtureDirectory, `${name}.json`), "utf8")
@@ -3344,7 +3357,8 @@ describe("Warcraft Logs gateway", () => {
     await expect(
       client.getFirstKillReports(multiwordRealmKey, {
         requestCap: 10,
-        parseRequestCap: 1
+        parseRequestCap: 1,
+        verifiedKills: verifiedIn("SeriouslyCasual", "aerie-peak")
       })
     ).resolves.toMatchObject({
       kind: "evidence",
@@ -3359,7 +3373,9 @@ describe("Warcraft Logs gateway", () => {
           bossName: "Za'qul",
           fightUrl: "https://www.warcraftlogs.com/reports/omittedReport#fight=7"
         }
-      ]
+      ],
+      // What recovery yielded, so its cost can be weighed against it later.
+      attendanceRecoveredKills: 1
     });
     expect(attendancePages).toEqual([1, 2]);
   });
@@ -3444,7 +3460,8 @@ describe("Warcraft Logs gateway", () => {
 
     await client.getFirstKillReports(key, {
       requestCap: 20,
-      parseRequestCap: 1
+      parseRequestCap: 1,
+      verifiedKills: verifiedIn("Guild")
     });
 
     expect(hydrated).toEqual([
@@ -3454,6 +3471,480 @@ describe("Warcraft Logs gateway", () => {
       "malformedListReport",
       "suffixedReport"
     ]);
+  });
+
+  describe("searching attendance only for verified kills", () => {
+    const night = Date.parse("2020-01-21T19:34:00.000Z");
+    const hours = (count: number) => count * 60 * 60 * 1_000;
+    const history = (reports: unknown[] = []) =>
+      jsonResponse({
+        data: {
+          characterData: {
+            character: {
+              server: { normalizedName: "Silvermoon" },
+              // The guild the old walk read attendance for on every run.
+              guilds: [
+                {
+                  name: "Guild",
+                  server: { slug: "silvermoon", region: { slug: "EU" } }
+                }
+              ],
+              recentReports: { data: reports, has_more_pages: false }
+            }
+          }
+        }
+      });
+    const attendancePage = (
+      data: ReadonlyArray<{ code: string; startTime: number }>,
+      hasMorePages: boolean
+    ) =>
+      jsonResponse({
+        data: {
+          guildData: {
+            guild: {
+              attendance: {
+                data: data.map((entry) => ({
+                  ...entry,
+                  players: [{ name: "Sentinel" }]
+                })),
+                has_more_pages: hasMorePages
+              }
+            }
+          }
+        }
+      });
+    const verified = [
+      {
+        at: new Date(night).toISOString(),
+        guild: { name: "Guild", realm: "silvermoon", region: "eu" as const }
+      }
+    ];
+
+    it("reads no attendance without a verified kill to search for", async () => {
+      // Break caught: walking every guild the history names is what pinned
+      // Ryii at the cap. With nothing verified to find, there is no search.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) return history();
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+      expect(queries).not.toContain("ReportByCode");
+    });
+
+    it("does not search for a verified kill a decoded report already spans", async () => {
+      // Break caught: a kill the history scan read -- or read and found was
+      // not the character's -- sent the run into attendance to find it again.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) {
+          return history([
+            {
+              code: "raidNight",
+              startTime: night - hours(1),
+              zone: { id: 23, name: "The Eternal Palace" },
+              masterData: { actors: [] },
+              fights: [
+                {
+                  id: 1,
+                  encounterID: 0,
+                  name: "Trash",
+                  startTime: 0,
+                  endTime: hours(2),
+                  kill: null,
+                  difficulty: null,
+                  friendlyPlayers: []
+                }
+              ]
+            }
+          ]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+    });
+
+    // A report holding one Mythic Queen Azshara kill by the character.
+    const hydratedKill = (code: string) =>
+      jsonResponse({
+        data: {
+          reportData: {
+            report: {
+              code,
+              startTime: night - hours(1),
+              owner: { name: "Uploader" },
+              guild: null,
+              zone: {
+                id: 23,
+                name: "The Eternal Palace",
+                encounters: [{ id: 2299, journalID: 0 }]
+              },
+              masterData: {
+                actors: [
+                  {
+                    id: 12,
+                    name: "Sentinel",
+                    server: "Silvermoon",
+                    type: "Player"
+                  }
+                ]
+              },
+              fights: [
+                {
+                  id: 8,
+                  encounterID: 2299,
+                  name: "Queen Azshara",
+                  startTime: hours(0.5),
+                  endTime: hours(1),
+                  kill: true,
+                  difficulty: 5,
+                  friendlyPlayers: [12]
+                }
+              ]
+            }
+          }
+        }
+      });
+
+    it("recovers nothing, and limits nothing, from a guild Warcraft Logs does not know", async () => {
+      // Break caught: Raider.IO names the guild as it was on the night. One
+      // renamed, moved or never logged is unknown to Warcraft Logs, and its
+      // refusal marked the scan limited -- so the run was partial, and was
+      // retried, and was partial again, for as long as the kill stayed unheld.
+      for (const refusal of [
+        jsonResponse({
+          errors: [{ message: "No guild exists for this name/server/region" }]
+        }),
+        jsonResponse({ data: { guildData: { guild: null } } }),
+        new Response("upstream-body-marker", { status: 503 })
+      ]) {
+        const { client } = clientFor((url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as { query: string };
+          if (body.query.includes("RecentReports")) return history();
+          if (body.query.includes("GuildAttendance")) return refusal.clone();
+          return emptyZoneRankingsResponse();
+        });
+
+        const result = await client.getFirstKillReports(key, {
+          requestCap: 10,
+          parseRequestCap: 1,
+          verifiedKills: verified
+        });
+
+        expect(result).toMatchObject({ kind: "evidence" });
+        expect(result).not.toHaveProperty("limitation");
+      }
+    });
+
+    it("re-reads a stored recovery directly instead of searching for it", async () => {
+      // Break caught: a kill recovered in an earlier run is held, so it was
+      // not searched for -- and a complete publish, which keeps only what the
+      // run finds again outside terminal raids, dropped it. The next run found
+      // it unheld and recovered it; the one after dropped it again.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { code?: string };
+        };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return hydratedKill(body.variables.code!);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        storedKillReportCodes: ["storedRecovery"]
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+      expect(queries.filter((query) => query === "ReportByCode")).toHaveLength(
+        1
+      );
+      expect(result).toMatchObject({
+        kind: "evidence",
+        kills: [
+          {
+            bossName: "Queen Azshara",
+            fightUrl:
+              "https://www.warcraftlogs.com/reports/storedRecovery#fight=8"
+          }
+        ]
+      });
+      expect(result).not.toHaveProperty("limitation");
+      // Re-reading what is already stored is not a search.
+      expect(result).not.toHaveProperty("attendanceRecoveredKills");
+    });
+
+    it("limits the scan when a stored recovery cannot be re-read", async () => {
+      // A complete publish would drop the stored kill this run failed to read
+      // again. A partial one carries every stored kill forward.
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return new Response("upstream-body-marker", { status: 503 });
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        storedKillReportCodes: ["storedRecovery"]
+      });
+
+      // With nothing else found, the whole result is the limitation.
+      const code =
+        result.kind === "limitation" ? result.code : result.limitation?.code;
+      expect(code).toBe("unavailable");
+    });
+
+    it("lets a stored kill go when its report is gone, as a complete publish should", async () => {
+      // A deleted or private report is a kill the run stopped finding. That
+      // is not a failure to read, so it must not hold the run partial.
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return jsonResponse({
+            errors: [{ message: "This report does not exist." }]
+          });
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        storedKillReportCodes: ["deletedReport"]
+      });
+
+      const code =
+        result.kind === "limitation" ? result.code : result.limitation?.code;
+      expect(code).toBeUndefined();
+    });
+
+    it("re-reads nothing the history scan already read, and nothing after a resume", async () => {
+      // A report the scan decoded has already been found again. And a resumed
+      // scan publishes partial, which carries every stored kill forward, so
+      // re-reading there would spend requests on nothing.
+      for (const resumed of [false, true]) {
+        const hydrated: string[] = [];
+        const page = (fixture("character-report-valid") as { pages: unknown[] })
+          .pages[0];
+        const { client } = clientFor((url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: { page?: number; code?: string };
+          };
+          if (body.query.includes("RecentReports")) {
+            if (body.variables.page === 1 && !resumed) {
+              const last = structuredClone(page) as {
+                data: {
+                  characterData: {
+                    character: { recentReports: { has_more_pages: boolean } };
+                  };
+                };
+              };
+              last.data.characterData.character.recentReports.has_more_pages = false;
+              return jsonResponse(last);
+            }
+            return body.variables.page === 18 ? jsonResponse(page) : history();
+          }
+          if (body.query.includes("ReportByCode")) {
+            hydrated.push(body.variables.code!);
+            return jsonResponse({ data: { reportData: { report: null } } });
+          }
+          return emptyZoneRankingsResponse();
+        });
+
+        await client.getFirstKillReports(key, {
+          requestCap: 10,
+          parseRequestCap: 1,
+          storedKillReportCodes: resumed
+            ? ["storedRecovery"]
+            : ["lateReport", "storedRecovery"],
+          ...(resumed
+            ? {
+                historyScanStartPage: 19,
+                historyScanResumeBoundaryReportCode: "lateReport"
+              }
+            : {})
+        });
+
+        expect(hydrated).toEqual(resumed ? [] : ["storedRecovery"]);
+      }
+    });
+
+    it("reports no search when the budget was spent before recovery began", async () => {
+      // Break caught: a run whose history scan used the whole cap still read
+      // `attendanceRecoveredKills: 0`, a measured zero for a search that
+      // never ran. The history holds a kill a month later, so the result is
+      // evidence and can carry the count at all.
+      const monthLater = (
+        (await hydratedKill("laterNight").json()) as {
+          data: { reportData: { report: Record<string, unknown> } };
+        }
+      ).data.reportData.report;
+      monthLater.startTime = night + hours(24 * 30);
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) {
+          return history([monthLater]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 1,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(result).not.toHaveProperty("attendanceRecoveredKills");
+    });
+
+    it("treats a report as covering a kill Raider.IO dates an hour before it", async () => {
+      // Break caught: Raider.IO put Ryun's Queen Azshara at 19:34Z; the log
+      // that holds it records the kill at 20:34Z. A whole-hour clock error on
+      // Raider.IO's side must not send the run into attendance for a night
+      // the history scan already read.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) {
+          return history([
+            {
+              code: "raidNight",
+              startTime: night + hours(0.5),
+              zone: { id: 23, name: "The Eternal Palace" },
+              masterData: { actors: [] },
+              fights: [
+                {
+                  id: 1,
+                  encounterID: 0,
+                  name: "Trash",
+                  startTime: 0,
+                  endTime: hours(1),
+                  kill: null,
+                  difficulty: null,
+                  friendlyPlayers: []
+                }
+              ]
+            }
+          ]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+    });
+
+    it("searches only the kill's guild, on its night, and stops paging once past it", async () => {
+      // Break caught: the walk read every page of every guild and hydrated
+      // every report on them. Only the named guild's reports from the night
+      // of the kill can hold it, and pages are newest first.
+      const walked: string[] = [];
+      const hydrated: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { name?: string; page?: number; code?: string };
+        };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("GuildAttendance")) {
+          walked.push(`${body.variables.name}:${body.variables.page}`);
+          return body.variables.page === 1
+            ? attendancePage(
+                [
+                  { code: "weekLater", startTime: night + hours(24 * 7) },
+                  // Opened after Raider.IO's time: its clock can run an
+                  // hour early, as it does for Ryun's Queen Azshara.
+                  { code: "openedLater", startTime: night + hours(1) },
+                  { code: "killNight", startTime: night - hours(1) },
+                  { code: "nightBefore", startTime: night - hours(20) }
+                ],
+                true
+              )
+            : body.variables.page === 2
+              ? attendancePage(
+                  [{ code: "monthBefore", startTime: night - hours(24 * 30) }],
+                  true
+                )
+              : attendancePage([], false);
+        }
+        if (body.query.includes("ReportByCode")) {
+          hydrated.push(body.variables.code!);
+          return jsonResponse({ data: { reportData: { report: null } } });
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const requests: string[] = [];
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 20,
+        parseRequestCap: 1,
+        verifiedKills: verified,
+        onRequest: (event) => requests.push(event.query)
+      });
+
+      expect(hydrated).toEqual(["openedLater", "killNight"]);
+      // Page two is wholly older than the night by more than the overlap
+      // pages can have at a boundary, so page three is never asked for.
+      expect(walked).toEqual(["Guild:1", "Guild:2"]);
+      // Recovery is counted apart from the history scan, so what it costs
+      // can be read without subtracting it back out of history pages.
+      expect(requests.filter((query) => query === "history_scan")).toHaveLength(
+        1
+      );
+      expect(
+        requests.filter((query) => query === "guild_attendance")
+      ).toHaveLength(2);
+      expect(
+        requests.filter((query) => query === "report_hydration")
+      ).toHaveLength(2);
+      // Searched and found nothing: a measured zero, not an absent value.
+      expect(result).toMatchObject({ attendanceRecoveredKills: 0 });
+    });
   });
 
   it("matches an attendance name written in another Unicode form", async () => {
@@ -3512,7 +4003,7 @@ describe("Warcraft Logs gateway", () => {
 
     await client.getFirstKillReports(
       { region: "eu", realm: "silvermoon", name: "zoë" },
-      { requestCap: 5, parseRequestCap: 1 }
+      { requestCap: 5, parseRequestCap: 1, verifiedKills: verifiedIn("Guild") }
     );
 
     expect(hydrated).toEqual(["decomposedReport"]);
@@ -3573,7 +4064,8 @@ describe("Warcraft Logs gateway", () => {
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 10,
-      parseRequestCap: 1
+      parseRequestCap: 1,
+      verifiedKills: verifiedIn("Guild")
     });
 
     expect(result).toMatchObject({
@@ -3647,6 +4139,7 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 10,
       parseRequestCap: 1,
+      verifiedKills: verifiedIn("Guild"),
       historyScanStartPage: 19,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
@@ -4783,14 +5276,24 @@ describe("Warcraft Logs gateway", () => {
     expect(result).not.toHaveProperty("limitation");
   });
 
-  it("keeps its proved cursor when a resumed scan finds history already exhausted", async () => {
-    // Break caught: a scan that ended cleanly and then capped elsewhere saves
-    // the page past the end. The resumed run reads that page, finds it empty,
-    // and used to save the page after it with no boundary, which the next run
-    // could not validate -- so it restarted at page one and saved the first
-    // cursor again. Ryii alternated between the two for a day.
+  it("keeps its proved cursor across an empty history page", async () => {
+    // Break caught: an empty page advanced the cursor with no boundary, which
+    // the next run could not validate -- so it restarted at page one and
+    // saved the first cursor again. Ryii alternated between pages 67 and 68
+    // for a day. Here the page after the empty one drifts, so the run ends
+    // limited with whatever cursor it proved.
     const page = (fixture("character-report-valid") as { pages: unknown[] })
       .pages[0];
+    const emptyPage = {
+      data: {
+        characterData: {
+          character: {
+            server: { normalizedName: "Silvermoon" },
+            recentReports: { data: [], has_more_pages: true }
+          }
+        }
+      }
+    };
     const historyPages: number[] = [];
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -4804,47 +5307,25 @@ describe("Warcraft Logs gateway", () => {
         return jsonResponse(
           requestedPage === 66
             ? page
-            : {
-                data: {
-                  characterData: {
-                    character: {
-                      server: { normalizedName: "Silvermoon" },
-                      guilds: [
-                        {
-                          name: "Guild",
-                          server: { slug: "silvermoon", region: { slug: "EU" } }
-                        }
-                      ],
-                      recentReports: { data: [], has_more_pages: false }
-                    }
-                  }
-                }
-              }
+            : requestedPage === 67
+              ? emptyPage
+              : fixture("schema-drift")
         );
-      }
-      if (body.query.includes("GuildAttendance")) {
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: { attendance: { data: [], has_more_pages: true } }
-            }
-          }
-        });
       }
       return emptyZoneRankingsResponse();
     });
 
     const result = await client.getFirstKillReports(key, {
-      requestCap: 4,
+      requestCap: 10,
       parseRequestCap: 10,
       historyScanStartPage: 67,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
-    expect(historyPages).toEqual([66, 67]);
+    expect(historyPages).toEqual([66, 67, 68]);
     expect(result).toMatchObject({
       kind: "evidence",
-      limitation: { code: "request_cap" },
+      limitation: { code: "schema_drift" },
       historyScanResumePage: 67,
       historyScanResumeBoundaryReportCode: "lateReport"
     });

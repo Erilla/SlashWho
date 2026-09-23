@@ -38,12 +38,17 @@ export type WarcraftLogsLimitation = Readonly<{
 
 /**
  * The classes of upstream request one `getFirstKillReports` issues. A single
- * gateway call spans all four, so run cost can only be attributed -- to the
- * history scan or to rankings -- by counting them apart.
+ * gateway call spans all of them, so run cost can only be attributed -- to the
+ * history scan, to attendance recovery or to rankings -- by counting them
+ * apart. All three history classes draw on the same scan request cap.
  */
 export type WarcraftLogsQueryType =
-  /** `RecentReports`, one per page of the history scan. */
+  /** `RecentReports`, one per page of the history scan, boundary probe included. */
   | "history_scan"
+  /** `GuildAttendance`, one per attendance page searched for a verified kill. */
+  | "guild_attendance"
+  /** `ReportByCode`, one per attendance report hydrated. */
+  | "report_hydration"
   /** `CharacterZoneParses`, one per raid zone read for tier bests. */
   | "zone_rankings"
   /** `ReportFightParses`, one per report group hydrated. */
@@ -156,6 +161,17 @@ export type WarcraftLogsWipeEvidence = Readonly<{
   uploader?: string | null;
 }>;
 
+export type WarcraftLogsVerifiedKill = Readonly<{
+  /** When the kill happened, as an ISO string. */
+  at: string;
+  /** The guild the kill was in, whose attendance is searched. */
+  guild: Readonly<{
+    name: string;
+    realm: string;
+    region: CharacterKey["region"];
+  }>;
+}>;
+
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
@@ -238,6 +254,12 @@ export type WarcraftLogsReportResult =
        * `parseLimitation`.
        */
       parseLimitations?: readonly WarcraftLogsLimitation[];
+      /**
+       * Kills attendance recovery added that the history scan had not already
+       * found. Present only when attendance was searched: absent means no
+       * search ran, which is not the same as a search that found nothing.
+       */
+      attendanceRecoveredKills?: number;
     }>
   | WarcraftLogsLimitation;
 
@@ -300,6 +322,23 @@ export interface WarcraftLogsGateway {
        * that allowed the stop, so the character would never settle.
        */
       killScanFloor?: string;
+      /**
+       * Kills another provider attributes to the character, with the guild
+       * they were in. They are where to look, never evidence: one that no
+       * decoded report covers is searched for in that guild's attendance, on
+       * that night, and counts only if a hydrated report attributes it.
+       * Absent or empty, attendance is not read at all.
+       */
+      verifiedKills?: readonly WarcraftLogsVerifiedKill[];
+      /**
+       * Report codes of stored kills outside terminal raids. A complete publish
+       * keeps only what the run finds again there, and a kill recovered from
+       * guild attendance is not in the character's own history to be found. So
+       * after a fresh scan that finishes, any of these the scan did not read is
+       * re-read directly. Taken from stored evidence, never from another
+       * provider, so a Raider.IO failure cannot drop what it once helped find.
+       */
+      storedKillReportCodes?: readonly string[];
       /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call rather than to the client so the counts

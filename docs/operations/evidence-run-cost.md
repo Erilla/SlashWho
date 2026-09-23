@@ -192,9 +192,98 @@ Settle the reserve from a window whose `window_moved` is zero and whose
 `unaccounted_spend` is clean. A sample that fails either check describes
 something other than what one run costs.
 
+## What attendance recovery costs, and what it finds
+
+Guild attendance is searched only for Mythic kills Raider.IO attributes to the
+character that no stored or decoded evidence covers (#436). A kill an earlier
+run already recovered is not searched for again. Instead, after a fresh scan
+that finished (the only kind that publishes complete), the report of every
+stored kill outside a terminal raid that the scan did not read is re-read
+directly, because a complete publish keeps only what the run finds again
+there. That list comes from stored evidence, never from Raider.IO, so a
+Raider.IO failure cannot drop what it once helped find. After a full scan, it
+is only the kills attendance recovered.
+
+Recovery's requests are counted apart from the history scan:
+`guild_attendance_requests` per attendance page, and
+`report_hydration_requests` per report read, whether a search hit or a re-read.
+All three draw on the same scan cap. Rows written before the split read zero in
+both, with their recovery counted inside `history_scan_requests`.
+
+A search never limits the run: a guild Warcraft Logs does not know, a page it
+will not serve, or a spent budget recovers nothing and leaves the run's status
+to its history scan. A re-read that fails for any reason other than the report
+being gone **does** limit it, because the stored kill depends on it and a
+partial publish is what carries that kill forward. A report that is gone
+(Warcraft Logs answers "This report does not exist.") is a kill the run
+stopped finding, which a complete publish is meant to drop.
+
+### A `request_cap` that is not the cap
+
+A resumed history scan never publishes complete (#437). When it reaches the end
+of the history below its cursor it records `limitation_code = 'request_cap'`
+and restarts from page one next time, although the cap was not reached. When
+sizing the cap from `request_cap` rows, tell the two apart:
+`history_scan_requests < request_cap_used` is a resumed scan that finished, not
+budget exhaustion.
+
+A kill whose first defeat was never logged is searched for again on every full
+run until its tier settles, since nothing can hold it. The cost is one walk of
+that guild's attendance back to the night, plus any reports on it that list the
+character. This is accepted for now and tracked in #434. The query below is how
+to tell whether it has become worth fixing: a group with `searches` well above
+`kills_recovered`, and high `attendance_pages`.
+
+The recovery columns carry the three evidence states this repository
+distinguishes, and a query must not merge them:
+
+- `raiderio_historic_outcome` is `evidence`, or the limitation Raider.IO
+  answered with (`private`, `not_found`, `rate_limited`, `unavailable`,
+  `schema_drift`). **Null means Raider.IO was not asked**: a light run or a
+  parse-only resume, neither of which can search attendance.
+- `raiderio_historic_ms` is how long the lookup took; null when not asked.
+- `verified_kills_searched` is how many kills were left to search after
+  stored evidence and the scan floor removed the rest. Re-reads are not
+  counted here: they come from stored evidence, not from Raider.IO. `0` is a
+  lookup that left nothing to search; null is no lookup.
+- `attendance_recovered_kills` is how many kills an attendance search added
+  that the run had not already found. Re-reads are not counted: they recover
+  nothing new. Null when no attendance request was made, which can happen with
+  kills to search when the history scan covers them or the budget is already
+  spent. `0` is a search that found nothing.
+
+Points are not split by class, so weigh cost with the per-request figures
+measured one request at a time on 2026-09-23: about 28 points an attendance
+page and about 6 a hydrated report.
+
+```sql
+SELECT raiderio_historic_outcome,
+       count(*) AS attempts,
+       count(verified_kills_searched) AS asked,
+       coalesce(sum(verified_kills_searched), 0) AS kills_searched,
+       count(attendance_recovered_kills) AS searches,
+       coalesce(sum(attendance_recovered_kills), 0) AS kills_recovered,
+       sum(guild_attendance_requests) AS attendance_pages,
+       sum(report_hydration_requests) AS reports_hydrated,
+       round(
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY raiderio_historic_ms)::numeric
+       ) AS raiderio_p50_ms,
+       max(raiderio_historic_ms) AS raiderio_max_ms
+FROM character_evidence_run_costs
+WHERE recorded_at >= now() - interval '7 days'
+GROUP BY raiderio_historic_outcome
+ORDER BY attempts DESC;
+```
+
+The `coalesce` is on the sums only, where "no rows contributed" and "the
+rows contributed zero" answer the same question. The counts beside them keep
+the not-asked rows visible: `attempts` minus `asked` is how many attempts never
+asked Raider.IO, and `asked` minus `searches` is how many asked and had
+nothing to search.
+
 ## Keeping this honest
 
-`tests/integration/repositories.test.ts` extracts both queries from this file
+`tests/integration/repositories.test.ts` extracts all three queries from this file
 and runs them verbatim against a seeded database. A column renamed out from
 under them fails the integration suite rather than leaving a document that
 silently stopped being true.

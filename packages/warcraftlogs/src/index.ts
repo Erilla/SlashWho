@@ -15,5 +15,6 @@ export type {
   WarcraftLogsReportResult,
   WarcraftLogsRequestEvent,
   WarcraftLogsTierBestParse,
+  WarcraftLogsVerifiedKill,
   WarcraftLogsWipeEvidence
 } from "./types";

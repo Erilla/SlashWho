@@ -34,17 +34,16 @@ export type RaiderIoEvidenceLimitation =
   | "unavailable"
   | "schema_drift";
 
-/** @deprecated Never use as dossier evidence; retained temporarily for API compatibility. */
+/**
+ * A Mythic kill Raider.IO attributes to the character. Never dossier evidence:
+ * it only tells the Warcraft Logs scan which guild's logs to search and on
+ * which night, and a kill counts only once a hydrated log attributes it.
+ */
 export type HistoricMythicKill = Readonly<{
-  raidId: string;
-  raidName: string;
-  bossId: string;
-  bossName: string;
-  bossOrder: number;
-  isFinalBoss: boolean;
+  raidSlug: string;
+  bossSlug: string;
   firstDefeated: string;
-  guild: { name: string; realm: string } | null;
-  historicWorldRank: number | null;
+  guild: { name: string; realm: string; region: string } | null;
 }>;
 
 export type HistoricMythicKillResult =

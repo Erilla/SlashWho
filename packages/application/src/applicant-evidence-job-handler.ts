@@ -47,6 +47,7 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
+import { raiderIoVerifiedKills, storedKillReportCodes } from "./verified-kills";
 import {
   createEvidencePhaseLedger,
   fullEvidencePhasePlan,
@@ -203,7 +204,8 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   > &
     Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
-  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings"> &
+    Partial<Pick<RaiderIoGateway, "getHistoricMythicKills">>;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
@@ -313,6 +315,8 @@ const RAIDER_IO_RANKING_CONCURRENCY = 4;
 const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
   {
     history_scan: "warcraftLogsHistoryScan",
+    guild_attendance: "warcraftLogsGuildAttendance",
+    report_hydration: "warcraftLogsReportHydration",
     zone_rankings: "warcraftLogsZoneRankings",
     fight_parses: "warcraftLogsFightParses",
     ranking_identities: "warcraftLogsRankingIdentities"
@@ -736,6 +740,9 @@ export function createApplicantEvidenceJobHandler(
         limitationCode: null,
         parseLimitationCode: null,
         killCount: 0,
+        raiderIoHistoricOutcome: null,
+        verifiedKillsSearched: null,
+        attendanceRecoveredKills: null,
         terminalTierCount: 0,
         // Overwritten with the effective cap once the allowance is read; this
         // is the value for a run that never got that far.
@@ -1127,7 +1134,11 @@ export function createApplicantEvidenceJobHandler(
         const phaseForQuery = (
           query: WarcraftLogsQueryType
         ): EvidencePhase["id"] =>
-          query === "history_scan"
+          // Attendance recovery is part of the history phase: it reads for the
+          // same kills, under the same request cap.
+          query === "history_scan" ||
+          query === "guild_attendance" ||
+          query === "report_hydration"
             ? "warcraft_logs_history"
             : query === "zone_rankings"
               ? "warcraft_logs_tier_bests"
@@ -1161,6 +1172,32 @@ export function createApplicantEvidenceJobHandler(
                   storedEvidence.historyScanResumeBoundaryReportCode
               }
             : {};
+        // Raider.IO names the kills worth searching guild attendance for, and
+        // attendance is read for nothing else. It is asked only when the run
+        // scans history in earnest, and never decides the run's status: a
+        // lookup that fails skips recovery, and the run is judged by its
+        // history scan alone.
+        const historicKills = options.raiderio?.getHistoricMythicKills;
+        const verified =
+          historicKills && requestCap > 1
+            ? await scope.time("raiderIoHistoricKills", () =>
+                raiderIoVerifiedKills(
+                  { getHistoricMythicKills: historicKills },
+                  run.key,
+                  {
+                    storedKills: storedEvidence.kills,
+                    ...(killScanFloor ? { killScanFloor } : {}),
+                    signal: activeContext.signal
+                  }
+                )
+              )
+            : undefined;
+        // Null when Raider.IO was not asked, which is not the same as asked
+        // and answering with nothing to search.
+        record.raiderIoHistoricOutcome = verified
+          ? (verified.limitation ?? "evidence")
+          : null;
+        record.verifiedKillsSearched = verified ? verified.kills.length : null;
         // The history scan is the first real upstream boundary for a normal
         // collection. Persist it before entering the gateway, rather than
         // after its promise settles: an interrupted long scan is then plainly
@@ -1179,6 +1216,21 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            ...(verified?.kills.length
+              ? { verifiedKills: verified.kills }
+              : {}),
+            // From stored evidence on every scanning run, whatever Raider.IO
+            // answered: a complete publish keeps only what the run finds again
+            // outside terminal raids, so a kill recovered from attendance is
+            // re-read rather than dropped.
+            ...(requestCap > 1
+              ? {
+                  storedKillReportCodes: storedKillReportCodes(
+                    storedEvidence.kills,
+                    terminalRaidIds.kills
+                  )
+                }
+              : {}),
             ...historyScanResumeOptions,
             ...(parseOnlyResume
               ? {
@@ -1434,6 +1486,8 @@ export function createApplicantEvidenceJobHandler(
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = drivingParse?.code ?? null;
         record.killCount = response.kills.length;
+        record.attendanceRecoveredKills =
+          response.attendanceRecoveredKills ?? null;
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
@@ -1642,11 +1696,28 @@ export function createApplicantEvidenceJobHandler(
               parseRequestCapUsed: record.parseRequestCapUsed as number,
               requests: {
                 historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
+                guildAttendance: requests(
+                  REQUEST_COUNTER_PREFIX.guild_attendance
+                ),
+                reportHydration: requests(
+                  REQUEST_COUNTER_PREFIX.report_hydration
+                ),
                 zoneRankings: requests(REQUEST_COUNTER_PREFIX.zone_rankings),
                 fightParses: requests(REQUEST_COUNTER_PREFIX.fight_parses),
                 rankingIdentities: requests(
                   REQUEST_COUNTER_PREFIX.ranking_identities
                 )
+              },
+              recovery: {
+                raiderIoOutcome: record.raiderIoHistoricOutcome as
+                  string | null,
+                raiderIoMs:
+                  typeof totals.raiderIoHistoricKillsMs === "number"
+                    ? Math.round(totals.raiderIoHistoricKillsMs)
+                    : null,
+                verifiedKillsSearched: record.verifiedKillsSearched as
+                  number | null,
+                recoveredKills: record.attendanceRecoveredKills as number | null
               }
             });
           } catch {

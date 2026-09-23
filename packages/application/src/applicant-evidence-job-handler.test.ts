@@ -290,6 +290,8 @@ describe("applicant evidence job handler", () => {
         parses: new Set(),
         tierBests: new Set()
       },
+      // Nothing stored yet, so nothing to re-read.
+      storedKillReportCodes: [],
       onLimitation: expect.any(Function),
       onRequest: expect.any(Function),
       signal: expect.any(AbortSignal)
@@ -2550,9 +2552,18 @@ describe("applicant evidence job handler", () => {
             parseRequestCapUsed: 8,
             requests: {
               historyScan: 2,
+              guildAttendance: 0,
+              reportHydration: 0,
               zoneRankings: 1,
               fightParses: 1,
               rankingIdentities: 1
+            },
+            // No Raider.IO client, so recovery never ran: null, not zero.
+            recovery: {
+              raiderIoOutcome: null,
+              raiderIoMs: null,
+              verifiedKillsSearched: null,
+              recoveredKills: null
             }
           }
         ]);
@@ -4212,6 +4223,172 @@ describe("applicant evidence job handler", () => {
           { id: "warcraft_logs_identity_resolution", state: "completed" }
         ])
       );
+    });
+  });
+});
+
+describe("searching attendance only for Raider.IO-verified kills", () => {
+  const verifiedAzshara = {
+    raidSlug: "the-eternal-palace",
+    bossSlug: "queen-azshara",
+    firstDefeated: "2020-01-21T19:34:00.000Z",
+    guild: { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" }
+  };
+  const emptyEvidence = async () => ({
+    kind: "evidence" as const,
+    parsedFightUrls: [],
+    kills: [],
+    wipes: [],
+    tierBests: [],
+    troubledRaidIds: { parses: [], tierBests: [] }
+  });
+  const handlerWith = (
+    evidence: ReturnType<typeof store>,
+    getFirstKillReports: ReturnType<typeof vi.fn>,
+    getHistoricMythicKills: ReturnType<typeof vi.fn>
+  ) =>
+    createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      raiderio: {
+        getMythicBossRankings: vi.fn(),
+        getHistoricMythicKills
+      } as never,
+      requestCap: 500,
+      parseRequestCap: 24,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
+    });
+
+  it("hands the scan the verified kills stored evidence does not hold", async () => {
+    const evidence = store();
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await emptyEvidence()),
+      attendanceRecoveredKills: 1
+    }));
+    const handler = handlerWith(
+      evidence,
+      getFirstKillReports,
+      vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+    );
+
+    await handler.execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        verifiedKills: [
+          {
+            at: "2020-01-21T19:34:00.000Z",
+            guild: {
+              name: "SeriouslyCasual",
+              realm: "silvermoon",
+              region: "eu"
+            }
+          }
+        ]
+      })
+    );
+    // What recovery was asked for and what it returned reach the durable
+    // cost row, so its yield can be weighed against its cost later.
+    expect(evidence.costs.at(-1)?.recovery).toEqual({
+      raiderIoOutcome: "evidence",
+      raiderIoMs: expect.any(Number),
+      verifiedKillsSearched: 1,
+      recoveredKills: 1
+    });
+  });
+
+  it("skips recovery and stays complete when Raider.IO cannot answer", async () => {
+    // A private profile would retry forever if it made the run partial --
+    // the same loop that pinned Ryii at the request cap.
+    const evidence = store();
+    const getFirstKillReports = vi.fn(emptyEvidence);
+    const handler = handlerWith(
+      evidence,
+      getFirstKillReports,
+      vi.fn(async () => ({ kind: "limitation", code: "private" }))
+    );
+
+    await handler.execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ verifiedKills: expect.anything() })
+    );
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      state: "complete"
+    });
+    // Asked and refused, and nothing searched: a measured zero, with no
+    // recovery count because no search ran.
+    expect(evidence.costs.at(-1)?.recovery).toMatchObject({
+      raiderIoOutcome: "private",
+      verifiedKillsSearched: 0,
+      recoveredKills: null
+    });
+  });
+
+  it("re-reads a recovered kill's report even when Raider.IO cannot answer", async () => {
+    // Break caught (review on #436): the re-read list came from Raider.IO's
+    // answer. A Raider.IO failure left the run complete with nothing re-read,
+    // and the complete publish dropped every kill attendance had recovered --
+    // permanently, for a profile gone private. The list is stored evidence's,
+    // and a terminal raid's kills need none, because the publish keeps them.
+    for (const terminal of [false, true]) {
+      const evidence = store();
+      evidence.storedKills.push({
+        raidId: "23",
+        raidName: "The Eternal Palace",
+        killedAt: "2020-01-21T20:34:49.222Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7"
+      });
+      if (terminal) evidence.stored.push({ raidId: "23", domain: "kills" });
+      const getFirstKillReports = vi.fn(emptyEvidence);
+      const handler = handlerWith(
+        evidence,
+        getFirstKillReports,
+        vi.fn(async () => ({ kind: "limitation", code: "unavailable" }))
+      );
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({
+          storedKillReportCodes: terminal ? [] : ["zCFtRjmLgvHxynh7"]
+        })
+      );
+    }
+  });
+
+  it("does not ask Raider.IO on a light run, which cannot search attendance", async () => {
+    const evidence = store();
+    const getHistoricMythicKills = vi.fn();
+    const handler = handlerWith(
+      evidence,
+      vi.fn(emptyEvidence),
+      getHistoricMythicKills
+    );
+
+    await handler.execute(
+      { runId: run.id, mode: "light" },
+      { attempt: 1, maxAttempts: 5, signal: new AbortController().signal }
+    );
+
+    expect(getHistoricMythicKills).not.toHaveBeenCalled();
+    // Not asked is recorded as null throughout, never as a zero.
+    expect(evidence.costs.at(-1)?.recovery).toEqual({
+      raiderIoOutcome: null,
+      raiderIoMs: null,
+      verifiedKillsSearched: null,
+      recoveredKills: null
     });
   });
 });

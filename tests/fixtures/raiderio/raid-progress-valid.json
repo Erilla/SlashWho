@@ -2,64 +2,89 @@
   "status": 200,
   "body": {
     "characterRaidProgress": {
+      "tier": "32",
       "raidProgress": [
         {
-          "raid": {
-            "id": "nerub-ar-palace",
-            "name": "Nerub-ar Palace"
-          },
+          "raid": "nerubar-palace",
+          "aotc": null,
+          "cuttingEdge": null,
           "encountersDefeated": {
+            "normal": [],
+            "heroic": [],
             "mythic": [
               {
                 "slug": "queen-ansurek",
-                "name": "Queen Ansurek",
-                "ordinal": 8,
-                "isFinalBoss": true,
                 "firstDefeated": "2025-02-04T17:59:00.000Z",
+                "itemLevel": 0,
+                "artifactTraits": 0,
+                "numKills": 3,
+                "lastDefeated": "2025-03-04T18:10:00.000Z",
+                "bossIcon": "example_icon",
+                "guildId": 1,
+                "loggedEncounterId": null,
                 "guild": {
+                  "id": 1,
                   "name": "Example Guild",
+                  "displayName": "Example Guild",
+                  "faction": "alliance",
                   "realm": {
+                    "id": 1,
+                    "name": "Silvermoon",
                     "slug": "silvermoon"
-                  }
+                  },
+                  "region": {
+                    "name": "Europe",
+                    "slug": "eu",
+                    "short_name": "EU"
+                  },
+                  "path": "/guilds/eu/silvermoon/Example%20Guild"
                 },
-                "historicWorldRank": 147
+                "raidWeek": 20,
+                "lastRaidWeek": 24
               },
               {
                 "slug": "the-silken-court",
-                "name": "The Silken Court",
-                "ordinal": 7,
-                "isFinalBoss": false,
-                "firstDefeated": "2025-01-29T20:00:00.000Z"
+                "firstDefeated": "2025-01-29T20:00:00.000Z",
+                "itemLevel": 0,
+                "artifactTraits": 0,
+                "numKills": 1,
+                "lastDefeated": "2025-01-29T20:00:00.000Z",
+                "bossIcon": "example_icon",
+                "guildId": null,
+                "loggedEncounterId": null,
+                "guild": null,
+                "raidWeek": 19,
+                "lastRaidWeek": 19
               }
             ]
-          }
+          },
+          "weekRanges": [],
+          "progress": {},
+          "tier": "32",
+          "raidWeekAotC": null,
+          "raidWeekCuttingEdge": null
         }
       ]
     }
   },
   "duplicateTierBody": {
     "characterRaidProgress": {
+      "tier": "33",
       "raidProgress": [
         {
-          "raid": {
-            "id": "nerub-ar-palace",
-            "name": "Nerub-ar Palace"
-          },
+          "raid": "nerubar-palace",
           "encountersDefeated": {
+            "normal": [],
+            "heroic": [],
             "mythic": [
               {
                 "slug": "queen-ansurek",
-                "name": "Queen Ansurek",
-                "ordinal": 8,
-                "isFinalBoss": true,
                 "firstDefeated": "2025-02-11T17:59:00.000Z",
                 "guild": {
                   "name": "Later Guild",
-                  "realm": {
-                    "slug": "silvermoon"
-                  }
-                },
-                "historicWorldRank": 203
+                  "realm": { "slug": "silvermoon" },
+                  "region": { "slug": "eu" }
+                }
               }
             ]
           }
