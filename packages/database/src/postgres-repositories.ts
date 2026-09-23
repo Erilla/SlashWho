@@ -1487,6 +1487,120 @@ async function requestHistoricAliasRecollection(
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
+    accountAuth: {
+      async registerPending(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          // A limited batch makes progress on old pending registrations without
+          // turning a signup into an unbounded table sweep.
+          await client.query(
+            `WITH expired AS (
+               SELECT id FROM accounts
+               WHERE verified_at IS NULL AND created_at <= $1::timestamptz - interval '7 days'
+               ORDER BY created_at, id LIMIT 100
+               FOR UPDATE SKIP LOCKED
+             )
+             DELETE FROM accounts WHERE id IN (SELECT id FROM expired)`,
+            [input.at]
+          );
+          const result = await client.query<{ id: string }>(
+            `INSERT INTO accounts
+               (canonical_email, email, password_hash, password_salt,
+                scrypt_version, scrypt_cost, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+             ON CONFLICT (canonical_email) DO NOTHING
+             RETURNING id`,
+            [
+              input.canonicalEmail,
+              input.email,
+              input.passwordHash,
+              input.passwordSalt,
+              input.scryptVersion,
+              input.scryptCost,
+              input.at
+            ]
+          );
+          await client.query("COMMIT");
+          return result.rows[0]
+            ? { kind: "created" as const, accountId: result.rows[0].id }
+            : { kind: "existing" as const };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      async admitRegistration(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          // The global lock serializes all admission buckets, including the
+          // missing-IP fallback, so concurrent requests cannot over-admit.
+          await client.query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('account-registration', 1))"
+          );
+          const buckets = [
+            {
+              purpose: "registration_global",
+              subject: "global",
+              limit: 100,
+              duration: 3_600_000
+            },
+            input.ipSubjectHash
+              ? {
+                  purpose: "registration_ip",
+                  subject: input.ipSubjectHash,
+                  limit: 5,
+                  duration: 3_600_000
+                }
+              : {
+                  purpose: "registration_missing_ip",
+                  subject: "fallback",
+                  limit: 10,
+                  duration: 3_600_000
+                },
+            {
+              purpose: "registration_email",
+              subject: input.emailSubjectHash,
+              limit: 3,
+              duration: 86_400_000
+            }
+          ];
+          for (const bucket of buckets) {
+            const usage = await client.query<{ count: string }>(
+              `SELECT count(*)::text AS count FROM account_request_attempts
+               WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
+              [bucket.purpose, bucket.subject, input.at]
+            );
+            if (Number(usage.rows[0]!.count) >= bucket.limit) {
+              await client.query("COMMIT");
+              return "throttled";
+            }
+          }
+          for (const bucket of buckets) {
+            await client.query(
+              `INSERT INTO account_request_attempts (purpose, subject_hash, expires_at)
+               VALUES ($1, $2, $3)`,
+              [
+                bucket.purpose,
+                bucket.subject,
+                new Date(input.at.getTime() + bucket.duration)
+              ]
+            );
+          }
+          await client.query("COMMIT");
+          return "admitted";
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      }
+    },
     operatorAuth: {
       async findCredential(canonicalLogin) {
         const result = await pool.query<OperatorCredentialRow>(

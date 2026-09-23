@@ -1198,9 +1198,23 @@ export type ProviderCredentials =
   | { provider: "raiderio"; accessKey: string }
   | { provider: "warcraftlogs"; clientId: string; clientSecret: string };
 
-/** Concrete auth methods are supplied with the account repository implementation. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AccountAuthRepository {}
+export interface AccountAuthRepository {
+  registerPending(input: {
+    canonicalEmail: string;
+    email: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<{ kind: "created" | "existing"; accountId?: string }>;
+  /** Inputs are HMAC digests; null means no trusted X-Real-IP was available. */
+  admitRegistration(input: {
+    ipSubjectHash: string | null;
+    emailSubjectHash: string;
+    at: Date;
+  }): Promise<"admitted" | "throttled">;
+}
 /** Concrete token and outbox methods are supplied with the mail implementation. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface AccountMailRepository {}
@@ -1310,8 +1324,8 @@ export interface OperatorAuthRepository {
 }
 
 export interface Repositories {
+  accountAuth: AccountAuthRepository;
   /** Transitional until the corresponding repository implementations land. */
-  accountAuth?: AccountAuthRepository;
   accountMail?: AccountMailRepository;
   accountCredentials?: AccountCredentialRepository;
   operatorAuth: OperatorAuthRepository;

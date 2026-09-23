@@ -171,6 +171,14 @@ function createMemoryRepositories(): Repositories {
   let snapshotSequence = 0;
 
   return {
+    accountAuth: {
+      async registerPending() {
+        throw new Error("not_used");
+      },
+      async admitRegistration() {
+        throw new Error("not_used");
+      }
+    },
     operatorAuth: {
       async findCredential() {
         return null;

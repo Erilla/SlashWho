@@ -201,8 +201,97 @@ describe("PostgreSQL repositories", () => {
       operator_auth_events,
       operator_login_attempts,
       operator_sessions,
-      operators
+      operators,
+      account_request_attempts,
+      accounts
       CASCADE`);
+  });
+
+  const registration = (canonicalEmail: string, at: Date) => ({
+    canonicalEmail,
+    email: canonicalEmail,
+    passwordHash: "derived-password-hash",
+    passwordSalt: "derived-password-salt",
+    scryptVersion: 1,
+    scryptCost: 16_384,
+    at
+  });
+
+  it("atomically keeps one account for concurrent duplicate registrations", async () => {
+    const at = new Date("2026-09-23T12:00:00.000Z");
+    const outcomes = await Promise.all([
+      repositories.accountAuth.registerPending(
+        registration("person@example.com", at)
+      ),
+      repositories.accountAuth.registerPending(
+        registration("person@example.com", at)
+      )
+    ]);
+    expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual([
+      "created",
+      "existing"
+    ]);
+    const rows = await pool.query(
+      `SELECT id, role, verified_at FROM accounts WHERE canonical_email = 'person@example.com'`
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0]).toMatchObject({ role: "user", verified_at: null });
+  });
+
+  it("expires stale unverified registrations while retaining verified accounts", async () => {
+    const at = new Date("2026-09-23T12:00:00.000Z");
+    await repositories.accountAuth.registerPending(
+      registration("old@example.com", new Date(at.getTime() - 8 * 86_400_000))
+    );
+    await repositories.accountAuth.registerPending(
+      registration(
+        "current@example.com",
+        new Date(at.getTime() - 6 * 86_400_000)
+      )
+    );
+    await pool.query(
+      `UPDATE accounts SET verified_at = $1 WHERE canonical_email = 'current@example.com'`,
+      [at]
+    );
+    await repositories.accountAuth.registerPending(
+      registration("new@example.com", at)
+    );
+    const rows = await pool.query<{ canonical_email: string }>(
+      `SELECT canonical_email FROM accounts ORDER BY canonical_email`
+    );
+    expect(rows.rows.map((row) => row.canonical_email)).toEqual([
+      "current@example.com",
+      "new@example.com"
+    ]);
+  });
+
+  it("enforces per IP, global, missing IP, and address admission limits", async () => {
+    const at = new Date("2026-09-23T12:00:00.000Z");
+    const admit = (
+      ipSubjectHash: string | null,
+      emailSubjectHash: string,
+      date = at
+    ) =>
+      repositories.accountAuth.admitRegistration({
+        ipSubjectHash,
+        emailSubjectHash,
+        at: date
+      });
+    for (let i = 0; i < 5; i++)
+      expect(await admit("ip-a", `mail-${i}`)).toBe("admitted");
+    expect(await admit("ip-a", "mail-5")).toBe("throttled");
+    expect(await admit("ip-b", "mail-0")).toBe("admitted");
+    expect(await admit("ip-b", "mail-0")).toBe("admitted");
+    expect(await admit("ip-b", "mail-0")).toBe("throttled");
+    for (let i = 0; i < 10; i++)
+      expect(await admit(null, `fallback-${i}`)).toBe("admitted");
+    expect(await admit(null, "fallback-10")).toBe("throttled");
+    for (let i = 0; i < 83; i++)
+      expect(await admit(`ip-${i}`, `global-${i}`)).toBe("admitted");
+    expect(await admit("ip-last", "global-last")).toBe("throttled");
+    expect(
+      await admit("ip-a", "mail-0", new Date(at.getTime() + 86_400_001))
+    ).toBe("admitted");
   });
 
   async function provisionOperator() {
