@@ -1358,9 +1358,35 @@ export interface AccountTokenRepository {
     at: Date;
   }): Promise<"pending" | "changed" | "invalid">;
 }
-/** Concrete key methods are supplied with the credential implementation. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AccountCredentialRepository {}
+export type AccountCredentialProvider =
+  "blizzard" | "raiderio" | "warcraftlogs";
+export type AccountCredentialRecord = Readonly<{
+  provider: AccountCredentialProvider;
+  encryptedPayload: string | null;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+}>;
+export interface AccountCredentialRepository {
+  list(accountId: string): Promise<readonly AccountCredentialRecord[]>;
+  get(
+    accountId: string,
+    provider: AccountCredentialProvider
+  ): Promise<AccountCredentialRecord | null>;
+  replace(input: {
+    accountId: string;
+    provider: AccountCredentialProvider;
+    encryptedPayload: string;
+    expectedVersion: number;
+    at: Date;
+  }): Promise<"saved" | "conflict">;
+  remove(
+    accountId: string,
+    provider: AccountCredentialProvider,
+    at: Date,
+    expectedVersion?: number
+  ): Promise<boolean>;
+}
 
 /**
  * The derived material needed only to verify an operator credential. This is
@@ -1467,7 +1493,6 @@ export interface Repositories {
   accountAuth: AccountAuthRepository;
   accountMail: AccountMailRepository;
   accountTokens: AccountTokenRepository;
-  /** Transitional until the corresponding repository implementation lands. */
   accountCredentials?: AccountCredentialRepository;
   operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;

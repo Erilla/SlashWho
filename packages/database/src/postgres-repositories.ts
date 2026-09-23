@@ -2096,6 +2096,100 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         });
       }
     },
+    accountCredentials: {
+      async list(accountId) {
+        const result = await pool.query<{
+          provider: "blizzard" | "raiderio" | "warcraftlogs";
+          encrypted_payload: string | null;
+          version: number;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          `SELECT provider, encrypted_payload, version, created_at, updated_at
+           FROM account_api_credentials WHERE account_id = $1`,
+          [accountId]
+        );
+        return result.rows.map((row) => ({
+          provider: row.provider,
+          encryptedPayload: row.encrypted_payload,
+          version: row.version,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
+        }));
+      },
+      async get(accountId, provider) {
+        const result = await pool.query<{
+          provider: "blizzard" | "raiderio" | "warcraftlogs";
+          encrypted_payload: string | null;
+          version: number;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          `SELECT c.provider, c.encrypted_payload, c.version, c.created_at, c.updated_at
+           FROM account_api_credentials c JOIN accounts a ON a.id = c.account_id
+           WHERE c.account_id = $1 AND c.provider = $2 AND a.active AND a.verified_at IS NOT NULL`,
+          [accountId, provider]
+        );
+        const row = result.rows[0];
+        return row
+          ? {
+              provider: row.provider,
+              encryptedPayload: row.encrypted_payload,
+              version: row.version,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at
+            }
+          : null;
+      },
+      async replace(input) {
+        const result = await pool.query(
+          `WITH changed AS (
+           INSERT INTO account_api_credentials (account_id, provider, encrypted_payload, version, created_at, updated_at)
+           SELECT id, $2, $3, 1, $5, $5 FROM accounts
+           WHERE id = $1 AND active AND verified_at IS NOT NULL
+             AND ($4 = 0 OR EXISTS (
+               SELECT 1 FROM account_api_credentials
+               WHERE account_id = $1 AND provider = $2 AND version = $4
+             ))
+           ON CONFLICT (account_id, provider) DO UPDATE SET
+             encrypted_payload = EXCLUDED.encrypted_payload,
+             version = account_api_credentials.version + 1,
+             updated_at = EXCLUDED.updated_at
+           WHERE account_api_credentials.version = $4
+             AND EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND active AND verified_at IS NOT NULL)
+           RETURNING account_id
+           )
+           INSERT INTO account_auth_events (account_id, action, outcome, occurred_at)
+           SELECT account_id, 'credential_replace', 'success', $5 FROM changed
+           RETURNING id`,
+          [
+            input.accountId,
+            input.provider,
+            input.encryptedPayload,
+            input.expectedVersion,
+            input.at
+          ]
+        );
+        return result.rowCount === 1 ? "saved" : "conflict";
+      },
+      async remove(accountId, provider, at, expectedVersion) {
+        const result = await pool.query(
+          `WITH changed AS (
+           UPDATE account_api_credentials SET encrypted_payload = NULL,
+             version = version + 1, updated_at = $3
+           WHERE account_id = $1 AND provider = $2
+             AND encrypted_payload IS NOT NULL
+             AND ($4::integer IS NULL OR version = $4)
+             AND EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND active AND verified_at IS NOT NULL)
+           RETURNING account_id
+           )
+           INSERT INTO account_auth_events (account_id, action, outcome, occurred_at)
+           SELECT account_id, 'credential_remove', 'success', $3 FROM changed`,
+          [accountId, provider, at, expectedVersion ?? null]
+        );
+        return result.rowCount === 1;
+      }
+    },
     accountAuth: {
       async findCredential(canonicalEmail) {
         const result = await pool.query<AccountCredentialRow>(

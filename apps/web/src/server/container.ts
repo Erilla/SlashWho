@@ -20,6 +20,7 @@ import {
 } from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
 import { createAccountTokens } from "./account-tokens";
+import { createAccountCredentials } from "./account-credentials";
 
 import { loadWebConfig, type WebConfig } from "./config";
 import {
@@ -48,6 +49,7 @@ export type WebContainer = Readonly<{
     "listAccounts" | "setRole" | "setActive" | "requirePasswordChange"
   >;
   accountTokens: ReturnType<typeof createAccountTokens> | null;
+  accountCredentials?: ReturnType<typeof createAccountCredentials> | null;
   accountRegistration: Pick<
     Repositories["accountAuth"],
     "registerPending" | "admitRegistration"
@@ -141,6 +143,13 @@ export async function createWebContainer(
           from: config.accountMail.from
         })
       : null;
+    const accountCredentials =
+      config.accountCredentialEncryptionKey && repositories.accountCredentials
+        ? createAccountCredentials(
+            repositories.accountCredentials,
+            config.accountCredentialEncryptionKey
+          )
+        : null;
     const collectionMonitor = createCollectionMonitorService({
       evidence: repositories.evidence
     });
@@ -209,6 +218,7 @@ export async function createWebContainer(
       accountAuth,
       accountAdmin: repositories.accountAuth,
       accountTokens,
+      accountCredentials,
       accountRegistration: repositories.accountAuth,
       registrationHashSecret: config.application.RATE_LIMIT_HASH_SECRET,
       accountOrigin: config.operatorAuth.origin,

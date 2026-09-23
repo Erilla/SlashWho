@@ -50,6 +50,42 @@ export function clearStoredCredentials(): void {
   }
 }
 
+export type BrowserCredentialProvider =
+  "blizzard" | "raiderio" | "warcraftlogs";
+
+export function browserProviderValues(
+  credentials: StoredApiCredentials,
+  provider: BrowserCredentialProvider
+): Record<string, string> | null {
+  if (provider === "raiderio")
+    return credentials.raiderIoAccessKey
+      ? { accessKey: credentials.raiderIoAccessKey }
+      : null;
+  const clientId =
+    provider === "blizzard"
+      ? credentials.blizzardClientId
+      : credentials.wclClientId;
+  const clientSecret =
+    provider === "blizzard"
+      ? credentials.blizzardClientSecret
+      : credentials.wclClientSecret;
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+export function clearStoredProvider(provider: BrowserCredentialProvider): void {
+  const current = readStoredCredentials();
+  if (provider === "blizzard") {
+    current.blizzardClientId = "";
+    current.blizzardClientSecret = "";
+  }
+  if (provider === "raiderio") current.raiderIoAccessKey = "";
+  if (provider === "warcraftlogs") {
+    current.wclClientId = "";
+    current.wclClientSecret = "";
+  }
+  writeStoredCredentials(current);
+}
+
 export function credentialHeaders(
   credentials: StoredApiCredentials
 ): HeadersInit {

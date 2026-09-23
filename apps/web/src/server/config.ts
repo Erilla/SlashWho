@@ -8,6 +8,7 @@ export type WebConfig = Readonly<{
   databaseUrl: string;
   application: ApplicationConfig;
   operatorAuth: Readonly<{ origin: string; sessionHashSecret: string }>;
+  accountCredentialEncryptionKey?: Buffer;
   accountMail?: Readonly<{
     from: string;
     encryptionKey: Buffer;
@@ -108,6 +109,23 @@ function requiredEncryptionKey(value: string | undefined): Buffer {
   return parseEncryptionKey(secret);
 }
 
+function optionalAccountCredentialKey(
+  environment: Readonly<Record<string, string | undefined>>
+): Buffer | undefined {
+  const authored = environment.ACCOUNT_CREDENTIAL_ENCRYPTION_KEY?.trim();
+  if (!authored) return undefined;
+  const key = parseEncryptionKey(authored);
+  if (
+    key.equals(
+      parseEncryptionKey(
+        environment.EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY?.trim() ?? ""
+      )
+    )
+  )
+    throw new Error("account_credential_encryption_key_must_be_distinct");
+  return key;
+}
+
 function positiveInteger(
   value: string | undefined,
   fallback: number,
@@ -132,6 +150,7 @@ export function loadWebConfig(
         environment.OPERATOR_SESSION_HASH_SECRET
       )
     },
+    accountCredentialEncryptionKey: optionalAccountCredentialKey(environment),
     accountMail:
       environment.RESEND_API_KEY?.trim() &&
       environment.ACCOUNT_EMAIL_FROM?.trim() &&

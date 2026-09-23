@@ -27,6 +27,27 @@ it("validates all web runtime secrets and operational limits", () => {
   });
 });
 
+it("validates the dedicated account credential key", () => {
+  expect(
+    loadWebConfig(validEnv).accountCredentialEncryptionKey
+  ).toBeUndefined();
+  expect(
+    loadWebConfig({
+      ...validEnv,
+      ACCOUNT_CREDENTIAL_ENCRYPTION_KEY: "b".repeat(64)
+    }).accountCredentialEncryptionKey
+  ).toEqual(Buffer.from("b".repeat(64), "hex"));
+  expect(() =>
+    loadWebConfig({ ...validEnv, ACCOUNT_CREDENTIAL_ENCRYPTION_KEY: "short" })
+  ).toThrow("invalid_credential_encryption_key");
+  expect(() =>
+    loadWebConfig({
+      ...validEnv,
+      ACCOUNT_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
+    })
+  ).toThrow("account_credential_encryption_key_must_be_distinct");
+});
+
 it.each([
   undefined,
   "",

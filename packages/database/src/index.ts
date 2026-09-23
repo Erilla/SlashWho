@@ -26,6 +26,8 @@ export type {
   AccountAuthRepository,
   AccountCredential,
   AccountCredentialRepository,
+  AccountCredentialProvider,
+  AccountCredentialRecord,
   AccountMailRepository,
   AccountTokenPurpose,
   AccountTokenRepository,

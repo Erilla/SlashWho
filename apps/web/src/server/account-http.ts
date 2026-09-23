@@ -1,10 +1,11 @@
 /** Strict, bounded JSON parser shared by account mutations. */
 export async function accountMutation(
   request: Request,
-  origin: string
+  origin: string,
+  method = "POST"
 ): Promise<Record<string, unknown> | null> {
   if (
-    request.method !== "POST" ||
+    request.method !== method ||
     request.headers.get("origin") !== origin ||
     request.headers.get("sec-fetch-site") !== "same-origin" ||
     request.headers.get("authorization") !== null ||

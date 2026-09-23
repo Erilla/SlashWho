@@ -20,6 +20,7 @@ import {
 } from "../../packages/database/src";
 import type { WarcraftLogsGateway } from "../../packages/warcraftlogs/src";
 import { startPostgres } from "./postgres";
+import { createAccountCredentials } from "../../apps/web/src/server/account-credentials";
 
 /**
  * The fenced SQL blocks in an operations document, in order. The queries in
@@ -1416,6 +1417,61 @@ describe("PostgreSQL repositories", () => {
     );
     expect(rows.rowCount).toBe(1);
     expect(rows.rows[0]).toMatchObject({ role: "user", verified_at: null });
+  });
+
+  it("stores encrypted account keys with owner isolation and compare-and-set versions", async () => {
+    const accountRows = await pool.query<{ id: string }>(
+      `INSERT INTO accounts (canonical_email, email, password_hash, password_salt, scrypt_version, scrypt_cost, verified_at)
+       VALUES ('alice@example.com', 'alice@example.com', 'hash', 'salt', 1, 16384, now()),
+              ('bob@example.com', 'bob@example.com', 'hash', 'salt', 1, 16384, now())
+       RETURNING id`
+    );
+    const [alice, bob] = accountRows.rows.map((row) => row.id);
+    const credentials = createAccountCredentials(
+      repositories.accountCredentials!,
+      Buffer.alloc(32, 44)
+    );
+    expect(
+      await credentials.replace(alice!, "warcraftlogs", {
+        clientId: "id-a",
+        clientSecret: "secret-a"
+      })
+    ).toBe("saved");
+    const stored = await pool.query<{ encrypted_payload: string }>(
+      "SELECT encrypted_payload FROM account_api_credentials WHERE account_id = $1 AND provider = 'warcraftlogs'",
+      [alice]
+    );
+    expect(stored.rows[0]!.encrypted_payload).not.toContain("secret-a");
+    expect(await credentials.resolve(bob!, "warcraftlogs")).toBeNull();
+    expect(
+      await credentials.replace(
+        alice!,
+        "warcraftlogs",
+        { clientId: "id-b", clientSecret: "secret-b" },
+        0
+      )
+    ).toBe("conflict");
+    expect(
+      await credentials.replace(
+        alice!,
+        "warcraftlogs",
+        { clientId: "id-b", clientSecret: "secret-b" },
+        1
+      )
+    ).toBe("saved");
+    await credentials.remove(alice!, "warcraftlogs");
+    expect(await credentials.resolve(alice!, "warcraftlogs")).toBeNull();
+    expect(
+      await credentials.replace(
+        alice!,
+        "warcraftlogs",
+        { clientId: "id-c", clientSecret: "secret-c" },
+        3
+      )
+    ).toBe("saved");
+    expect(await credentials.resolve(alice!, "warcraftlogs")).toMatchObject({
+      version: 4
+    });
   });
 
   it("expires stale unverified registrations while retaining verified accounts", async () => {
