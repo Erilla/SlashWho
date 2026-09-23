@@ -43,6 +43,91 @@ const report = (code: string, fightId: number, canonicalID = 40989140) => ({
 });
 
 describe("ranked Mythic backfill", () => {
+  it("retries zone discovery after a failed first lookup", async () => {
+    let zoneCalls = 0;
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token")
+          return Response.json({ access_token: "token", expires_in: 3600 });
+        const { query } = JSON.parse(String(init?.body)) as { query: string };
+        if (query.includes("HistoricRaidZones")) {
+          zoneCalls += 1;
+          return Response.json({
+            data: {
+              worldData: {
+                zones:
+                  zoneCalls === 1
+                    ? null
+                    : [{ id: 17, name: "Antorus, The Burning Throne" }]
+              }
+            }
+          });
+        }
+        if (query.includes("HistoricZoneRankings"))
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  id: 40989140,
+                  damage: { rankings: [{ encounterID: 2092, totalKills: 1 }] },
+                  healing: { rankings: [] }
+                }
+              }
+            }
+          });
+        if (query.includes("HistoricEncounterRankings"))
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  encounterRankings: {
+                    ranks: [
+                      {
+                        report: { code: "recovered", fightID: 10 },
+                        spec: "Holy"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          });
+        return Response.json(report("recovered", 10));
+      }
+    );
+    const client = createWarcraftLogsClient({
+      fetch: fetch as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret"
+    });
+
+    const first = await client.getRankedKillReports(key, {
+      journalRaidId: "946",
+      requestCap: 1
+    });
+    expect(first).toMatchObject({
+      kind: "evidence",
+      cursor: { zonesLoaded: false },
+      limitation: { code: "schema_drift" }
+    });
+    if (first.kind !== "evidence") throw new Error("expected_cursor");
+    const resumed = await client.getRankedKillReports(key, {
+      journalRaidId: "946",
+      requestCap: 4,
+      cursor: first.cursor
+    });
+    expect(zoneCalls).toBe(2);
+    expect(resumed).toMatchObject({
+      kind: "evidence",
+      kills: [
+        { fightUrl: "https://www.warcraftlogs.com/reports/recovered#fight=10" }
+      ]
+    });
+  });
+
   it("resumes at later reports under a cap and attributes an old alias by canonical ID", async () => {
     const requests: string[] = [];
     const fetch = vi.fn(

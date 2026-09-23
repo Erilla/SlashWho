@@ -227,6 +227,7 @@ export type WarcraftLogsRankedBackfillCursor = Readonly<{
   journalRaidId: string;
   characterId?: number;
   zoneIds: readonly number[];
+  zonesLoaded: boolean;
   zoneIndex: number;
   encounterIds: readonly number[];
   encountersLoaded: boolean;

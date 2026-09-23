@@ -2053,6 +2053,7 @@ export function createWarcraftLogsClient(
       journalRaidId: options.journalRaidId,
       ...(options.characterId ? { characterId: options.characterId } : {}),
       zoneIds: [],
+      zonesLoaded: false,
       zoneIndex: 0,
       encounterIds: [],
       encountersLoaded: false,
@@ -2089,14 +2090,14 @@ export function createWarcraftLogsClient(
       }
       return result;
     };
-    if (!options.cursor) {
+    if (!progress.zonesLoaded) {
       const zones = await request("zone_rankings", historicRaidZonesQuery, {});
       if (!zones) return limited({ kind: "limitation", code: "request_cap" });
       if (zones.kind !== "success") return limited(zones);
       const zoneIds = historicZoneIds(zones.value, options.journalRaidId);
       if (!zoneIds)
         return limited({ kind: "limitation", code: "schema_drift" });
-      progress = { ...progress, zoneIds };
+      progress = { ...progress, zoneIds, zonesLoaded: true };
     }
     while (progress.zoneIndex < progress.zoneIds.length) {
       const zoneId = progress.zoneIds[progress.zoneIndex]!;

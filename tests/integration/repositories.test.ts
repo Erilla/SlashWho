@@ -3855,6 +3855,7 @@ describe("PostgreSQL repositories", () => {
         journalRaidId: tier,
         characterId: 40989140,
         zoneIds: [23],
+        zonesLoaded: true,
         zoneIndex: 0,
         encounterIds: [2299],
         encountersLoaded: true,
