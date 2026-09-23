@@ -572,6 +572,14 @@ export const characterEvidenceRuns = pgTable(
     ),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
+    // What the run was reserved to do. `tier_search` is a full collection
+    // that also walks one tier's guild attendance, asked for from the
+    // dossier (#435). It lives on the run rather than only in the queue
+    // payload so a re-claimed attempt is still a tier search, and so nothing
+    // that re-enqueues without a payload can turn one into a default.
+    mode: text("mode").default("full").notNull(),
+    /** The Journal raid id a `tier_search` run searches; null otherwise. */
+    tierSearchRaidId: text("tier_search_raid_id"),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -589,6 +597,21 @@ export const characterEvidenceRuns = pgTable(
       table.realmSlug,
       table.normalizedName,
       table.completedAt
+    ),
+    // How recently a character's tier was searched, which is what rate
+    // limits the search per tier and per character.
+    index("character_evidence_runs_tier_search_idx")
+      .on(
+        table.region,
+        table.realmSlug,
+        table.normalizedName,
+        table.tierSearchRaidId,
+        table.createdAt
+      )
+      .where(sql`${table.mode} = 'tier_search'`),
+    check(
+      "character_evidence_runs_mode_check",
+      sql`(${table.mode} = 'full' AND ${table.tierSearchRaidId} IS NULL) OR (${table.mode} = 'tier_search' AND ${table.tierSearchRaidId} IS NOT NULL)`
     ),
     // A partial run must name a shortfall, in one of three channels: the
     // history scan's, the parse budget's, or a scan the run deliberately did
@@ -768,7 +791,26 @@ export const characterEvidenceRunCosts = pgTable(
     raiderIoHistoricOutcome: text("raiderio_historic_outcome"),
     raiderIoHistoricMs: integer("raiderio_historic_ms"),
     verifiedKillsSearched: integer("verified_kills_searched"),
-    attendanceRecoveredKills: integer("attendance_recovered_kills")
+    attendanceRecoveredKills: integer("attendance_recovered_kills"),
+    /** The run's mode, so a tier search's cost can be read apart (#435). */
+    mode: text("mode").default("full").notNull(),
+    /** `CharacterGuilds`, which only a tier search reads. */
+    characterGuildsRequests: integer("character_guilds_requests")
+      .default(0)
+      .notNull(),
+    /**
+     * What a tier search was asked for and what it yielded. Null on a run that
+     * searched no tier, and never a zero for one: a search not made is not a
+     * search that found nothing. Its requests are also counted in the
+     * per-class columns above.
+     */
+    tierSearchRaidId: text("tier_search_raid_id"),
+    tierSearchOutcome: text("tier_search_outcome"),
+    tierSearchRequests: integer("tier_search_requests"),
+    tierSearchGuilds: integer("tier_search_guilds"),
+    tierSearchReportsHydrated: integer("tier_search_reports_hydrated"),
+    tierSearchRecoveredKills: integer("tier_search_recovered_kills"),
+    tierSearchRecoveredWipes: integer("tier_search_recovered_wipes")
   },
   (table) => [
     primaryKey({

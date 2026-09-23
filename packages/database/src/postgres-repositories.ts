@@ -9,6 +9,8 @@ import type { Pool, PoolClient } from "pg";
 import type {
   CallerClass,
   CharacterEvidenceRun,
+  EvidenceRunMode,
+  StoredEvidenceGuild,
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicKillInput,
@@ -170,6 +172,8 @@ interface EvidenceRunRow {
   wcl_client_id_encrypted: string | null;
   wcl_client_secret_encrypted: string | null;
   class_name: string | null;
+  mode?: EvidenceRunMode;
+  tier_search_raid_id?: string | null;
 }
 
 interface CharacterMythicKillRow {
@@ -499,6 +503,12 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
                AND c.normalized_name = ${alias}.normalized_name) AS class_name`;
 }
 
+// What a run was reserved to do. Selected everywhere a run is mapped, so a
+// re-claimed tier search is still a tier search.
+function evidenceRunModeSql(alias = "character_evidence_runs"): string {
+  return `${alias}.mode, ${alias}.tier_search_raid_id`;
+}
+
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
   return {
     id: row.id,
@@ -519,7 +529,9 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     completedAt: row.completed_at,
     wclClientIdEncrypted: row.wcl_client_id_encrypted,
     wclClientSecretEncrypted: row.wcl_client_secret_encrypted,
-    className: row.class_name
+    className: row.class_name,
+    mode: row.mode ?? "full",
+    tierSearchRaidId: row.tier_search_raid_id ?? null
   };
 }
 
@@ -722,6 +734,24 @@ function historicalGuildsFromDatabase(
     .map(([, guild]) => guild);
 }
 
+/**
+ * The distinct guilds a character's stored kills were in. A guild is in the
+ * character's own region; rows from before #427 carry no region of their own.
+ */
+function storedEvidenceGuilds(
+  kills: readonly StoredCharacterMythicKill[],
+  region: CharacterKey["region"]
+): readonly StoredEvidenceGuild[] {
+  const guilds = new Map<string, StoredEvidenceGuild>();
+  for (const kill of kills) {
+    const guild = kill.guild;
+    if (!guild || guild.name.length === 0 || guild.realm.length === 0) continue;
+    const item = { name: guild.name, realm: guild.realm, region };
+    guilds.set(`${item.realm}\u0000${item.name}`, item);
+  }
+  return [...guilds.values()];
+}
+
 async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
@@ -731,7 +761,7 @@ async function loadCompletedEvidence(
             evidence_version, attempt, limitation_code, parse_limitation_code,
             retry_after_at, error_code, created_at, started_at,
             completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
-            ${evidenceRunClassNameSql()}
+            ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
        AND status IN ('complete', 'partial')
@@ -3283,7 +3313,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
-                    ${evidenceRunClassNameSql()}
+                    ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
                AND status IN ('queued', 'running', 'retrying')
@@ -3332,7 +3362,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                        completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
-                       ${evidenceRunClassNameSql()}`,
+                       ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`,
             [
               key.region,
               key.realm,
@@ -3367,12 +3397,104 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
+      async reserveTierSearch({ key, raidId, at, searchedSince, phasePlan }) {
+        if (
+          Number.isNaN(at.valueOf()) ||
+          Number.isNaN(searchedSince.valueOf())
+        ) {
+          throw new RangeError("character_evidence_reservation_time_invalid");
+        }
+        if (raidId.length === 0) {
+          throw new RangeError("character_evidence_tier_search_raid_invalid");
+        }
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockCharacterEvidence(client, key);
+          const columns = `id, region, realm_slug, normalized_name, queue_job_id, status,
+                    attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                    ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`;
+          // One run per character at a time, whatever its mode: the unique
+          // index says so, and a search joining an ordinary run would quietly
+          // search nothing.
+          const active = await client.query<EvidenceRunRow>(
+            `SELECT ${columns}
+               FROM character_evidence_runs
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                AND status IN ('queued', 'running', 'retrying')
+              ORDER BY created_at DESC, id DESC
+              LIMIT 1`,
+            [key.region, key.realm, key.name]
+          );
+          if (active.rows[0]) {
+            await client.query("COMMIT");
+            return { kind: "active", run: mapEvidenceRun(active.rows[0]) };
+          }
+          // Whatever became of it: a search that failed or found nothing was
+          // still paid for, and repeating it on the next click is exactly the
+          // spend the limit exists to stop.
+          const recent = await client.query<EvidenceRunRow>(
+            `SELECT ${columns}
+               FROM character_evidence_runs
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                AND mode = 'tier_search' AND tier_search_raid_id = $4
+                AND created_at >= $5
+              ORDER BY created_at DESC, id DESC
+              LIMIT 1`,
+            [key.region, key.realm, key.name, raidId, searchedSince]
+          );
+          if (recent.rows[0]) {
+            await client.query("COMMIT");
+            return { kind: "recent", run: mapEvidenceRun(recent.rows[0]) };
+          }
+          // A tier search adds to evidence the character already has. With
+          // none, the ordinary collection has to run first.
+          const completed = await client.query(
+            `SELECT 1 FROM character_evidence_runs
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                AND status IN ('complete', 'partial')
+              LIMIT 1`,
+            [key.region, key.realm, key.name]
+          );
+          if (completed.rowCount === 0) {
+            await client.query("COMMIT");
+            return { kind: "no_evidence" };
+          }
+          const inserted = await client.query<EvidenceRunRow>(
+            `INSERT INTO character_evidence_runs
+               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at)
+             VALUES ($1, $2, $3, 'tier_search', $4, $5)
+             RETURNING ${columns}`,
+            [key.region, key.realm, key.name, raidId, at]
+          );
+          const run = mapEvidenceRun(inserted.rows[0]!);
+          if (phasePlan && phasePlan.length > 0) {
+            await client.query(
+              `INSERT INTO character_evidence_run_phases
+                 (run_id, phase_id, ordinal, state)
+               SELECT $1, item.phase_id, item.ordinal, 'pending'
+                 FROM unnest($2::text[]) WITH ORDINALITY
+                   AS item(phase_id, ordinal)`,
+              [run.id, phasePlan]
+            );
+          }
+          await client.query("COMMIT");
+          return { kind: "reserved", run };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
       async find(id) {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                   attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                   completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
-                  ${evidenceRunClassNameSql()}
+                  ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
            FROM character_evidence_runs WHERE id = $1`,
           [id]
         );
@@ -3394,7 +3516,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                      attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                      completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
-                     ${evidenceRunClassNameSql()}`,
+                     ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`,
           [id, attempt]
         );
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
@@ -4091,6 +4213,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             raidName: wipe.raidName,
             attemptedAt: wipe.attemptedAt
           })),
+          guilds: storedEvidenceGuilds(completed?.kills ?? [], key.region),
           ...(completed?.kills ? { parseOnlyKills: completed.kills } : {}),
           // Freshness answers whether a scan result can still be reused; the
           // newest publication answers whether there is parse work to resume.
@@ -4247,7 +4370,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              run.parse_limitation_code,
              run.error_code, run.created_at, run.started_at, run.completed_at,
              run.wcl_client_id_encrypted, run.wcl_client_secret_encrypted,
-             ${evidenceRunClassNameSql("run")}
+             ${evidenceRunClassNameSql("run")}, ${evidenceRunModeSql("run")}
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])
              AS requested(region, realm_slug, normalized_name)
@@ -4404,10 +4527,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              fight_parses_requests, ranking_identities_requests,
              guild_attendance_requests, report_hydration_requests,
              raiderio_historic_outcome, raiderio_historic_ms,
-             verified_kills_searched, attendance_recovered_kills
+             verified_kills_searched, attendance_recovered_kills,
+             mode, character_guilds_requests, tier_search_raid_id,
+             tier_search_outcome, tier_search_requests, tier_search_guilds,
+             tier_search_reports_hydrated, tier_search_recovered_kills,
+             tier_search_recovered_wipes
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                   $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                   $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+                   $23, $24, $25, $26, $27, $28, $29, $30, $31)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -4429,7 +4557,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              raiderio_historic_outcome = EXCLUDED.raiderio_historic_outcome,
              raiderio_historic_ms = EXCLUDED.raiderio_historic_ms,
              verified_kills_searched = EXCLUDED.verified_kills_searched,
-             attendance_recovered_kills = EXCLUDED.attendance_recovered_kills`,
+             attendance_recovered_kills = EXCLUDED.attendance_recovered_kills,
+             mode = EXCLUDED.mode,
+             character_guilds_requests = EXCLUDED.character_guilds_requests,
+             tier_search_raid_id = EXCLUDED.tier_search_raid_id,
+             tier_search_outcome = EXCLUDED.tier_search_outcome,
+             tier_search_requests = EXCLUDED.tier_search_requests,
+             tier_search_guilds = EXCLUDED.tier_search_guilds,
+             tier_search_reports_hydrated = EXCLUDED.tier_search_reports_hydrated,
+             tier_search_recovered_kills = EXCLUDED.tier_search_recovered_kills,
+             tier_search_recovered_wipes = EXCLUDED.tier_search_recovered_wipes`,
           [
             cost.runId,
             cost.attempt,
@@ -4452,7 +4589,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             cost.recovery.raiderIoOutcome,
             cost.recovery.raiderIoMs,
             cost.recovery.verifiedKillsSearched,
-            cost.recovery.recoveredKills
+            cost.recovery.recoveredKills,
+            cost.mode ?? "full",
+            cost.requests.characterGuilds ?? 0,
+            cost.tierSearch?.raidId ?? null,
+            cost.tierSearch?.outcome ?? null,
+            cost.tierSearch?.requests ?? null,
+            cost.tierSearch?.guilds ?? null,
+            cost.tierSearch?.reportsHydrated ?? null,
+            cost.tierSearch?.recoveredKills ?? null,
+            cost.tierSearch?.recoveredWipes ?? null
           ]
         );
       },
