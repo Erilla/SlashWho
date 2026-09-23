@@ -1493,16 +1493,23 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           // A limited batch makes progress on old pending registrations without
-          // turning a signup into an unbounded table sweep.
+          // turning a signup into an unbounded table sweep. Remove the target
+          // first so a backlog cannot keep an expired address unavailable.
+          const targetCleanup = await client.query(
+            `DELETE FROM accounts
+             WHERE canonical_email = $2 AND verified_at IS NULL
+               AND created_at <= $1::timestamptz - interval '7 days'`,
+            [input.at, input.canonicalEmail]
+          );
           await client.query(
             `WITH expired AS (
                SELECT id FROM accounts
                WHERE verified_at IS NULL AND created_at <= $1::timestamptz - interval '7 days'
-               ORDER BY created_at, id LIMIT 100
+               ORDER BY created_at, id LIMIT $2
                FOR UPDATE SKIP LOCKED
              )
              DELETE FROM accounts WHERE id IN (SELECT id FROM expired)`,
-            [input.at]
+            [input.at, 100 - (targetCleanup.rowCount ?? 0)]
           );
           const result = await client.query<{ id: string }>(
             `INSERT INTO accounts

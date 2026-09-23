@@ -265,6 +265,37 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("re-registers an expired address even when older cleanup exceeds one batch", async () => {
+    const at = new Date("2026-09-23T12:00:00.000Z");
+    await pool.query(
+      `INSERT INTO accounts
+         (canonical_email, email, password_hash, password_salt,
+          scrypt_version, scrypt_cost, created_at, updated_at)
+       SELECT 'stale-' || n || '@example.com', 'stale-' || n || '@example.com',
+              'hash', 'salt', 1, 16384, $1::timestamptz - interval '9 days',
+              $1::timestamptz - interval '9 days'
+       FROM generate_series(1, 100) n`,
+      [at]
+    );
+    await pool.query(
+      `INSERT INTO accounts
+         (canonical_email, email, password_hash, password_salt,
+          scrypt_version, scrypt_cost, created_at, updated_at)
+       VALUES ('target@example.com', 'target@example.com', 'hash', 'salt', 1,
+               16384, $1::timestamptz - interval '8 days',
+               $1::timestamptz - interval '8 days')`,
+      [at]
+    );
+    const result = await repositories.accountAuth.registerPending(
+      registration("target@example.com", at)
+    );
+    expect(result.kind).toBe("created");
+    const row = await pool.query<{ created_at: Date }>(
+      `SELECT created_at FROM accounts WHERE canonical_email = 'target@example.com'`
+    );
+    expect(row.rows[0]?.created_at).toEqual(at);
+  });
+
   it("enforces per IP, global, missing IP, and address admission limits", async () => {
     const at = new Date("2026-09-23T12:00:00.000Z");
     const admit = (
