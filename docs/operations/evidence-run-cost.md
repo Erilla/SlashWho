@@ -196,18 +196,36 @@ something other than what one run costs.
 
 Guild attendance is searched only for Mythic kills Raider.IO attributes to the
 character that no stored or decoded evidence covers (#436). A kill an earlier
-run already recovered is not searched for again: its stored report is re-read
+run already recovered is not searched for again. Instead, after a fresh scan
+that finished (the only kind that publishes complete), the report of every
+stored kill outside a terminal raid that the scan did not read is re-read
 directly, because a complete publish keeps only what the run finds again
-outside terminal raids. Recovery's requests are counted apart from the history
-scan: `guild_attendance_requests` per attendance page, and
+there. That list comes from stored evidence, never from Raider.IO, so a
+Raider.IO failure cannot drop what it once helped find. After a full scan, it
+is only the kills attendance recovered.
+
+Recovery's requests are counted apart from the history scan:
+`guild_attendance_requests` per attendance page, and
 `report_hydration_requests` per report read, whether a search hit or a re-read.
 All three draw on the same scan cap. Rows written before the split read zero in
 both, with their recovery counted inside `history_scan_requests`.
 
 A search never limits the run: a guild Warcraft Logs does not know, a page it
 will not serve, or a spent budget recovers nothing and leaves the run's status
-to its history scan. A failed **re-read** does limit it, because the stored
-kill depends on it and a partial publish is what carries that kill forward.
+to its history scan. A re-read that fails for any reason other than the report
+being gone **does** limit it, because the stored kill depends on it and a
+partial publish is what carries that kill forward. A report that is gone
+(Warcraft Logs answers "This report does not exist.") is a kill the run
+stopped finding, which a complete publish is meant to drop.
+
+### A `request_cap` that is not the cap
+
+A resumed history scan never publishes complete (#437). When it reaches the end
+of the history below its cursor it records `limitation_code = 'request_cap'`
+and restarts from page one next time, although the cap was not reached. When
+sizing the cap from `request_cap` rows, tell the two apart:
+`history_scan_requests < request_cap_used` is a resumed scan that finished, not
+budget exhaustion.
 
 A kill whose first defeat was never logged is searched for again on every full
 run until its tier settles, since nothing can hold it. The cost is one walk of
@@ -224,9 +242,10 @@ distinguishes, and a query must not merge them:
   `schema_drift`). **Null means Raider.IO was not asked**: a light run or a
   parse-only resume, neither of which can search attendance.
 - `raiderio_historic_ms` is how long the lookup took; null when not asked.
-- `verified_kills_searched` is how many kills were handed to the scan after
-  the scan floor and terminal raids removed the rest, re-reads included. `0` is
-  a lookup that left nothing to do; null is no lookup.
+- `verified_kills_searched` is how many kills were left to search after
+  stored evidence and the scan floor removed the rest. Re-reads are not
+  counted here: they come from stored evidence, not from Raider.IO. `0` is a
+  lookup that left nothing to search; null is no lookup.
 - `attendance_recovered_kills` is how many kills an attendance search added
   that the run had not already found. Re-reads are not counted: they recover
   nothing new. Null when no attendance request was made, which can happen with

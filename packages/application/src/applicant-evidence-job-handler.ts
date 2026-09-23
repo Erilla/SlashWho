@@ -47,7 +47,7 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
-import { raiderIoVerifiedKills } from "./verified-kills";
+import { raiderIoVerifiedKills, storedKillReportCodes } from "./verified-kills";
 import {
   createEvidencePhaseLedger,
   fullEvidencePhasePlan,
@@ -1186,7 +1186,6 @@ export function createApplicantEvidenceJobHandler(
                   run.key,
                   {
                     storedKills: storedEvidence.kills,
-                    terminalKillRaidIds: terminalRaidIds.kills,
                     ...(killScanFloor ? { killScanFloor } : {}),
                     signal: activeContext.signal
                   }
@@ -1219,6 +1218,18 @@ export function createApplicantEvidenceJobHandler(
             ...(killScanFloor ? { killScanFloor } : {}),
             ...(verified?.kills.length
               ? { verifiedKills: verified.kills }
+              : {}),
+            // From stored evidence on every scanning run, whatever Raider.IO
+            // answered: a complete publish keeps only what the run finds again
+            // outside terminal raids, so a kill recovered from attendance is
+            // re-read rather than dropped.
+            ...(requestCap > 1
+              ? {
+                  storedKillReportCodes: storedKillReportCodes(
+                    storedEvidence.kills,
+                    terminalRaidIds.kills
+                  )
+                }
               : {}),
             ...historyScanResumeOptions,
             ...(parseOnlyResume

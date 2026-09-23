@@ -329,7 +329,15 @@ function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
   const extensions = error && record(error.extensions);
   const code =
     extensions && nonEmptyString(extensions.code)?.toLocaleUpperCase("en-US");
-  if (code === "NOT_FOUND" || message?.includes("not found")) {
+  // "This report does not exist." is what Warcraft Logs answers for a missing
+  // report code (recorded 2026-09-23), with `report: null` beside it. Read as
+  // `unavailable`, a deleted report looked transient and held a run partial
+  // on every retry.
+  if (
+    code === "NOT_FOUND" ||
+    message?.includes("not found") ||
+    message?.includes("does not exist")
+  ) {
     return { kind: "limitation", code: "not_found" };
   }
   if (
@@ -1706,6 +1714,15 @@ export function createWarcraftLogsClient(
        */
       verifiedKills?: readonly WarcraftLogsVerifiedKill[];
       /**
+       * Report codes of stored kills outside terminal raids. A complete publish
+       * keeps only what the run finds again there, and a kill recovered from
+       * guild attendance is not in the character's own history to be found. So
+       * after a fresh scan that finishes, any of these the scan did not read is
+       * re-read directly. Taken from stored evidence, never from another
+       * provider, so a Raider.IO failure cannot drop what it once helped find.
+       */
+      storedKillReportCodes?: readonly string[];
+      /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call so the counts attribute to one run.
        */
@@ -1958,34 +1975,41 @@ export function createWarcraftLogsClient(
     let recoverySearched = false;
     let attendanceRecoveredKills = 0;
 
-    // A kill already recovered in an earlier run is held but absent from the
-    // character's own history, and a complete publish keeps only what the run
-    // found again outside terminal raids. Its stored report is re-read
-    // directly, one request, so it is not dropped. A failure here puts that
-    // evidence at risk, so unlike the search below it limits the scan: a
-    // partial publish carries every stored kill forward.
-    const knownCodes = new Set(
-      uncovered.flatMap((verified) =>
-        verified.knownReportCode !== undefined &&
-        !scannedReportCodes.has(verified.knownReportCode)
-          ? [verified.knownReportCode]
-          : []
-      )
-    );
-    for (const code of knownCodes) {
-      if (historyScanRequests >= options.requestCap) {
-        scanLimitation ??= { kind: "limitation", code: "request_cap" };
-        break;
+    // A complete publish keeps only what the run finds again outside terminal
+    // raids, and a kill an earlier run recovered from attendance is not in the
+    // character's own history to be found. So after a fresh scan that
+    // finished -- the only kind that publishes complete -- each stored kill's
+    // report the scan did not read is re-read directly, one request. The list
+    // comes from stored evidence, never from Raider.IO, so a Raider.IO failure
+    // cannot drop what it once helped find.
+    //
+    // A report that is gone (`not_found`, `private`) is a kill the run stopped
+    // finding, which a complete publish is meant to drop. Anything else puts
+    // the stored kill at risk, so it limits the scan: a partial publish
+    // carries every stored kill forward.
+    if (
+      !resumedFromCursor &&
+      historyScanFinished &&
+      scanLimitation === undefined
+    ) {
+      for (const code of new Set(options.storedKillReportCodes ?? [])) {
+        if (scannedReportCodes.has(code)) continue;
+        if (historyScanRequests >= options.requestCap) {
+          scanLimitation ??= { kind: "limitation", code: "request_cap" };
+          break;
+        }
+        const decoded = await hydrate(code);
+        scannedReportCodes.add(code);
+        if (decoded.kind === "limitation") {
+          if (decoded.code !== "not_found" && decoded.code !== "private") {
+            scanLimitation ??= decoded;
+          }
+          continue;
+        }
+        for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
+        for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
+        if (decoded.limitation) scanLimitation ??= decoded.limitation;
       }
-      const decoded = await hydrate(code);
-      scannedReportCodes.add(code);
-      if (decoded.kind === "limitation") {
-        scanLimitation ??= decoded;
-        continue;
-      }
-      for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
-      for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
-      if (decoded.limitation) scanLimitation ??= decoded.limitation;
     }
 
     // A kill nothing holds is searched for in the guild's attendance. Nothing
@@ -1996,12 +2020,9 @@ export function createWarcraftLogsClient(
     // the run partial on every retry.
     const recoveryTargets = new Map<
       string,
-      { guild: NonNullable<WarcraftLogsVerifiedKill["guild"]>; times: number[] }
+      { guild: WarcraftLogsVerifiedKill["guild"]; times: number[] }
     >();
     for (const verified of uncovered) {
-      if (verified.knownReportCode !== undefined || verified.guild === null) {
-        continue;
-      }
       const guildKey = `${verified.guild.region}\0${verified.guild.realm}\0${verified.guild.name}`;
       const target = recoveryTargets.get(guildKey) ?? {
         guild: verified.guild,

@@ -290,6 +290,8 @@ describe("applicant evidence job handler", () => {
         parses: new Set(),
         tierBests: new Set()
       },
+      // Nothing stored yet, so nothing to re-read.
+      storedKillReportCodes: [],
       onLimitation: expect.any(Function),
       onRequest: expect.any(Function),
       signal: expect.any(AbortSignal)
@@ -4333,9 +4335,12 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
     });
   });
 
-  it("hands a held kill's stored report over for a re-read unless its raid is terminal", async () => {
-    // Break caught: a held kill vanished from the scan's inputs, so a
-    // complete publish dropped a kill that only attendance had ever found.
+  it("re-reads a recovered kill's report even when Raider.IO cannot answer", async () => {
+    // Break caught (review on #436): the re-read list came from Raider.IO's
+    // answer. A Raider.IO failure left the run complete with nothing re-read,
+    // and the complete publish dropped every kill attendance had recovered --
+    // permanently, for a profile gone private. The list is stored evidence's,
+    // and a terminal raid's kills need none, because the publish keeps them.
     for (const terminal of [false, true]) {
       const evidence = store();
       evidence.storedKills.push({
@@ -4349,22 +4354,16 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
       const handler = handlerWith(
         evidence,
         getFirstKillReports,
-        vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+        vi.fn(async () => ({ kind: "limitation", code: "unavailable" }))
       );
 
       await handler.execute(run.id);
 
       expect(getFirstKillReports).toHaveBeenCalledWith(
         key,
-        terminal
-          ? expect.not.objectContaining({ verifiedKills: expect.anything() })
-          : expect.objectContaining({
-              verifiedKills: [
-                expect.objectContaining({
-                  knownReportCode: "zCFtRjmLgvHxynh7"
-                })
-              ]
-            })
+        expect.objectContaining({
+          storedKillReportCodes: terminal ? [] : ["zCFtRjmLgvHxynh7"]
+        })
       );
     }
   });

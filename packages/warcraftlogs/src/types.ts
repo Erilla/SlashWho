@@ -164,18 +164,12 @@ export type WarcraftLogsWipeEvidence = Readonly<{
 export type WarcraftLogsVerifiedKill = Readonly<{
   /** When the kill happened, as an ISO string. */
   at: string;
-  /** The guild the kill was in, whose attendance is searched; null if none. */
+  /** The guild the kill was in, whose attendance is searched. */
   guild: Readonly<{
     name: string;
     realm: string;
     region: CharacterKey["region"];
-  }> | null;
-  /**
-   * The report a stored kill already came from. Present, it is re-read
-   * directly instead of searched for: an earlier run recovered it, and a
-   * complete publish keeps only what the run finds again.
-   */
-  knownReportCode?: string;
+  }>;
 }>;
 
 export type WarcraftLogsReportResult =
@@ -336,6 +330,15 @@ export interface WarcraftLogsGateway {
        * Absent or empty, attendance is not read at all.
        */
       verifiedKills?: readonly WarcraftLogsVerifiedKill[];
+      /**
+       * Report codes of stored kills outside terminal raids. A complete publish
+       * keeps only what the run finds again there, and a kill recovered from
+       * guild attendance is not in the character's own history to be found. So
+       * after a fresh scan that finishes, any of these the scan did not read is
+       * re-read directly. Taken from stored evidence, never from another
+       * provider, so a Raider.IO failure cannot drop what it once helped find.
+       */
+      storedKillReportCodes?: readonly string[];
       /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call rather than to the client so the counts

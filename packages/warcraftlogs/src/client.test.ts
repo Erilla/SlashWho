@@ -3679,9 +3679,7 @@ describe("Warcraft Logs gateway", () => {
       const result = await client.getFirstKillReports(key, {
         requestCap: 10,
         parseRequestCap: 1,
-        verifiedKills: [
-          { ...verified[0]!, guild: null, knownReportCode: "storedRecovery" }
-        ]
+        storedKillReportCodes: ["storedRecovery"]
       });
 
       expect(queries).not.toContain("GuildAttendance");
@@ -3719,15 +3717,92 @@ describe("Warcraft Logs gateway", () => {
       const result = await client.getFirstKillReports(key, {
         requestCap: 10,
         parseRequestCap: 1,
-        verifiedKills: [
-          { ...verified[0]!, guild: null, knownReportCode: "storedRecovery" }
-        ]
+        storedKillReportCodes: ["storedRecovery"]
       });
 
       // With nothing else found, the whole result is the limitation.
       const code =
         result.kind === "limitation" ? result.code : result.limitation?.code;
       expect(code).toBe("unavailable");
+    });
+
+    it("lets a stored kill go when its report is gone, as a complete publish should", async () => {
+      // A deleted or private report is a kill the run stopped finding. That
+      // is not a failure to read, so it must not hold the run partial.
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return jsonResponse({
+            errors: [{ message: "This report does not exist." }]
+          });
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        storedKillReportCodes: ["deletedReport"]
+      });
+
+      const code =
+        result.kind === "limitation" ? result.code : result.limitation?.code;
+      expect(code).toBeUndefined();
+    });
+
+    it("re-reads nothing the history scan already read, and nothing after a resume", async () => {
+      // A report the scan decoded has already been found again. And a resumed
+      // scan publishes partial, which carries every stored kill forward, so
+      // re-reading there would spend requests on nothing.
+      for (const resumed of [false, true]) {
+        const hydrated: string[] = [];
+        const page = (fixture("character-report-valid") as { pages: unknown[] })
+          .pages[0];
+        const { client } = clientFor((url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: { page?: number; code?: string };
+          };
+          if (body.query.includes("RecentReports")) {
+            if (body.variables.page === 1 && !resumed) {
+              const last = structuredClone(page) as {
+                data: {
+                  characterData: {
+                    character: { recentReports: { has_more_pages: boolean } };
+                  };
+                };
+              };
+              last.data.characterData.character.recentReports.has_more_pages = false;
+              return jsonResponse(last);
+            }
+            return body.variables.page === 18 ? jsonResponse(page) : history();
+          }
+          if (body.query.includes("ReportByCode")) {
+            hydrated.push(body.variables.code!);
+            return jsonResponse({ data: { reportData: { report: null } } });
+          }
+          return emptyZoneRankingsResponse();
+        });
+
+        await client.getFirstKillReports(key, {
+          requestCap: 10,
+          parseRequestCap: 1,
+          storedKillReportCodes: resumed
+            ? ["storedRecovery"]
+            : ["lateReport", "storedRecovery"],
+          ...(resumed
+            ? {
+                historyScanStartPage: 19,
+                historyScanResumeBoundaryReportCode: "lateReport"
+              }
+            : {})
+        });
+
+        expect(hydrated).toEqual(resumed ? [] : ["storedRecovery"]);
+      }
     });
 
     it("reports no search when the budget was spent before recovery began", async () => {
@@ -5201,14 +5276,24 @@ describe("Warcraft Logs gateway", () => {
     expect(result).not.toHaveProperty("limitation");
   });
 
-  it("keeps its proved cursor when a resumed scan finds history already exhausted", async () => {
-    // Break caught: a scan that ended cleanly and then capped elsewhere saves
-    // the page past the end. The resumed run reads that page, finds it empty,
-    // and used to save the page after it with no boundary, which the next run
-    // could not validate -- so it restarted at page one and saved the first
-    // cursor again. Ryii alternated between the two for a day.
+  it("keeps its proved cursor across an empty history page", async () => {
+    // Break caught: an empty page advanced the cursor with no boundary, which
+    // the next run could not validate -- so it restarted at page one and
+    // saved the first cursor again. Ryii alternated between pages 67 and 68
+    // for a day. Here the page after the empty one drifts, so the run ends
+    // limited with whatever cursor it proved.
     const page = (fixture("character-report-valid") as { pages: unknown[] })
       .pages[0];
+    const emptyPage = {
+      data: {
+        characterData: {
+          character: {
+            server: { normalizedName: "Silvermoon" },
+            recentReports: { data: [], has_more_pages: true }
+          }
+        }
+      }
+    };
     const historyPages: number[] = [];
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
@@ -5222,57 +5307,25 @@ describe("Warcraft Logs gateway", () => {
         return jsonResponse(
           requestedPage === 66
             ? page
-            : {
-                data: {
-                  characterData: {
-                    character: {
-                      server: { normalizedName: "Silvermoon" },
-                      guilds: [
-                        {
-                          name: "Guild",
-                          server: { slug: "silvermoon", region: { slug: "EU" } }
-                        }
-                      ],
-                      recentReports: { data: [], has_more_pages: false }
-                    }
-                  }
-                }
-              }
+            : requestedPage === 67
+              ? emptyPage
+              : fixture("schema-drift")
         );
-      }
-      if (body.query.includes("GuildAttendance")) {
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: { attendance: { data: [], has_more_pages: true } }
-            }
-          }
-        });
       }
       return emptyZoneRankingsResponse();
     });
 
     const result = await client.getFirstKillReports(key, {
-      requestCap: 2,
+      requestCap: 10,
       parseRequestCap: 10,
-      // A kill an earlier run recovered, re-read directly: the one budget
-      // that still limits a run once its history is done, because the
-      // stored evidence depends on it.
-      verifiedKills: [
-        {
-          at: "2001-01-01T20:00:00.000Z",
-          guild: null,
-          knownReportCode: "storedRecovery"
-        }
-      ],
       historyScanStartPage: 67,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
-    expect(historyPages).toEqual([66, 67]);
+    expect(historyPages).toEqual([66, 67, 68]);
     expect(result).toMatchObject({
       kind: "evidence",
-      limitation: { code: "request_cap" },
+      limitation: { code: "schema_drift" },
       historyScanResumePage: 67,
       historyScanResumeBoundaryReportCode: "lateReport"
     });

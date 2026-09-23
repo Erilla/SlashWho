@@ -2,7 +2,11 @@ import type { HistoricMythicKill } from "@slashwho/raiderio";
 import { raiderIoHistoricTierOrdinals } from "@slashwho/raiderio";
 import { describe, expect, it } from "vitest";
 
-import { raiderIoVerifiedKills, searchableKills } from "./verified-kills";
+import {
+  raiderIoVerifiedKills,
+  searchableKills,
+  storedKillReportCodes
+} from "./verified-kills";
 
 const key = { region: "eu", realm: "silvermoon", name: "ryun" } as const;
 const guild = { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" };
@@ -20,47 +24,12 @@ describe("searchableKills", () => {
     ]);
   });
 
-  const storedAzshara = {
-    killedAt: "2020-01-21T19:41:12.000Z",
-    raidId: "23",
-    reportUrl: "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7"
-  };
-
-  it("re-reads a held kill's stored report instead of searching for it", () => {
-    // Break caught: a held kill was dropped from the scan's inputs, and a
-    // complete publish keeps only what the run finds again outside terminal
-    // raids -- so a kill recovered from attendance was stored, dropped, found
-    // again, and dropped again on alternate runs.
-    expect(
-      searchableKills([azshara], { storedKills: [storedAzshara] })
-    ).toEqual([
-      {
-        at: "2020-01-21T19:34:00.000Z",
-        guild,
-        knownReportCode: "zCFtRjmLgvHxynh7"
-      }
-    ]);
-  });
-
-  it("re-reads a held guildless kill too, which has no attendance to search", () => {
-    expect(
-      searchableKills([{ ...azshara, guild: null }], {
-        storedKills: [storedAzshara]
-      })
-    ).toEqual([
-      {
-        at: "2020-01-21T19:34:00.000Z",
-        guild: null,
-        knownReportCode: "zCFtRjmLgvHxynh7"
-      }
-    ]);
-  });
-
-  it("drops a held kill in a terminal raid, which a complete publish keeps", () => {
+  it("does not search for a kill stored evidence already holds", () => {
+    // Held: its stored report is re-read through `storedKillReportCodes`
+    // instead, so a search would only find it again.
     expect(
       searchableKills([azshara], {
-        storedKills: [storedAzshara],
-        terminalKillRaidIds: new Set(["23"])
+        storedKills: [{ killedAt: "2020-01-21T19:41:12.000Z" }]
       })
     ).toEqual([]);
   });
@@ -72,13 +41,9 @@ describe("searchableKills", () => {
     // 15-minute match called it unheld, so it would be searched every run.
     expect(
       searchableKills([azshara], {
-        storedKills: [
-          { ...storedAzshara, killedAt: "2020-01-21T20:34:49.222Z" }
-        ]
+        storedKills: [{ killedAt: "2020-01-21T20:34:49.222Z" }]
       })
-    ).toEqual([
-      expect.objectContaining({ knownReportCode: "zCFtRjmLgvHxynh7" })
-    ]);
+    ).toEqual([]);
   });
 
   it("keeps a kill whose only stored neighbour is another night", () => {
@@ -177,5 +142,35 @@ describe("raiderIoVerifiedKills", () => {
         { storedKills: [], signal: controller.signal }
       )
     ).rejects.toBe(reason);
+  });
+});
+
+describe("storedKillReportCodes", () => {
+  it("lists the reports of stored kills outside terminal raids, once each", () => {
+    // Break caught (review on #436): the re-read list came from Raider.IO's
+    // answer, so a Raider.IO failure left the run complete with nothing
+    // re-read, and the complete publish dropped every kill attendance had
+    // recovered. The list is stored evidence's, whatever Raider.IO says.
+    expect(
+      storedKillReportCodes(
+        [
+          {
+            raidId: "23",
+            reportUrl: "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7"
+          },
+          {
+            raidId: "23",
+            reportUrl:
+              "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7#fight=8"
+          },
+          {
+            raidId: "2450",
+            reportUrl: "https://www.warcraftlogs.com/reports/terminalRaidLog"
+          },
+          { raidId: "23" }
+        ],
+        new Set(["2450"])
+      )
+    ).toEqual(["zCFtRjmLgvHxynh7"]);
   });
 });
