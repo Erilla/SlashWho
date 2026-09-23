@@ -547,14 +547,10 @@ a {
   }
 }
 
-/* The connected-characters column carries a name, a guild, upstream icons and
-   a source pill on one row, so it is the track that runs out of room first.
-   The extra width it needs is taken from the gap rather than from the evidence
-   column: dropping the gap to 2rem and shifting the ratio to 0.75/1.25 widens
-   the left track by ~44px while the evidence track gives up under 4px. */
+/* Character names, guilds and row actions need more room than achievement cards. */
 .dossier-layout {
   display: grid;
-  grid-template-columns: minmax(16rem, 0.75fr) minmax(0, 1.25fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(16rem, 0.95fr);
   gap: 2rem;
   align-items: start;
   padding-top: 2rem;
@@ -2348,4 +2344,28 @@ a {
   .dossier-raid-heading {
     min-height: 6.5rem;
   }
+}
+.dossier-character-alias-anchor {
+  position: relative;
+  display: inline-block;
+}
+
+.dossier-character-alias-tooltip {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: max-content;
+  max-width: min(24rem, 80vw);
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.35rem;
+  background: #17202b;
+  color: #fff;
+  box-shadow: 0 4px 12px #0006;
+  visibility: hidden;
+}
+
+.dossier-character-alias-anchor:hover .dossier-character-alias-tooltip,
+.dossier-character-alias-anchor:focus-within .dossier-character-alias-tooltip {
+  visibility: visible;
 }

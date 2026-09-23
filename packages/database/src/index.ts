@@ -64,6 +64,7 @@ export type {
   SnapshotRepository,
   StagedEvidenceCollection,
   StoredEvidenceTiers,
+  HistoricAliasScanProgress,
   EmptyAttendanceSearch,
   StoredKillTier,
   StoredSnapshot,

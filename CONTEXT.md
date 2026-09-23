@@ -32,6 +32,9 @@ _Avoid_: Officer mode, admin view, Applicant Intel API
 The reviewer-surface report about a searched character and every character linked to it, carrying evidence attributed per character. It is never stored, so it is always a view of the moment rather than a citable record.
 _Avoid_: Intel report, applicant snapshot, saved dossier
 
+**Historic alias**:
+A reviewer-declared former name and realm attached to one connected character. It is used to collect older evidence under that character and is not an independent dossier character.
+
 **Fight parse**:
 One Warcraft Logs percentile for damage, healing, or boss damage, attributed to one canonical character on one exact public Mythic fight. Its evidence must agree on report, fight, encounter, difficulty, region, and realm; available values link back to that supporting fight. Rankings use Warcraft Logs' historical comparison, not a current or character-wide lifetime comparison.
 _Avoid_: Character parse, lifetime best, report parse

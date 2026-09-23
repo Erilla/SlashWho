@@ -108,7 +108,7 @@ test("unlinks a manually added character only after a real modal confirms it", a
   await expect(panel.getByText("Removable")).toHaveCount(0);
 });
 
-test("offers no row actions for a source-discovered character", async ({
+test("offers Exclude and historic links for a source-discovered character", async ({
   page
 }) => {
   const key = {
@@ -140,7 +140,75 @@ test("offers no row actions for a source-discovered character", async ({
 
   const panel = page.getByRole("region", { name: "Connected characters" });
   await expect(panel.getByText("Declaredalt")).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Actions for/ })).toHaveCount(
-    0
+  await page.getByRole("button", { name: "Actions for Declaredalt" }).click();
+  await expect(page.getByRole("menuitem", { name: "Exclude" })).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Link historic alias…" })
+  ).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Remove…" })).toHaveCount(0);
+});
+
+test("links and removes a historic alias with a two-field modal and tooltip", async ({
+  page
+}) => {
+  const root = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "aliasroot"
+  } as const;
+  const connected = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "aliascurrent"
+  } as const;
+  await seedSnapshot({
+    key: root,
+    displayName: "Aliasroot",
+    refreshedAt: new Date(),
+    characters: [
+      { key: root, displayName: "Aliasroot", className: "Mage", level: 80 },
+      {
+        key: connected,
+        displayName: "Aliascurrent",
+        className: "Mage",
+        level: 80
+      }
+    ]
+  });
+  await seedCharacterEvidence(root, { withSampleKills: false });
+  await seedCharacterEvidence(connected, { withSampleKills: false });
+  await page.goto("/dossiers/eu/silvermoon/aliasroot");
+  const trigger = page.getByRole("button", {
+    name: "Actions for Aliascurrent"
+  });
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "Link historic alias…" }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "Link historic alias to Aliascurrent"
+  });
+  await expect(dialog).toBeVisible();
+  expect(await dialog.evaluate((element) => element.matches(":modal"))).toBe(
+    true
   );
+  await expect(dialog.getByRole("textbox")).toHaveCount(2);
+  await dialog.getByRole("textbox", { name: "Character name" }).fill("Erilla");
+  await dialog.getByRole("textbox", { name: "Realm" }).fill("Neptulon");
+  await dialog.getByRole("button", { name: "Link historic alias" }).click();
+  const connectedName = page
+    .getByRole("region", { name: "Connected characters" })
+    .locator(".dossier-character-name", { hasText: "Aliascurrent" });
+  await connectedName.hover();
+  await expect(page.getByRole("tooltip")).toHaveText(
+    "Also known as: Erilla-Neptulon"
+  );
+  await page.reload();
+  await connectedName.hover();
+  await expect(page.getByRole("tooltip")).toHaveText(
+    "Also known as: Erilla-Neptulon"
+  );
+  await trigger.click();
+  await page
+    .getByRole("menuitem", { name: "Remove historic alias erilla-neptulon" })
+    .click();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
 });

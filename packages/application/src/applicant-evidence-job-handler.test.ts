@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type {
   EvidenceRunPhase,
   EvidenceRunCost,
@@ -6,9 +8,12 @@ import type {
   StoredWipeTier,
   TerminalTier
 } from "@slashwho/database";
-import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
+import {
+  createWarcraftLogsClient,
+  type WarcraftLogsGateway
+} from "@slashwho/warcraftlogs";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
-import { supportedRaidCatalogue } from "@slashwho/domain";
+import { supportedRaidCatalogue, type CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -324,6 +329,403 @@ describe("applicant evidence job handler", () => {
         }
       }
     ]);
+  });
+
+  it("collects a former name without applying the terminal kill scan floor", async () => {
+    const evidence = store();
+    const alias = { region: "eu", realm: "neptulon", name: "former" } as const;
+    evidence.historicAliases = vi.fn().mockResolvedValue([alias]);
+    const getFirstKillReports = vi.fn(async (requested: CharacterKey) => ({
+      kind: "evidence" as const,
+      kills:
+        requested.name === "former"
+          ? [
+              {
+                raidId: "42",
+                raidName: "Old Tier",
+                bossId: "7",
+                bossName: "Old Boss",
+                journalBossId: "7",
+                bossOrder: 7,
+                killedAt: "2024-01-01T20:00:00.000Z",
+                reportUrl: "https://www.warcraftlogs.com/reports/oldreport",
+                fightUrl:
+                  "https://www.warcraftlogs.com/reports/oldreport#fight=7",
+                reportCode: "oldreport",
+                fightId: 7,
+                difficulty: 5,
+                guild: null,
+                performance: {
+                  damage: { state: "unavailable" as const },
+                  healing: { state: "unavailable" as const },
+                  bossDamage: { state: "unavailable" as const }
+                }
+              }
+            ]
+          : [],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      alias,
+      expect.not.objectContaining({ killScanFloor: expect.anything() })
+    );
+    expect(evidence.published[0]?.result.kills).toEqual([
+      expect.objectContaining({ bossName: "Old Boss" })
+    ]);
+  });
+
+  it("does not admit more identity scans or parses than the light-run budget", async () => {
+    const evidence = store();
+    let turn = 0;
+    evidence.storedEvidenceTiers = async () => ({
+      kills: [],
+      wipes: [],
+      identityScanTurn: turn
+    });
+    evidence.historicAliases = async () => [
+      { region: "eu", realm: "one", name: "former-one" },
+      { region: "eu", realm: "two", name: "former-two" }
+    ];
+    const getFirstKillReports = vi.fn<
+      WarcraftLogsGateway["getFirstKillReports"]
+    >(async () => ({
+      kind: "evidence" as const,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 1,
+      parseRequestCap: 0,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    expect(getFirstKillReports).toHaveBeenCalledTimes(1);
+    expect(getFirstKillReports.mock.calls[0]?.[1]).toMatchObject({
+      requestCap: 1,
+      parseRequestCap: 0
+    });
+    expect(evidence.published[0]?.result).toMatchObject({
+      state: "partial",
+      limitationCode: "request_cap"
+    });
+    turn = 1;
+    evidence.staged.clear();
+    await handler.execute(run.id);
+    expect(getFirstKillReports.mock.calls[1]?.[0]).toEqual({
+      region: "eu",
+      realm: "one",
+      name: "former-one"
+    });
+  });
+
+  it("resumes a capped alias scan from its own boundary on the next run", async () => {
+    const evidence = store();
+    const alias = { region: "eu", realm: "old-realm", name: "former" } as const;
+    evidence.historicAliases = async () => [alias];
+    let storedProgress: NonNullable<
+      Awaited<
+        ReturnType<ApplicantEvidenceStore["storedEvidenceTiers"]>
+      >["historicAliasProgress"]
+    > = [];
+    evidence.storedEvidenceTiers = async () => ({
+      kills: [],
+      wipes: [],
+      historicAliasProgress: storedProgress,
+      parseOnlyKills: evidence.published[0]?.result.kills ?? []
+    });
+    const oldKill = {
+      raidId: "42",
+      raidName: "Old Tier",
+      bossId: "7",
+      bossName: "Old Boss",
+      journalBossId: "7",
+      bossOrder: 7,
+      killedAt: "2024-01-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/oldreport",
+      fightUrl: "https://www.warcraftlogs.com/reports/oldreport#fight=7",
+      reportCode: "oldreport",
+      fightId: 7,
+      difficulty: 5,
+      guild: null,
+      performance: {
+        damage: { state: "unavailable" as const },
+        healing: { state: "unavailable" as const },
+        bossDamage: { state: "unavailable" as const }
+      }
+    };
+    const olderKill = {
+      ...oldKill,
+      bossName: "Older Boss",
+      reportUrl: "https://www.warcraftlogs.com/reports/olderreport",
+      fightUrl: "https://www.warcraftlogs.com/reports/olderreport#fight=7",
+      reportCode: "olderreport"
+    };
+    const getFirstKillReports = vi.fn(
+      async (
+        requested: CharacterKey,
+        collection: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
+      ) => ({
+        kind: "evidence" as const,
+        kills:
+          requested.name === "former"
+            ? collection.historyScanStartPage === 2
+              ? [oldKill, olderKill]
+              : [oldKill]
+            : [],
+        wipes: [],
+        tierBests: [],
+        parsedFightUrls: [],
+        troubledRaidIds: { parses: [], tierBests: [] },
+        ...(requested.name === "former"
+          ? {
+              limitation: {
+                kind: "limitation" as const,
+                code: "request_cap" as const
+              },
+              parseLimitation: {
+                kind: "limitation" as const,
+                code: "parse_request_cap" as const
+              },
+              historyScanResumePage: 2,
+              historyScanResumeBoundaryReportCode: "old-page-boundary"
+            }
+          : {})
+      })
+    );
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 4,
+      parseRequestCap: 2,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    storedProgress = evidence.published[0]?.result.historicAliasProgress ?? [];
+    expect(storedProgress).toEqual([
+      expect.objectContaining({
+        historyScanResumePage: 2,
+        historyScanResumeBoundaryReportCode: "old-page-boundary",
+        pendingParseFightUrls: [oldKill.fightUrl]
+      })
+    ]);
+    evidence.staged.clear();
+    await handler.execute(run.id);
+    expect(getFirstKillReports).toHaveBeenLastCalledWith(
+      alias,
+      expect.objectContaining({
+        historyScanStartPage: 2,
+        historyScanResumeBoundaryReportCode: "old-page-boundary",
+        storedKills: [expect.objectContaining({ fightUrl: oldKill.fightUrl })]
+      })
+    );
+    expect(evidence.published[1]?.result.kills).toEqual([
+      expect.objectContaining({ bossName: "Old Boss" }),
+      expect.objectContaining({ bossName: "Older Boss" })
+    ]);
+  });
+
+  it("spends two requests so a resumed alias advances beyond the real gateway boundary probe", async () => {
+    const evidence = store();
+    const alias = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "sentinel"
+    } as const;
+    let turn = 0;
+    let storedProgress: NonNullable<
+      Awaited<
+        ReturnType<ApplicantEvidenceStore["storedEvidenceTiers"]>
+      >["historicAliasProgress"]
+    > = [];
+    evidence.historicAliases = async () => [alias];
+    evidence.storedEvidenceTiers = async () => ({
+      kills: [],
+      wipes: [],
+      identityScanTurn: turn,
+      historicAliasProgress: storedProgress
+    });
+    const pages = (
+      JSON.parse(
+        readFileSync(
+          new URL(
+            "../../../tests/fixtures/warcraftlogs/character-report-valid.json",
+            import.meta.url
+          ),
+          "utf8"
+        )
+      ) as { pages: unknown[] }
+    ).pages;
+    const historyPages: number[] = [];
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "test-token",
+              expires_in: 3600
+            })
+          );
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { page?: number };
+        };
+        if (body.query.includes("RecentReports")) {
+          const page = body.variables.page ?? 1;
+          historyPages.push(page);
+          return new Response(JSON.stringify(pages[page === 2 ? 1 : 0]));
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              characterData: {
+                character: {
+                  damage: { rankings: [] },
+                  healing: { rankings: [] },
+                  bossDamage: { rankings: [] }
+                }
+              }
+            }
+          })
+        );
+      }
+    );
+    const client = createWarcraftLogsClient({
+      fetch: fetch as typeof globalThis.fetch,
+      clientId: "test-id",
+      clientSecret: "test-secret"
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        getRateLimit: openGate.getRateLimit,
+        getFirstKillReports: client.getFirstKillReports
+      },
+      requestCap: 2,
+      parseRequestCap: 4,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    expect(evidence.failed).toEqual([]);
+    expect(evidence.published).toHaveLength(1);
+    storedProgress = evidence.published[0]?.result.historicAliasProgress ?? [];
+    expect(storedProgress[0]).toMatchObject({ historyScanResumePage: 2 });
+    evidence.staged.clear();
+    turn = 1;
+    await handler.execute(run.id);
+    expect(historyPages.slice(-2)).toEqual([1, 2]);
+    expect(evidence.published[1]?.result.kills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reportUrl: expect.stringContaining("earlyReport")
+        })
+      ])
+    );
+  });
+
+  it("collects a declared alias when the current name is not found", async () => {
+    const evidence = store();
+    const alias = { region: "eu", realm: "old-realm", name: "former" } as const;
+    evidence.historicAliases = async () => [alias];
+    const aliasKill = {
+      raidId: "42",
+      raidName: "Old Tier",
+      bossId: "7",
+      bossName: "Alias Boss",
+      journalBossId: "7",
+      bossOrder: 7,
+      killedAt: "2024-01-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/aliasreport",
+      fightUrl: "https://www.warcraftlogs.com/reports/aliasreport#fight=7",
+      reportCode: "aliasreport",
+      fightId: 7,
+      difficulty: 5,
+      guild: null,
+      performance: {
+        damage: { state: "unavailable" as const },
+        healing: { state: "unavailable" as const },
+        bossDamage: { state: "unavailable" as const }
+      }
+    };
+    const getFirstKillReports = vi.fn(async (requested: CharacterKey) =>
+      requested.name === "former"
+        ? {
+            kind: "evidence" as const,
+            kills: [aliasKill],
+            wipes: [],
+            tierBests: [],
+            parsedFightUrls: [],
+            troubledRaidIds: { parses: [], tierBests: [] }
+          }
+        : { kind: "limitation" as const, code: "not_found" as const }
+    );
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 4,
+      parseRequestCap: 2,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    expect(getFirstKillReports).toHaveBeenCalledTimes(2);
+    expect(evidence.published[0]?.result).toMatchObject({
+      state: "partial",
+      limitationCode: "not_found",
+      kills: [expect.objectContaining({ bossName: "Alias Boss" })]
+    });
   });
 
   it("publishes gathered kills as partial rather than deleting a prior result", async () => {

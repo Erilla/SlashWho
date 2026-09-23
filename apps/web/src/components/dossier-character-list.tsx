@@ -169,7 +169,7 @@ export function DossierCharacterList({
                   </span>
                 </span>
               ) : null}
-              {canAddCharacters && character.source === "manually_added" ? (
+              {canAddCharacters ? (
                 <DossierCharacterMenu
                   character={character}
                   onChanged={(change) => onCharactersChanged?.(change)}
