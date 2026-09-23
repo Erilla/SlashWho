@@ -547,6 +547,15 @@ function guildAttendancePage(
   return { reports, hasMorePages };
 }
 
+/**
+ * Whether an attendance response is Warcraft Logs saying it has no such guild,
+ * as opposed to a page it could not read.
+ */
+function guildIsAbsent(value: unknown): boolean {
+  const guildData = record(record(record(value)?.data)?.guildData);
+  return guildData !== null && guildData.guild === null;
+}
+
 function attendanceListsCharacter(
   players: unknown,
   characterName: string
@@ -2046,7 +2055,7 @@ export function createWarcraftLogsClient(
           span.start - REPORT_COVER_SLACK_MS <= at &&
           at <= span.end + REPORT_COVER_SLACK_MS
       );
-      return covered ? [] : [{ ...verified, at }];
+      return covered ? [] : [{ verified, at }];
     });
     const hydrate = async (code: string) => {
       const report = counted(
@@ -2108,18 +2117,27 @@ export function createWarcraftLogsClient(
     // the run partial on every retry.
     const recoveryTargets = new Map<
       string,
-      { guild: WarcraftLogsVerifiedKill["guild"]; times: number[] }
+      {
+        guild: WarcraftLogsVerifiedKill["guild"];
+        wanted: { verified: WarcraftLogsVerifiedKill; at: number }[];
+      }
     >();
-    for (const verified of uncovered) {
+    for (const { verified, at } of uncovered) {
       const guildKey = `${verified.guild.region}\0${verified.guild.realm}\0${verified.guild.name}`;
       const target = recoveryTargets.get(guildKey) ?? {
         guild: verified.guild,
-        times: []
+        wanted: []
       };
-      target.times.push(verified.at);
+      target.wanted.push({ verified, at });
       recoveryTargets.set(guildKey, target);
     }
-    search: for (const { guild, times } of recoveryTargets.values()) {
+    // Kills whose night was searched to the end and held nothing, reported so
+    // the caller can stop searching for them for a while (#434). Only a walk
+    // that finished counts: a spent budget, a transient refusal or a report
+    // that could not be read leaves a kill unproven, and it is searched again.
+    const searchedEmpty: WarcraftLogsVerifiedKill[] = [];
+    search: for (const { guild, wanted: targets } of recoveryTargets.values()) {
+      const times = targets.map((target) => target.at);
       const pagedPast =
         Math.min(...times) -
         ATTENDANCE_REPORT_LEAD_MS -
@@ -2134,7 +2152,11 @@ export function createWarcraftLogsClient(
             startTime <= at + REPORT_COVER_SLACK_MS &&
             startTime >= at - ATTENDANCE_REPORT_LEAD_MS
         );
-      for (let page = 1; ; page++) {
+      // Whether this guild's walk reached a conclusion: past every wanted
+      // night, out of pages, or told the guild does not exist.
+      let concluded: boolean;
+      let unreadable = false;
+      walk: for (let page = 1; ; page++) {
         if (historyScanRequests >= options.requestCap) break search;
         recoverySearched = true;
         const attendance = counted(
@@ -2151,9 +2173,19 @@ export function createWarcraftLogsClient(
           )
         );
         historyScanRequests += 1;
-        if (attendance.kind !== "success") continue search;
+        if (attendance.kind !== "success") {
+          // A guild Warcraft Logs does not have holds nothing to find. Any
+          // other refusal may pass, so it proves nothing.
+          concluded = attendance.code === "not_found";
+          break walk;
+        }
         const attendancePage = guildAttendancePage(attendance.value, key.name);
-        if (attendancePage === null) continue search;
+        if (attendancePage === null) {
+          // `guild: null` is Warcraft Logs saying it has no such guild; a
+          // page that is otherwise unreadable proves nothing.
+          concluded = guildIsAbsent(attendance.value);
+          break walk;
+        }
         for (const {
           code,
           startTime,
@@ -2164,14 +2196,24 @@ export function createWarcraftLogsClient(
           if (historyScanRequests >= options.requestCap) break search;
           const decoded = await hydrate(code);
           scannedReportCodes.add(code);
-          if (decoded.kind === "limitation") continue;
+          if (decoded.kind === "limitation") {
+            // A report that is gone holds nothing; one that could not be
+            // read might have held the kill.
+            if (decoded.code !== "not_found" && decoded.code !== "private") {
+              unreadable = true;
+            }
+            continue;
+          }
           for (const kill of decoded.kills) {
             if (!kills.has(kill.fightUrl)) attendanceRecoveredKills += 1;
             kills.set(kill.fightUrl, kill);
           }
           for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
         }
-        if (!attendancePage.hasMorePages) break;
+        if (!attendancePage.hasMorePages) {
+          concluded = true;
+          break walk;
+        }
         // Newest first, so a page wholly past every wanted night ends the
         // walk. A page with an undated report says nothing about its reach.
         const starts = attendancePage.reports.map((report) => report.startTime);
@@ -2179,8 +2221,17 @@ export function createWarcraftLogsClient(
           starts.length > 0 &&
           starts.every((start) => start !== null && start < pagedPast)
         ) {
-          break;
+          concluded = true;
+          break walk;
         }
+      }
+      if (!concluded || unreadable) continue;
+      for (const { verified, at } of targets) {
+        const found = [...kills.values()].some((kill) => {
+          const killedAt = Date.parse(kill.killedAt);
+          return Math.abs(killedAt - at) <= REPORT_COVER_SLACK_MS;
+        });
+        if (!found) searchedEmpty.push(verified);
       }
     }
 
@@ -2704,7 +2755,10 @@ export function createWarcraftLogsClient(
         ? { parseLimitation: reportedParseLimitation }
         : {}),
       ...(parseLimitations.length > 0 ? { parseLimitations } : {}),
-      ...(recoverySearched ? { attendanceRecoveredKills } : {})
+      ...(recoverySearched ? { attendanceRecoveredKills } : {}),
+      ...(searchedEmpty.length > 0
+        ? { attendanceSearchedEmpty: searchedEmpty }
+        : {})
     });
     // A resumed scan read only the pages below its cursor, so reaching the end
     // of them is not a finished history. The pages above were read by earlier

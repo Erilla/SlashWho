@@ -266,6 +266,13 @@ export type WarcraftLogsReportResult =
        * search ran, which is not the same as a search that found nothing.
        */
       attendanceRecoveredKills?: number;
+      /**
+       * Verified kills whose night was searched to the end and held nothing:
+       * the guild's attendance was walked past it, or Warcraft Logs has no such
+       * guild, and no report read could have held it. A caller may stop
+       * searching for these for a while. Absent when none qualified.
+       */
+      attendanceSearchedEmpty?: readonly WarcraftLogsVerifiedKill[];
     }>
   | WarcraftLogsLimitation;
 

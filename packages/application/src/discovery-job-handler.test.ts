@@ -500,6 +500,10 @@ function createMemoryRepositories(): Repositories {
       async warcraftLogsCharacterId() {
         return null;
       },
+      async emptyAttendanceSearches() {
+        return [];
+      },
+      async recordEmptyAttendanceSearches() {},
       async recordLimitation() {},
       async listActive() {
         return [];

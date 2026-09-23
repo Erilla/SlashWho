@@ -227,12 +227,20 @@ sizing the cap from `request_cap` rows, tell the two apart:
 `history_scan_requests < request_cap_used` is a resumed scan that finished, not
 budget exhaustion.
 
-A kill whose first defeat was never logged is searched for again on every full
-run until its tier settles, since nothing can hold it. The cost is one walk of
-that guild's attendance back to the night, plus any reports on it that list the
-character. This is accepted for now and tracked in #434. The query below is how
-to tell whether it has become worth fixing: a group with `searches` well above
-`kills_recovered`, and high `attendance_pages`.
+A kill whose first defeat was never logged can never be held, so it would be
+searched for on every full run until its tier settles. For a character with no
+stored Warcraft Logs evidence at all, that is never, because nothing gives it a
+scan floor. Measured on 2026-09-23, 6 of 38 active characters were in that
+state. So a night searched to the end and found empty is remembered in
+`character_attendance_searches` and not searched again for **seven days**
+(#434). The memory is kept per character and per collection version, and
+lapses because a log can still be uploaded late.
+
+Only a search that finished counts: attendance walked past the night, the
+guild's pages ran out, or Warcraft Logs has no such guild. A transient refusal,
+a report that could not be read, or a spent budget proves nothing, so the kill
+is searched again next run. Losing the memory costs a repeated search, never a
+kill, so failing to read or write it never fails the run.
 
 The recovery columns carry the three evidence states this repository
 distinguishes, and a query must not merge them:
@@ -246,6 +254,8 @@ distinguishes, and a query must not merge them:
   stored evidence and the scan floor removed the rest. Re-reads are not
   counted here: they come from stored evidence, not from Raider.IO. `0` is a
   lookup that left nothing to search; null is no lookup.
+- `verified_kills_skipped_empty` is how many kills were left out because their
+  night was searched empty within the last week. Null is no lookup.
 - `attendance_recovered_kills` is how many kills an attendance search added
   that the run had not already found. Re-reads are not counted: they recover
   nothing new. Null when no attendance request was made, which can happen with
@@ -261,6 +271,7 @@ SELECT raiderio_historic_outcome,
        count(*) AS attempts,
        count(verified_kills_searched) AS asked,
        coalesce(sum(verified_kills_searched), 0) AS kills_searched,
+       coalesce(sum(verified_kills_skipped_empty), 0) AS kills_skipped_empty,
        count(attendance_recovered_kills) AS searches,
        coalesce(sum(attendance_recovered_kills), 0) AS kills_recovered,
        sum(guild_attendance_requests) AS attendance_pages,

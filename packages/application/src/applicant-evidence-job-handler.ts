@@ -4,6 +4,7 @@ import type {
   CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
+  EmptyAttendanceSearch,
   EvidenceRunCost,
   EvidenceRunPhase,
   StagedEvidenceCollection,
@@ -50,7 +51,12 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
-import { raiderIoVerifiedKills, storedKillReportCodes } from "./verified-kills";
+import {
+  EMPTY_SEARCH_RECHECK_MS,
+  emptySearchKey,
+  raiderIoVerifiedKills,
+  storedKillReportCodes
+} from "./verified-kills";
 import {
   createEvidencePhaseLedger,
   fullEvidencePhasePlan,
@@ -119,6 +125,20 @@ export type ApplicantEvidenceStore = {
    * deployment logs (#342).
    */
   recordRunCost(cost: EvidenceRunCost): Promise<void>;
+  /**
+   * Verified kills whose night an attendance search covered to the end and
+   * found empty since `searchedSince` (#434). Optional: a store without it
+   * searches every verified kill, which is only slower.
+   */
+  emptyAttendanceSearches?(
+    key: CharacterKey,
+    searchedSince: Date
+  ): Promise<readonly EmptyAttendanceSearch[]>;
+  recordEmptyAttendanceSearches?(
+    key: CharacterKey,
+    searches: readonly EmptyAttendanceSearch[],
+    at: Date
+  ): Promise<void>;
   /**
    * Holds a finished collection between the scan that paid for it and the
    * publication that stores it, so a retry republishes rather than re-collects.
@@ -754,6 +774,7 @@ export function createApplicantEvidenceJobHandler(
         killCount: 0,
         raiderIoHistoricOutcome: null,
         verifiedKillsSearched: null,
+        verifiedKillsSkippedEmpty: null,
         attendanceRecoveredKills: null,
         terminalTierCount: 0,
         // Overwritten with the effective cap once the allowance is read; this
@@ -1225,7 +1246,31 @@ export function createApplicantEvidenceJobHandler(
         record.raiderIoHistoricOutcome = verified
           ? (verified.limitation ?? "evidence")
           : null;
-        record.verifiedKillsSearched = verified ? verified.kills.length : null;
+        // A night searched to the end and found empty in the last week is not
+        // searched again (#434). A failure to read that memory costs a search,
+        // never a kill, so it is not allowed to fail the run.
+        const remembered =
+          verified &&
+          verified.kills.length > 0 &&
+          evidence.emptyAttendanceSearches
+            ? new Set(
+                (
+                  await evidence
+                    .emptyAttendanceSearches(
+                      run.key,
+                      new Date(now().getTime() - EMPTY_SEARCH_RECHECK_MS)
+                    )
+                    .catch(() => [])
+                ).map(emptySearchKey)
+              )
+            : new Set<string>();
+        const toSearch = (verified?.kills ?? []).filter(
+          (kill) => !remembered.has(emptySearchKey(kill))
+        );
+        record.verifiedKillsSearched = verified ? toSearch.length : null;
+        record.verifiedKillsSkippedEmpty = verified
+          ? verified.kills.length - toSearch.length
+          : null;
         // The history scan is the first real upstream boundary for a normal
         // collection. Persist it before entering the gateway, rather than
         // after its promise settles: an interrupted long scan is then plainly
@@ -1245,9 +1290,7 @@ export function createApplicantEvidenceJobHandler(
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
             ...(characterId !== undefined ? { characterId } : {}),
-            ...(verified?.kills.length
-              ? { verifiedKills: verified.kills }
-              : {}),
+            ...(toSearch.length > 0 ? { verifiedKills: toSearch } : {}),
             // From stored evidence on every scanning run, whatever Raider.IO
             // answered: a complete publish keeps only what the run finds again
             // outside terminal raids, so a kill recovered from attendance is
@@ -1517,6 +1560,17 @@ export function createApplicantEvidenceJobHandler(
         record.killCount = response.kills.length;
         record.attendanceRecoveredKills =
           response.attendanceRecoveredKills ?? null;
+        if (response.attendanceSearchedEmpty?.length) {
+          // A cache of where not to look, not evidence: losing a write costs
+          // one repeated search next run.
+          await evidence
+            .recordEmptyAttendanceSearches?.(
+              run.key,
+              response.attendanceSearchedEmpty,
+              now()
+            )
+            .catch(() => undefined);
+        }
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
@@ -1746,7 +1800,10 @@ export function createApplicantEvidenceJobHandler(
                     : null,
                 verifiedKillsSearched: record.verifiedKillsSearched as
                   number | null,
-                recoveredKills: record.attendanceRecoveredKills as number | null
+                recoveredKills: record.attendanceRecoveredKills as
+                  number | null,
+                verifiedKillsSkippedEmpty: record.verifiedKillsSkippedEmpty as
+                  number | null
               }
             });
           } catch {

@@ -60,6 +60,7 @@ export type {
   SnapshotRepository,
   StagedEvidenceCollection,
   StoredEvidenceTiers,
+  EmptyAttendanceSearch,
   StoredKillTier,
   StoredSnapshot,
   StoredSnapshotCharacter,
