@@ -3794,6 +3794,42 @@ describe("PostgreSQL repositories", () => {
       ).resolves.toMatchObject({ kind: "reserved" });
     });
 
+    it("reports each tier's newest search since a time, for the dossier", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const old = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: new Date("2026-09-20T12:00:00.000Z"),
+        searchedSince: new Date("2026-09-19T12:00:00.000Z")
+      });
+      if (old.kind !== "reserved") throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(old.run.id, 1);
+      await repositories.evidence.fail(old.run.id, "unavailable");
+      const recent = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+      if (recent.kind !== "reserved") {
+        throw new Error("tier_search_not_reserved");
+      }
+      // Only the newest search of the tier is reported, in its current state.
+      await pool.query(
+        `UPDATE character_evidence_runs SET status = 'running' WHERE id = $1`,
+        [recent.run.id]
+      );
+
+      await expect(
+        repositories.evidence.latestTierSearches(rootKey, dayBefore)
+      ).resolves.toEqual([
+        { raidId: tier, status: "running", createdAt: searchedAt }
+      ]);
+      await expect(
+        repositories.evidence.latestTierSearches(altKey, dayBefore)
+      ).resolves.toEqual([]);
+    });
+
     it("names the guilds stored kills were in, for the search to walk", async () => {
       await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
 
