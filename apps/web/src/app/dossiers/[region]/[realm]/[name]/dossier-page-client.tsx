@@ -751,7 +751,11 @@ function DossierPageState({
                     ? `${name} has been removed from this dossier.`
                     : change.kind === "excluded"
                       ? `${name} is excluded from this dossier.`
-                      : `${name} is included in this dossier again.`
+                      : change.kind === "alias_added"
+                        ? `Historic alias linked to ${name}. Evidence is being re-collected.`
+                        : change.kind === "alias_removed"
+                          ? `Historic alias removed from ${name}. Evidence is being re-collected.`
+                          : `${name} is included in this dossier again.`
                 );
                 void refreshDossier();
               }}

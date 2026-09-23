@@ -152,11 +152,16 @@ function fixture(
     manualConnections: {
       add: vi.fn().mockResolvedValue("added"),
       list: vi.fn().mockResolvedValue([]),
+      listDiscoveredExclusions: vi.fn().mockResolvedValue([]),
+      setDiscoveredExcluded: vi.fn().mockResolvedValue("updated"),
       setExcluded: vi.fn().mockResolvedValue("updated"),
       remove: vi.fn().mockResolvedValue("removed")
     },
     runs: { create: runsCreate },
     evidence: {
+      historicAliases: vi.fn().mockResolvedValue([]),
+      addHistoricAlias: vi.fn().mockResolvedValue("added"),
+      removeHistoricAlias: vi.fn().mockResolvedValue("removed"),
       latestTierSearches: vi.fn().mockResolvedValue(options.tierSearches ?? []),
       recordHistoricRankLookup: vi
         .fn()
@@ -2583,5 +2588,60 @@ describe("manually connected characters", () => {
     ).resolves.toEqual({ kind: "invalid", code: "invalid_character_url" });
 
     expect(repositories.manualConnections.remove).not.toHaveBeenCalled();
+  });
+
+  it("links a former identity to a connected character and queues recollection", async () => {
+    const { dossiers, repositories } = fixture();
+    const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+    await expect(dossiers.addHistoricAlias(root, alt, alias)).resolves.toBe(
+      "added"
+    );
+    expect(repositories.evidence.addHistoricAlias).toHaveBeenCalledWith(
+      alt,
+      alias
+    );
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: alt })
+    );
+  });
+
+  it("rejects self-links and unconnected targets before persisting aliases", async () => {
+    const { dossiers, repositories } = fixture();
+    const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+    await expect(dossiers.addHistoricAlias(root, alt, alt)).resolves.toBe(
+      "self"
+    );
+    await expect(dossiers.addHistoricAlias(root, third, alias)).resolves.toBe(
+      "missing"
+    );
+    expect(repositories.evidence.addHistoricAlias).not.toHaveBeenCalled();
+  });
+
+  it("excludes a discovered character from evidence while retaining its row", async () => {
+    const { dossiers, repositories } = fixture();
+    (
+      repositories.manualConnections.setExcluded as ReturnType<typeof vi.fn>
+    ).mockResolvedValue("missing");
+    (
+      repositories.manualConnections.listDiscoveredExclusions as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue([alt]);
+    await expect(
+      dossiers.setConnectedCharacterExclusion(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+        excluded: true
+      })
+    ).resolves.toEqual({ kind: "updated" });
+    expect(
+      repositories.manualConnections.setDiscoveredExcluded
+    ).toHaveBeenCalledWith(root, alt, true);
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+    expect(
+      result.dossier.characters.find(
+        (character) => character.key.name === "ryalts"
+      )
+    ).toMatchObject({ excluded: true, source: "fingerprint_derived" });
   });
 });

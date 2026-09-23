@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { createApplicantSheetClient } from "./applicant-sheet";
 
-it("requests only the response column with a read-only scope", async () => {
+it("requests only the configured response column with a read-only scope", async () => {
   const { privateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
     privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -21,7 +21,7 @@ it("requests only the response column with a read-only scope", async () => {
       );
       return new Response(JSON.stringify({ access_token: "fake-token" }));
     }
-    expect(decodeURIComponent(url)).toContain("'Form Responses'!F2:F");
+    expect(decodeURIComponent(url)).toContain("'Form Responses'!G2:G");
     expect(url).not.toContain("A2:");
     return new Response(
       JSON.stringify({
@@ -31,6 +31,7 @@ it("requests only the response column with a read-only scope", async () => {
   });
   const cells = await createApplicantSheetClient({
     sheetId: "fake-sheet",
+    column: "G",
     email: "fake@example.test",
     privateKey,
     fetch: fetch as typeof globalThis.fetch

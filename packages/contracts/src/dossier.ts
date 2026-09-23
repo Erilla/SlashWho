@@ -47,6 +47,7 @@ export const dossierCharacterSchema = z
     displayName: z.string().min(1),
     className: z.string().min(1).nullable(),
     raiderIoUrl: z.url(),
+    historicAliases: z.array(characterKeySchema).optional(),
     /**
      * The character's guild as at the snapshot. Optional as well as nullable:
      * snapshots committed before this field existed carry no guild at all, and

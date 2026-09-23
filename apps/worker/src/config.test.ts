@@ -14,6 +14,7 @@ const environment = {
 
 it("keeps applicant polling disabled until credentials and limits are explicit", () => {
   expect(loadWorkerConfig(environment).applicantWatcher.enabled).toBe(false);
+  expect(loadWorkerConfig(environment).applicantWatcher.column).toBe("F");
   expect(() =>
     loadWorkerConfig({ ...environment, APPLICANT_WATCHER_ENABLED: "true" })
   ).toThrow("applicant_watcher_configuration_required");
@@ -33,6 +34,34 @@ it("keeps applicant polling disabled until credentials and limits are explicit",
       APPLICANT_MINIMUM_POINTS: "3500"
     }).applicantWatcher.enabled
   ).toBe(true);
+});
+
+it("accepts a Google Sheet URL and a configured response column", () => {
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_SHEET_URL:
+        "https://docs.google.com/spreadsheets/d/sheet_123/edit#gid=0",
+      APPLICANT_SHEET_COLUMN: " g "
+    }).applicantWatcher
+  ).toMatchObject({ sheetId: "sheet_123", column: "G" });
+  expect(() =>
+    loadWorkerConfig({ ...environment, APPLICANT_SHEET_COLUMN: "F:G" })
+  ).toThrow("invalid_applicant_sheet_column");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_SHEET_URL: "https://example.test/spreadsheets/d/sheet_123"
+    })
+  ).toThrow("invalid_applicant_sheet_url");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_SHEET_ID: "sheet_123",
+      APPLICANT_SHEET_URL:
+        "https://docs.google.com/spreadsheets/d/sheet_123/edit"
+    })
+  ).toThrow("ambiguous_applicant_sheet_source");
 });
 
 it("rejects missing Blizzard credentials and invalid sweep bounds", () => {

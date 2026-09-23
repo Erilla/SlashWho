@@ -8,6 +8,7 @@ import { main } from "./main";
 const config: WorkerConfig = {
   applicantWatcher: {
     enabled: false,
+    column: "F",
     cadenceMs: 300_000,
     perTick: 1,
     perDay: 5,

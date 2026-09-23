@@ -223,6 +223,79 @@ export const manualDossierConnections = pgTable(
   ]
 );
 
+/** Explicit former names owned by a connected character, never dossier rows. */
+export const characterHistoricAliases = pgTable(
+  "character_historic_aliases",
+  {
+    characterId: uuid("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_historic_aliases_pkey",
+      columns: [
+        table.characterId,
+        table.region,
+        table.realmSlug,
+        table.normalizedName
+      ]
+    })
+  ]
+);
+
+/** Dossier-local evidence exclusions for characters found in a snapshot. */
+export const dossierCharacterExclusions = pgTable(
+  "dossier_character_exclusions",
+  {
+    rootCharacterId: uuid("root_character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "dossier_character_exclusions_pkey",
+      columns: [
+        table.rootCharacterId,
+        table.region,
+        table.realmSlug,
+        table.normalizedName
+      ]
+    })
+  ]
+);
+
+/** Alias edits awaiting a fresh run, including those made during an active run. */
+export const characterAliasRecollections = pgTable(
+  "character_alias_recollections",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_alias_recollections_pkey",
+      columns: [table.region, table.realmSlug, table.normalizedName]
+    })
+  ]
+);
+
 export const suppressedCharacters = pgTable(
   "suppressed_characters",
   {
@@ -570,6 +643,7 @@ export const characterEvidenceRuns = pgTable(
     killScanResumeBoundaryReportCode: text(
       "kill_scan_resume_boundary_report_code"
     ),
+    historicAliasProgress: jsonb("historic_alias_progress"),
     rankedBackfillCursor: jsonb("ranked_backfill_cursor"),
     rankedBackfillAttempted: boolean("ranked_backfill_attempted")
       .default(false)

@@ -477,6 +477,7 @@ export async function createWorkerRuntime(
     const applicantSheet = config.applicantWatcher.enabled
       ? createApplicantSheetClient({
           sheetId: config.applicantWatcher.sheetId!,
+          column: config.applicantWatcher.column,
           email: config.applicantWatcher.serviceAccountEmail!,
           privateKey: config.applicantWatcher.privateKey!
         })

@@ -1,6 +1,5 @@
 import { createSign } from "node:crypto";
 
-const range = "'Form Responses'!F2:F";
 const scope = "https://www.googleapis.com/auth/spreadsheets.readonly";
 
 function base64url(value: string): string {
@@ -10,11 +9,13 @@ function base64url(value: string): string {
 /** A dedicated view-only service account; errors expose categories only. */
 export function createApplicantSheetClient(options: {
   sheetId: string;
+  column: string;
   email: string;
   privateKey: string;
   fetch?: typeof globalThis.fetch;
 }) {
   const fetch = options.fetch ?? globalThis.fetch;
+  const range = `'Form Responses'!${options.column}2:${options.column}`;
   return {
     async readColumn(): Promise<unknown[]> {
       const now = Math.floor(Date.now() / 1000);
