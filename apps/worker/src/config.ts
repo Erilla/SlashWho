@@ -23,6 +23,7 @@ export type WorkerConfig = {
   warcraftLogsClientSecret: string;
   evidenceRequestCap: number;
   evidenceParseRequestCap: number;
+  evidenceTierSearchRequestCap: number;
   evidenceCapRetryMs: number;
   evidenceTransientRetryMs: number;
   evidenceResumeSweepLimit: number;
@@ -218,6 +219,15 @@ export function loadWorkerConfig(
       environment.EVIDENCE_PARSE_REQUEST_CAP,
       24,
       "invalid_evidence_parse_request_cap"
+    ),
+    // The most requests one "search this tier" may make (#435): attendance
+    // pages at about 28 points each and hydrated reports at about 6. It is
+    // carved out of the run's scan cap, never added to it, so the run's
+    // points budget is the one `evidenceRunBudget` already guards.
+    evidenceTierSearchRequestCap: positiveInteger(
+      environment.EVIDENCE_TIER_SEARCH_REQUEST_CAP,
+      60,
+      "invalid_evidence_tier_search_request_cap"
     ),
     // A run that spends one of its own request budgets has work outstanding
     // and no upstream retry hint to carry, so it supplies its own. Half an

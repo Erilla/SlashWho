@@ -553,6 +553,7 @@ export async function createWorkerRuntime(
       decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: config.evidenceRequestCap,
       parseRequestCap: config.evidenceParseRequestCap,
+      tierSearchRequestCap: config.evidenceTierSearchRequestCap,
       capRetryMs: config.evidenceCapRetryMs,
       transientRetryMs: config.evidenceTransientRetryMs,
       pointsReserve: config.evidencePointsReserve,

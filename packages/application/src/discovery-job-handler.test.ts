@@ -446,6 +446,9 @@ function createMemoryRepositories(): Repositories {
       async reserve() {
         throw new Error("not used");
       },
+      async reserveTierSearch() {
+        throw new Error("not used");
+      },
       async find() {
         return null;
       },
