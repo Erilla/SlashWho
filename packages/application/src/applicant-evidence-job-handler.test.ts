@@ -480,28 +480,45 @@ describe("applicant evidence job handler", () => {
         bossDamage: { state: "unavailable" as const }
       }
     };
-    const getFirstKillReports = vi.fn(async (requested: CharacterKey) => ({
-      kind: "evidence" as const,
-      kills: requested.name === "former" ? [oldKill] : [],
-      wipes: [],
-      tierBests: [],
-      parsedFightUrls: [],
-      troubledRaidIds: { parses: [], tierBests: [] },
-      ...(requested.name === "former"
-        ? {
-            limitation: {
-              kind: "limitation" as const,
-              code: "request_cap" as const
-            },
-            parseLimitation: {
-              kind: "limitation" as const,
-              code: "parse_request_cap" as const
-            },
-            historyScanResumePage: 2,
-            historyScanResumeBoundaryReportCode: "old-page-boundary"
-          }
-        : {})
-    }));
+    const olderKill = {
+      ...oldKill,
+      bossName: "Older Boss",
+      reportUrl: "https://www.warcraftlogs.com/reports/olderreport",
+      fightUrl: "https://www.warcraftlogs.com/reports/olderreport#fight=7",
+      reportCode: "olderreport"
+    };
+    const getFirstKillReports = vi.fn(
+      async (
+        requested: CharacterKey,
+        collection: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
+      ) => ({
+        kind: "evidence" as const,
+        kills:
+          requested.name === "former"
+            ? collection.historyScanStartPage === 2
+              ? [oldKill, olderKill]
+              : [oldKill]
+            : [],
+        wipes: [],
+        tierBests: [],
+        parsedFightUrls: [],
+        troubledRaidIds: { parses: [], tierBests: [] },
+        ...(requested.name === "former"
+          ? {
+              limitation: {
+                kind: "limitation" as const,
+                code: "request_cap" as const
+              },
+              parseLimitation: {
+                kind: "limitation" as const,
+                code: "parse_request_cap" as const
+              },
+              historyScanResumePage: 2,
+              historyScanResumeBoundaryReportCode: "old-page-boundary"
+            }
+          : {})
+      })
+    );
     const handler = createApplicantEvidenceJobHandler({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports },
@@ -534,17 +551,41 @@ describe("applicant evidence job handler", () => {
         storedKills: [expect.objectContaining({ fightUrl: oldKill.fightUrl })]
       })
     );
+    expect(evidence.published[1]?.result.kills).toEqual([
+      expect.objectContaining({ bossName: "Old Boss" }),
+      expect.objectContaining({ bossName: "Older Boss" })
+    ]);
   });
 
   it("collects a declared alias when the current name is not found", async () => {
     const evidence = store();
     const alias = { region: "eu", realm: "old-realm", name: "former" } as const;
     evidence.historicAliases = async () => [alias];
+    const aliasKill = {
+      raidId: "42",
+      raidName: "Old Tier",
+      bossId: "7",
+      bossName: "Alias Boss",
+      journalBossId: "7",
+      bossOrder: 7,
+      killedAt: "2024-01-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/aliasreport",
+      fightUrl: "https://www.warcraftlogs.com/reports/aliasreport#fight=7",
+      reportCode: "aliasreport",
+      fightId: 7,
+      difficulty: 5,
+      guild: null,
+      performance: {
+        damage: { state: "unavailable" as const },
+        healing: { state: "unavailable" as const },
+        bossDamage: { state: "unavailable" as const }
+      }
+    };
     const getFirstKillReports = vi.fn(async (requested: CharacterKey) =>
       requested.name === "former"
         ? {
             kind: "evidence" as const,
-            kills: [],
+            kills: [aliasKill],
             wipes: [],
             tierBests: [],
             parsedFightUrls: [],
@@ -569,7 +610,8 @@ describe("applicant evidence job handler", () => {
     expect(getFirstKillReports).toHaveBeenCalledTimes(2);
     expect(evidence.published[0]?.result).toMatchObject({
       state: "partial",
-      limitationCode: "not_found"
+      limitationCode: "not_found",
+      kills: [expect.objectContaining({ bossName: "Alias Boss" })]
     });
   });
 
