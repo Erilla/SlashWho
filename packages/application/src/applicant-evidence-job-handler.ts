@@ -318,6 +318,7 @@ export type EvidenceRunNotifier = {
 };
 
 export type ApplicantEvidenceJobHandlerOptions = Readonly<{
+  isSuppressed?: (key: CharacterKey) => Promise<boolean>;
   evidence: ApplicantEvidenceStore;
   warcraftLogs: Pick<
     WarcraftLogsGateway,
@@ -927,6 +928,11 @@ export function createApplicantEvidenceJobHandler(
         const run = await evidence.claim(job.runId, activeContext.attempt);
         if (!run) {
           record.outcome = "not_claimed";
+          return;
+        }
+        if (await options.isSuppressed?.(run.key)) {
+          await evidence.fail(run.id, "suppressed_character");
+          record.outcome = "suppressed";
           return;
         }
         // Announcing only once the claim succeeds keeps one run to one pair of

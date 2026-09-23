@@ -1,5 +1,6 @@
 export { createDiscoveryJobHandler } from "./discovery-job-handler";
 export { fullEvidencePhasePlan } from "./evidence-phase-ledger";
+export { startApplicantCollection } from "./start-applicant-collection";
 export {
   createApplicantEvidenceJobHandler,
   evidenceRunBudget,

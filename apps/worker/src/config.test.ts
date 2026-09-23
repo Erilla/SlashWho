@@ -12,6 +12,85 @@ const environment = {
   EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
 };
 
+it("keeps applicant polling disabled until credentials and limits are explicit", () => {
+  expect(loadWorkerConfig(environment).applicantWatcher.enabled).toBe(false);
+  expect(loadWorkerConfig(environment).applicantWatcher.column).toBe("F");
+  expect(() =>
+    loadWorkerConfig({ ...environment, APPLICANT_WATCHER_ENABLED: "true" })
+  ).toThrow("applicant_watcher_configuration_required");
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_WATCHER_ENABLED: "true",
+      APPLICANT_SHEET_ID: "fake-id",
+      APPLICANT_GOOGLE_SERVICE_ACCOUNT_EMAIL: "fake@example.test",
+      APPLICANT_GOOGLE_PRIVATE_KEY: "fake-key",
+      MAINTAINER_ALERT_WEBHOOK_URL: "https://example.test/alert",
+      APPLICANT_POLL_CADENCE_MS: "300000",
+      APPLICANT_ADMISSIONS_PER_TICK: "1",
+      APPLICANT_ADMISSIONS_PER_DAY: "5",
+      APPLICANT_BACKLOG_LIMIT: "100",
+      APPLICANT_QUEUE_DEPTH_LIMIT: "10",
+      APPLICANT_MINIMUM_POINTS: "3500"
+    }).applicantWatcher.enabled
+  ).toBe(true);
+});
+
+it("accepts a Google Sheet URL and a configured response column", () => {
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_SHEET_URL:
+        "https://docs.google.com/spreadsheets/d/sheet_123/edit#gid=0",
+      APPLICANT_SHEET_COLUMN: " g "
+    }).applicantWatcher
+  ).toMatchObject({ sheetId: "sheet_123", column: "G" });
+  expect(() =>
+    loadWorkerConfig({ ...environment, APPLICANT_SHEET_COLUMN: "F:G" })
+  ).toThrow("invalid_applicant_sheet_column");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_SHEET_URL: "https://example.test/spreadsheets/d/sheet_123"
+    })
+  ).toThrow("invalid_applicant_sheet_url");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_SHEET_ID: "sheet_123",
+      APPLICANT_SHEET_URL:
+        "https://docs.google.com/spreadsheets/d/sheet_123/edit"
+    })
+  ).toThrow("ambiguous_applicant_sheet_source");
+});
+
+it("accepts an API key as the sole Google credential for an enabled watcher", () => {
+  const config = loadWorkerConfig({
+    ...environment,
+    APPLICANT_WATCHER_ENABLED: "true",
+    APPLICANT_SHEET_URL: "https://docs.google.com/spreadsheets/d/sheet_123",
+    APPLICANT_GOOGLE_API_KEY: " public-sheet-key ",
+    MAINTAINER_ALERT_WEBHOOK_URL: "https://example.test/alert",
+    APPLICANT_POLL_CADENCE_MS: "300000",
+    APPLICANT_ADMISSIONS_PER_TICK: "1",
+    APPLICANT_ADMISSIONS_PER_DAY: "5",
+    APPLICANT_BACKLOG_LIMIT: "100",
+    APPLICANT_QUEUE_DEPTH_LIMIT: "10",
+    APPLICANT_MINIMUM_POINTS: "3500"
+  });
+  expect(config.applicantWatcher).toMatchObject({
+    enabled: true,
+    apiKey: "public-sheet-key"
+  });
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_GOOGLE_API_KEY: "public-sheet-key",
+      APPLICANT_GOOGLE_SERVICE_ACCOUNT_EMAIL: "fake@example.test"
+    })
+  ).toThrow("ambiguous_applicant_google_credentials");
+});
+
 it("rejects missing Blizzard credentials and invalid sweep bounds", () => {
   // Break caught: the worker could start a sweep without its private Blizzard
   // credentials or reserve an impossible number of upstream requests.

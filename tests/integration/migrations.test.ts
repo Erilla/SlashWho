@@ -28,6 +28,10 @@ describe("database migrations", () => {
     `);
 
     expect(result.rows.map(({ name }) => name)).toEqual([
+      "applicant_source_counts",
+      "applicant_source_intents",
+      "applicant_source_state",
+      "applicant_suppression_history",
       "character_alias_recollections",
       "character_attendance_searches",
       "character_evidence_collections",
@@ -120,7 +124,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-20).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-21).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
@@ -141,7 +145,8 @@ describe("database migrations", () => {
       { idx: 43, tag: "0044_warcraft_logs_character_ids" },
       { idx: 44, tag: "0045_tier_search_runs" },
       { idx: 45, tag: "0046_ranked_backfill_cursor" },
-      { idx: 46, tag: "0047_character_historic_aliases" }
+      { idx: 46, tag: "0047_character_historic_aliases" },
+      { idx: 47, tag: "0048_applicant_watcher" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

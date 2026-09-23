@@ -330,6 +330,13 @@
       "when": 1790856000003,
       "tag": "0047_character_historic_aliases",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790860000000,
+      "tag": "0048_applicant_watcher",
+      "breakpoints": true
     }
   ]
 }

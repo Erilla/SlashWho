@@ -4,6 +4,20 @@ import {
 } from "@slashwho/application";
 
 export type WorkerConfig = {
+  applicantWatcher: {
+    enabled: boolean;
+    sheetId?: string;
+    column: string;
+    apiKey?: string;
+    serviceAccountEmail?: string;
+    privateKey?: string;
+    cadenceMs: number;
+    perTick: number;
+    perDay: number;
+    backlog: number;
+    queueDepth: number;
+    minimumPoints: number;
+  };
   databaseUrl: string;
   healthHost: "127.0.0.1" | "0.0.0.0";
   port: number;
@@ -70,6 +84,35 @@ function optionalSecret(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
 }
 
+function applicantSheetId(environment: NodeJS.ProcessEnv): string | undefined {
+  const id = optionalSecret(environment.APPLICANT_SHEET_ID);
+  const value = optionalSecret(environment.APPLICANT_SHEET_URL);
+  if (!value) return id;
+  if (id) throw new Error("ambiguous_applicant_sheet_source");
+  try {
+    const url = new URL(value);
+    const match = /^\/spreadsheets\/d\/([A-Za-z0-9_-]+)(?:\/.*)?$/.exec(
+      url.pathname
+    );
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== "docs.google.com" ||
+      !match
+    )
+      throw new Error();
+    return match[1];
+  } catch {
+    throw new Error("invalid_applicant_sheet_url");
+  }
+}
+
+function applicantSheetColumn(value: string | undefined): string {
+  const column = value === undefined ? "F" : value.trim().toUpperCase();
+  if (!/^[A-Z]{1,3}$/.test(column))
+    throw new Error("invalid_applicant_sheet_column");
+  return column;
+}
+
 function requiredString(value: string | undefined, code: string): string {
   if (!value?.trim()) throw new Error(code);
   return value;
@@ -95,6 +138,86 @@ export function loadWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): WorkerConfig {
   if (!environment.DATABASE_URL) throw new Error("database_url_required");
+  const applicantEnabled = environment.APPLICANT_WATCHER_ENABLED === "true";
+  if (
+    environment.APPLICANT_WATCHER_ENABLED &&
+    !["true", "false"].includes(environment.APPLICANT_WATCHER_ENABLED)
+  )
+    throw new Error("invalid_applicant_watcher_enabled");
+  const applicantWatcher = {
+    enabled: applicantEnabled,
+    sheetId: applicantSheetId(environment),
+    column: applicantSheetColumn(environment.APPLICANT_SHEET_COLUMN),
+    apiKey: optionalSecret(environment.APPLICANT_GOOGLE_API_KEY),
+    serviceAccountEmail: optionalSecret(
+      environment.APPLICANT_GOOGLE_SERVICE_ACCOUNT_EMAIL
+    ),
+    privateKey: optionalSecret(
+      environment.APPLICANT_GOOGLE_PRIVATE_KEY
+    )?.replace(/\\n/g, "\n"),
+    cadenceMs: integerInRange(
+      environment.APPLICANT_POLL_CADENCE_MS,
+      300_000,
+      300_000,
+      3_600_000,
+      "invalid_applicant_poll_cadence"
+    ),
+    perTick: integerInRange(
+      environment.APPLICANT_ADMISSIONS_PER_TICK,
+      1,
+      1,
+      20,
+      "invalid_applicant_per_tick"
+    ),
+    perDay: integerInRange(
+      environment.APPLICANT_ADMISSIONS_PER_DAY,
+      5,
+      1,
+      100,
+      "invalid_applicant_per_day"
+    ),
+    backlog: integerInRange(
+      environment.APPLICANT_BACKLOG_LIMIT,
+      100,
+      1,
+      1_000,
+      "invalid_applicant_backlog"
+    ),
+    queueDepth: integerInRange(
+      environment.APPLICANT_QUEUE_DEPTH_LIMIT,
+      10,
+      1,
+      100,
+      "invalid_applicant_queue_depth"
+    ),
+    minimumPoints: integerInRange(
+      environment.APPLICANT_MINIMUM_POINTS,
+      3500,
+      1,
+      100_000,
+      "invalid_applicant_minimum_points"
+    )
+  };
+  if (
+    applicantWatcher.apiKey &&
+    (applicantWatcher.serviceAccountEmail || applicantWatcher.privateKey)
+  )
+    throw new Error("ambiguous_applicant_google_credentials");
+  if (
+    applicantEnabled &&
+    (!applicantWatcher.sheetId ||
+      (!applicantWatcher.apiKey &&
+        (!applicantWatcher.serviceAccountEmail ||
+          !applicantWatcher.privateKey)) ||
+      !environment.MAINTAINER_ALERT_WEBHOOK_URL ||
+      !environment.APPLICANT_POLL_CADENCE_MS ||
+      !environment.APPLICANT_ADMISSIONS_PER_TICK ||
+      !environment.APPLICANT_ADMISSIONS_PER_DAY ||
+      !environment.APPLICANT_BACKLOG_LIMIT ||
+      !environment.APPLICANT_QUEUE_DEPTH_LIMIT ||
+      !environment.APPLICANT_MINIMUM_POINTS)
+  )
+    throw new Error("applicant_watcher_configuration_required");
   const healthHost = environment.WORKER_HEALTH_HOST ?? "127.0.0.1";
   if (healthHost !== "127.0.0.1" && healthHost !== "0.0.0.0") {
     throw new Error("invalid_worker_health_host");
@@ -137,6 +260,7 @@ export function loadWorkerConfig(
   })();
 
   return {
+    applicantWatcher,
     databaseUrl: environment.DATABASE_URL,
     healthHost,
     port: positiveInteger(environment.PORT, 3001, "invalid_port"),

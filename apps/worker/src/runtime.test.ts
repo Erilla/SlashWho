@@ -29,6 +29,16 @@ import {
 } from "./runtime";
 
 const config: WorkerConfig = {
+  applicantWatcher: {
+    enabled: false,
+    column: "F",
+    cadenceMs: 300_000,
+    perTick: 1,
+    perDay: 5,
+    backlog: 100,
+    queueDepth: 10,
+    minimumPoints: 3500
+  },
   databaseUrl: "postgres://worker:secret@database/slashwho",
   healthHost: "127.0.0.1",
   port: 3001,
@@ -706,6 +716,35 @@ describe("worker runtime", () => {
     expect(logger.info).toHaveBeenCalledWith({
       event: "evidence_announcement_delivery_failed",
       failure: "network_or_timeout"
+    });
+  });
+
+  it("formats count-only maintainer alerts for a Discord channel webhook", async () => {
+    const fetch = vi.fn(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        expect(String(url)).toContain("discord.com/api/webhooks/");
+        expect(init?.method).toBe("POST");
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.notify({
+      event: "applicant_backlog_pressure",
+      details: { backlog: 80, limit: 100 }
+    });
+
+    const request = fetch.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({
+      content: "⚠️ applicant_backlog_pressure — backlog: 80 · limit: 100",
+      allowed_mentions: { parse: [] }
     });
   });
 
