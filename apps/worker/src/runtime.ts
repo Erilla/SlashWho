@@ -36,6 +36,8 @@ import {
 } from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
 
+import { createApplicantSheetClient } from "./applicant-sheet";
+import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
 
@@ -118,7 +120,9 @@ export type WorkerRuntimeDependencies = {
     config: WorkerConfig,
     logger?: DiscoveryLogger
   ) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
-    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
+    Partial<
+      Pick<WarcraftLogsGateway, "resolveCharacter" | "resolveCharacterById">
+    >;
   createFingerprintIntegration?: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
@@ -469,6 +473,16 @@ export async function createWorkerRuntime(
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
     const gateway = dependencies.createGateway(config, logger);
+    const applicantSheet = config.applicantWatcher.enabled
+      ? createApplicantSheetClient({
+          sheetId: config.applicantWatcher.sheetId!,
+          email: config.applicantWatcher.serviceAccountEmail!,
+          privateKey: config.applicantWatcher.privateKey!
+        })
+      : null;
+    let applicantPollFailures = 0;
+    let applicantNextPollAttempt = 0;
+    let applicantAlertedAt = 0;
     const fingerprintIntegration = dependencies.createFingerprintIntegration?.(
       config,
       logger
@@ -525,9 +539,12 @@ export async function createWorkerRuntime(
       config,
       logger
     );
+    const evidenceGateway = dependencies.createEvidenceGateway(config, logger);
     const evidenceHandler = dependencies.createEvidenceHandler({
       evidence,
-      warcraftLogs: dependencies.createEvidenceGateway(config, logger),
+      isSuppressed: (key) =>
+        repositories.suppressions.isActive(key, new Date()),
+      warcraftLogs: evidenceGateway,
       // These are collection dependencies too: the dossier reader only reads
       // the facts this worker publishes, so progress and publication share
       // one durable run.
@@ -689,6 +706,131 @@ export async function createWorkerRuntime(
         released,
         republished
       });
+      if (applicantSheet) {
+        try {
+          const due = await pool.query(
+            "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
+            ["applicant_sheet"]
+          );
+          const last = due.rows[0]?.last_polled_at;
+          if (
+            (Date.now() >= applicantNextPollAttempt && !last) ||
+            (Date.now() >= applicantNextPollAttempt &&
+              Date.now() - new Date(last as string).getTime() >=
+                config.applicantWatcher.cadenceMs)
+          ) {
+            try {
+              let numericChecks = 0;
+              let numericAllowance: boolean | undefined;
+              const poll = await pollApplicantSheet({
+                pool: pool as Pool,
+                readColumn: () => applicantSheet.readColumn(),
+                isSuppressed: async (identity) => {
+                  if (identity.startsWith("warcraftlogs_id:")) {
+                    if (
+                      ++numericChecks > 4 ||
+                      !evidenceGateway.resolveCharacterById
+                    )
+                      return "defer";
+                    try {
+                      if (numericAllowance === undefined) {
+                        const allowance = await evidenceGateway.getRateLimit();
+                        numericAllowance =
+                          allowance.kind === "rate_limit" &&
+                          allowance.limitPerHour -
+                            allowance.pointsSpentThisHour >=
+                            config.applicantWatcher.minimumPoints;
+                      }
+                      if (!numericAllowance) return "defer";
+                      const resolved =
+                        await evidenceGateway.resolveCharacterById(
+                          Number(identity.slice(16))
+                        );
+                      if (resolved.kind !== "identity") return "defer";
+                      return repositories.suppressions.isActive(
+                        resolved.key,
+                        new Date()
+                      );
+                    } catch {
+                      return "defer";
+                    }
+                  }
+                  if (!identity.startsWith("character:")) return "defer";
+                  const parts: unknown = JSON.parse(identity.slice(10));
+                  if (!Array.isArray(parts) || parts.length !== 3)
+                    return "defer";
+                  return repositories.suppressions.isActive(
+                    {
+                      region: parts[0] as "eu",
+                      realm: parts[1] as string,
+                      name: parts[2] as string
+                    },
+                    new Date()
+                  );
+                },
+                backlogLimit: config.applicantWatcher.backlog
+              });
+              applicantPollFailures = 0;
+              applicantNextPollAttempt = 0;
+              logger?.info({ event: "applicant_sheet_poll", ...poll });
+              if (
+                poll.backlog >=
+                  Math.ceil(config.applicantWatcher.backlog * 0.8) &&
+                Date.now() - applicantAlertedAt > 3_600_000
+              ) {
+                applicantAlertedAt = Date.now();
+                await fingerprintAlertNotifier?.notify({
+                  event: "applicant_backlog_pressure",
+                  details: {
+                    backlog: poll.backlog,
+                    limit: config.applicantWatcher.backlog
+                  }
+                });
+              }
+            } catch {
+              applicantPollFailures++;
+              applicantNextPollAttempt =
+                Date.now() +
+                Math.min(
+                  3_600_000,
+                  config.applicantWatcher.cadenceMs *
+                    2 ** Math.min(applicantPollFailures, 4)
+                );
+              logger?.info({
+                event: "applicant_sheet_poll_failed",
+                failures: applicantPollFailures
+              });
+              if (
+                applicantPollFailures >= 3 &&
+                Date.now() - applicantAlertedAt > 3_600_000
+              ) {
+                applicantAlertedAt = Date.now();
+                await fingerprintAlertNotifier?.notify({
+                  event: "applicant_poll_failed",
+                  details: { failures: applicantPollFailures }
+                });
+              }
+            }
+          }
+          const wcl = evidenceGateway;
+          if (!wcl.resolveCharacterById)
+            throw new Error("applicant_resolver_unavailable");
+          const drained = await drainApplicantIntents({
+            pool: pool as Pool,
+            config,
+            repositories,
+            queue: initializedQueue,
+            raiderio: gateway,
+            warcraftlogs: {
+              getRateLimit: wcl.getRateLimit,
+              resolveCharacterById: wcl.resolveCharacterById
+            }
+          });
+          logger?.info({ event: "applicant_sheet_drain", ...drained });
+        } catch {
+          logger?.info({ event: "applicant_sheet_tick_failed" });
+        }
+      }
     });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
       await cleanupExpired(repositories);

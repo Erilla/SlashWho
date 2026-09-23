@@ -29,6 +29,15 @@ import {
 } from "./runtime";
 
 const config: WorkerConfig = {
+  applicantWatcher: {
+    enabled: false,
+    cadenceMs: 300_000,
+    perTick: 1,
+    perDay: 5,
+    backlog: 100,
+    queueDepth: 10,
+    minimumPoints: 3500
+  },
   databaseUrl: "postgres://worker:secret@database/slashwho",
   healthHost: "127.0.0.1",
   port: 3001,

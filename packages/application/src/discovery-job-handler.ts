@@ -125,7 +125,9 @@ export type FingerprintAlertNotifier = {
     event:
       | "fingerprint_admission_blocked"
       | "fingerprint_reservation_pressure"
-      | "fingerprint_blizzard_rate_limited";
+      | "fingerprint_blizzard_rate_limited"
+      | "applicant_poll_failed"
+      | "applicant_backlog_pressure";
     details: Record<string, number>;
   }): Promise<void> | void;
 };

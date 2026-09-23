@@ -19,7 +19,7 @@ import { terminalTiersFrom } from "./terminal-tiers";
  * survive a retry publishes what it has under `collection_failed` (#292).
  */
 export type EvidenceLimitationCode =
-  WarcraftLogsLimitationCode | "collection_failed";
+  WarcraftLogsLimitationCode | "collection_failed" | "suppressed_character";
 
 /** What one run hands to storage when its collection is done. */
 export type EvidencePublication = Readonly<{
