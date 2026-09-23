@@ -70,8 +70,8 @@ test("researches an applicant pasted as a Warcraft Logs character-ID URL", async
   // Break caught: an ID URL names no realm or region, so without resolving it
   // in place the search either refuses it or submits a guess.
   await seedSnapshot({
-    key: { region: "eu", realm: "silvermoon", name: "ryii" },
-    displayName: "Ryii",
+    key: { region: "eu", realm: "silvermoon", name: "ryun" },
+    displayName: "Ryun",
     refreshedAt: new Date("2026-09-11T00:00:00.000Z")
   });
   let answerLookup!: () => void;
@@ -96,13 +96,13 @@ test("researches an applicant pasted as a Warcraft Logs character-ID URL", async
 
   answerLookup();
   await expect(page.getByLabel("Realm")).toHaveValue("silvermoon");
-  await expect(character).toHaveValue("Ryii");
+  await expect(character).toHaveValue("Ryun");
   await expect(page.getByLabel("Region")).toHaveValue("eu");
   await expect(character).toBeFocused();
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(
-    /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
+    /\/dossiers\/eu\/silvermoon\/ryun(?:\?job=[\da-f-]+)?$/
   );
 });
 

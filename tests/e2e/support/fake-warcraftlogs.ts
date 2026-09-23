@@ -1,6 +1,9 @@
 import { createServer, type Server } from "node:http";
 
-/** The one character ID the fake knows: Ryii-Silvermoon (EU). */
+/**
+ * The one character ID the fake knows: Ryun-Silvermoon (EU), a character no
+ * other spec researches, so the evidence run it starts shares no state.
+ */
 export const fakeWarcraftLogsCharacterId = 40989140;
 
 type FakeWarcraftLogs = Readonly<{ baseUrl: string; close(): Promise<void> }>;
@@ -37,7 +40,7 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
         query?: string;
         variables?: { name?: string; realm?: string; id?: number };
       };
-      // A pasted character-ID URL resolves to the seeded Ryii; any other ID is
+      // A pasted character-ID URL resolves to Ryun; any other ID is
       // absent, as Warcraft Logs answers an unknown one.
       if (body.query?.includes("ResolveCharacterById")) {
         const id = body.variables?.id;
@@ -49,7 +52,7 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
                   id === fakeWarcraftLogsCharacterId
                     ? {
                         id,
-                        name: "Ryii",
+                        name: "Ryun",
                         server: { slug: "silvermoon", region: { slug: "eu" } }
                       }
                     : null
