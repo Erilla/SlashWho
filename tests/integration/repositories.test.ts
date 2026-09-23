@@ -217,6 +217,24 @@ describe("PostgreSQL repositories", () => {
     at
   });
 
+  it("rejects empty local-part dot segments at the database boundary", async () => {
+    for (const canonicalEmail of [
+      "a..b@example.com",
+      ".alice@example.com",
+      "alice.@example.com"
+    ]) {
+      await expect(
+        pool.query(
+          `INSERT INTO accounts
+             (canonical_email, email, password_hash, password_salt,
+              scrypt_version, scrypt_cost)
+           VALUES ($1, $1, 'hash', 'salt', 1, 16384)`,
+          [canonicalEmail]
+        )
+      ).rejects.toMatchObject({ code: "23514" });
+    }
+  });
+
   it("atomically keeps one account for concurrent duplicate registrations", async () => {
     const at = new Date("2026-09-23T12:00:00.000Z");
     const outcomes = await Promise.all([

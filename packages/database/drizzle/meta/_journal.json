@@ -344,6 +344,13 @@
       "when": 1792011600000,
       "tag": "0049_optional_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1792011600001,
+      "tag": "0050_conventional_account_email",
+      "breakpoints": true
     }
   ]
 }

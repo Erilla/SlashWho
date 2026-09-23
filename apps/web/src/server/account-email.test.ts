@@ -15,6 +15,15 @@ describe("canonicalizeEmail", () => {
     expect(canonicalizeEmail("pérson@example.com")).toBeNull();
     expect(canonicalizeEmail(`${"a".repeat(243)}@example.com`)).toBeNull();
   });
+
+  it("rejects empty local-part dot segments", () => {
+    expect(canonicalizeEmail("a..b@example.com")).toBeNull();
+    expect(canonicalizeEmail(".alice@example.com")).toBeNull();
+    expect(canonicalizeEmail("alice.@example.com")).toBeNull();
+    expect(canonicalizeEmail("alice.bob@example.com")).toBe(
+      "alice.bob@example.com"
+    );
+  });
 });
 
 describe("registrationSubjects", () => {

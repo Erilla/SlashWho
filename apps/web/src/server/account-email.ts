@@ -7,7 +7,7 @@ export function canonicalizeEmail(input: string): string | null {
   if (trimmed.length > 254) return null;
   const canonical = trimmed.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
   if (
-    !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(
+    !/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(
       canonical
     )
   ) {

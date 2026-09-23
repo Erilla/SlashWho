@@ -482,7 +482,7 @@ export const accounts = pgTable(
     check("accounts_role_check", sql`${table.role} IN ('user', 'admin')`),
     check(
       "accounts_canonical_email_check",
-      sql`char_length(${table.canonicalEmail}) BETWEEN 3 AND ${accountCanonicalEmailMaxLength} AND ${table.canonicalEmail} ~ '^[a-z0-9.!#$%&''*+/=?^_\x60{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$'`
+      sql`char_length(${table.canonicalEmail}) BETWEEN 3 AND ${accountCanonicalEmailMaxLength} AND ${table.canonicalEmail} ~ '^[a-z0-9!#$%&''*+/=?^_\x60{|}~-]+(?:\\.[a-z0-9!#$%&''*+/=?^_\x60{|}~-]+)*@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$'`
     )
   ]
 );
