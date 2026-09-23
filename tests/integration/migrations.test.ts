@@ -29,7 +29,9 @@ describe("database migrations", () => {
 
     expect(result.rows.map(({ name }) => name)).toEqual([
       "character_evidence_collections",
+      "character_evidence_cutting_edges",
       "character_evidence_run_costs",
+      "character_evidence_run_phases",
       "character_evidence_runs",
       "character_mythic_kills",
       "character_mythic_wipes",
@@ -67,9 +69,12 @@ describe("database migrations", () => {
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'character_mythic_kills'
-        AND column_name IN ('is_final_boss', 'historic_world_rank')
+        AND column_name IN ('is_final_boss', 'historic_world_rank', 'historic_rank_checked_at')
     `);
-    expect(vestigialKillColumns.rows).toEqual([]);
+    expect(vestigialKillColumns.rows).toEqual([
+      { column_name: "historic_rank_checked_at" },
+      { column_name: "historic_world_rank" }
+    ]);
   });
 
   it("can run repeatedly without applying migrations twice", async () => {
@@ -110,9 +115,8 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-14).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-17).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 23, tag: "0024_evidence_collection_stage" },
       { idx: 24, tag: "0025_parse_limitations_seen" },
       { idx: 25, tag: "0026_unstick_parse_drift_runs" },
       { idx: 26, tag: "0027_kill_parses_read_at" },
@@ -125,7 +129,11 @@ describe("database migrations", () => {
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
       { idx: 34, tag: "0035_operator_auth" },
       { idx: 35, tag: "0036_kill_guild_region" },
-      { idx: 36, tag: "0037_fingerprint_historical_guilds" }
+      { idx: 36, tag: "0037_fingerprint_historical_guilds" },
+      { idx: 37, tag: "0038_evidence_run_phases" },
+      { idx: 38, tag: "0039_evidence_cutting_edges" },
+      { idx: 39, tag: "0040_mythic_kill_world_rank" },
+      { idx: 40, tag: "0041_mythic_kill_rank_checked" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

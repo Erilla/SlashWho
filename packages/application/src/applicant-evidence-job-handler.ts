@@ -1,14 +1,23 @@
 import type {
   CharacterMythicKillInput,
+  CharacterCuttingEdgeInput,
   CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
   EvidenceRunCost,
+  EvidenceRunPhase,
   StagedEvidenceCollection,
   StoredEvidenceTiers,
   TerminalTier
 } from "@slashwho/database";
+import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
+import { isAccountWideCuttingEdgeAchievement } from "@slashwho/domain";
+import type {
+  MythicBossRanking,
+  MythicBossRankingsOptions,
+  RaiderIoGateway
+} from "@slashwho/raiderio";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
@@ -38,6 +47,16 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
+import {
+  createEvidencePhaseLedger,
+  fullEvidencePhasePlan,
+  type EvidencePhase
+} from "./evidence-phase-ledger";
+import {
+  historicWorldRankForKill,
+  raiderIoRankingRequest,
+  rankingRequestKey
+} from "./historic-world-rank";
 
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
@@ -54,6 +73,15 @@ export type { EvidenceLimitationCode };
 export type ApplicantEvidenceStore = {
   find(runId: string): Promise<ApplicantEvidenceRun | null>;
   claim(runId: string, attempt: number): Promise<ApplicantEvidenceRun | null>;
+  seedPhases?(
+    runId: string,
+    phases: readonly { id: string; ordinal: number }[]
+  ): Promise<void>;
+  recordPhaseTransitions?(
+    runId: string,
+    phases: readonly Omit<EvidenceRunPhase, "ordinal">[]
+  ): Promise<void>;
+  listPhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
   publish(
     runId: string,
     result: Readonly<{
@@ -64,6 +92,7 @@ export type ApplicantEvidenceStore = {
       kills: readonly CharacterMythicKillInput[];
       wipes: readonly CharacterMythicWipeInput[];
       tierBests: readonly CharacterTierBestParseInput[];
+      cuttingEdges?: readonly CharacterCuttingEdgeInput[];
       /**
        * Fight URLs this run asked about and got an answer for. Named here
        * rather than left to structural typing so an implementation cannot
@@ -171,11 +200,15 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   warcraftLogs: Pick<
     WarcraftLogsGateway,
     "getFirstKillReports" | "getRateLimit"
-  >;
+  > &
+    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
+  blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
+  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
-  }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit">;
+  }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
+    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   decryptionKey?: Buffer;
   requestCap: number;
   parseRequestCap: number;
@@ -264,10 +297,13 @@ function toCharacterMythicKillInput(
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
     guild: kill.guild,
-    uploader: kill.uploader,
+    ...(kill.uploader === undefined ? {} : { uploader: kill.uploader }),
     performance: kill.performance
   };
 }
+
+const MAX_RAIDER_IO_RANKING_REQUESTS_PER_RUN = 50;
+const RAIDER_IO_RANKING_CONCURRENCY = 4;
 
 /**
  * Log-field prefix per class of upstream Warcraft Logs request. A closed map
@@ -623,6 +659,29 @@ export function parseOnlyRequestCap(
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
  */
+type PhaseLedger = ReturnType<typeof createEvidencePhaseLedger>;
+
+/** Progress is observational; its storage failure cannot change collection. */
+function bestEffortPhaseLedger(ledger: PhaseLedger): PhaseLedger {
+  const attempt = async (work: () => Promise<void>): Promise<void> => {
+    try {
+      await work();
+    } catch {
+      // The evidence publication remains the source of truth for the run.
+    }
+  };
+  return {
+    seed: () => attempt(() => ledger.seed()),
+    transition: (...args) => attempt(() => ledger.transition(...args)),
+    unknownStop: () => attempt(() => ledger.unknownStop()),
+    cancelActive: () => attempt(() => ledger.cancelActive()),
+    failActive: (...args) => attempt(() => ledger.failActive(...args)),
+    skipPending: () => attempt(() => ledger.skipPending()),
+    skipPendingBefore: (...args) =>
+      attempt(() => ledger.skipPendingBefore(...args))
+  };
+}
+
 export function createApplicantEvidenceJobHandler(
   options: ApplicantEvidenceJobHandlerOptions
 ) {
@@ -716,6 +775,8 @@ export function createApplicantEvidenceJobHandler(
       // by the budget, so it outlives the `try` that decides it.
       let usesVisitorCredentials = false;
       let sampleSpend: (() => Promise<void>) | undefined;
+      let phaseLedger: ReturnType<typeof createEvidencePhaseLedger> | undefined;
+      let phaseWrites = Promise.resolve();
 
       try {
         const run = await evidence.claim(job.runId, activeContext.attempt);
@@ -981,6 +1042,116 @@ export function createApplicantEvidenceJobHandler(
         record.requestCapUsed = requestCap;
         record.parseRequestCapUsed = parseRequestCap;
         collectionBegan = true;
+        // This must match reservation exactly. Rebuilding only the WCL subset
+        // makes real provider ids unknown to the ledger that owns them.
+        const phasePlan = fullEvidencePhasePlan();
+        const reservedPhases = await evidence
+          .listPhases?.(run.id)
+          .catch(() => undefined);
+        const reservedPhaseIds = new Set(
+          reservedPhases?.map((phase) => phase.id) ?? []
+        );
+        const hasReservedPhasePlan = phasePlan.every((id) =>
+          reservedPhaseIds.has(id)
+        );
+        try {
+          phaseLedger =
+            hasReservedPhasePlan && evidence.recordPhaseTransitions
+              ? bestEffortPhaseLedger(
+                  createEvidencePhaseLedger({
+                    plan: phasePlan,
+                    initialPhases: reservedPhases,
+                    now,
+                    persist: async (phases) => {
+                      const changed = phases.filter(
+                        (item) => item.state !== "pending"
+                      );
+                      if (changed.length)
+                        await evidence.recordPhaseTransitions!(
+                          run.id,
+                          changed.map((item) => ({
+                            id: item.id,
+                            state: item.state,
+                            startedAt: item.startedAt ?? null,
+                            completedAt: item.completedAt ?? null,
+                            limitationCode: item.limitationCode ?? null
+                          }))
+                        );
+                    }
+                  })
+                )
+              : undefined;
+        } catch {
+          // A corrupt progress projection must not discard collected evidence.
+          phaseLedger = undefined;
+        }
+        if (gateway.resolveCharacter) {
+          await phaseLedger?.transition(
+            "warcraft_logs_identity_resolution",
+            "active"
+          );
+          try {
+            const identity = await gateway.resolveCharacter(
+              run.key,
+              activeContext.signal
+            );
+            await phaseLedger?.transition(
+              "warcraft_logs_identity_resolution",
+              identity.kind === "identity" ? "completed" : "limited",
+              identity.kind === "limitation" ? identity.code : undefined
+            );
+          } catch (error) {
+            if (activeContext.signal.aborted) throw error;
+            await phaseLedger?.transition(
+              "warcraft_logs_identity_resolution",
+              "limited",
+              "unavailable"
+            );
+          }
+        } else {
+          await phaseLedger?.transition(
+            "warcraft_logs_identity_resolution",
+            "skipped"
+          );
+        }
+        if (parseOnlyResume) {
+          await phaseLedger?.transition("warcraft_logs_history", "skipped");
+          // A parse-only retry neither scans history nor reads tier bests.
+          // Both precede fight parsing in the durable plan and must settle
+          // before the first parse request can become active.
+          await phaseLedger?.transition("warcraft_logs_tier_bests", "skipped");
+        }
+        let activePhase: EvidencePhase["id"] | undefined;
+        let observedPhase: EvidencePhase["id"] | undefined;
+        const phaseLimitations = new Map<EvidencePhase["id"], string>();
+        const phaseForQuery = (
+          query: WarcraftLogsQueryType
+        ): EvidencePhase["id"] =>
+          query === "history_scan"
+            ? "warcraft_logs_history"
+            : query === "zone_rankings"
+              ? "warcraft_logs_tier_bests"
+              : query === "fight_parses"
+                ? "warcraft_logs_fight_parses"
+                : "warcraft_logs_ranking_identities";
+        const observePhase = (query: WarcraftLogsQueryType) => {
+          const ledger = phaseLedger;
+          const next = phaseForQuery(query);
+          if (!ledger || observedPhase === next) return;
+          observedPhase = next;
+          phaseWrites = phaseWrites.then(async () => {
+            if (activePhase) {
+              const code = phaseLimitations.get(activePhase);
+              await ledger.transition(
+                activePhase,
+                code ? "limited" : "completed",
+                code
+              );
+            }
+            await ledger.transition(next, "active");
+            activePhase = next;
+          });
+        };
         const historyScanResumeOptions =
           storedEvidence.historyScanResumePage &&
           storedEvidence.historyScanResumeBoundaryReportCode
@@ -990,6 +1161,15 @@ export function createApplicantEvidenceJobHandler(
                   storedEvidence.historyScanResumeBoundaryReportCode
               }
             : {};
+        // The history scan is the first real upstream boundary for a normal
+        // collection. Persist it before entering the gateway, rather than
+        // after its promise settles: an interrupted long scan is then plainly
+        // active, not a run that merely looks queued to readers.
+        if (!parseOnlyResume) {
+          await phaseLedger?.transition("warcraft_logs_history", "active");
+          activePhase = phaseLedger ? "warcraft_logs_history" : undefined;
+          observedPhase = activePhase;
+        }
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
             requestCap,
@@ -1015,6 +1195,7 @@ export function createApplicantEvidenceJobHandler(
             // makes a run's points attributable to the history scan or to
             // rankings, rather than a total nobody can act on (#303).
             onRequest: (event) => {
+              observePhase(event.query);
               scope.increment(`${REQUEST_COUNTER_PREFIX[event.query]}Requests`);
               if (event.limited) {
                 scope.increment(
@@ -1027,10 +1208,16 @@ export function createApplicantEvidenceJobHandler(
             },
             onLimitation: (query, code) => {
               if (code === "schema_drift") record.limitationQuery = query;
+              observePhase(query);
+              if (phaseLedger) {
+                const limitedPhase = phaseForQuery(query);
+                phaseLimitations.set(limitedPhase, code);
+              }
             },
             signal: activeContext.signal
           })
         );
+        await phaseWrites;
         activeContext.signal.throwIfAborted();
 
         // What the run actually cost. This is the measurement that replaces the
@@ -1045,6 +1232,13 @@ export function createApplicantEvidenceJobHandler(
         await sampleSpend();
 
         if (response.kind === "limitation") {
+          if (activePhase)
+            await phaseLedger?.transition(
+              activePhase,
+              "limited",
+              response.code
+            );
+          await phaseLedger?.skipPending();
           record.outcome = "limitation";
           record.limitationCode = response.code;
           const limitationRetryMs = retryDelayMs(response);
@@ -1074,6 +1268,7 @@ export function createApplicantEvidenceJobHandler(
               kills: [],
               wipes: [],
               tierBests: [],
+              cuttingEdges: [],
               // The scan stopped before any parse work, so no fight was
               // asked about.
               parsedFightUrls: [],
@@ -1098,6 +1293,129 @@ export function createApplicantEvidenceJobHandler(
           transientRetryMs: options.transientRetryMs,
           capRetryMs: options.capRetryMs
         });
+        if (activePhase) {
+          const limitationCode =
+            phaseLimitations.get(activePhase) ??
+            (activePhase === "warcraft_logs_history"
+              ? response.limitation?.code
+              : undefined);
+          await phaseLedger?.transition(
+            activePhase,
+            limitationCode ? "limited" : "completed",
+            limitationCode
+          );
+        }
+        // The remaining providers are part of this run, not dossier-read
+        // embellishments. Each phase is entered at its own gateway boundary
+        // and terminalised before the next one begins.
+        await phaseLedger?.skipPendingBefore("raiderio_rankings");
+        const publishedKills = response.kills.map(toCharacterMythicKillInput);
+        if (options.raiderio) {
+          const requests = new Map<string, MythicBossRankingsOptions>();
+          for (const kill of publishedKills) {
+            const request = raiderIoRankingRequest(kill, run.key.region);
+            if (request) requests.set(rankingRequestKey(request), request);
+          }
+          if (requests.size === 0) {
+            await phaseLedger?.transition("raiderio_rankings", "skipped");
+          } else {
+            await phaseLedger?.transition("raiderio_rankings", "active");
+            try {
+              const cappedRequests = [...requests.entries()].slice(
+                0,
+                MAX_RAIDER_IO_RANKING_REQUESTS_PER_RUN
+              );
+              const results = new Map<string, readonly MythicBossRanking[]>();
+              let limitationCode: string | undefined =
+                requests.size > cappedRequests.length
+                  ? "request_cap"
+                  : undefined;
+              for (
+                let offset = 0;
+                offset < cappedRequests.length;
+                offset += RAIDER_IO_RANKING_CONCURRENCY
+              ) {
+                const batch = cappedRequests.slice(
+                  offset,
+                  offset + RAIDER_IO_RANKING_CONCURRENCY
+                );
+                const settled = await Promise.all(
+                  batch.map(async ([key, request]) => ({
+                    key,
+                    result: await options.raiderio!.getMythicBossRankings(
+                      request,
+                      activeContext.signal
+                    )
+                  }))
+                );
+                for (const item of settled) {
+                  if (item.result.kind === "rankings")
+                    results.set(item.key, item.result.rows);
+                  else limitationCode ??= item.result.code;
+                }
+              }
+              for (let index = 0; index < publishedKills.length; index += 1) {
+                const kill = publishedKills[index]!;
+                const request = raiderIoRankingRequest(kill, run.key.region);
+                const rows = request
+                  ? results.get(rankingRequestKey(request))
+                  : undefined;
+                if (rows) {
+                  publishedKills[index] = {
+                    ...kill,
+                    historicRankCheckedAt: new Date().toISOString(),
+                    historicWorldRank: historicWorldRankForKill(
+                      kill,
+                      run.key.region,
+                      rows
+                    )
+                  };
+                }
+              }
+              await phaseLedger?.transition(
+                "raiderio_rankings",
+                limitationCode ? "limited" : "completed",
+                limitationCode
+              );
+            } catch (error) {
+              if (activeContext.signal.aborted) throw error;
+              await phaseLedger?.transition(
+                "raiderio_rankings",
+                "limited",
+                "unavailable"
+              );
+            }
+          }
+        }
+        let cuttingEdges: readonly CharacterCuttingEdgeInput[] = [];
+        if (options.blizzard) {
+          await phaseLedger?.transition("blizzard_achievements", "active");
+          try {
+            cuttingEdges = (
+              await options.blizzard.getCompletedAchievements(
+                run.key,
+                activeContext.signal
+              )
+            )
+              .filter((achievement) =>
+                isAccountWideCuttingEdgeAchievement(achievement.achievementId)
+              )
+              .map((achievement) => ({
+                achievementId: achievement.achievementId,
+                completedAt: achievement.completedAt
+              }));
+            await phaseLedger?.transition("blizzard_achievements", "completed");
+          } catch (error) {
+            if (activeContext.signal.aborted) throw error;
+            await phaseLedger?.transition(
+              "blizzard_achievements",
+              "limited",
+              "unavailable"
+            );
+          }
+        }
+        await phaseLedger?.skipPending();
+        activeContext.signal.throwIfAborted();
         // Whichever limitation asks to wait longest decides, because the run
         // is not collectable again until both are. A limitation with no answer
         // at all contributes nothing rather than forcing a retry the code was
@@ -1119,7 +1437,7 @@ export function createApplicantEvidenceJobHandler(
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
-            scanSkipped: response.scanSkipped,
+            ...(response.scanSkipped ? { scanSkipped: true } : {}),
             ...(response.scanSkipped
               ? {}
               : response.historyScanResumePage !== undefined
@@ -1152,9 +1470,10 @@ export function createApplicantEvidenceJobHandler(
             ...(retryAfterMs > 0
               ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
               : {}),
-            kills: response.kills.map(toCharacterMythicKillInput),
+            kills: publishedKills,
             wipes: response.wipes,
             tierBests: response.tierBests,
+            cuttingEdges,
             parsedFightUrls: response.parsedFightUrls,
             completedAt: now()
           },
@@ -1177,7 +1496,11 @@ export function createApplicantEvidenceJobHandler(
           await evidence.markTerminalTiers(run.key, marks, now());
         }
       } catch (error) {
+        // The gateway can reject after it has emitted progress callbacks.
+        // Drain their chain before settling the run so no late write escapes.
+        await phaseWrites.catch(() => undefined);
         const aborted = activeContext.signal.aborted;
+        if (aborted) await phaseLedger?.cancelActive();
         record.outcome = aborted
           ? "cancelled"
           : isPointsBudgetRefusal(error)
@@ -1212,6 +1535,9 @@ export function createApplicantEvidenceJobHandler(
         record.retryDecision = decision.action;
         record.retryReason = decision.reason;
 
+        if (decision.action !== "retry" && !aborted)
+          await phaseLedger?.failActive("collection_failed");
+
         // Rethrowing is what schedules the retry. A run this attempt never
         // claimed has nothing to publish onto either way.
         if (decision.action === "retry" || claimedRunId === undefined) {
@@ -1231,6 +1557,7 @@ export function createApplicantEvidenceJobHandler(
           kills: [],
           wipes: [],
           tierBests: [],
+          cuttingEdges: [],
           // Whatever this attempt read is lost with the error that stopped
           // it: the fights it answered are not in hand to be recorded, so
           // they stay eligible and the next attempt asks again.

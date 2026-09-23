@@ -284,6 +284,23 @@ export type EvidenceMonitorRun = Readonly<{
   completedAt: Date | null;
 }>;
 
+/** A privacy-safe operational projection; provider payloads never enter it. */
+export type EvidenceRunPhase = Readonly<{
+  id: string;
+  ordinal: number;
+  state:
+    | "pending"
+    | "active"
+    | "completed"
+    | "skipped"
+    | "limited"
+    | "failed"
+    | "cancelled";
+  startedAt: Date | null;
+  completedAt: Date | null;
+  limitationCode: string | null;
+}>;
+
 export type CharacterMythicKillParseMetric =
   | Readonly<{ state: "available"; percentile: number }>
   | Readonly<{ state: "not_applicable" | "unavailable" }>;
@@ -313,6 +330,10 @@ export interface CharacterMythicKillInput {
   } | null;
   /** Absent on evidence collected before Warcraft Logs exposed report owners. */
   uploader?: string | null;
+  /** Raider.IO's confirmed world rank for this kill, if available. */
+  historicWorldRank?: number | null;
+  /** A successful ranking response, including one with no unique match. */
+  historicRankCheckedAt?: string | null;
   performance: CharacterMythicKillPerformance;
 }
 
@@ -365,6 +386,11 @@ export interface StoredCharacterMythicWipe extends CharacterMythicWipeInput {
   id: string;
 }
 
+export type CharacterCuttingEdgeInput = Readonly<{
+  achievementId: string;
+  completedAt: string;
+}>;
+
 export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
   /** Internal cache generation used to invalidate evidence after a parser fix. */
@@ -372,6 +398,9 @@ export interface CompletedCharacterEvidence {
   kills: readonly StoredCharacterMythicKill[];
   wipes: readonly StoredCharacterMythicWipe[];
   tierBests: readonly StoredCharacterTierBestParse[];
+  cuttingEdges: readonly CharacterCuttingEdgeInput[];
+  /** True only when this run completed its Blizzard achievement phase. */
+  cuttingEdgesCollected?: boolean;
   wipeCapable: boolean;
 }
 
@@ -491,6 +520,8 @@ export interface StagedEvidenceCollection {
   kills: readonly CharacterMythicKillInput[];
   wipes: readonly CharacterMythicWipeInput[];
   tierBests: readonly CharacterTierBestParseInput[];
+  /** Blizzard cutting-edge facts collected with this run. */
+  cuttingEdges?: readonly CharacterCuttingEdgeInput[];
   /**
    * Fight URLs the run got a ranking answer about, so a republished stage
    * records the attempts it paid for rather than making the next run pay
@@ -560,6 +591,8 @@ export interface EvidenceRepository {
     key: CharacterKey;
     freshnessCutoff: Date;
     at: Date;
+    /** The ordered collection plan fixed when a new run is reserved. */
+    phasePlan?: readonly string[];
     credentials?: {
       wclClientIdEncrypted: string;
       wclClientSecretEncrypted: string;
@@ -568,6 +601,15 @@ export interface EvidenceRepository {
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
   markEnqueued(id: string, queueJobId: string): Promise<void>;
+  seedPhases?(
+    runId: string,
+    phases: readonly { id: string; ordinal: number }[]
+  ): Promise<void>;
+  recordPhaseTransitions?(
+    runId: string,
+    phases: readonly Omit<EvidenceRunPhase, "ordinal">[]
+  ): Promise<void>;
+  listPhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
   publish(
     runId: string,
     input: {
@@ -595,6 +637,7 @@ export interface EvidenceRepository {
        * character's previous evidence rather than written back blank.
        */
       tierBests: readonly CharacterTierBestParseInput[];
+      cuttingEdges?: readonly CharacterCuttingEdgeInput[];
       /**
        * Fight URLs this run asked about and got an answer for, whatever the
        * answer was. Stamped onto those kills so a later run can tell them
@@ -634,6 +677,12 @@ export interface EvidenceRepository {
    */
   clearSettledCollectionStages(): Promise<number>;
   getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
+  /** Records a successful legacy rank fallback on the published kill itself. */
+  recordHistoricRankLookup(
+    killId: string,
+    rank: number | null,
+    checkedAt: Date
+  ): Promise<void>;
   /**
    * Fight URLs there is nothing left to ask about, so a budget-limited
    * collection run can spend its requests on what is missing instead of

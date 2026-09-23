@@ -473,6 +473,7 @@ function createMemoryRepositories(): Repositories {
       async getCompleted() {
         return null;
       },
+      async recordHistoricRankLookup() {},
       async listResumable() {
         return [];
       },

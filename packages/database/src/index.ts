@@ -20,6 +20,7 @@ export type {
 export type {
   CallerClass,
   CharacterEvidenceRun,
+  CharacterCuttingEdgeInput,
   CharacterMythicKillInput,
   CharacterTierBestParseInput,
   CharacterMythicKillParseMetric,
@@ -35,6 +36,7 @@ export type {
   EvidenceRunCost,
   EvidenceReservationResult,
   EvidenceRunStatus,
+  EvidenceRunPhase,
   FingerprintAdmission,
   FingerprintAdmissionDispatch,
   FingerprintSweepCursor,

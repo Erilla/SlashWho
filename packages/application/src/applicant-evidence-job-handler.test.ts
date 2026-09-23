@@ -1,4 +1,5 @@
 import type {
+  EvidenceRunPhase,
   EvidenceRunCost,
   StagedEvidenceCollection,
   StoredKillTier,
@@ -6,6 +7,7 @@ import type {
   TerminalTier
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -300,6 +302,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: null,
           parseLimitationCode: null,
           parseLimitationCodesSeen: [],
+          cuttingEdges: [],
           parsedFightUrls: [],
           tierBests: [],
           kills: [
@@ -361,6 +364,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: "rate_limited",
           parseLimitationCode: null,
           parseLimitationCodesSeen: [],
+          cuttingEdges: [],
           parsedFightUrls: [],
           retryAfterAt: new Date("2026-09-13T12:02:30.000Z"),
           kills: [],
@@ -445,6 +449,7 @@ describe("applicant evidence job handler", () => {
           limitationCode: null,
           parseLimitationCode: "parse_request_cap",
           parseLimitationCodesSeen: ["parse_request_cap"],
+          cuttingEdges: [],
           parsedFightUrls: [],
           retryAfterAt: new Date("2026-09-13T12:31:00.000Z"),
           tierBests: [],
@@ -2996,13 +3001,24 @@ describe("applicant evidence job handler", () => {
 
     function handlerFor(
       evidence: ReturnType<typeof store>,
-      response: Record<string, unknown>
+      response: Record<string, unknown>,
+      warcraftLogsOverrides: Partial<
+        Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit" | "resolveCharacter"
+        >
+      > = {},
+      integrations: {
+        raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
+      } = {}
     ) {
       return createApplicantEvidenceJobHandler({
         evidence,
+        ...integrations,
         warcraftLogs: {
           getFirstKillReports: vi.fn(async () => response),
-          ...openGate
+          ...openGate,
+          ...warcraftLogsOverrides
         } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
@@ -3526,6 +3542,676 @@ describe("applicant evidence job handler", () => {
       expect(evidence.settleCutoffs).toEqual([
         new Date("2026-09-11T12:00:00.000Z")
       ]);
+    });
+
+    it("persists an active WCL phase before its gateway call completes", async () => {
+      // The request observer is the gateway boundary. Waiting for the whole
+      // collection promise used to make a long report scan indistinguishable
+      // from a queued run to readers.
+      let finish!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const transitions: Array<{ id: string; state: string }> = [];
+      const evidence = store();
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            await waiting;
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+
+      const collecting = handler.execute(run.id);
+      await vi.waitFor(() =>
+        expect(transitions).toContainEqual({
+          id: "warcraft_logs_history",
+          state: "active"
+        })
+      );
+      finish();
+      await collecting;
+    });
+
+    it("skips parse-only prerequisites before activating fight parsing", async () => {
+      const transitions: Array<{ id: string; state: string }> = [];
+      const evidence = store();
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        lastCleanKillScanAt: "2026-09-18T11:00:00.000Z",
+        parseWorkOutstanding: true,
+        parseOnlyKills: []
+      });
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+      await handler.execute(run.id);
+      expect(transitions).toEqual(
+        expect.arrayContaining([
+          { id: "warcraft_logs_history", state: "skipped" },
+          { id: "warcraft_logs_tier_bests", state: "skipped" },
+          { id: "warcraft_logs_fight_parses", state: "active" }
+        ])
+      );
+      expect(evidence.published).toHaveLength(1);
+    });
+
+    it("publishes a normal scan followed by fight parsing without tier bests", async () => {
+      const transitions: Array<{ id: string; state: string }> = [];
+      const evidence = store();
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+      await handler.execute(run.id);
+      expect(transitions).toEqual(
+        expect.arrayContaining([
+          { id: "warcraft_logs_tier_bests", state: "skipped" },
+          { id: "warcraft_logs_fight_parses", state: "completed" }
+        ])
+      );
+      expect(evidence.published).toHaveLength(1);
+    });
+
+    it("publishes collected evidence when phase persistence fails", async () => {
+      const evidence = store();
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async () => {
+        throw new Error("progress unavailable");
+      };
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+      await handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 1,
+        signal: new AbortController().signal
+      });
+      expect(evidence.published).toHaveLength(1);
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "complete",
+        limitationCode: null
+      });
+    });
+
+    it("settles a failed collection after an earlier phase write fails", async () => {
+      const evidence = store();
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async () => {
+        throw new Error("progress unavailable");
+      };
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            throw new Error("gateway failed");
+          }
+        }
+      );
+      await handler.execute(run.id, {
+        attempt: 1,
+        maxAttempts: 1,
+        signal: new AbortController().signal
+      });
+      expect(evidence.published).toHaveLength(1);
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "collection_failed"
+      });
+    });
+
+    it("keeps a tier-best limitation on that phase after later parse requests", async () => {
+      const phases = [
+        "warcraft_logs_identity_resolution",
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "raiderio_rankings",
+        "blizzard_achievements",
+        "publication"
+      ].map((id, ordinal) => ({
+        id,
+        ordinal,
+        state: "pending" as EvidenceRunPhase["state"],
+        startedAt: null as Date | null,
+        completedAt: null as Date | null,
+        limitationCode: null as string | null
+      }));
+      const evidence = store();
+      evidence.listPhases = async () => phases;
+      const tierTransitions: string[] = [];
+      evidence.recordPhaseTransitions = async (_runId, updates) => {
+        for (const update of updates) {
+          if (update.id === "warcraft_logs_tier_bests")
+            tierTransitions.push(update.state);
+          const phase = phases.find((item) => item.id === update.id)!;
+          Object.assign(phase, update);
+        }
+      };
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({ query: "zone_rankings", limited: false });
+            options.onLimitation?.("zone_rankings", "parse_request_cap");
+            options.onRequest?.({ query: "zone_rankings", limited: false });
+            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "ranking_identities",
+              limited: false
+            });
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              parseLimitation: {
+                kind: "limitation" as const,
+                code: "parse_request_cap" as const
+              },
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+      await handler.execute(run.id);
+      expect(
+        phases.find((phase) => phase.id === "warcraft_logs_tier_bests")
+      ).toMatchObject({
+        state: "limited",
+        limitationCode: "parse_request_cap"
+      });
+      expect(
+        phases.find((phase) => phase.id === "warcraft_logs_ranking_identities")
+      ).toMatchObject({ state: "completed", limitationCode: null });
+      expect(tierTransitions).toEqual(["active", "limited"]);
+    });
+
+    it.each([
+      { name: "completed", persistedIdentityState: "completed" as const },
+      { name: "limited", persistedIdentityState: "limited" as const }
+    ])(
+      "restores persisted $name phase state across retries of the same run",
+      async ({ persistedIdentityState }) => {
+        const evidence = store();
+        const phaseIds = [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ];
+        const persistedPhases: EvidenceRunPhase[] = phaseIds.map(
+          (id, ordinal) => ({
+            id,
+            ordinal,
+            state: "pending",
+            startedAt: null,
+            completedAt: null,
+            limitationCode: null
+          })
+        );
+        evidence.listPhases = async () => persistedPhases;
+        evidence.recordPhaseTransitions = async (_runId, phases) => {
+          for (const transition of phases) {
+            const persisted = persistedPhases.find(
+              (phase) => phase.id === transition.id
+            );
+            if (!persisted)
+              throw new Error("character_evidence_phase_not_found");
+            const legal =
+              persisted.state === transition.state ||
+              (persisted.state === "pending" &&
+                (transition.state === "active" ||
+                  transition.state === "skipped")) ||
+              (persisted.state === "limited" &&
+                transition.state === "active") ||
+              (persisted.state === "active" &&
+                ["completed", "limited", "failed", "cancelled"].includes(
+                  transition.state
+                ));
+            if (!legal)
+              throw new Error(
+                `character_evidence_phase_not_found:${transition.id}:${persisted.state}->${transition.state}`
+              );
+            Object.assign(persisted, transition);
+          }
+        };
+
+        let collectionAttempts = 0;
+        let identityAttempts = 0;
+        let currentTime = new Date("2026-09-18T12:00:00.000Z");
+        const handler = createApplicantEvidenceJobHandler({
+          evidence,
+          warcraftLogs: {
+            ...openGate,
+            async resolveCharacter() {
+              identityAttempts += 1;
+              if (
+                identityAttempts === 1 &&
+                persistedIdentityState === "limited"
+              ) {
+                return {
+                  kind: "limitation" as const,
+                  code: "not_found" as const
+                };
+              }
+              return { kind: "identity" as const, key, displayName: "Rinn" };
+            },
+            async getFirstKillReports(_key, options) {
+              collectionAttempts += 1;
+              options.onRequest?.({ query: "history_scan", limited: false });
+              if (collectionAttempts === 1) {
+                throw Object.assign(new Error("socket reset"), {
+                  code: "ECONNRESET"
+                });
+              }
+              return {
+                kind: "evidence" as const,
+                parsedFightUrls: [],
+                kills: [],
+                wipes: [],
+                tierBests: [],
+                troubledRaidIds: { parses: [], tierBests: [] }
+              };
+            }
+          },
+          requestCap: 500,
+          parseRequestCap: 24,
+          capRetryMs: 1_800_000,
+          transientRetryMs: 900_000,
+          pointsReserve: 0,
+          retryCostCeiling: 250,
+          failureCooldownMs: 1_800_000,
+          killSettleMs: 7 * 24 * 60 * 60 * 1000,
+          now: () => new Date(currentTime)
+        });
+
+        const context = (attempt: number) => ({
+          attempt,
+          maxAttempts: 5,
+          signal: new AbortController().signal
+        });
+        await expect(handler.execute(run.id, context(1))).rejects.toMatchObject(
+          {
+            code: "ECONNRESET"
+          }
+        );
+        expect(persistedPhases).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "warcraft_logs_identity_resolution",
+              state: persistedIdentityState
+            }),
+            expect.objectContaining({
+              id: "warcraft_logs_history",
+              state: "active"
+            })
+          ])
+        );
+        if (persistedIdentityState === "limited") {
+          expect(
+            persistedPhases.find(
+              (phase) => phase.id === "warcraft_logs_identity_resolution"
+            )?.limitationCode
+          ).toBe("not_found");
+        }
+        const firstIdentityCompletion = persistedPhases.find(
+          (phase) => phase.id === "warcraft_logs_identity_resolution"
+        )?.completedAt;
+        currentTime = new Date("2026-09-18T12:01:00.000Z");
+        await handler.execute(run.id, context(2));
+
+        expect(collectionAttempts).toBe(2);
+        expect(persistedPhases).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "warcraft_logs_identity_resolution",
+              state: "completed"
+            }),
+            expect.objectContaining({
+              id: "warcraft_logs_history",
+              state: "completed"
+            })
+          ])
+        );
+        if (persistedIdentityState === "limited") {
+          const recoveredIdentity = persistedPhases.find(
+            (phase) => phase.id === "warcraft_logs_identity_resolution"
+          );
+          expect(recoveredIdentity?.startedAt).toEqual(
+            new Date("2026-09-18T12:00:00.000Z")
+          );
+          expect(recoveredIdentity?.completedAt).toEqual(currentTime);
+          expect(recoveredIdentity?.limitationCode).toBeNull();
+          expect(recoveredIdentity?.completedAt).not.toEqual(
+            firstIdentityCompletion
+          );
+        }
+        expect(evidence.published).toHaveLength(1);
+      }
+    );
+
+    it("deduplicates Raider.IO ranking requests and persists matched historic ranks", async () => {
+      const evidence = store();
+      const firstKill = {
+        ...concludedKill,
+        raidName: "The Venomous Abyss",
+        bossName: "Sszorak",
+        killedAt: "2026-09-12T20:00:00.000Z",
+        guild: { name: "Guild", region: "eu", realm: "Silvermoon" }
+      };
+      const secondKill = {
+        ...firstKill,
+        killedAt: "2026-09-13T20:00:00.000Z",
+        fightUrl: "https://www.warcraftlogs.com/reports/abc#fight=2"
+      };
+      const getMythicBossRankings = vi.fn(async () => ({
+        kind: "rankings" as const,
+        rows: [
+          {
+            bossSlug: "sszorak",
+            rank: 3,
+            guildName: "Guild",
+            guildRealm: "Silvermoon",
+            guildRegion: "eu",
+            firstDefeated: firstKill.killedAt
+          },
+          {
+            bossSlug: "sszorak",
+            rank: 4,
+            guildName: "Guild",
+            guildRealm: "Silvermoon",
+            guildRegion: "eu",
+            firstDefeated: secondKill.killedAt
+          }
+        ]
+      }));
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [firstKill, secondKill],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {},
+        { raiderio: { getMythicBossRankings } }
+      );
+
+      await handler.execute(run.id);
+
+      expect(getMythicBossRankings).toHaveBeenCalledTimes(1);
+      expect(
+        evidence.published[0]?.result.kills.map(
+          (kill) => kill.historicWorldRank
+        )
+      ).toEqual([3, 4]);
+      expect(
+        evidence.published[0]?.result.kills.every(
+          (kill) => kill.historicRankCheckedAt !== undefined
+        )
+      ).toBe(true);
+    });
+
+    it("records a successful Raider.IO no-match answer without inventing a rank", async () => {
+      const evidence = store();
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [
+            {
+              ...concludedKill,
+              raidName: "The Venomous Abyss",
+              bossName: "Sszorak",
+              guild: { name: "Guild", region: "eu", realm: "Silvermoon" }
+            }
+          ],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {},
+        {
+          raiderio: {
+            getMythicBossRankings: vi.fn(async () => ({
+              kind: "rankings" as const,
+              rows: []
+            }))
+          }
+        }
+      );
+      await handler.execute(run.id);
+      expect(evidence.published[0]?.result.kills[0]).toMatchObject({
+        historicWorldRank: null,
+        historicRankCheckedAt: expect.any(String)
+      });
+    });
+
+    it("resolves the Warcraft Logs identity as its own persisted phase", async () => {
+      const evidence = store();
+      const transitions: Array<{ id: string; state: string }> = [];
+      evidence.listPhases = async () =>
+        [
+          "warcraft_logs_identity_resolution",
+          "warcraft_logs_history",
+          "warcraft_logs_tier_bests",
+          "warcraft_logs_fight_parses",
+          "warcraft_logs_ranking_identities",
+          "raiderio_rankings",
+          "blizzard_achievements",
+          "publication"
+        ].map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      const resolveCharacter = vi.fn(async () => ({
+        kind: "identity" as const,
+        key,
+        displayName: "Rinn-Silvermoon"
+      }));
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        { resolveCharacter }
+      );
+
+      await handler.execute(run.id);
+
+      expect(resolveCharacter).toHaveBeenCalledWith(key, expect.anything());
+      expect(transitions).toEqual(
+        expect.arrayContaining([
+          { id: "warcraft_logs_identity_resolution", state: "active" },
+          { id: "warcraft_logs_identity_resolution", state: "completed" }
+        ])
+      );
     });
   });
 });

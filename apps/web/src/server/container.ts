@@ -63,11 +63,14 @@ export type WebContainerDependencies = Readonly<{
     onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): BlizzardGateway;
   createApplicantDossierService(options: {
-    repositories: Pick<Repositories, "snapshots" | "evidence">;
+    repositories: Pick<
+      Repositories,
+      "snapshots" | "evidence" | "manualConnections"
+    >;
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-    search: Pick<SearchService, "create">;
+    search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
-    raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
+    raiderio: Pick<RaiderIoGateway, "getCharacter">;
     config: ApplicationConfig;
     evidenceJobCredentialEncryptionKey: Buffer;
     onCacheEvent?: (source: string, event: string) => void;

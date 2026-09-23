@@ -1902,6 +1902,16 @@ export function createWarcraftLogsClient(
       WarcraftLogsLimitationCode,
       WarcraftLogsLimitation
     >();
+    const noteParseLimitation = (
+      query: WarcraftLogsQueryType,
+      code: WarcraftLogsLimitationCode
+    ): void => {
+      try {
+        options.onLimitation?.(query, code);
+      } catch {
+        // Progress observation cannot change the collected evidence.
+      }
+    };
     /**
      * Records a parse limitation, and makes it the reported one.
      *
@@ -1912,8 +1922,10 @@ export function createWarcraftLogsClient(
      */
     const raiseParse = (
       limitation: WarcraftLogsLimitation,
+      query: WarcraftLogsQueryType,
       options?: Readonly<{ preferExisting?: boolean }>
     ): void => {
+      noteParseLimitation(query, limitation.code);
       if (!parseLimitationsSeen.has(limitation.code)) {
         parseLimitationsSeen.set(limitation.code, limitation);
       }
@@ -1999,6 +2011,7 @@ export function createWarcraftLogsClient(
     });
     if (pendingZones.length > zoneRequestCap) {
       tierParseLimitation = { kind: "limitation", code: "parse_request_cap" };
+      noteParseLimitation("zone_rankings", "parse_request_cap");
       // The zones the budget will not reach were read by nobody, so none of
       // them may settle on the strength of this run.
       for (const zone of pendingZones.slice(zoneRequestCap)) {
@@ -2026,6 +2039,7 @@ export function createWarcraftLogsClient(
       if (rankings.kind !== "success") {
         troubledTierBestRaidIds.add(String(zone.zoneId));
         tierParseLimitation = toParseLimitation(rankings);
+        noteParseLimitation("zone_rankings", tierParseLimitation.code);
         // The loop stops here, so every zone still queued was read by nobody.
         for (const pending of pendingZones.slice(
           pendingZones.indexOf(zone) + 1,
@@ -2044,6 +2058,7 @@ export function createWarcraftLogsClient(
       if (isLimitation(decoded)) {
         troubledTierBestRaidIds.add(String(zone.zoneId));
         tierParseLimitation = decoded;
+        noteParseLimitation("zone_rankings", decoded.code);
         // Drift describes this one zone's response. Every other zone is a
         // separate request with its own answer, so the budget goes on reading
         // them rather than being abandoned over a shape one zone returned.
@@ -2181,7 +2196,10 @@ export function createWarcraftLogsClient(
       // Reserve one request for the shared canonical identity lookup, so a cap
       // of N spends N-1 requests on rankings and one on identities.
       if (parseRequests + 1 >= options.parseRequestCap) {
-        raiseParse({ kind: "limitation", code: "parse_request_cap" });
+        raiseParse(
+          { kind: "limitation", code: "parse_request_cap" },
+          "fight_parses"
+        );
         // Everything from here on was read by nobody, so none of the tiers
         // those reports belong to may settle on this run.
         troubleGroups(orderedGroups.slice(index));
@@ -2200,13 +2218,13 @@ export function createWarcraftLogsClient(
         })
       );
       if (rankings.kind !== "success") {
-        raiseParse(toParseLimitation(rankings));
+        raiseParse(toParseLimitation(rankings), "fight_parses");
         troubleGroups(orderedGroups.slice(index));
         break;
       }
       const decoded = decodeRankingRows(rankings.value, group, key);
       if (isLimitation(decoded)) {
-        raiseParse(decoded);
+        raiseParse(decoded, "fight_parses");
         // One report's rankings being unreadable says nothing about the next
         // report's, so the remaining budget hydrates the groups it can rather
         // than stopping the run at the first response the decoder rejects.
@@ -2248,6 +2266,7 @@ export function createWarcraftLogsClient(
       if (parseRequests >= options.parseRequestCap) {
         raiseParse(
           { kind: "limitation", code: "parse_request_cap" },
+          "ranking_identities",
           { preferExisting: true }
         );
         // The identity lookup is shared, so without it no decoded group gets
@@ -2275,7 +2294,7 @@ export function createWarcraftLogsClient(
           })
         );
         if (canonical.kind !== "success") {
-          raiseParse(toParseLimitation(canonical));
+          raiseParse(toParseLimitation(canonical), "ranking_identities");
           troubleGroups(decodedGroups.map(({ group }) => group));
         } else {
           const canonicalIds = decodeCanonicalIdentityIds(
@@ -2283,7 +2302,7 @@ export function createWarcraftLogsClient(
             canonicalIdentities
           );
           if (isLimitation(canonicalIds)) {
-            raiseParse(canonicalIds);
+            raiseParse(canonicalIds, "ranking_identities");
             troubleGroups(decodedGroups.map(({ group }) => group));
           } else
             for (const { group, decoded } of decodedGroups) {
@@ -2294,7 +2313,7 @@ export function createWarcraftLogsClient(
                 key
               );
               if (isLimitation(requestedIds)) {
-                raiseParse(requestedIds);
+                raiseParse(requestedIds, "ranking_identities");
                 troubleGroups([group]);
                 continue;
               }
@@ -2313,7 +2332,7 @@ export function createWarcraftLogsClient(
                 options.className
               );
               if (isLimitation(performance)) {
-                raiseParse(performance);
+                raiseParse(performance, "ranking_identities");
                 troubleGroups(
                   decodedGroups
                     .slice(decodedGroups.findIndex((it) => it.group === group))

@@ -603,6 +603,53 @@ export const characterEvidenceRuns = pgTable(
   ]
 );
 
+export const characterEvidenceRunPhases = pgTable(
+  "character_evidence_run_phases",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    phaseId: text("phase_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    state: text("state").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    limitationCode: text("limitation_code")
+  },
+  (table) => [
+    primaryKey({
+      name: "character_evidence_run_phases_pk",
+      columns: [table.runId, table.phaseId]
+    }),
+    check(
+      "character_evidence_run_phases_state_check",
+      sql`${table.state} in ('pending', 'active', 'completed', 'skipped', 'limited', 'failed', 'cancelled')`
+    ),
+    uniqueIndex("character_evidence_run_phases_order_idx").on(
+      table.runId,
+      table.ordinal
+    )
+  ]
+);
+
+/** Normalized Blizzard achievements collected as part of one evidence run. */
+export const characterEvidenceCuttingEdges = pgTable(
+  "character_evidence_cutting_edges",
+  {
+    evidenceRunId: uuid("evidence_run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    achievementId: text("achievement_id").notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_evidence_cutting_edges_pk",
+      columns: [table.evidenceRunId, table.achievementId]
+    })
+  ]
+);
+
 /**
  * One run's collected evidence, staged between a finished Warcraft Logs scan
  * and a successful publication.
@@ -738,6 +785,10 @@ export const characterMythicKills = pgTable(
     guildRegion: text("guild_region"),
     guildRealm: text("guild_realm"),
     uploader: text("uploader"),
+    historicWorldRank: integer("historic_world_rank"),
+    historicRankCheckedAt: timestamp("historic_rank_checked_at", {
+      withTimezone: true
+    }),
     specName: text("spec_name"),
     specIconUrl: text("spec_icon_url"),
     damageParseState:
@@ -784,6 +835,10 @@ export const characterMythicKills = pgTable(
     check(
       "character_mythic_kills_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
+    ),
+    check(
+      "character_mythic_kills_historic_world_rank_check",
+      sql`${table.historicWorldRank} IS NULL OR ${table.historicWorldRank} > 0`
     ),
     check(
       "character_mythic_kills_damage_parse_check",

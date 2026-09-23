@@ -5,6 +5,7 @@ import {
 } from "@slashwho/contracts";
 import type {
   DiscoveryQueue,
+  EvidenceRunPhase,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -17,7 +18,6 @@ import {
   canonicalCharacterId,
   lookupCuttingEdgeAchievement,
   isAccountWideCuttingEdgeAchievement,
-  lookupRaiderIoBoss,
   parseApplicantCharacterUrl,
   toRaiderIoUrl,
   type CharacterGuild,
@@ -30,15 +30,20 @@ import {
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type {
-  MythicBossRanking,
+  RaiderIoGateway,
   MythicBossRankingsOptions,
-  MythicBossRankingsResult,
-  RaiderIoGateway
+  MythicBossRankingsResult
 } from "@slashwho/raiderio";
 
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { encryptCredential } from "./credential-encryption";
+import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
+import {
+  historicWorldRankForKill,
+  raiderIoRankingRequest,
+  rankingRequestKey
+} from "./historic-world-rank";
 import {
   refreshCharacter,
   type RefreshCharacterResult
@@ -50,6 +55,7 @@ import {
  * rather than refusing.
  */
 const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
+const MAX_LEGACY_RANK_FALLBACK_REQUESTS_PER_READ = 50;
 import { createConcurrencyLimiter } from "./concurrency";
 import { measuredRepositories } from "./measured-repositories";
 import type { MeasurementScope } from "./measurement";
@@ -139,6 +145,8 @@ export interface ApplicantDossierService {
     key: CharacterKey,
     scope?: MeasurementScope
   ): Promise<RefreshCharacterResult>;
+  /** Backend-only progress projection for the dossier and operator monitor. */
+  readEvidencePhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
 }
 
 type EvidenceSource = "raiderio" | "warcraft_logs" | "blizzard";
@@ -151,10 +159,22 @@ type DossierSubject = Readonly<{
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
 }>;
 type DossierEvidenceState = "waiting" | "scanning" | "complete" | "partial";
+type StoredRankKillEvidence = DossierKillEvidence &
+  Readonly<{
+    rankLookup: { killId: string; checkedAt: string | null };
+  }>;
+class RankingLookupFailure extends Error {
+  constructor(
+    readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
+  ) {
+    super("rankings_unavailable");
+  }
+}
 type EvidenceResult = Readonly<{
-  kills: readonly DossierKillEvidence[];
+  kills: readonly StoredRankKillEvidence[];
   wipes: readonly DossierWipeEvidence[];
   tierBests: readonly DossierTierBestParse[];
+  cuttingEdges: readonly DossierCuttingEdgeEvidence[] | null;
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
   evidenceState: DossierEvidenceState;
@@ -328,7 +348,7 @@ function blizzardLimitationCode(
 function cachedKill(
   kill: StoredCharacterMythicKill,
   character: CharacterKey
-): DossierKillEvidence {
+): StoredRankKillEvidence {
   return {
     raidId: kill.raidId,
     raidName: kill.raidName,
@@ -340,7 +360,11 @@ function cachedKill(
     killedAt: kill.killedAt,
     guild: kill.guild ? { ...kill.guild, region: character.region } : null,
     uploader: kill.uploader ?? null,
-    historicWorldRank: null,
+    historicWorldRank: kill.historicWorldRank ?? null,
+    rankLookup: {
+      killId: kill.id,
+      checkedAt: kill.historicRankCheckedAt ?? null
+    },
     reportUrl: kill.fightUrl,
     performance: kill.performance
   };
@@ -404,7 +428,8 @@ async function gatherCharacterEvidence(
             options.encryptionKey
           )
         }
-      : null
+      : null,
+    phasePlan: fullEvidencePhasePlan()
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
@@ -467,6 +492,9 @@ async function gatherCharacterEvidence(
       completed?.tierBests.map((tierBest) =>
         cachedTierBest(tierBest, character.key)
       ) ?? [],
+    cuttingEdges: completed?.cuttingEdgesCollected
+      ? completed.cuttingEdges
+      : null,
     // Negative conclusions rest on the history scan, which `limitationCode`
     // reports. A run whose only shortfall is its parse budget scanned the whole
     // history and publishes `partial` to say so, so requiring `complete` here
@@ -526,6 +554,7 @@ async function gatherCuttingEdgeEvidence(
   subjects: readonly DossierSubject[],
   options: {
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
+    stored: readonly (readonly DossierCuttingEdgeEvidence[] | null)[];
     concurrency: ReturnType<typeof createConcurrencyLimiter>;
     signal?: AbortSignal;
   }
@@ -533,11 +562,19 @@ async function gatherCuttingEdgeEvidence(
   // Never throws: an abort is returned as an outcome so a concurrent batch
   // can be settled in full before it is rethrown. A bare rethrow would leave
   // this subject's siblings in flight and their rejections unhandled.
-  async function read(character: DossierSubject): Promise<CuttingEdgeOutcome> {
+  async function read(
+    character: DossierSubject,
+    index: number
+  ): Promise<CuttingEdgeOutcome> {
     try {
-      const achievements = await options.concurrency.run(() =>
-        options.blizzard.getCompletedAchievements(character.key, options.signal)
-      );
+      const achievements =
+        options.stored[index] ??
+        (await options.concurrency.run(() =>
+          options.blizzard.getCompletedAchievements(
+            character.key,
+            options.signal
+          )
+        ));
       const supported = achievements.filter((achievement) =>
         isAccountWideCuttingEdgeAchievement(achievement.achievementId)
       );
@@ -573,7 +610,7 @@ async function gatherCuttingEdgeEvidence(
   const outcomes = new Array<CuttingEdgeOutcome | undefined>(subjects.length);
   await Promise.all(
     leading.map(async (index) => {
-      outcomes[index] = await read(subjects[index]!);
+      outcomes[index] = await read(subjects[index]!, index);
     })
   );
   // Settled in full above, so rethrowing here abandons nothing in flight.
@@ -587,7 +624,7 @@ async function gatherCuttingEdgeEvidence(
   );
   for (const index of tail) {
     if (fingerprintAccountEstablished) break;
-    const outcome = await read(subjects[index]!);
+    const outcome = await read(subjects[index]!, index);
     if (outcome.kind === "abort") throw outcome.error;
     outcomes[index] = outcome;
     if (outcome.kind === "evidence" && outcome.establishes) {
@@ -603,6 +640,121 @@ async function gatherCuttingEdgeEvidence(
       limitations.push(outcome.limitation);
   }
   return { cuttingEdges, limitations };
+}
+
+async function restoreMissingHistoricRanks(options: {
+  kills: readonly StoredRankKillEvidence[];
+  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  recordLookup: Repositories["evidence"]["recordHistoricRankLookup"];
+  concurrency: ReturnType<typeof createConcurrencyLimiter>;
+  signal: AbortSignal;
+}): Promise<{
+  kills: readonly StoredRankKillEvidence[];
+  limitations: DossierLimitation[];
+}> {
+  const requests = new Map<
+    string,
+    NonNullable<ReturnType<typeof raiderIoRankingRequest>>
+  >();
+  let capped = false;
+  for (const kill of options.kills) {
+    if (kill.historicWorldRank !== null || kill.rankLookup.checkedAt) continue;
+    const request = raiderIoRankingRequest(kill, kill.character.region);
+    if (!request) continue;
+    const key = rankingRequestKey(request);
+    if (requests.has(key)) continue;
+    if (requests.size >= MAX_LEGACY_RANK_FALLBACK_REQUESTS_PER_READ) {
+      capped = true;
+      continue;
+    }
+    requests.set(key, request);
+  }
+  const rankings = new Map<
+    string,
+    Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
+  >();
+  await Promise.all(
+    [...requests].map(async ([key, request]) => {
+      const result = await options.concurrency
+        .run(() =>
+          options.raiderio.getMythicBossRankings(request, options.signal)
+        )
+        .catch((error: unknown) => {
+          if (isAbort(error, options.signal)) throw error;
+          return { kind: "limitation" as const, code: "unavailable" as const };
+        });
+      rankings.set(key, result);
+    })
+  );
+  const limitations: DossierLimitation[] = [];
+  if (capped) {
+    limitations.push({
+      source: "raiderio",
+      character: null,
+      code: "request_cap",
+      observedAt: new Date().toISOString()
+    });
+  }
+  for (const result of rankings.values()) {
+    if (result.kind === "rankings") continue;
+    if (limitations.some((item) => item.code === result.code)) continue;
+    limitations.push({
+      source: "raiderio",
+      character: null,
+      code: result.code,
+      observedAt: result.observedAt ?? new Date().toISOString(),
+      ...(result.retryAfterMs === undefined
+        ? {}
+        : {
+            retryAt: new Date(
+              Date.parse(result.observedAt ?? new Date().toISOString()) +
+                Math.max(0, result.retryAfterMs)
+            ).toISOString()
+          })
+    });
+  }
+  const checkedAt = new Date();
+  await Promise.all(
+    options.kills.map(async (kill) => {
+      if (kill.historicWorldRank !== null || kill.rankLookup.checkedAt) return;
+      const request = raiderIoRankingRequest(kill, kill.character.region);
+      const result = request
+        ? rankings.get(rankingRequestKey(request))
+        : undefined;
+      if (result?.kind !== "rankings") return;
+      const rank = historicWorldRankForKill(
+        kill,
+        kill.character.region,
+        result.rows
+      );
+      // The dossier remains readable if a legacy write-through fails. The
+      // fallback will retry on a later read instead of claiming it was stored.
+      await options
+        .recordLookup(kill.rankLookup.killId, rank, checkedAt)
+        .catch(() => undefined);
+    })
+  );
+  return {
+    kills: options.kills.map((kill) => {
+      if (kill.historicWorldRank !== null || kill.rankLookup.checkedAt)
+        return kill;
+      const request = raiderIoRankingRequest(kill, kill.character.region);
+      const result = request
+        ? rankings.get(rankingRequestKey(request))
+        : undefined;
+      return result?.kind === "rankings"
+        ? {
+            ...kill,
+            historicWorldRank: historicWorldRankForKill(
+              kill,
+              kill.character.region,
+              result.rows
+            )
+          }
+        : kill;
+    }),
+    limitations
+  };
 }
 
 function serializeDossierSubject(
@@ -640,126 +792,6 @@ function serializeDossierSubject(
   };
 }
 
-function normalizedIdentity(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/[^\p{L}\p{N}]+/gu, "")
-    .toLocaleLowerCase("en-US");
-}
-
-function normalizedRealm(value: string): string {
-  return normalizedIdentity(value).replace(/^connected/, "");
-}
-
-function historicRank(
-  kill: DossierKillEvidence,
-  rankings: readonly MythicBossRanking[]
-): number | null {
-  if (!kill.guild) return null;
-  const killedAt = Date.parse(kill.killedAt);
-  if (!Number.isFinite(killedAt)) return null;
-  const matches = rankings.filter(
-    (ranking) =>
-      (!ranking.bossSlug ||
-        ranking.bossSlug ===
-          lookupRaiderIoBoss(kill.raidName, kill.bossName)?.bossSlug) &&
-      normalizedIdentity(ranking.guildName) ===
-        normalizedIdentity(kill.guild!.name) &&
-      normalizedRealm(ranking.guildRealm) ===
-        normalizedRealm(kill.guild!.realm) &&
-      normalizedIdentity(ranking.guildRegion) ===
-        normalizedIdentity(kill.character.region) &&
-      Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <= 120_000
-  );
-  return matches.length === 1 ? matches[0]!.rank : null;
-}
-
-function rankingKey(options: MythicBossRankingsOptions): string {
-  return JSON.stringify(
-    options.guild
-      ? [
-          options.raidSlug,
-          options.guild.region,
-          options.guild.realm,
-          options.guild.name
-        ]
-      : [options.raidSlug, options.bossSlug]
-  );
-}
-
-function guildRankingRequest(
-  kill: DossierKillEvidence
-): MythicBossRankingsOptions | null {
-  if (!kill.guild) return null;
-  const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
-  return boss
-    ? { ...boss, guild: { ...kill.guild, region: kill.character.region } }
-    : null;
-}
-
-async function enrichHistoricRanks(options: {
-  kills: readonly DossierKillEvidence[];
-  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
-  concurrency: ReturnType<typeof createConcurrencyLimiter>;
-  signal: AbortSignal;
-  scope?: MeasurementScope;
-}): Promise<{
-  kills: readonly DossierKillEvidence[];
-  limitations: readonly DossierLimitation[];
-}> {
-  const rankings = new Map<string, readonly MythicBossRanking[]>();
-  const failures = new Map<string, DossierLimitation>();
-  const requests = new Map<string, MythicBossRankingsOptions>();
-  for (const kill of options.kills) {
-    if (!kill.guild) continue;
-    const boss = guildRankingRequest(kill);
-    if (boss) requests.set(rankingKey(boss), boss);
-  }
-  // A logical key is one guild/raid confirmation that the dossier needs,
-  // irrespective of whether its normalized result is a cache hit or a miss.
-  // It is deliberately a count only: the identity belongs in neither request
-  // telemetry nor logs.
-  options.scope?.increment("raiderIoRankingLogicalKeys", requests.size);
-  await Promise.all(
-    [...requests.entries()].map(async ([key, boss]) => {
-      const result = await options.concurrency.run(() =>
-        options.raiderio.getMythicBossRankings(boss, options.signal)
-      );
-      if (result.kind === "rankings") rankings.set(key, result.rows);
-      else
-        failures.set(result.code, {
-          source: "raiderio",
-          character: null,
-          code: result.code,
-          // A replayed negative-cache entry carries the timestamp of the
-          // failure that produced it, so it never looks fresher than it is.
-          observedAt: result.observedAt ?? new Date().toISOString(),
-          ...(result.retryAfterMs === undefined
-            ? {}
-            : {
-                retryAt: new Date(
-                  Date.now() + Math.max(0, result.retryAfterMs)
-                ).toISOString()
-              })
-        });
-    })
-  );
-  const kills = options.kills.map((kill) => {
-    const boss = guildRankingRequest(kill);
-    if (!boss) return kill;
-    const rows = rankings.get(rankingKey(boss));
-    return rows
-      ? { ...kill, historicWorldRank: historicRank(kill, rows) }
-      : kill;
-  });
-  return {
-    kills,
-    limitations: [...failures.values()].sort((a, b) =>
-      a.code.localeCompare(b.code)
-    )
-  };
-}
-
 async function assembleDossier(options: {
   root: CharacterKey;
   subjects: readonly DossierSubject[];
@@ -779,28 +811,35 @@ async function assembleDossier(options: {
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   concurrency: ReturnType<typeof createConcurrencyLimiter>;
-  scope?: MeasurementScope;
 
   freshnessCutoff: Date;
   signal: AbortSignal;
   wclCredentials?: WclCredentials | null;
   encryptionKey: Buffer;
 }): Promise<ContractApplicantDossier> {
-  const [evidence, cuttingEdgeEvidence] = await Promise.all([
-    Promise.all(
-      options.subjects.map((character) =>
-        gatherCharacterEvidence(character, {
-          repositories: options.repositories,
-          queue: options.queue,
-          freshnessCutoff: options.freshnessCutoff,
-          signal: options.signal,
-          wclCredentials: options.wclCredentials,
-          encryptionKey: options.encryptionKey
-        })
-      )
-    ),
+  const evidence = await Promise.all(
+    options.subjects.map((character) =>
+      gatherCharacterEvidence(character, {
+        repositories: options.repositories,
+        queue: options.queue,
+        freshnessCutoff: options.freshnessCutoff,
+        signal: options.signal,
+        wclCredentials: options.wclCredentials,
+        encryptionKey: options.encryptionKey
+      })
+    )
+  );
+  const [cuttingEdgeEvidence, ranked] = await Promise.all([
     gatherCuttingEdgeEvidence(options.subjects, {
       blizzard: options.blizzard,
+      stored: evidence.map((item) => item.cuttingEdges),
+      concurrency: options.concurrency,
+      signal: options.signal
+    }),
+    restoreMissingHistoricRanks({
+      kills: evidence.flatMap((item) => item.kills),
+      raiderio: options.raiderio,
+      recordLookup: options.repositories.evidence.recordHistoricRankLookup,
       concurrency: options.concurrency,
       signal: options.signal
     })
@@ -808,17 +847,11 @@ async function assembleDossier(options: {
   const limitations = [
     ...evidence.flatMap((item) => item.limitations),
     ...cuttingEdgeEvidence.limitations,
+    ...ranked.limitations,
     ...options.skippedSubjects.map((character) =>
       limitation("warcraft_logs", character.key, "request_cap", new Date())
     )
   ];
-  const ranked = await enrichHistoricRanks({
-    kills: evidence.flatMap((item) => item.kills),
-    raiderio: options.raiderio,
-    concurrency: options.concurrency,
-    signal: options.signal,
-    scope: options.scope
-  });
   const dossier = buildApplicantDossier({
     root: options.root,
     characters: options.subjects.map(
@@ -837,7 +870,7 @@ async function assembleDossier(options: {
       item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
     ),
     cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
-    limitations: [...limitations, ...ranked.limitations]
+    limitations
   });
   // The oldest of the characters' collections, so the value reads as
   // "everything is at least this fresh" rather than tracking whichever
@@ -883,17 +916,9 @@ async function assembleDossier(options: {
   });
 }
 
-// Both dossier caches are sized the same way, so the asymmetry that had
-// rankings at 256 and achievements at 1,000 cannot silently return: one
-// dossier's measured per-key working set times the number of concurrent cold
-// reads of distinct rosters that should fit inside the TTL window without
-// evicting each other.
-//
-// Measured from a `test` log capture (see #243): a cold dossier touches ~25
-// ranking keys (`raiderIoRankingsCalls` p95 23.6, max 25) and ~10 achievement
-// keys.
+// Sized for the achievement lookups made by one cold dossier and the number
+// of distinct rosters that should fit inside the TTL window without eviction.
 const DOSSIER_CACHE_TTL_MS = 15 * 60_000;
-const RANKING_KEYS_PER_DOSSIER = 25;
 const ACHIEVEMENT_KEYS_PER_DOSSIER = 10;
 // The multiple is the number of concurrent cold reads of distinct rosters that
 // fit inside the 15-minute window before entries start evicting each other.
@@ -903,13 +928,12 @@ const ACHIEVEMENT_KEYS_PER_DOSSIER = 10;
 // than crowding one -- it costs hit rate, because every replica cold-loads the
 // same keys independently, not capacity per instance.
 //
-// This also sets each cache's in-flight ceiling, since `createBoundedCache`
+// This also sets the cache's in-flight ceiling, since `createBoundedCache`
 // rejects a load once `pending.size` reaches `maxEntries`. That is a far
-// backstop at these sizes rather than the operative limit: ranking loads are
-// admitted by `providerConcurrency` before they reach the cache, so a read has
-// at most `DOSSIER_PROVIDER_CONCURRENCY` in flight, and achievement loads are
-// gathered one character at a time. Parallelising that gather (#241) raises
-// the achievement cache's in-flight count per read and should re-check this.
+// backstop at these sizes rather than the operative limit: achievement loads
+// are admitted by `providerConcurrency` and gathered one character at a time.
+// Parallelising that gather (#241) raises the cache's in-flight count per read
+// and should re-check this.
 const CONCURRENT_COLD_DOSSIERS = 40;
 
 // Maps a bounded cache's per-call outcome onto the requesting scope's own
@@ -933,14 +957,6 @@ function cacheObserver(
   };
 }
 
-class RankingLookupFailure extends Error {
-  constructor(
-    readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
-  ) {
-    super("rankings_unavailable");
-  }
-}
-
 export function createApplicantDossierService(options: {
   repositories: Pick<
     Repositories,
@@ -949,7 +965,7 @@ export function createApplicantDossierService(options: {
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
-  raiderio: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
+  raiderio: Pick<RaiderIoGateway, "getCharacter" | "getMythicBossRankings">;
   config: ApplicationConfig;
   evidenceJobCredentialEncryptionKey: Buffer;
   onCacheEvent?: (source: string, event: string) => void;
@@ -962,30 +978,23 @@ export function createApplicantDossierService(options: {
     maxEntries: ACHIEVEMENT_KEYS_PER_DOSSIER * CONCURRENT_COLD_DOSSIERS,
     observe: (event) => options.onCacheEvent?.("blizzard_cutting_edge", event)
   });
+  const rankings = createBoundedCache<
+    Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
+  >({
+    ttlMs: DOSSIER_CACHE_TTL_MS,
+    maxEntries: 25 * CONCURRENT_COLD_DOSSIERS,
+    negativeTtlMs: options.config.NEGATIVE_CACHE_TTL_MS,
+    cacheFailure: (error) =>
+      error instanceof RankingLookupFailure &&
+      error.result.code === "unavailable",
+    observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
+  });
   // The limiter instance is shared across every request so it actually
   // bounds the fan-out; only the wait *reporting* is per-call, via a
   // scope-bound facade built per readInitial/read call below.
   const providerConcurrency = createConcurrencyLimiter(
     options.config.DOSSIER_PROVIDER_CONCURRENCY
   );
-  const rankings = createBoundedCache<
-    Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
-  >({
-    ttlMs: DOSSIER_CACHE_TTL_MS,
-    // A negative entry occupies the slot its positive counterpart would have:
-    // it is keyed by the same `rankingKey`, so remembering failures adds no
-    // keys to the working set and the sizing above still holds.
-    maxEntries: RANKING_KEYS_PER_DOSSIER * CONCURRENT_COLD_DOSSIERS,
-    negativeTtlMs: options.config.NEGATIVE_CACHE_TTL_MS,
-    // `unavailable` only. `not_found` and `private` are stable facts about the
-    // target and are already handled as such; `rate_limited` carries its own
-    // `retryAfterMs`, which a flat negative TTL would fight; and `schema_drift`
-    // is a signal we want to keep seeing at full volume rather than suppress.
-    cacheFailure: (error) =>
-      error instanceof RankingLookupFailure &&
-      error.result.code === "unavailable",
-    observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
-  });
   // A null cache is a visitor-supplied gateway: it keeps the shared timeout,
   // filtering and failure semantics while neither reading from nor writing to
   // the caches every other visitor is served from.
@@ -1029,61 +1038,6 @@ export function createApplicantDossierService(options: {
       }
     };
   }
-  function rankingsGateway(
-    source: Pick<RaiderIoGateway, "getMythicBossRankings">,
-    cache: typeof rankings | null,
-    scope?: MeasurementScope
-  ): Pick<RaiderIoGateway, "getMythicBossRankings"> {
-    return {
-      async getMythicBossRankings(boss, signal) {
-        signal?.throwIfAborted();
-        const load = async () => {
-          const run = async () =>
-            source.getMythicBossRankings(
-              boss,
-              AbortSignal.timeout(15_000),
-              () => scope?.increment("raiderIoRankingPhysicalCalls")
-            );
-          const response = scope
-            ? await scope.time("raiderIoRankings", run)
-            : await run();
-          if (response.kind !== "rankings") {
-            // The bounded cache's own "failure" outcome already reaches the
-            // requesting scope via cacheObserver(scope) below, since this
-            // loader throws. The container-level onCacheEvent notification is
-            // additive and carries the limitation code; an uncached
-            // visitor-supplied gateway reports neither, since it is not part
-            // of the shared cache at all.
-            if (cache) {
-              options.onCacheEvent?.(
-                "raiderio_rankings",
-                `failure_${response.code}`
-              );
-            }
-            // Stamped here, not where the limitation is serialised: an
-            // `unavailable` result may be replayed from the negative cache
-            // minutes later, and must keep the age of this observation.
-            throw new RankingLookupFailure({
-              ...response,
-              observedAt: new Date().toISOString()
-            });
-          }
-          return response;
-        };
-        try {
-          const result = await (cache
-            ? cache(rankingKey(boss), load, cacheObserver(scope))
-            : load());
-          signal?.throwIfAborted();
-          return result;
-        } catch (error) {
-          signal?.throwIfAborted();
-          if (error instanceof RankingLookupFailure) return error.result;
-          return { kind: "limitation", code: "unavailable" };
-        }
-      }
-    };
-  }
   // Built per call and never captured at construction: this service is a
   // process-wide singleton, so a wrapper held in a closure would attribute one
   // request's queries to another request's scope. The dossier read path is the
@@ -1109,9 +1063,8 @@ export function createApplicantDossierService(options: {
         )
     };
   }
-  // Both gateways are rebuilt for every read so that the visitor's own
-  // credentials and the caller's own measurement scope are applied together.
-  // Nothing here is cached across calls.
+  // New ranks are durable worker evidence. A legacy rankless kill gets one
+  // successful read fallback, then its answer (including no match) is stored.
   function gatewaysFor(
     overrides?: DossierGatewayOverrides,
     scope?: MeasurementScope
@@ -1122,11 +1075,59 @@ export function createApplicantDossierService(options: {
         overrides?.blizzard ? null : achievements,
         scope
       ),
-      raiderio: rankingsGateway(
-        overrides?.raiderio ?? options.raiderio,
-        overrides?.raiderio ? null : rankings,
-        scope
-      )
+      raiderio: {
+        getMythicBossRankings: async (
+          request: MythicBossRankingsOptions,
+          signal?: AbortSignal
+        ) => {
+          signal?.throwIfAborted();
+          const load = async (): Promise<MythicBossRankingsResult> => {
+            const call = () =>
+              overrides?.raiderio
+                ? overrides.raiderio.getMythicBossRankings(request, signal)
+                : options.raiderio.getMythicBossRankings(
+                    request,
+                    AbortSignal.timeout(15_000),
+                    () => scope?.increment("raiderIoRankingPhysicalCalls")
+                  );
+            const result = scope
+              ? await scope.time("raiderIoRankings", call)
+              : await call();
+            if (result.kind === "limitation") {
+              options.onCacheEvent?.(
+                "raiderio_rankings",
+                `failure_${result.code}`
+              );
+              throw new RankingLookupFailure({
+                ...result,
+                observedAt: result.observedAt ?? new Date().toISOString()
+              });
+            }
+            return result;
+          };
+          try {
+            return await awaitWithAbort(
+              overrides?.raiderio
+                ? load()
+                : rankings(
+                    rankingRequestKey(request),
+                    load,
+                    cacheObserver(scope)
+                  ),
+              signal
+            );
+          } catch (error) {
+            signal?.throwIfAborted();
+            return error instanceof RankingLookupFailure
+              ? error.result
+              : {
+                  kind: "limitation" as const,
+                  code: "unavailable" as const,
+                  observedAt: new Date().toISOString()
+                };
+          }
+        }
+      }
     };
   }
   async function readRootOnly(
@@ -1164,7 +1165,6 @@ export function createApplicantDossierService(options: {
         queue: options.queue,
         ...gatewaysFor(overrides, scope),
         concurrency: scopedConcurrency(scope),
-        scope,
         freshnessCutoff: new Date(
           Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
         ),
@@ -1175,6 +1175,9 @@ export function createApplicantDossierService(options: {
     };
   }
   return {
+    async readEvidencePhases(runId) {
+      return options.repositories.evidence.listPhases?.(runId) ?? [];
+    },
     async start(input, scope) {
       // start does real database and queue work through search.create, so its
       // scope is threaded through rather than discarded: this is the endpoint
@@ -1446,7 +1449,6 @@ export function createApplicantDossierService(options: {
           queue: options.queue,
           ...gatewaysFor(overrides, scope),
           concurrency: scopedConcurrency(scope),
-          scope,
           freshnessCutoff: new Date(
             Date.now() - options.config.FRESHNESS_HOURS * 60 * 60 * 1000
           ),

@@ -18,6 +18,7 @@ import type {
   CreateSnapshotInput,
   DiscoveryRun,
   EvidenceCollectionDomain,
+  EvidenceRunPhase,
   FingerprintAdmission,
   FingerprintContinuationAdmission,
   Operator,
@@ -186,6 +187,8 @@ interface CharacterMythicKillRow {
   guild_region: CharacterKey["region"] | null;
   guild_realm: string | null;
   uploader: string | null;
+  historic_world_rank: number | null;
+  historic_rank_checked_at: Date | null;
   spec_name: string | null;
   spec_icon_url: string | null;
   damage_parse_state: CharacterMythicKillParseMetric["state"];
@@ -543,6 +546,8 @@ function mapCharacterMythicKill(
             ...(row.guild_region === null ? {} : { region: row.guild_region })
           },
     ...(row.uploader === null ? {} : { uploader: row.uploader }),
+    historicWorldRank: row.historic_world_rank,
+    historicRankCheckedAt: row.historic_rank_checked_at?.toISOString() ?? null,
     performance: {
       spec:
         row.spec_name === null || row.spec_icon_url === null
@@ -740,7 +745,7 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_region, guild_realm, uploader, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, historic_world_rank, historic_rank_checked_at, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -764,12 +769,32 @@ async function loadCompletedEvidence(
      ORDER BY raid_id, boss_id`,
     [run.id]
   );
+  const cuttingEdgesResult = await client.query<{
+    achievement_id: string;
+    completed_at: Date;
+  }>(
+    `SELECT achievement_id, completed_at
+       FROM character_evidence_cutting_edges
+      WHERE evidence_run_id = $1
+      ORDER BY achievement_id`,
+    [run.id]
+  );
+  const blizzardPhase = await client.query<{ state: string }>(
+    `SELECT state FROM character_evidence_run_phases
+      WHERE run_id = $1 AND phase_id = 'blizzard_achievements'`,
+    [run.id]
+  );
   return {
     run: mapEvidenceRun(run),
     evidenceVersion: run.evidence_version,
     kills: killsResult.rows.map(mapCharacterMythicKill),
     wipes: wipesResult.rows.map(mapCharacterMythicWipe),
     tierBests: tierBestsResult.rows.map(mapCharacterTierBestParse),
+    cuttingEdges: cuttingEdgesResult.rows.map((row) => ({
+      achievementId: row.achievement_id,
+      completedAt: row.completed_at.toISOString()
+    })),
+    cuttingEdgesCollected: blizzardPhase.rows[0]?.state === "completed",
     wipeCapable: run.evidence_version >= 2
   };
 }
@@ -957,7 +982,7 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_region, guild_realm, uploader, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, historic_world_rank, historic_rank_checked_at, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
@@ -966,7 +991,7 @@ async function loadPositiveEvidenceForPartial(
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
               k.journal_boss_id, k.boss_order, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_region, k.guild_realm, k.uploader, k.spec_name, k.spec_icon_url,
+              k.guild_region, k.guild_realm, k.uploader, k.historic_world_rank, k.historic_rank_checked_at, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -3238,7 +3263,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
-      async reserve({ key, freshnessCutoff, at, credentials }) {
+      async reserve({ key, freshnessCutoff, at, credentials, phasePlan }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -3317,6 +3342,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]
           );
           const reservedRun = mapEvidenceRun(inserted.rows[0]!);
+          if (phasePlan && phasePlan.length > 0) {
+            await client.query(
+              `INSERT INTO character_evidence_run_phases
+                 (run_id, phase_id, ordinal, state)
+               SELECT $1, item.phase_id, item.ordinal, 'pending'
+                 FROM unnest($2::text[]) WITH ORDINALITY
+                   AS item(phase_id, ordinal)`,
+              [reservedRun.id, phasePlan]
+            );
+          }
           await client.query("COMMIT");
           return {
             kind: "reserved",
@@ -3377,6 +3412,76 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (result.rowCount !== 1) {
           throw new Error("character_evidence_run_not_enqueuable");
         }
+      },
+
+      async seedPhases(runId, phases) {
+        if (phases.length === 0) return;
+        const result = await pool.query(
+          `INSERT INTO character_evidence_run_phases
+             (run_id, phase_id, ordinal, state)
+           SELECT $1, item.phase_id, item.ordinal, 'pending'
+             FROM unnest($2::text[], $3::integer[]) AS item(phase_id, ordinal)
+           ON CONFLICT (run_id, phase_id) DO NOTHING`,
+          [
+            runId,
+            phases.map((phase) => phase.id),
+            phases.map((phase) => phase.ordinal)
+          ]
+        );
+        if ((result.rowCount ?? 0) !== phases.length) {
+          const count = await pool.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM character_evidence_run_phases WHERE run_id = $1`,
+            [runId]
+          );
+          if (Number(count.rows[0]?.count) !== phases.length) {
+            throw new Error("character_evidence_phase_plan_conflict");
+          }
+        }
+      },
+
+      async recordPhaseTransitions(runId, phases) {
+        for (const phase of phases) {
+          const result = await pool.query(
+            `UPDATE character_evidence_run_phases
+                SET state = $3, started_at = $4, completed_at = $5,
+                    limitation_code = $6
+              WHERE run_id = $1 AND phase_id = $2
+                AND EXISTS (
+                  SELECT 1 FROM character_evidence_runs run
+                   WHERE run.id = $1
+                     AND run.status IN ('queued', 'running', 'retrying')
+                )
+                AND (
+                  state = $3 OR
+                  (state = 'pending' AND $3 IN ('active', 'skipped')) OR
+                  (state = 'limited' AND $3 = 'active') OR
+                  (state = 'active' AND $3 IN ('completed', 'limited', 'failed', 'cancelled'))
+                )`,
+            [
+              runId,
+              phase.id,
+              phase.state,
+              phase.startedAt,
+              phase.completedAt,
+              phase.limitationCode
+            ]
+          );
+          if (result.rowCount !== 1)
+            throw new Error("character_evidence_phase_not_found");
+        }
+      },
+
+      async listPhases(runId) {
+        const result = await pool.query<
+          EvidenceRunPhase & { phase_id: string }
+        >(
+          `SELECT phase_id AS id, ordinal, state, started_at AS "startedAt",
+                  completed_at AS "completedAt", limitation_code AS "limitationCode"
+             FROM character_evidence_run_phases
+            WHERE run_id = $1 ORDER BY ordinal`,
+          [runId]
+        );
+        return result.rows;
       },
 
       async publish(runId, input) {
@@ -3508,6 +3613,25 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               )
             ).rows.map((row) => [row.fight_url, row.collected_at] as const)
           );
+          const storedHistoricRankLookups = new Map(
+            (
+              await client.query<{
+                fight_url: string;
+                historic_world_rank: number | null;
+                historic_rank_checked_at: Date | null;
+              }>(
+                `SELECT DISTINCT ON (k.fight_url)
+                        k.fight_url, k.historic_world_rank, k.historic_rank_checked_at
+                   FROM character_mythic_kills k
+                   JOIN character_evidence_runs r ON r.id = k.evidence_run_id
+                  WHERE r.region = $1 AND r.realm_slug = $2
+                    AND r.normalized_name = $3
+                    AND r.status IN ('complete', 'partial')
+                  ORDER BY k.fight_url, r.completed_at DESC NULLS LAST, r.id DESC`,
+                [activeKey.region, activeKey.realm, activeKey.name]
+              )
+            ).rows.map((row) => [row.fight_url, row] as const)
+          );
           const incomingFightUrls = new Set(
             input.kills.map((kill) => kill.fightUrl)
           );
@@ -3596,10 +3720,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, killed_at,
                  report_url, fight_url, guild_name, guild_region, guild_realm, uploader,
+                 historic_world_rank, historic_rank_checked_at,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+               VALUES (${Array.from({ length: 27 }, (_, index) => `$${index + 1}`).join(", ")})`,
               [
                 runId,
                 kill.fightUrl,
@@ -3616,6 +3741,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.guild?.region ?? null,
                 kill.guild?.realm ?? null,
                 kill.uploader ?? null,
+                kill.historicWorldRank ??
+                  storedHistoricRankLookups.get(kill.fightUrl)
+                    ?.historic_world_rank ??
+                  null,
+                kill.historicRankCheckedAt ??
+                  storedHistoricRankLookups.get(kill.fightUrl)
+                    ?.historic_rank_checked_at ??
+                  null,
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
                 performance.damage.state,
@@ -3695,6 +3828,26 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               ]
             );
           }
+          for (const cuttingEdge of input.cuttingEdges ?? []) {
+            await client.query(
+              `INSERT INTO character_evidence_cutting_edges
+                (evidence_run_id, achievement_id, completed_at)
+               VALUES ($1, $2, $3)`,
+              [runId, cuttingEdge.achievementId, cuttingEdge.completedAt]
+            );
+          }
+          // The terminal publication marker belongs to this transaction, not
+          // to the worker's finally block: evidence a reader can see must not
+          // ever say its final phase is still pending after a crash.
+          await client.query(
+            `UPDATE character_evidence_run_phases
+                SET state = CASE WHEN $3 = 'collection_failed' THEN 'failed' ELSE 'completed' END,
+                    started_at = COALESCE(started_at, $2),
+                    completed_at = $2,
+                    limitation_code = CASE WHEN $3 = 'collection_failed' THEN $3 ELSE NULL END
+              WHERE run_id = $1 AND phase_id = 'publication'`,
+            [runId, input.completedAt, input.limitationCode]
+          );
           const publication = await client.query(
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
@@ -3793,20 +3946,53 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async fail(id, code) {
         if (code.length === 0)
           throw new RangeError("character_evidence_error_invalid");
-        const result = await pool.query(
-          `UPDATE character_evidence_runs
-           SET status = 'failed', error_code = $2, completed_at = now(),
-               wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
-           WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
-          [id, code]
-        );
-        if (result.rowCount !== 1) {
-          throw new Error("character_evidence_run_not_active");
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const result = await client.query<{ completed_at: Date }>(
+            `UPDATE character_evidence_runs
+             SET status = 'failed', error_code = $2, completed_at = now(),
+                 wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
+             WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
+             RETURNING completed_at`,
+            [id, code]
+          );
+          if (result.rowCount !== 1)
+            throw new Error("character_evidence_run_not_active");
+          await client.query(
+            `UPDATE character_evidence_run_phases
+                SET state = 'failed',
+                    started_at = COALESCE(started_at, $2),
+                    completed_at = $2,
+                    limitation_code = $3
+              WHERE run_id = $1 AND phase_id = 'publication'`,
+            [id, result.rows[0]!.completed_at, code]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
         }
       },
 
       async getCompleted(key) {
         return loadCompletedEvidence(pool, key);
+      },
+
+      async recordHistoricRankLookup(killId, rank, checkedAt) {
+        await pool.query(
+          `UPDATE character_mythic_kills AS kill
+              SET historic_world_rank = COALESCE(kill.historic_world_rank, $2),
+                  historic_rank_checked_at = COALESCE(kill.historic_rank_checked_at, $3)
+             FROM character_evidence_runs AS run
+            WHERE kill.id = $1
+              AND kill.evidence_run_id = run.id
+              AND run.status IN ('complete', 'partial')
+              AND kill.historic_rank_checked_at IS NULL`,
+          [killId, rank, checkedAt]
+        );
       },
 
       async hydratedFightUrls(key, settledBefore) {

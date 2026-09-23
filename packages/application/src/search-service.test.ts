@@ -313,6 +313,7 @@ function policyFixture(
       async getCompleted() {
         return null;
       },
+      async recordHistoricRankLookup() {},
       async listResumable() {
         return [];
       },

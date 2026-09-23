@@ -6,6 +6,7 @@ import type {
 import type { CharacterKey } from "@slashwho/domain";
 
 import { measuredRepositories } from "./measured-repositories";
+import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 import type { MeasurementScope } from "./measurement";
 import { refreshMode, type RefreshMode } from "./refresh-mode";
 
@@ -152,7 +153,8 @@ export async function refreshCharacter(options: {
   const reservation = await evidence.reserve({
     key: options.key,
     freshnessCutoff: options.at,
-    at: options.at
+    at: options.at,
+    phasePlan: fullEvidencePhasePlan()
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(

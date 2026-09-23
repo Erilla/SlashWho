@@ -84,6 +84,7 @@ function mythicKill(
     reportUrl: "https://www.warcraftlogs.com/reports/example",
     fightUrl: "https://www.warcraftlogs.com/reports/example#fight=1",
     guild: { name: "Example Guild", region: "eu", realm: "silvermoon" },
+    historicWorldRank: null,
     performance: {
       spec: null,
       damage: { state: "unavailable" },
@@ -349,6 +350,272 @@ describe("PostgreSQL repositories", () => {
       name: "Rancour",
       region: "eu",
       realm: "draenor"
+    });
+  });
+
+  it("persists a rankless successful lookup and carries it into later publications", async () => {
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+    const legacy = (await repositories.evidence.getCompleted(rootKey))
+      ?.kills[0];
+    expect(legacy?.historicRankCheckedAt).toBeNull();
+    const checkedAt = new Date("2026-08-04T12:10:00.000Z");
+    await repositories.evidence.recordHistoricRankLookup(
+      legacy!.id,
+      null,
+      checkedAt
+    );
+    expect(
+      (await repositories.evidence.getCompleted(rootKey))?.kills[0]
+    ).toMatchObject({
+      historicWorldRank: null,
+      historicRankCheckedAt: checkedAt.toISOString()
+    });
+
+    const later = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (later.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(later.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+    expect(
+      (await repositories.evidence.getCompleted(rootKey))?.kills[0]
+    ).toMatchObject({
+      historicWorldRank: null,
+      historicRankCheckedAt: checkedAt.toISOString()
+    });
+  });
+
+  it("commits an evidence run with its reserved phase plan", async () => {
+    // Break caught: a process dying after reservation but before worker claim
+    // used to leave no ledger at all, so an operator could not distinguish a
+    // queued run from one whose progress writer had failed.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: [
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "publication"
+      ]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "warcraft_logs_history",
+        ordinal: 1,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_tier_bests",
+        ordinal: 2,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_fight_parses",
+        ordinal: 3,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_ranking_identities",
+        ordinal: 4,
+        state: "pending"
+      }),
+      expect.objectContaining({
+        id: "publication",
+        ordinal: 5,
+        state: "pending"
+      })
+    ]);
+  });
+
+  it("records a stopped collection as failed publication in the same transaction", async () => {
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: ["publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "partial",
+      limitationCode: "collection_failed",
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-22T11:05:00.000Z")
+    });
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "publication",
+        state: "failed",
+        limitationCode: "collection_failed"
+      })
+    ]);
+  });
+
+  it("settles publication when a run fails before it can publish", async () => {
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: ["publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.fail(reservation.run.id, "collection_failed");
+    await expect(
+      repositories.evidence.find(reservation.run.id)
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "collection_failed"
+    });
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "publication",
+        state: "failed",
+        limitationCode: "collection_failed"
+      })
+    ]);
+  });
+
+  it("reopens a limited evidence phase on retry and records its recovered result", async () => {
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: [
+        "warcraft_logs_identity_resolution",
+        "warcraft_logs_history",
+        "publication"
+      ]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    const recordTransition = async (
+      state: "active" | "limited" | "completed",
+      at: Date,
+      limitationCode: string | null = null
+    ) =>
+      repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+        {
+          id: "warcraft_logs_identity_resolution",
+          state,
+          startedAt: new Date("2026-09-22T11:01:00.000Z"),
+          completedAt: state === "active" ? null : at,
+          limitationCode
+        }
+      ]);
+
+    await recordTransition("active", new Date("2026-09-22T11:01:00.000Z"));
+    await recordTransition(
+      "limited",
+      new Date("2026-09-22T11:02:00.000Z"),
+      "not_found"
+    );
+    await recordTransition("active", new Date("2026-09-22T11:03:00.000Z"));
+    await recordTransition("completed", new Date("2026-09-22T11:04:00.000Z"));
+
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "warcraft_logs_identity_resolution",
+          state: "completed",
+          startedAt: new Date("2026-09-22T11:01:00.000Z"),
+          completedAt: new Date("2026-09-22T11:04:00.000Z"),
+          limitationCode: null
+        })
+      ])
+    );
+  });
+
+  it("publishes normalized Blizzard achievements with the evidence run", async () => {
+    // Break caught: a provider phase that does not publish its normalized
+    // result only recreates the same network call on every dossier read.
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: ["blizzard_achievements", "publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+
+    await repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+      {
+        id: "blizzard_achievements",
+        state: "active",
+        startedAt: new Date("2026-09-22T11:01:00.000Z"),
+        completedAt: null,
+        limitationCode: null
+      }
+    ]);
+    await repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+      {
+        id: "blizzard_achievements",
+        state: "completed",
+        startedAt: new Date("2026-09-22T11:01:00.000Z"),
+        completedAt: new Date("2026-09-22T11:04:00.000Z"),
+        limitationCode: null
+      }
+    ]);
+
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      cuttingEdges: [
+        { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+      ],
+      completedAt: new Date("2026-09-22T11:05:00.000Z")
+    } as never);
+
+    expect(await repositories.evidence.getCompleted(rootKey)).toMatchObject({
+      cuttingEdgesCollected: true,
+      cuttingEdges: [
+        { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+      ]
     });
   });
 
@@ -1540,6 +1807,8 @@ describe("PostgreSQL repositories", () => {
       ],
       wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })],
       tierBests: [],
+      cuttingEdges: [],
+      cuttingEdgesCollected: false,
       wipeCapable: true
     });
   });
@@ -2441,12 +2710,17 @@ describe("PostgreSQL repositories", () => {
     // Back to the shape that was published: the identifier and the read time
     // are storage's own, and neither was part of the input.
     const asPublished = (
-      kills: readonly { id: string; parsesReadAt: string | null }[]
+      kills: readonly {
+        id: string;
+        parsesReadAt: string | null;
+        historicRankCheckedAt?: string | null;
+      }[]
     ) =>
       kills.map((kill) => {
-        const { id, parsesReadAt, ...rest } = kill;
+        const { id, parsesReadAt, historicRankCheckedAt, ...rest } = kill;
         void id;
         void parsesReadAt;
+        void historicRankCheckedAt;
         return rest;
       });
     await expect(
