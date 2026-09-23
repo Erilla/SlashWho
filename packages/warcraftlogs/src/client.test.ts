@@ -3364,6 +3364,304 @@ describe("Warcraft Logs gateway", () => {
     expect(attendancePages).toEqual([1, 2]);
   });
 
+  it("hydrates only attendance reports the history scan has not read and that may list the character", async () => {
+    // Break caught: attendance lists every report a guild ever logged. Ryii's
+    // two guilds held 1,740 against 141 with Ryii in them and 20 missing from
+    // Ryii's own history, so hydrating each one cost 1,811 requests a run
+    // against a 300 cap. Every run ended `request_cap`, none kept a cursor
+    // for the walk, and the character was re-collected forever.
+    const hydrated: string[] = [];
+    const report = (code: string) => ({
+      code,
+      startTime: 1_579_633_885_132,
+      zone: { id: 23, name: "The Eternal Palace" },
+      masterData: { actors: [] },
+      fights: []
+    });
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string; page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                server: { normalizedName: "Silvermoon" },
+                guilds: [
+                  {
+                    name: "Guild",
+                    server: { slug: "silvermoon", region: { slug: "EU" } }
+                  }
+                ],
+                recentReports: {
+                  data: [report("scannedReport")],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("GuildAttendance")) {
+        return jsonResponse({
+          data: {
+            guildData: {
+              guild: {
+                attendance: {
+                  data: [
+                    { code: "scannedReport", players: [{ name: "Sentinel" }] },
+                    { code: "strangersReport", players: [{ name: "Other" }] },
+                    { code: "omittedReport", players: [{ name: "SENTINEL" }] },
+                    // Not listing players is not listing the character's
+                    // absence, so these must still be read.
+                    { code: "unlistedReport" },
+                    { code: "emptyListReport", players: [] },
+                    { code: "malformedListReport", players: [{ name: null }] },
+                    {
+                      code: "suffixedReport",
+                      players: [
+                        { name: "Other" },
+                        { name: "Sentinel-Silvermoon" }
+                      ]
+                    }
+                  ],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("ReportByCode")) {
+        hydrated.push(body.variables.code!);
+        return jsonResponse({ data: { reportData: { report: null } } });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 20,
+      parseRequestCap: 1
+    });
+
+    expect(hydrated).toEqual([
+      "omittedReport",
+      "unlistedReport",
+      "emptyListReport",
+      "malformedListReport",
+      "suffixedReport"
+    ]);
+  });
+
+  it("matches an attendance name written in another Unicode form", async () => {
+    // Break caught: a decomposed accent is a different string, so an exact
+    // comparison would rule out the very report attendance exists to recover.
+    const hydrated: string[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string };
+      };
+      if (body.query.includes("RecentReports")) {
+        return jsonResponse({
+          data: {
+            characterData: {
+              character: {
+                server: { normalizedName: "Silvermoon" },
+                guilds: [
+                  {
+                    name: "Guild",
+                    server: { slug: "silvermoon", region: { slug: "EU" } }
+                  }
+                ],
+                recentReports: { data: [], has_more_pages: false }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("GuildAttendance")) {
+        return jsonResponse({
+          data: {
+            guildData: {
+              guild: {
+                attendance: {
+                  data: [
+                    {
+                      code: "decomposedReport",
+                      players: [{ name: "Zoë" }]
+                    }
+                  ],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("ReportByCode")) {
+        hydrated.push(body.variables.code!);
+        return jsonResponse({ data: { reportData: { report: null } } });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    await client.getFirstKillReports(
+      { region: "eu", realm: "silvermoon", name: "zoë" },
+      { requestCap: 5, parseRequestCap: 1 }
+    );
+
+    expect(hydrated).toEqual(["decomposedReport"]);
+  });
+
+  it("still hydrates the reports a drifted history page never decoded", async () => {
+    // Break caught: a page that drifts after a kill still returns evidence.
+    // Marking every code on it as scanned hid the undecoded reports from
+    // attendance, the one path left that could recover them.
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[0]
+    ) as {
+      data: {
+        characterData: {
+          character: {
+            guilds?: unknown;
+            recentReports: { data: unknown[] };
+          };
+        };
+      };
+    };
+    const character = page.data.characterData.character;
+    character.guilds = [
+      { name: "Guild", server: { slug: "silvermoon", region: { slug: "EU" } } }
+    ];
+    character.recentReports.data.push({ code: "driftedReport" });
+    const hydrated: string[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string };
+      };
+      if (body.query.includes("RecentReports")) return jsonResponse(page);
+      if (body.query.includes("GuildAttendance")) {
+        return jsonResponse({
+          data: {
+            guildData: {
+              guild: {
+                attendance: {
+                  data: [
+                    { code: "lateReport", players: [{ name: "Sentinel" }] },
+                    { code: "driftedReport", players: [{ name: "Sentinel" }] }
+                  ],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("ReportByCode")) {
+        hydrated.push(body.variables.code!);
+        return jsonResponse({ data: { reportData: { report: null } } });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 10,
+      parseRequestCap: 1
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "schema_drift" }
+    });
+    // The report the page did decode may be read again; that costs a
+    // request, where skipping the undecoded one would cost its evidence.
+    expect(hydrated).toContain("driftedReport");
+  });
+
+  it("keeps the proved boundary page's evidence and does not hydrate it again", async () => {
+    // Break caught: a resume reads only the probe page and what lies below
+    // it, so every report the probe proved was hydrated again through
+    // attendance -- a resumed run cost more than a fresh one.
+    const page = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages[0]
+    );
+    const hydrated: string[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { code?: string; page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        return jsonResponse(
+          body.variables.page === 18
+            ? page
+            : {
+                data: {
+                  characterData: {
+                    character: {
+                      server: { normalizedName: "Silvermoon" },
+                      guilds: [
+                        {
+                          name: "Guild",
+                          server: { slug: "silvermoon", region: { slug: "EU" } }
+                        }
+                      ],
+                      recentReports: { data: [], has_more_pages: false }
+                    }
+                  }
+                }
+              }
+        );
+      }
+      if (body.query.includes("GuildAttendance")) {
+        return jsonResponse({
+          data: {
+            guildData: {
+              guild: {
+                attendance: {
+                  data: [
+                    { code: "lateReport", players: [{ name: "Sentinel" }] }
+                  ],
+                  has_more_pages: false
+                }
+              }
+            }
+          }
+        });
+      }
+      if (body.query.includes("ReportByCode")) {
+        hydrated.push(body.variables.code!);
+        return jsonResponse({ data: { reportData: { report: null } } });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 10,
+      parseRequestCap: 1,
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    expect(hydrated).toEqual([]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: [
+        {
+          reportUrl: expect.stringContaining("lateReport")
+        }
+      ]
+    });
+  });
+
   it("uses each fight's game zone when the report zone names another instance", async () => {
     // Break caught: Warcraft Logs pins one zone to a whole report, and a raid
     // night that also ran Mythic+ is filed under the dungeon season. Stamping
@@ -4401,6 +4699,125 @@ describe("Warcraft Logs gateway", () => {
       kind: "evidence",
       limitation: { code: "request_cap" },
       historyScanResumePage: 20
+    });
+  });
+
+  it("keeps its proved cursor when a resumed scan finds history already exhausted", async () => {
+    // Break caught: a scan that ended cleanly and then capped elsewhere saves
+    // the page past the end. The resumed run reads that page, finds it empty,
+    // and used to save the page after it with no boundary, which the next run
+    // could not validate -- so it restarted at page one and saved the first
+    // cursor again. Ryii alternated between the two for a day.
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0];
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        const requestedPage = body.variables.page ?? 0;
+        historyPages.push(requestedPage);
+        return jsonResponse(
+          requestedPage === 66
+            ? page
+            : {
+                data: {
+                  characterData: {
+                    character: {
+                      server: { normalizedName: "Silvermoon" },
+                      guilds: [
+                        {
+                          name: "Guild",
+                          server: { slug: "silvermoon", region: { slug: "EU" } }
+                        }
+                      ],
+                      recentReports: { data: [], has_more_pages: false }
+                    }
+                  }
+                }
+              }
+        );
+      }
+      if (body.query.includes("GuildAttendance")) {
+        return jsonResponse({
+          data: {
+            guildData: {
+              guild: { attendance: { data: [], has_more_pages: true } }
+            }
+          }
+        });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 4,
+      parseRequestCap: 10,
+      historyScanStartPage: 67,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    expect(historyPages).toEqual([66, 67]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "request_cap" },
+      historyScanResumePage: 67,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+  });
+
+  it("does not probe a stored boundary on a run with no history budget", async () => {
+    // Break caught: the probe went out before the cap was consulted, so a
+    // parse-only resume spent a request it did not have -- and an unavailable
+    // probe returned early and dropped the whole parse-only run.
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        historyPages.push(body.variables.page ?? 0);
+        return new Response("upstream-body-marker", { status: 503 });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 0,
+      parseRequestCap: 10,
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    expect(historyPages).toEqual([]);
+    expect(result).not.toEqual({ kind: "limitation", code: "unavailable" });
+  });
+
+  it("reports the cap when a resume spends its whole budget proving the boundary", async () => {
+    // Break caught: the proved boundary page counts as decoded, which must not
+    // let a run that read nothing past it look like a finished history.
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0];
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+    );
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10,
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    expect(result).toMatchObject({
+      limitation: { code: "request_cap" },
+      historyScanResumePage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
     });
   });
 
