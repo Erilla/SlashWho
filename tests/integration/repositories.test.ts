@@ -3689,7 +3689,8 @@ describe("PostgreSQL repositories", () => {
         searchedSince: dayBefore
       });
       expect(other).toMatchObject({ kind: "reserved" });
-      if (other.kind !== "reserved") throw new Error("tier_search_not_reserved");
+      if (other.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
       await repositories.evidence.claim(other.run.id, 1);
       await repositories.evidence.fail(other.run.id, "unavailable");
       await expect(
@@ -4037,8 +4038,43 @@ describe("PostgreSQL repositories", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the three queries the document describes", () => {
-        expect(queries).toHaveLength(3);
+      it("finds exactly the four queries the document describes", () => {
+        expect(queries).toHaveLength(4);
+      });
+
+      it("reports what tier searches spent and found, apart from other runs", async () => {
+        const ordinary = await reserveRun(rootKey, new Date());
+        const searched = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(cost(ordinary));
+        await repositories.evidence.recordRunCost(
+          cost(searched, {
+            mode: "tier_search",
+            tierSearch: {
+              raidId: "1180",
+              outcome: "complete",
+              requests: 20,
+              guilds: 2,
+              reportsHydrated: 11,
+              recoveredKills: 1,
+              recoveredWipes: 4
+            }
+          })
+        );
+
+        const result = await pool.query(queries[3] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            tier_search_outcome: "complete",
+            searches: "1",
+            requests: "20",
+            guilds: "2",
+            reports_hydrated: "11",
+            kills_recovered: "1",
+            wipes_recovered: "4",
+            measured: "1"
+          })
+        ]);
       });
 
       it("reports recovery's yield without counting an unasked run as zero", async () => {
