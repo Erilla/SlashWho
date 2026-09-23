@@ -3842,8 +3842,11 @@ describe("applicant evidence job handler", () => {
       }));
       const evidence = store();
       evidence.listPhases = async () => phases;
+      const tierTransitions: string[] = [];
       evidence.recordPhaseTransitions = async (_runId, updates) => {
         for (const update of updates) {
+          if (update.id === "warcraft_logs_tier_bests")
+            tierTransitions.push(update.state);
           const phase = phases.find((item) => item.id === update.id)!;
           Object.assign(phase, update);
         }
@@ -3887,6 +3890,7 @@ describe("applicant evidence job handler", () => {
       expect(
         phases.find((phase) => phase.id === "warcraft_logs_ranking_identities")
       ).toMatchObject({ state: "completed", limitationCode: null });
+      expect(tierTransitions).toEqual(["active", "limited"]);
     });
 
     it.each([
@@ -4114,6 +4118,47 @@ describe("applicant evidence job handler", () => {
           (kill) => kill.historicWorldRank
         )
       ).toEqual([3, 4]);
+      expect(
+        evidence.published[0]?.result.kills.every(
+          (kill) => kill.historicRankCheckedAt !== undefined
+        )
+      ).toBe(true);
+    });
+
+    it("records a successful Raider.IO no-match answer without inventing a rank", async () => {
+      const evidence = store();
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [
+            {
+              ...concludedKill,
+              raidName: "The Venomous Abyss",
+              bossName: "Sszorak",
+              guild: { name: "Guild", region: "eu", realm: "Silvermoon" }
+            }
+          ],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {},
+        {
+          raiderio: {
+            getMythicBossRankings: vi.fn(async () => ({
+              kind: "rankings" as const,
+              rows: []
+            }))
+          }
+        }
+      );
+      await handler.execute(run.id);
+      expect(evidence.published[0]?.result.kills[0]).toMatchObject({
+        historicWorldRank: null,
+        historicRankCheckedAt: expect.any(String)
+      });
     });
 
     it("resolves the Warcraft Logs identity as its own persisted phase", async () => {

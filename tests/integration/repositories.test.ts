@@ -353,6 +353,61 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("persists a rankless successful lookup and carries it into later publications", async () => {
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+    const legacy = (await repositories.evidence.getCompleted(rootKey))
+      ?.kills[0];
+    expect(legacy?.historicRankCheckedAt).toBeNull();
+    const checkedAt = new Date("2026-08-04T12:10:00.000Z");
+    await repositories.evidence.recordHistoricRankLookup(
+      legacy!.id,
+      null,
+      checkedAt
+    );
+    expect(
+      (await repositories.evidence.getCompleted(rootKey))?.kills[0]
+    ).toMatchObject({
+      historicWorldRank: null,
+      historicRankCheckedAt: checkedAt.toISOString()
+    });
+
+    const later = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    if (later.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(later.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T13:05:00.000Z")
+    });
+    expect(
+      (await repositories.evidence.getCompleted(rootKey))?.kills[0]
+    ).toMatchObject({
+      historicWorldRank: null,
+      historicRankCheckedAt: checkedAt.toISOString()
+    });
+  });
+
   it("commits an evidence run with its reserved phase plan", async () => {
     // Break caught: a process dying after reservation but before worker claim
     // used to leave no ledger at all, so an operator could not distinguish a
@@ -2655,12 +2710,17 @@ describe("PostgreSQL repositories", () => {
     // Back to the shape that was published: the identifier and the read time
     // are storage's own, and neither was part of the input.
     const asPublished = (
-      kills: readonly { id: string; parsesReadAt: string | null }[]
+      kills: readonly {
+        id: string;
+        parsesReadAt: string | null;
+        historicRankCheckedAt?: string | null;
+      }[]
     ) =>
       kills.map((kill) => {
-        const { id, parsesReadAt, ...rest } = kill;
+        const { id, parsesReadAt, historicRankCheckedAt, ...rest } = kill;
         void id;
         void parsesReadAt;
+        void historicRankCheckedAt;
         return rest;
       });
     await expect(

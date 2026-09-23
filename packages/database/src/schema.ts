@@ -786,6 +786,9 @@ export const characterMythicKills = pgTable(
     guildRealm: text("guild_realm"),
     uploader: text("uploader"),
     historicWorldRank: integer("historic_world_rank"),
+    historicRankCheckedAt: timestamp("historic_rank_checked_at", {
+      withTimezone: true
+    }),
     specName: text("spec_name"),
     specIconUrl: text("spec_icon_url"),
     damageParseState:

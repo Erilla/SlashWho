@@ -69,9 +69,10 @@ describe("database migrations", () => {
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'character_mythic_kills'
-        AND column_name IN ('is_final_boss', 'historic_world_rank')
+        AND column_name IN ('is_final_boss', 'historic_world_rank', 'historic_rank_checked_at')
     `);
     expect(vestigialKillColumns.rows).toEqual([
+      { column_name: "historic_rank_checked_at" },
       { column_name: "historic_world_rank" }
     ]);
   });
@@ -114,7 +115,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-16).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-17).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 24, tag: "0025_parse_limitations_seen" },
       { idx: 25, tag: "0026_unstick_parse_drift_runs" },
@@ -131,7 +132,8 @@ describe("database migrations", () => {
       { idx: 36, tag: "0037_fingerprint_historical_guilds" },
       { idx: 37, tag: "0038_evidence_run_phases" },
       { idx: 38, tag: "0039_evidence_cutting_edges" },
-      { idx: 39, tag: "0040_mythic_kill_world_rank" }
+      { idx: 39, tag: "0040_mythic_kill_world_rank" },
+      { idx: 40, tag: "0041_mythic_kill_rank_checked" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

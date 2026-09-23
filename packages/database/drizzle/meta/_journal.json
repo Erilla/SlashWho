@@ -281,6 +281,13 @@
       "when": 1790769600000,
       "tag": "0040_mythic_kill_world_rank",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790769600001,
+      "tag": "0041_mythic_kill_rank_checked",
+      "breakpoints": true
     }
   ]
 }

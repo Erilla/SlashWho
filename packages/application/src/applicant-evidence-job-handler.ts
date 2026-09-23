@@ -1209,15 +1209,9 @@ export function createApplicantEvidenceJobHandler(
             onLimitation: (query, code) => {
               if (code === "schema_drift") record.limitationQuery = query;
               observePhase(query);
-              const ledger = phaseLedger;
-              if (ledger) {
+              if (phaseLedger) {
                 const limitedPhase = phaseForQuery(query);
                 phaseLimitations.set(limitedPhase, code);
-                observedPhase = undefined;
-                phaseWrites = phaseWrites.then(async () => {
-                  await ledger.transition(limitedPhase, "limited", code);
-                  activePhase = undefined;
-                });
               }
             },
             signal: activeContext.signal
@@ -1369,6 +1363,7 @@ export function createApplicantEvidenceJobHandler(
                 if (rows) {
                   publishedKills[index] = {
                     ...kill,
+                    historicRankCheckedAt: new Date().toISOString(),
                     historicWorldRank: historicWorldRankForKill(
                       kill,
                       run.key.region,

@@ -188,6 +188,7 @@ interface CharacterMythicKillRow {
   guild_realm: string | null;
   uploader: string | null;
   historic_world_rank: number | null;
+  historic_rank_checked_at: Date | null;
   spec_name: string | null;
   spec_icon_url: string | null;
   damage_parse_state: CharacterMythicKillParseMetric["state"];
@@ -546,6 +547,7 @@ function mapCharacterMythicKill(
           },
     ...(row.uploader === null ? {} : { uploader: row.uploader }),
     historicWorldRank: row.historic_world_rank,
+    historicRankCheckedAt: row.historic_rank_checked_at?.toISOString() ?? null,
     performance: {
       spec:
         row.spec_name === null || row.spec_icon_url === null
@@ -743,7 +745,7 @@ async function loadCompletedEvidence(
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_region, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, historic_world_rank, historic_rank_checked_at, spec_name, spec_icon_url,
             damage_parse_state,
             damage_percentile, healing_parse_state, healing_percentile,
             boss_damage_parse_state, boss_damage_percentile, parses_read_at
@@ -980,7 +982,7 @@ async function loadPositiveEvidenceForPartial(
   const kills = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
-            guild_name, guild_region, guild_realm, uploader, historic_world_rank, spec_name, spec_icon_url,
+            guild_name, guild_region, guild_realm, uploader, historic_world_rank, historic_rank_checked_at, spec_name, spec_icon_url,
             damage_parse_state, damage_percentile, healing_parse_state,
             healing_percentile, boss_damage_parse_state, boss_damage_percentile,
             parses_read_at
@@ -989,7 +991,7 @@ async function loadPositiveEvidenceForPartial(
               k.id, k.raid_id, k.raid_name, k.boss_id, k.boss_name,
               k.journal_boss_id, k.boss_order, k.killed_at,
               k.report_url, k.fight_url, k.source_fight_key, k.guild_name,
-              k.guild_region, k.guild_realm, k.uploader, k.historic_world_rank, k.spec_name, k.spec_icon_url,
+              k.guild_region, k.guild_realm, k.uploader, k.historic_world_rank, k.historic_rank_checked_at, k.spec_name, k.spec_icon_url,
               k.damage_parse_state, k.damage_percentile,
               k.healing_parse_state, k.healing_percentile,
               k.boss_damage_parse_state, k.boss_damage_percentile,
@@ -3611,14 +3613,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               )
             ).rows.map((row) => [row.fight_url, row.collected_at] as const)
           );
-          const storedHistoricWorldRanks = new Map(
+          const storedHistoricRankLookups = new Map(
             (
               await client.query<{
                 fight_url: string;
                 historic_world_rank: number | null;
+                historic_rank_checked_at: Date | null;
               }>(
                 `SELECT DISTINCT ON (k.fight_url)
-                        k.fight_url, k.historic_world_rank
+                        k.fight_url, k.historic_world_rank, k.historic_rank_checked_at
                    FROM character_mythic_kills k
                    JOIN character_evidence_runs r ON r.id = k.evidence_run_id
                   WHERE r.region = $1 AND r.realm_slug = $2
@@ -3627,9 +3630,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                   ORDER BY k.fight_url, r.completed_at DESC NULLS LAST, r.id DESC`,
                 [activeKey.region, activeKey.realm, activeKey.name]
               )
-            ).rows.map(
-              (row) => [row.fight_url, row.historic_world_rank] as const
-            )
+            ).rows.map((row) => [row.fight_url, row] as const)
           );
           const incomingFightUrls = new Set(
             input.kills.map((kill) => kill.fightUrl)
@@ -3719,11 +3720,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
                  boss_name, journal_boss_id, boss_order, killed_at,
                  report_url, fight_url, guild_name, guild_region, guild_realm, uploader,
-                 historic_world_rank,
+                 historic_world_rank, historic_rank_checked_at,
                  spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
                  healing_percentile, boss_damage_parse_state, boss_damage_percentile,
                  collected_at, parses_read_at)
-               VALUES (${Array.from({ length: 26 }, (_, index) => `$${index + 1}`).join(", ")})`,
+               VALUES (${Array.from({ length: 27 }, (_, index) => `$${index + 1}`).join(", ")})`,
               [
                 runId,
                 kill.fightUrl,
@@ -3740,9 +3741,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 kill.guild?.region ?? null,
                 kill.guild?.realm ?? null,
                 kill.uploader ?? null,
-                kill.historicWorldRank !== undefined
-                  ? kill.historicWorldRank
-                  : (storedHistoricWorldRanks.get(kill.fightUrl) ?? null),
+                kill.historicWorldRank ??
+                  storedHistoricRankLookups.get(kill.fightUrl)
+                    ?.historic_world_rank ??
+                  null,
+                kill.historicRankCheckedAt ??
+                  storedHistoricRankLookups.get(kill.fightUrl)
+                    ?.historic_rank_checked_at ??
+                  null,
                 performance.spec?.name ?? null,
                 performance.spec?.iconUrl ?? null,
                 performance.damage.state,
@@ -3973,6 +3979,20 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
       async getCompleted(key) {
         return loadCompletedEvidence(pool, key);
+      },
+
+      async recordHistoricRankLookup(killId, rank, checkedAt) {
+        await pool.query(
+          `UPDATE character_mythic_kills AS kill
+              SET historic_world_rank = COALESCE(kill.historic_world_rank, $2),
+                  historic_rank_checked_at = COALESCE(kill.historic_rank_checked_at, $3)
+             FROM character_evidence_runs AS run
+            WHERE kill.id = $1
+              AND kill.evidence_run_id = run.id
+              AND run.status IN ('complete', 'partial')
+              AND kill.historic_rank_checked_at IS NULL`,
+          [killId, rank, checkedAt]
+        );
       },
 
       async hydratedFightUrls(key, settledBefore) {

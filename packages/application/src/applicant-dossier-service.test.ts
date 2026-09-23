@@ -82,6 +82,7 @@ function fixture(
     evidenceCompletedAt?: Date;
     storedEvidence?: boolean;
     historicWorldRank?: number | null;
+    historicRankCheckedAt?: string | null;
     storedCuttingEdges?: readonly {
       achievementId: string;
       completedAt: string;
@@ -117,6 +118,7 @@ function fixture(
       guild: { name: "Example Guild", realm: "silvermoon" },
       historicWorldRank:
         options.historicWorldRank === undefined ? 2 : options.historicWorldRank,
+      historicRankCheckedAt: options.historicRankCheckedAt ?? null,
       parsesReadAt: null,
       performance: {
         damage: { state: "unavailable" },
@@ -150,6 +152,17 @@ function fixture(
     },
     runs: { create: runsCreate },
     evidence: {
+      recordHistoricRankLookup: vi
+        .fn()
+        .mockImplementation(
+          async (killId: string, rank: number | null, checkedAt: Date) => {
+            const kill = cachedKills.find((item) => item.id === killId);
+            if (kill) {
+              kill.historicWorldRank = rank;
+              kill.historicRankCheckedAt = checkedAt.toISOString();
+            }
+          }
+        ),
       reserve: vi.fn().mockImplementation(async ({ key }) => ({
         kind: options.gatheringCharacter === key ? "active" : "fresh",
         active:
@@ -1385,15 +1398,132 @@ describe("applicant dossier service", () => {
   });
 
   it("restores historic ranks for evidence published before ranks were stored", async () => {
-    const { dossiers, raiderio } = fixture({ historicWorldRank: null });
+    const { dossiers, raiderio, repositories } = fixture({
+      historicWorldRank: null
+    });
     await expect(dossiers.read(root)).resolves.toMatchObject({
       dossier: {
         raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 2 })])
       }
     });
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+    expect(repositories.evidence.recordHistoricRankLookup).toHaveBeenCalledWith(
+      "10000000-0000-4000-8000-000000000011",
+      2,
+      expect.any(Date)
+    );
     await dossiers.read(root);
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-request a successfully checked rankless kill", async () => {
+    const { dossiers, raiderio } = fixture({
+      historicWorldRank: null,
+      historicRankCheckedAt: "2026-09-22T10:00:00.000Z"
+    });
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).not.toHaveBeenCalled();
+  });
+
+  it("stores a successful no-match lookup so later reads stop probing", async () => {
+    const { dossiers, raiderio, repositories } = fixture({
+      historicWorldRank: null
+    });
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "rankings",
+      rows: []
+    });
+    await dossiers.read(root);
+    expect(repositories.evidence.recordHistoricRankLookup).toHaveBeenCalledWith(
+      "10000000-0000-4000-8000-000000000011",
+      null,
+      expect.any(Date)
+    );
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps legacy rank fallback requests per dossier read", async () => {
+    const additionalKills: StoredCharacterMythicKill[] = Array.from(
+      { length: 50 },
+      (_, index) => ({
+        id: `10000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`,
+        raidId: "42",
+        raidName: "Nerub-ar Palace",
+        bossId: "1234",
+        bossName: "Queen Ansurek",
+        journalBossId: null,
+        bossOrder: 8,
+        killedAt: "2024-10-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/example",
+        fightUrl: `https://www.warcraftlogs.com/reports/example#fight=${index + 10}`,
+        guild: { name: `Guild ${index}`, realm: "silvermoon" },
+        historicWorldRank: null,
+        historicRankCheckedAt: null,
+        parsesReadAt: null,
+        performance: {
+          damage: { state: "unavailable" },
+          healing: { state: "unavailable" },
+          bossDamage: { state: "unavailable" }
+        }
+      })
+    );
+    const { dossiers, raiderio } = fixture({
+      historicWorldRank: null,
+      additionalKills
+    });
+    const result = await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(50);
+    expect(result).toMatchObject({
+      dossier: {
+        limitations: expect.arrayContaining([
+          expect.objectContaining({ source: "raiderio", code: "request_cap" })
+        ])
+      }
+    });
+  });
+
+  it.each(["rate_limited", "schema_drift"] as const)(
+    "retries a %s rank lookup rather than caching its limitation",
+    async (code) => {
+      const { dossiers, raiderio } = fixture({ historicWorldRank: null });
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValueOnce({
+        kind: "limitation",
+        code,
+        retryAfterMs: 1000
+      });
+      await dossiers.read(root);
+      await dossiers.read(root);
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("keeps an unavailable lookup's observation and retry time fixed on cache replay", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-09-22T10:00:00.000Z"));
+      const { dossiers, raiderio } = fixture({ historicWorldRank: null });
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+        kind: "limitation",
+        code: "unavailable",
+        retryAfterMs: 600_000
+      });
+      const first = await dossiers.read(root);
+      vi.setSystemTime(new Date("2026-09-22T10:01:00.000Z"));
+      const second = await dossiers.read(root);
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+      if (first.kind !== "ready" || second.kind !== "ready")
+        throw new Error("expected_dossier");
+      const firstLimitation = first.dossier.limitations.find(
+        (item) => item.source === "raiderio"
+      );
+      const secondLimitation = second.dossier.limitations.find(
+        (item) => item.source === "raiderio"
+      );
+      expect(secondLimitation).toEqual(firstLimitation);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps legacy kills visible when the rank fallback is unavailable", async () => {

@@ -332,6 +332,8 @@ export interface CharacterMythicKillInput {
   uploader?: string | null;
   /** Raider.IO's confirmed world rank for this kill, if available. */
   historicWorldRank?: number | null;
+  /** A successful ranking response, including one with no unique match. */
+  historicRankCheckedAt?: string | null;
   performance: CharacterMythicKillPerformance;
 }
 
@@ -675,6 +677,12 @@ export interface EvidenceRepository {
    */
   clearSettledCollectionStages(): Promise<number>;
   getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
+  /** Records a successful legacy rank fallback on the published kill itself. */
+  recordHistoricRankLookup(
+    killId: string,
+    rank: number | null,
+    checkedAt: Date
+  ): Promise<void>;
   /**
    * Fight URLs there is nothing left to ask about, so a budget-limited
    * collection run can spend its requests on what is missing instead of
