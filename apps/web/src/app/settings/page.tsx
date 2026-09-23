@@ -296,12 +296,14 @@ export default function SettingsPage() {
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const generation = sessionGeneration.current;
     try {
       const response = await fetch("/api/account/session", {
         cache: "no-store"
       });
       if (!response.ok) throw new Error("session_unavailable");
       const session = (await response.json()) as { account?: unknown };
+      if (sessionGeneration.current !== generation) return;
       if (session.account !== null) {
         refreshSession();
         return;
@@ -309,6 +311,7 @@ export default function SettingsPage() {
       writeStoredCredentials(credentials);
       setSaved(true);
     } catch {
+      if (sessionGeneration.current !== generation) return;
       setSessionStatus("unknown");
       setFeedback("Could not verify your session. Retry before changing keys.");
     }

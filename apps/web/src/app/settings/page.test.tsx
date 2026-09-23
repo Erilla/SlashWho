@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +28,67 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it.each(["unknown", "signed-in"])(
+    "does not save a stale signed-out form after session refresh becomes %s",
+    async (nextSession) => {
+      let resolveSave!: (response: {
+        ok: boolean;
+        json(): Promise<{ account: null }>;
+      }) => void;
+      const pendingSave = new Promise<{
+        ok: boolean;
+        json(): Promise<{ account: null }>;
+      }>((resolve) => {
+        resolveSave = resolve;
+      });
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ account: null })
+        })
+        .mockImplementationOnce(() => pendingSave)
+        .mockResolvedValueOnce(
+          nextSession === "unknown"
+            ? { ok: false, status: 500 }
+            : {
+                ok: true,
+                json: async () => ({
+                  account: {
+                    email: "b@example.test",
+                    passwordChangeRequired: false
+                  }
+                })
+              }
+        )
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            providers: [
+              { provider: "blizzard", present: false, version: 0 },
+              { provider: "raiderio", present: false, version: 0 },
+              { provider: "warcraftlogs", present: false, version: 0 }
+            ]
+          })
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<SettingsPage />);
+      const [clientId] = await screen.findAllByLabelText("Client ID");
+      await userEvent.type(clientId!, "old-secret-id");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      window.dispatchEvent(new Event("focus"));
+      if (nextSession === "unknown")
+        await screen.findByRole("button", { name: "Retry session check" });
+      else await screen.findAllByText("No account key saved");
+      await act(async () =>
+        resolveSave({ ok: true, json: async () => ({ account: null }) })
+      );
+      expect(readStoredCredentials().blizzardClientId).toBe("");
+      expect(screen.queryByText("Saved.")).not.toBeInTheDocument();
+    }
+  );
+
   it.each(["rejected", "http-500"])(
     "keeps browser storage locked when session lookup is %s",
     async (failure) => {
@@ -190,6 +251,54 @@ describe("SettingsPage", () => {
       )
     ).toBeInTheDocument();
     expect(readStoredCredentials().blizzardClientSecret).toBe("secret");
+  });
+
+  it("retains the account slot and browser copy when DELETE rejects", async () => {
+    writeStoredCredentials({
+      blizzardClientId: "browser-id",
+      blizzardClientSecret: "browser-secret",
+      raiderIoAccessKey: "",
+      wclClientId: "",
+      wclClientSecret: ""
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((url: string, options?: RequestInit) => {
+        if (options?.method === "DELETE")
+          return Promise.reject(new Error("offline"));
+        if (url === "/api/account/session")
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              account: {
+                email: "a@example.test",
+                passwordChangeRequired: false
+              }
+            })
+          });
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            providers: [
+              { provider: "blizzard", present: true, version: 1 },
+              { provider: "raiderio", present: false, version: 0 },
+              { provider: "warcraftlogs", present: false, version: 0 }
+            ]
+          })
+        });
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettingsPage />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove account key" })
+    );
+    expect(
+      await screen.findByText(
+        "Could not remove this provider. Check your connection and try again."
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText("Saved in account")).toBeInTheDocument();
+    expect(readStoredCredentials().blizzardClientSecret).toBe("browser-secret");
   });
 
   it("locks account controls when the pre-save session recheck fails", async () => {
