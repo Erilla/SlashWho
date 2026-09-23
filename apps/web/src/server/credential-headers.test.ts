@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { readCredentialOverrides } from "./credential-headers";
+import {
+  readCredentialOverrides,
+  resolveCredentialOverrides
+} from "./credential-headers";
 import { loadWebConfig } from "./config";
 import { webLogger } from "./logger";
 
@@ -13,6 +16,41 @@ const config = loadWebConfig({
   BLIZZARD_CLIENT_ID: "blizzard-client-id",
   BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
   EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
+});
+
+describe("resolveCredentialOverrides", () => {
+  it("uses the active account's saved keys and ignores stale browser headers", async () => {
+    const request = new Request("https://example.test/api/dossiers", {
+      headers: {
+        "x-wcl-client-id": "stale",
+        "x-wcl-client-secret": "other-account"
+      }
+    });
+    const credentials = {
+      resolve: vi.fn(async (accountId: string) => ({
+        values: { clientId: accountId, clientSecret: `${accountId}-key` },
+        version: 3
+      }))
+    };
+    const alice = await resolveCredentialOverrides(
+      request,
+      { kind: "account", accountId: "alice" },
+      credentials,
+      config
+    );
+    const bob = await resolveCredentialOverrides(
+      request,
+      { kind: "account", accountId: "bob" },
+      credentials,
+      config
+    );
+    expect(alice.wclCredentials?.clientSecret).toBe("alice-key");
+    expect(bob.wclCredentials?.clientSecret).toBe("bob-key");
+    expect(alice.wclCredentialRef).toEqual({
+      accountId: "alice",
+      credentialVersion: 3
+    });
+  });
 });
 
 describe("readCredentialOverrides", () => {

@@ -20,6 +20,7 @@ export type WorkerConfig = {
     minimumPoints: number;
   };
   accountMail?: AccountMailConfig;
+  accountCredentialEncryptionKey?: Buffer;
   databaseUrl: string;
   healthHost: "127.0.0.1" | "0.0.0.0";
   port: number;
@@ -281,6 +282,9 @@ export function loadWorkerConfig(
   return {
     applicantWatcher,
     ...(accountMail ? { accountMail } : {}),
+    ...(accountKey
+      ? { accountCredentialEncryptionKey: parseEncryptionKey(accountKey) }
+      : {}),
     databaseUrl: environment.DATABASE_URL,
     healthHost,
     port: positiveInteger(environment.PORT, 3001, "invalid_port"),

@@ -232,6 +232,8 @@ interface EvidenceRunRow {
   completed_at: Date | null;
   wcl_client_id_encrypted: string | null;
   wcl_client_secret_encrypted: string | null;
+  account_credential_owner_id?: string | null;
+  account_credential_version?: number | null;
   class_name: string | null;
   mode?: EvidenceRunMode;
   tier_search_raid_id?: string | null;
@@ -590,6 +592,8 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     completedAt: row.completed_at,
     wclClientIdEncrypted: row.wcl_client_id_encrypted,
     wclClientSecretEncrypted: row.wcl_client_secret_encrypted,
+    accountCredentialOwnerId: row.account_credential_owner_id ?? null,
+    accountCredentialVersion: row.account_credential_version ?? null,
     className: row.class_name,
     mode: row.mode ?? "full",
     tierSearchRaidId: row.tier_search_raid_id ?? null
@@ -4634,18 +4638,28 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-              (region, realm_slug, normalized_name, wcl_client_id_encrypted, wcl_client_secret_encrypted)
-             VALUES ($1, $2, $3, $4, $5)
+              (region, realm_slug, normalized_name, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                       completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                       completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
                        ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`,
             [
               key.region,
               key.realm,
               key.name,
-              credentials?.wclClientIdEncrypted ?? null,
-              credentials?.wclClientSecretEncrypted ?? null
+              credentials && "wclClientIdEncrypted" in credentials
+                ? credentials.wclClientIdEncrypted
+                : null,
+              credentials && "wclClientSecretEncrypted" in credentials
+                ? credentials.wclClientSecretEncrypted
+                : null,
+              credentials && "accountId" in credentials
+                ? credentials.accountId
+                : null,
+              credentials && "credentialVersion" in credentials
+                ? credentials.credentialVersion
+                : null
             ]
           );
           const reservedRun = mapEvidenceRun(inserted.rows[0]!);
@@ -4698,7 +4712,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }));
       },
 
-      async reserveTierSearch({ key, raidId, at, searchedSince, phasePlan }) {
+      async reserveTierSearch({
+        key,
+        raidId,
+        at,
+        searchedSince,
+        phasePlan,
+        credentials
+      }) {
         if (
           Number.isNaN(at.valueOf()) ||
           Number.isNaN(searchedSince.valueOf())
@@ -4714,7 +4735,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await lockCharacterEvidence(client, key);
           const columns = `id, region, realm_slug, normalized_name, queue_job_id, status,
                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
                     ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`;
           // One run per character at a time, whatever its mode: the unique
           // index says so, and a search joining an ordinary run would quietly
@@ -4764,10 +4785,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           }
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at)
-             VALUES ($1, $2, $3, 'tier_search', $4, $5)
+               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at, account_credential_owner_id, account_credential_version)
+             VALUES ($1, $2, $3, 'tier_search', $4, $5, $6, $7)
              RETURNING ${columns}`,
-            [key.region, key.realm, key.name, raidId, at]
+            [
+              key.region,
+              key.realm,
+              key.name,
+              raidId,
+              at,
+              credentials?.accountId ?? null,
+              credentials?.credentialVersion ?? null
+            ]
           );
           const run = mapEvidenceRun(inserted.rows[0]!);
           if (phasePlan && phasePlan.length > 0) {
@@ -4816,7 +4845,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              AND status IN ('queued', 'running', 'retrying')
            RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                      attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
                      ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`,
           [id, attempt]
         );

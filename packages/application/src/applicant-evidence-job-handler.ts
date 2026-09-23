@@ -151,6 +151,8 @@ export type ApplicantEvidenceRun = Readonly<{
   createdAt: Date;
   wclClientIdEncrypted: string | null;
   wclClientSecretEncrypted: string | null;
+  accountCredentialOwnerId?: string | null;
+  accountCredentialVersion?: number | null;
   className?: string | null;
   /**
    * What the run was reserved to do. A `tier_search` run is a full collection
@@ -334,6 +336,13 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
     Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   decryptionKey?: Buffer;
+  resolveAccountWarcraftLogs?: (
+    accountId: string,
+    credentialVersion: number
+  ) => Promise<{
+    values: { clientId: string; clientSecret: string };
+    version: number;
+  } | null>;
   requestCap: number;
   parseRequestCap: number;
   /**
@@ -1000,28 +1009,46 @@ export function createApplicantEvidenceJobHandler(
         // nothing derived from them reaches `record`.
         // Whose allowance this run spends. The scan share differs by this and
         // not by how big the allowance turns out to be.
-        usesVisitorCredentials = Boolean(
-          run.wclClientIdEncrypted &&
-          run.wclClientSecretEncrypted &&
-          options.createWarcraftLogsGateway &&
-          options.decryptionKey
-        );
+        const accountCredential =
+          run.accountCredentialOwnerId &&
+          run.accountCredentialVersion !== null &&
+          run.accountCredentialVersion !== undefined
+            ? await options.resolveAccountWarcraftLogs?.(
+                run.accountCredentialOwnerId,
+                run.accountCredentialVersion
+              )
+            : null;
+        const currentAccountCredential =
+          accountCredential &&
+          accountCredential.version === run.accountCredentialVersion
+            ? accountCredential.values
+            : null;
+        usesVisitorCredentials =
+          Boolean(currentAccountCredential) ||
+          Boolean(
+            run.wclClientIdEncrypted &&
+            run.wclClientSecretEncrypted &&
+            options.createWarcraftLogsGateway &&
+            options.decryptionKey
+          );
         const gateway =
-          run.wclClientIdEncrypted &&
-          run.wclClientSecretEncrypted &&
-          options.createWarcraftLogsGateway &&
-          options.decryptionKey
-            ? options.createWarcraftLogsGateway({
-                clientId: decryptCredential(
-                  run.wclClientIdEncrypted,
-                  options.decryptionKey
-                ),
-                clientSecret: decryptCredential(
-                  run.wclClientSecretEncrypted,
-                  options.decryptionKey
-                )
-              })
-            : options.warcraftLogs;
+          currentAccountCredential && options.createWarcraftLogsGateway
+            ? options.createWarcraftLogsGateway(currentAccountCredential)
+            : run.wclClientIdEncrypted &&
+                run.wclClientSecretEncrypted &&
+                options.createWarcraftLogsGateway &&
+                options.decryptionKey
+              ? options.createWarcraftLogsGateway({
+                  clientId: decryptCredential(
+                    run.wclClientIdEncrypted,
+                    options.decryptionKey
+                  ),
+                  clientSecret: decryptCredential(
+                    run.wclClientSecretEncrypted,
+                    options.decryptionKey
+                  )
+                })
+              : options.warcraftLogs;
 
         // Read from `gateway`, not `options.warcraftLogs`: a run carrying a
         // visitor's own credentials spends *their* allowance, and the worker's

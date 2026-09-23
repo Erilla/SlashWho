@@ -4323,6 +4323,39 @@ describe("PostgreSQL repositories", () => {
     expect(reservation.run.wclClientSecretEncrypted).toBe("encrypted-secret");
   });
 
+  it("keeps the first account key reference when another account joins a run", async () => {
+    const accounts = await pool.query<{ id: string }>(
+      `INSERT INTO accounts (canonical_email, email, password_hash, password_salt, scrypt_version, scrypt_cost, verified_at)
+       VALUES ('evidence-a@example.com', 'evidence-a@example.com', 'hash', 'salt', 1, 16384, now()),
+              ('evidence-b@example.com', 'evidence-b@example.com', 'hash', 'salt', 1, 16384, now()) RETURNING id`
+    );
+    const [alice, bob] = accounts.rows.map((row) => row.id);
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Accountjoined"
+    } as const;
+    const first = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: { accountId: alice!, credentialVersion: 1 }
+    });
+    const joined = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      credentials: { accountId: bob!, credentialVersion: 1 }
+    });
+    expect(first.kind).toBe("reserved");
+    expect(joined.kind).toBe("active");
+    expect(joined.run.id).toBe(first.run.id);
+    const claimed = await repositories.evidence.claim(first.run.id, 1);
+    expect(claimed?.accountCredentialOwnerId).toBe(alice);
+    expect(claimed?.accountCredentialVersion).toBe(1);
+    expect(claimed?.wclClientIdEncrypted).toBeNull();
+  });
+
   it("clears encrypted WCL credentials when a run is published", async () => {
     const key = {
       region: "eu",

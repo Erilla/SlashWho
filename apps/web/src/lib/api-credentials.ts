@@ -103,3 +103,19 @@ export function credentialHeaders(
   }
   return headers;
 }
+
+/** Resolve the current session before attaching browser-only credentials. */
+export async function credentialHeadersForRequest(): Promise<HeadersInit> {
+  const headers = credentialHeaders(readStoredCredentials());
+  if (Object.keys(headers).length === 0) return headers;
+  try {
+    const response = await fetch("/api/account/session", { cache: "no-store" });
+    if (!response.ok) return {};
+    const body: unknown = await response.json();
+    if (body && typeof body === "object" && "account" in body && body.account)
+      return {};
+  } catch {
+    return {};
+  }
+  return headers;
+}

@@ -1,6 +1,8 @@
 import { dossierRefreshResponseSchema } from "@slashwho/contracts";
 
 import { getContainer } from "../../../../../../../server/container";
+import { loadWebConfig } from "../../../../../../../server/config";
+import { resolveCredentialOverrides } from "../../../../../../../server/credential-headers";
 import {
   apiError,
   parseCharacterRoute,
@@ -15,7 +17,7 @@ type CharacterParams = { region: string; realm: string; name: string };
  * always does something honest.
  */
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<CharacterParams> }
 ): Promise<Response> {
   return withHttpRequest("dossier_refresh", async (scope) => {
@@ -26,8 +28,24 @@ export async function POST(
       return apiError("invalid_character_url");
     }
     if (!character.canonical) return apiError("invalid_character_url");
-    const { dossiers } = await getContainer();
-    const result = await dossiers.refreshCharacter(character.key, scope);
+    const { dossiers, accountAuth, accountCredentials } = await getContainer();
+    const { principal } = accountAuth
+      ? await accountAuth.authenticate(request)
+      : { principal: null };
+    const overrides =
+      principal?.kind === "account"
+        ? await resolveCredentialOverrides(
+            request,
+            principal,
+            accountCredentials,
+            loadWebConfig()
+          )
+        : undefined;
+    const result = await dossiers.refreshCharacter(
+      character.key,
+      scope,
+      overrides
+    );
     return Response.json(
       dossierRefreshResponseSchema.parse({
         mode: result.mode,

@@ -94,6 +94,7 @@ export type DossierGatewayOverrides = Readonly<{
   blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
   wclCredentials?: WclCredentials | null;
+  wclCredentialRef?: { accountId: string; credentialVersion: number };
 }>;
 
 type WclCredentials = Readonly<{ clientId: string; clientSecret: string }>;
@@ -148,7 +149,8 @@ export interface ApplicantDossierService {
    */
   refreshCharacter(
     key: CharacterKey,
-    scope?: MeasurementScope
+    scope?: MeasurementScope,
+    overrides?: DossierGatewayOverrides
   ): Promise<RefreshCharacterResult>;
   /**
    * Forgets every terminal mark for one character, so its history is collected
@@ -169,7 +171,8 @@ export interface ApplicantDossierService {
   searchTier(
     key: CharacterKey,
     raidId: string,
-    scope?: MeasurementScope
+    scope?: MeasurementScope,
+    overrides?: DossierGatewayOverrides
   ): Promise<SearchCharacterTierResult>;
   /** Backend-only progress projection for the dossier and operator monitor. */
   readEvidencePhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
@@ -436,6 +439,7 @@ async function gatherCharacterEvidence(
     freshnessCutoff: Date;
     signal?: AbortSignal;
     wclCredentials?: WclCredentials | null;
+    wclCredentialRef?: { accountId: string; credentialVersion: number };
     encryptionKey: Buffer;
   }
 ): Promise<EvidenceResult & { gathering: boolean }> {
@@ -443,18 +447,20 @@ async function gatherCharacterEvidence(
     key: character.key,
     freshnessCutoff: options.freshnessCutoff,
     at: new Date(),
-    credentials: options.wclCredentials
-      ? {
-          wclClientIdEncrypted: encryptCredential(
-            options.wclCredentials.clientId,
-            options.encryptionKey
-          ),
-          wclClientSecretEncrypted: encryptCredential(
-            options.wclCredentials.clientSecret,
-            options.encryptionKey
-          )
-        }
-      : null,
+    credentials:
+      options.wclCredentialRef ??
+      (options.wclCredentials
+        ? {
+            wclClientIdEncrypted: encryptCredential(
+              options.wclCredentials.clientId,
+              options.encryptionKey
+            ),
+            wclClientSecretEncrypted: encryptCredential(
+              options.wclCredentials.clientSecret,
+              options.encryptionKey
+            )
+          }
+        : null),
     phasePlan: fullEvidencePhasePlan()
   });
   if (reservation.kind === "reserved") {
@@ -843,6 +849,7 @@ async function assembleDossier(options: {
   freshnessCutoff: Date;
   signal: AbortSignal;
   wclCredentials?: WclCredentials | null;
+  wclCredentialRef?: { accountId: string; credentialVersion: number };
   encryptionKey: Buffer;
 }): Promise<ContractApplicantDossier> {
   const evidence = await Promise.all(
@@ -853,6 +860,7 @@ async function assembleDossier(options: {
         freshnessCutoff: options.freshnessCutoff,
         signal: options.signal,
         wclCredentials: options.wclCredentials,
+        wclCredentialRef: options.wclCredentialRef,
         encryptionKey: options.encryptionKey
       })
     )
@@ -1281,6 +1289,7 @@ export function createApplicantDossierService(options: {
         ),
         signal: signal ?? new AbortController().signal,
         wclCredentials: overrides?.wclCredentials,
+        wclCredentialRef: overrides?.wclCredentialRef,
         encryptionKey: options.evidenceJobCredentialEncryptionKey
       })
     };
@@ -1405,7 +1414,7 @@ export function createApplicantDossierService(options: {
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
-    async refreshCharacter(key, scope) {
+    async refreshCharacter(key, scope, overrides) {
       // Deliberately takes no mode. The reader-facing control is `full` outside
       // the cooldown and `light` inside it, one run either way, and there is no
       // argument a caller could pass to turn it into a rebuild.
@@ -1415,18 +1424,20 @@ export function createApplicantDossierService(options: {
         cooldownMs: REFRESH_COOLDOWN_MS,
         repositories: options.repositories,
         queue: options.queue,
+        credentials: overrides?.wclCredentialRef,
         ...(options.logger ? { logger: options.logger } : {}),
         ...(scope ? { scope } : {})
       });
     },
 
-    async searchTier(key, raidId, scope) {
+    async searchTier(key, raidId, scope, overrides) {
       return searchCharacterTier({
         key,
         raidId,
         at: new Date(),
         repositories: options.repositories,
         queue: options.queue,
+        credentials: overrides?.wclCredentialRef,
         ...(scope ? { scope } : {})
       });
     },
@@ -1638,6 +1649,7 @@ export function createApplicantDossierService(options: {
           ),
           signal: signal ?? new AbortController().signal,
           wclCredentials: overrides?.wclCredentials,
+          wclCredentialRef: overrides?.wclCredentialRef,
           encryptionKey: options.evidenceJobCredentialEncryptionKey
         })
       };

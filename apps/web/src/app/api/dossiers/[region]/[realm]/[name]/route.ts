@@ -1,7 +1,7 @@
 import { applicantDossierSchema } from "@slashwho/contracts";
 
 import { loadWebConfig } from "../../../../../../server/config";
-import { readCredentialOverrides } from "../../../../../../server/credential-headers";
+import { resolveCredentialOverrides } from "../../../../../../server/credential-headers";
 import { getContainer } from "../../../../../../server/container";
 import {
   apiError,
@@ -34,12 +34,21 @@ export async function GET(
         }
       });
     }
-    const { dossiers, searches } = await getContainer();
+    const { dossiers, searches, accountAuth, accountCredentials } =
+      await getContainer();
     const denied = publicReadAuthorizationResponse(
       await searches.authorizePublicRead(request.headers)
     );
     if (denied) return denied;
-    const overrides = readCredentialOverrides(request.headers, loadWebConfig());
+    const { principal } = accountAuth
+      ? await accountAuth.authenticate(request)
+      : { principal: null };
+    const overrides = await resolveCredentialOverrides(
+      request,
+      principal,
+      accountCredentials,
+      loadWebConfig()
+    );
     const result =
       new URL(request.url).searchParams.get("scope") === "initial"
         ? await dossiers.readInitial(

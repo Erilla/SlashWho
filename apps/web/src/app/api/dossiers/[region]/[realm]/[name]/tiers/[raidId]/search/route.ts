@@ -4,6 +4,8 @@ import {
 } from "@slashwho/contracts";
 
 import { getContainer } from "../../../../../../../../../server/container";
+import { loadWebConfig } from "../../../../../../../../../server/config";
+import { resolveCredentialOverrides } from "../../../../../../../../../server/credential-headers";
 import {
   apiError,
   parseCharacterRoute,
@@ -53,12 +55,30 @@ export async function POST(
     if (!/^[A-Za-z0-9-]{1,64}$/.test(raidId)) {
       return apiError("tier_not_found");
     }
-    const { dossiers, searches } = await getContainer();
+    const { dossiers, searches, accountAuth, accountCredentials } =
+      await getContainer();
     const denied = publicReadAuthorizationResponse(
       await searches.authorizeTierSearch(request.headers)
     );
     if (denied) return denied;
-    const result = await dossiers.searchTier(character.key, raidId, scope);
+    const { principal } = accountAuth
+      ? await accountAuth.authenticate(request)
+      : { principal: null };
+    const overrides =
+      principal?.kind === "account"
+        ? await resolveCredentialOverrides(
+            request,
+            principal,
+            accountCredentials,
+            loadWebConfig()
+          )
+        : undefined;
+    const result = await dossiers.searchTier(
+      character.key,
+      raidId,
+      scope,
+      overrides
+    );
     switch (result.kind) {
       case "unknown_tier":
         return apiError("tier_not_found");

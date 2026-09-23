@@ -271,6 +271,8 @@ export interface CharacterEvidenceRun {
   completedAt: Date | null;
   wclClientIdEncrypted: string | null;
   wclClientSecretEncrypted: string | null;
+  accountCredentialOwnerId?: string | null;
+  accountCredentialVersion?: number | null;
   /** The character's class, carried so evidence collection can resolve shared specialisation names. */
   className: string | null;
   /** What the run was reserved to do; see `EvidenceRunMode`. */
@@ -741,10 +743,20 @@ export interface EvidenceRepository {
     at: Date;
     /** The ordered collection plan fixed when a new run is reserved. */
     phasePlan?: readonly string[];
-    credentials?: {
-      wclClientIdEncrypted: string;
-      wclClientSecretEncrypted: string;
-    } | null;
+    credentials?:
+      | {
+          wclClientIdEncrypted: string;
+          wclClientSecretEncrypted: string;
+          accountId?: never;
+          credentialVersion?: never;
+        }
+      | {
+          accountId: string;
+          credentialVersion: number;
+          wclClientIdEncrypted?: never;
+          wclClientSecretEncrypted?: never;
+        }
+      | null;
   }): Promise<EvidenceReservationResult>;
   /**
    * Reserves a tier search, under the same per-character lock as `reserve`.
@@ -767,6 +779,7 @@ export interface EvidenceRepository {
     at: Date;
     searchedSince: Date;
     phasePlan?: readonly string[];
+    credentials?: { accountId: string; credentialVersion: number };
   }): Promise<TierSearchReservationResult>;
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;

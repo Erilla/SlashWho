@@ -1586,6 +1586,8 @@ describe("DossierPageClient staged research", () => {
       wclClientSecret: ""
     });
     const fetchMock = vi.fn((input: string) => {
+      if (input === "/api/account/session")
+        return Promise.resolve(Response.json({ account: null }));
       if (input === `${dossierPath}?scope=initial`) {
         return Promise.resolve(Response.json(initial));
       }

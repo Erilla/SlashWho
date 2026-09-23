@@ -1,3 +1,4 @@
+import { hkdfSync } from "node:crypto";
 import {
   createApplicantEvidenceJobHandler,
   cleanupExpired,
@@ -6,6 +7,7 @@ import {
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
+  decryptCredential,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -579,6 +581,43 @@ export async function createWorkerRuntime(
       isSuppressed: (key) =>
         repositories.suppressions.isActive(key, new Date()),
       warcraftLogs: evidenceGateway,
+      resolveAccountWarcraftLogs: async (accountId, credentialVersion) => {
+        if (!config.accountCredentialEncryptionKey) return null;
+        const row = await repositories.accountCredentials?.get(
+          accountId,
+          "warcraftlogs"
+        );
+        if (!row?.encryptedPayload || row.version !== credentialVersion)
+          return null;
+        const key = Buffer.from(
+          hkdfSync(
+            "sha256",
+            config.accountCredentialEncryptionKey,
+            "",
+            "account-provider-credentials-v1",
+            32
+          )
+        );
+        const values: unknown = JSON.parse(
+          decryptCredential(row.encryptedPayload, key)
+        );
+        if (
+          !values ||
+          typeof values !== "object" ||
+          !("clientId" in values) ||
+          !("clientSecret" in values) ||
+          typeof values.clientId !== "string" ||
+          typeof values.clientSecret !== "string"
+        )
+          return null;
+        return {
+          values: {
+            clientId: values.clientId,
+            clientSecret: values.clientSecret
+          },
+          version: row.version
+        };
+      },
       // These are collection dependencies too: the dossier reader only reads
       // the facts this worker publishes, so progress and publication share
       // one durable run.

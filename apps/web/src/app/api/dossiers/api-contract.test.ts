@@ -38,6 +38,7 @@ let readAllowed:
 let readCalls = 0;
 let readInitialCalls = 0;
 let lastReadOverrides: unknown;
+let signedInAccount: string | null = null;
 
 const dossiers = {
   async start() {
@@ -74,7 +75,29 @@ const searches = {
 };
 
 vi.mock("../../../server/container", () => ({
-  getContainer: async () => ({ dossiers, searches })
+  getContainer: async () => ({
+    dossiers,
+    searches,
+    accountAuth: {
+      authenticate: async () => ({
+        principal: signedInAccount
+          ? { kind: "account", accountId: signedInAccount }
+          : null
+      })
+    },
+    accountCredentials: {
+      resolve: async (accountId: string, provider: string) =>
+        provider === "warcraftlogs"
+          ? {
+              values: {
+                clientId: `${accountId}-id`,
+                clientSecret: `${accountId}-key`
+              },
+              version: 2
+            }
+          : null
+    }
+  })
 }));
 
 vi.mock("../../../server/config", () => ({
@@ -115,6 +138,7 @@ const noncanonicalCharacterContext = {
 };
 
 beforeEach(() => {
+  signedInAccount = null;
   started = {
     kind: "job",
     jobId,
@@ -309,6 +333,29 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     expect(response.status).toBe(200);
     expect(readCalls).toBe(1);
     expect(lastReadOverrides).toMatchObject({ blizzard: expect.anything() });
+  });
+
+  it("resolves each signed-in account's key despite stale browser headers", async () => {
+    const request = () =>
+      new Request("https://slashwho.example/api/dossiers/eu/silvermoon/ryii", {
+        headers: {
+          "x-real-ip": "203.0.113.8",
+          "x-wcl-client-id": "stale",
+          "x-wcl-client-secret": "alice-key"
+        }
+      });
+    signedInAccount = "alice";
+    await GET(request(), characterContext);
+    expect(lastReadOverrides).toMatchObject({
+      wclCredentialRef: { accountId: "alice", credentialVersion: 2 },
+      wclCredentials: { clientSecret: "alice-key" }
+    });
+    signedInAccount = "bob";
+    await GET(request(), characterContext);
+    expect(lastReadOverrides).toMatchObject({
+      wclCredentialRef: { accountId: "bob", credentialVersion: 2 },
+      wclCredentials: { clientSecret: "bob-key" }
+    });
   });
 });
 

@@ -9,10 +9,7 @@ import {
 } from "@slashwho/domain";
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 
-import {
-  credentialHeaders,
-  readStoredCredentials
-} from "../lib/api-credentials";
+import { credentialHeadersForRequest } from "../lib/api-credentials";
 
 export type CharacterIdentity = Readonly<{
   /** What the viewer typed: either a character name or a full character URL. */
@@ -93,7 +90,7 @@ async function lookUpCharacterId(
   let response: Response;
   try {
     response = await fetch(`/api/warcraft-logs/characters/${characterId}`, {
-      headers: credentialHeaders(readStoredCredentials()),
+      headers: await credentialHeadersForRequest(),
       signal
     });
   } catch {
