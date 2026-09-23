@@ -30,7 +30,12 @@ import {
   createCharacterIdResolver,
   type CharacterIdResolver
 } from "./warcraft-logs-characters";
-import { createOperatorAuth, type OperatorAuth } from "./operator-auth";
+import {
+  createAccountAuth,
+  createOperatorAuth,
+  type AccountAuth,
+  type OperatorAuth
+} from "./operator-auth";
 
 type WebPool = {
   query(text: string): Promise<unknown>;
@@ -42,6 +47,7 @@ export type WebContainer = Readonly<{
   dossiers: ApplicantDossierService;
   collectionMonitor: CollectionMonitorService;
   operatorAuth: OperatorAuth;
+  accountAuth: AccountAuth;
   characterIds: CharacterIdResolver;
   ready(): Promise<boolean>;
   close(): Promise<void>;
@@ -120,6 +126,11 @@ export async function createWebContainer(
       config: config.application,
       ...config.operatorAuth
     });
+    const accountAuth = createAccountAuth({
+      repository: repositories.accountAuth,
+      config: config.application,
+      ...config.operatorAuth
+    });
     const collectionMonitor = createCollectionMonitorService({
       evidence: repositories.evidence
     });
@@ -186,6 +197,7 @@ export async function createWebContainer(
       dossiers,
       collectionMonitor,
       operatorAuth,
+      accountAuth,
       characterIds,
       async ready() {
         try {

@@ -209,6 +209,27 @@ function createMemoryRepositories(): Repositories {
       }
     },
     accountAuth: {
+      async findCredential() {
+        throw new Error("not_used");
+      },
+      async admitLoginAttempt() {
+        throw new Error("not_used");
+      },
+      async appendEvent() {
+        throw new Error("not_used");
+      },
+      async issueSession() {
+        throw new Error("not_used");
+      },
+      async useSession() {
+        throw new Error("not_used");
+      },
+      async revokeSession() {
+        throw new Error("not_used");
+      },
+      async changePassword() {
+        throw new Error("not_used");
+      },
       async provisionAdmin() {
         throw new Error("not_used");
       },

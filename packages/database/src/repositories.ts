@@ -1199,6 +1199,47 @@ export type ProviderCredentials =
   | { provider: "warcraftlogs"; clientId: string; clientSecret: string };
 
 export interface AccountAuthRepository {
+  findCredential(canonicalEmail: string): Promise<AccountCredential | null>;
+  admitLoginAttempt(input: {
+    subjectHash: string;
+    limit: number;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<OperatorLoginAdmission>;
+  appendEvent(input: {
+    accountId: string | null;
+    action: "sign_in" | "sign_out" | "session_revoke" | "password_change";
+    outcome: "success" | "failure";
+    at: Date;
+  }): Promise<void>;
+  issueSession(input: {
+    sessionId: string;
+    secretDigest: string;
+    accountId: string;
+    credentialVersion: number;
+    issuedAt: Date;
+    lastUsedAt: Date;
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+  }): Promise<AccountSession | null>;
+  useSession(input: {
+    sessionId: string;
+    secretDigest: string;
+    at: Date;
+    idleExpiresAt: Date;
+  }): Promise<{ account: Account; session: AccountSession } | null>;
+  revokeSession(sessionId: string, at: Date): Promise<void>;
+  changePassword(input: {
+    accountId: string;
+    sessionId: string;
+    expectedCredentialVersion: number;
+    expectedPasswordHash: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<boolean>;
   provisionAdmin(input: {
     canonicalEmail: string;
     email: string;
@@ -1242,6 +1283,16 @@ export interface AccountAuthRepository {
     at: Date;
   }): Promise<"admitted" | "throttled">;
 }
+export type AccountSession = Readonly<{
+  id: string;
+  accountId: string;
+  credentialVersion: number;
+  issuedAt: Date;
+  lastUsedAt: Date;
+  idleExpiresAt: Date;
+  absoluteExpiresAt: Date;
+  revokedAt: Date | null;
+}>;
 export interface AccountMailRepository {
   issue(input: {
     accountId: string;

@@ -217,6 +217,77 @@ describe("PostgreSQL repositories", () => {
     at
   });
 
+  it("uses live account state and atomically revokes all sessions on password change", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.provisionAdmin(
+      registration("session@example.com", at)
+    );
+    expect(
+      (await repositories.accountAuth.findCredential("session@example.com"))?.id
+    ).toBe(account.id);
+    const issue = (id: string) =>
+      repositories.accountAuth.issueSession({
+        sessionId: id,
+        secretDigest: `${id}-secret`,
+        accountId: account.id,
+        credentialVersion: 1,
+        issuedAt: at,
+        lastUsedAt: at,
+        idleExpiresAt: new Date(at.getTime() + 30 * 60_000),
+        absoluteExpiresAt: new Date(at.getTime() + 8 * 60 * 60_000)
+      });
+    const first = await issue(crypto.randomUUID());
+    const second = await issue(crypto.randomUUID());
+    if (!first || !second) throw new Error("expected sessions");
+    const use = (id: string) =>
+      repositories.accountAuth.useSession({
+        sessionId: id,
+        secretDigest: `${id}-secret`,
+        at: new Date(at.getTime() + 60_000),
+        idleExpiresAt: new Date(at.getTime() + 31 * 60_000)
+      });
+    expect((await use(first.id))?.account.passwordChangeRequired).toBe(true);
+    await pool.query("UPDATE accounts SET role = 'user' WHERE id = $1", [
+      account.id
+    ]);
+    expect((await use(first.id))?.account.role).toBe("user");
+    expect(
+      await repositories.accountAuth.changePassword({
+        accountId: account.id,
+        sessionId: first.id,
+        expectedCredentialVersion: 1,
+        expectedPasswordHash: "wrong",
+        passwordHash: "new-hash",
+        passwordSalt: "new-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at: new Date(at.getTime() + 2 * 60_000)
+      })
+    ).toBe(false);
+    expect(
+      await repositories.accountAuth.changePassword({
+        accountId: account.id,
+        sessionId: first.id,
+        expectedCredentialVersion: 1,
+        expectedPasswordHash: "derived-password-hash",
+        passwordHash: "new-hash",
+        passwordSalt: "new-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at: new Date(at.getTime() + 2 * 60_000)
+      })
+    ).toBe(true);
+    expect(await use(first.id)).toBeNull();
+    expect(await use(second.id)).toBeNull();
+    expect(
+      await repositories.accountAuth.findCredential("session@example.com")
+    ).toMatchObject({
+      passwordHash: "new-hash",
+      credentialVersion: 2,
+      passwordChangeRequired: false
+    });
+  });
+
   it("consumes verification once only after matching the registration credential", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const account = await repositories.accountAuth.registerPending(

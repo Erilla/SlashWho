@@ -28,6 +28,7 @@ import type {
   FingerprintContinuationAdmission,
   Account,
   AccountSummary,
+  AccountSession,
   Operator,
   OperatorCredential,
   OperatorSession,
@@ -2088,6 +2089,167 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       }
     },
     accountAuth: {
+      async findCredential(canonicalEmail) {
+        const result = await pool.query<AccountCredentialRow>(
+          "SELECT * FROM accounts WHERE canonical_email = $1",
+          [canonicalEmail]
+        );
+        return result.rows[0] ? mapAccountCredential(result.rows[0]) : null;
+      },
+      async admitLoginAttempt(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 2))",
+            [`account-login-${input.subjectHash}`]
+          );
+          const count = await client.query<{ count: string }>(
+            "SELECT count(*)::text AS count FROM account_request_attempts WHERE purpose = 'login' AND subject_hash = $1 AND expires_at > $2",
+            [input.subjectHash, input.at]
+          );
+          if (Number(count.rows[0]!.count) >= input.limit) {
+            await client.query("COMMIT");
+            return { kind: "throttled" as const, retryAt: input.expiresAt };
+          }
+          await client.query(
+            "INSERT INTO account_request_attempts (purpose, subject_hash, expires_at) VALUES ('login', $1, $2)",
+            [input.subjectHash, input.expiresAt]
+          );
+          await client.query("COMMIT");
+          return { kind: "admitted" as const };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async appendEvent(input) {
+        await pool.query(
+          "INSERT INTO account_auth_events (account_id, action, outcome, occurred_at) VALUES ($1, $2, $3, $4)",
+          [input.accountId, input.action, input.outcome, input.at]
+        );
+      },
+      async issueSession(input) {
+        const result = await pool.query<{
+          id: string;
+          account_id: string;
+          credential_version: number;
+          issued_at: Date;
+          last_used_at: Date;
+          idle_expires_at: Date;
+          absolute_expires_at: Date;
+          revoked_at: Date | null;
+        }>(
+          `INSERT INTO account_sessions (id, secret_digest, account_id, credential_version, issued_at, last_used_at, idle_expires_at, absolute_expires_at)
+           SELECT $1, $2, id, credential_version, $5, $6, $7, $8 FROM accounts
+           WHERE id = $3 AND credential_version = $4 AND active AND verified_at IS NOT NULL
+           RETURNING id, account_id, credential_version, issued_at, last_used_at, idle_expires_at, absolute_expires_at, revoked_at`,
+          [
+            input.sessionId,
+            input.secretDigest,
+            input.accountId,
+            input.credentialVersion,
+            input.issuedAt,
+            input.lastUsedAt,
+            input.idleExpiresAt,
+            input.absoluteExpiresAt
+          ]
+        );
+        const row = result.rows[0];
+        if (!row) return null;
+        return {
+          id: row.id,
+          accountId: row.account_id,
+          credentialVersion: row.credential_version,
+          issuedAt: row.issued_at,
+          lastUsedAt: row.last_used_at,
+          idleExpiresAt: row.idle_expires_at,
+          absoluteExpiresAt: row.absolute_expires_at,
+          revokedAt: row.revoked_at
+        } satisfies AccountSession;
+      },
+      async useSession(input) {
+        const result = await pool.query<
+          AccountRow & {
+            session_id: string;
+            session_account_id: string;
+            session_credential_version: number;
+            issued_at: Date;
+            last_used_at: Date;
+            idle_expires_at: Date;
+            absolute_expires_at: Date;
+            revoked_at: Date | null;
+          }
+        >(
+          `UPDATE account_sessions s SET last_used_at = $3, idle_expires_at = LEAST($4, s.absolute_expires_at)
+           FROM accounts a WHERE s.id = $1 AND s.secret_digest = $2 AND s.account_id = a.id
+             AND s.revoked_at IS NULL AND s.idle_expires_at > $3 AND s.absolute_expires_at > $3
+             AND s.credential_version = a.credential_version AND a.active AND a.verified_at IS NOT NULL
+           RETURNING a.*, s.id AS session_id, s.account_id AS session_account_id, s.credential_version AS session_credential_version,
+             s.issued_at, s.last_used_at, s.idle_expires_at, s.absolute_expires_at, s.revoked_at`,
+          [input.sessionId, input.secretDigest, input.at, input.idleExpiresAt]
+        );
+        const row = result.rows[0];
+        return row
+          ? {
+              account: mapAccount(row),
+              session: {
+                id: row.session_id,
+                accountId: row.session_account_id,
+                credentialVersion: row.session_credential_version,
+                issuedAt: row.issued_at,
+                lastUsedAt: row.last_used_at,
+                idleExpiresAt: row.idle_expires_at,
+                absoluteExpiresAt: row.absolute_expires_at,
+                revokedAt: row.revoked_at
+              }
+            }
+          : null;
+      },
+      async revokeSession(sessionId, at) {
+        await pool.query(
+          "UPDATE account_sessions SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL",
+          [sessionId, at]
+        );
+      },
+      async changePassword(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const updated = await client.query<{ id: string }>(
+            `UPDATE accounts SET password_hash = $5, password_salt = $6, scrypt_version = $7, scrypt_cost = $8,
+               password_change_required = false, credential_version = credential_version + 1, updated_at = $9
+             WHERE id = $1 AND credential_version = $3 AND password_hash = $4 AND active AND verified_at IS NOT NULL
+               AND EXISTS (SELECT 1 FROM account_sessions WHERE id = $2 AND account_id = $1 AND revoked_at IS NULL AND idle_expires_at > $9 AND absolute_expires_at > $9)
+             RETURNING id`,
+            [
+              input.accountId,
+              input.sessionId,
+              input.expectedCredentialVersion,
+              input.expectedPasswordHash,
+              input.passwordHash,
+              input.passwordSalt,
+              input.scryptVersion,
+              input.scryptCost,
+              input.at
+            ]
+          );
+          if (updated.rows[0])
+            await client.query(
+              "UPDATE account_sessions SET revoked_at = $2 WHERE account_id = $1 AND revoked_at IS NULL",
+              [input.accountId, input.at]
+            );
+          await client.query("COMMIT");
+          return Boolean(updated.rows[0]);
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
       async provisionAdmin(input) {
         const client = await pool.connect();
         try {

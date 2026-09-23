@@ -22,6 +22,7 @@ export type {
 } from "./queue";
 export type {
   Account,
+  AccountSession,
   AccountAuthRepository,
   AccountCredential,
   AccountCredentialRepository,

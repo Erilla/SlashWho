@@ -4,11 +4,14 @@ import {
   type ApplicationConfig
 } from "@slashwho/application";
 import type {
+  Account,
+  AccountSession,
   Operator,
   OperatorCredential,
   OperatorSession,
   Repositories
 } from "@slashwho/database";
+import { canonicalizeEmail } from "./account-email";
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -51,6 +54,27 @@ export type OperatorSignOut = Readonly<
   | { accepted: true; principal: null; cookie: CookieDirective }
 >;
 export type OperatorAuth = ReturnType<typeof createOperatorAuth>;
+export type AccountPrincipal = Readonly<
+  | { kind: "automation" }
+  | {
+      kind: "account";
+      accountId: string;
+      email: string;
+      role: "user" | "admin";
+      passwordChangeRequired: boolean;
+    }
+>;
+export type RequiredRole = "account" | "admin";
+export function authorizes(
+  principal: AccountPrincipal | null,
+  required: RequiredRole
+): boolean {
+  return (
+    principal?.kind === "account" &&
+    !principal.passwordChangeRequired &&
+    (required === "account" || principal.role === "admin")
+  );
+}
 
 export function canonicalizeOperatorLogin(login: string): string | null {
   return /^[A-Za-z0-9_-]{1,64}$/.test(login) && !login.endsWith("\n")
@@ -398,3 +422,256 @@ export function createOperatorAuth(options: {
 
   return { authenticateOperator, signIn, signOut };
 }
+
+export function createAccountAuth(options: {
+  repository: Pick<
+    Repositories["accountAuth"],
+    | "findCredential"
+    | "admitLoginAttempt"
+    | "appendEvent"
+    | "issueSession"
+    | "useSession"
+    | "revokeSession"
+    | "changePassword"
+  >;
+  config: ApplicationConfig;
+  origin: string;
+  sessionHashSecret: string;
+  now?: () => Date;
+  random?: RandomSource;
+}) {
+  const { repository, config } = options;
+  const now = options.now ?? (() => new Date());
+  const random = options.random ?? randomBytes;
+  const digest = (secret: string) =>
+    createHmac("sha256", options.sessionHashSecret)
+      .update("account-session\0")
+      .update(secret)
+      .digest("hex");
+  const denied = () => ({ principal: null, cookie: clearCookie() }) as const;
+  const project = (account: Account): AccountPrincipal => ({
+    kind: "account",
+    accountId: account.id,
+    email: account.email,
+    role: account.role,
+    passwordChangeRequired: account.passwordChangeRequired
+  });
+  const renew = (token: string, session: AccountSession, at: Date) =>
+    cookieDirective(
+      token,
+      new Date(
+        Math.min(
+          session.idleExpiresAt.getTime(),
+          session.absoluteExpiresAt.getTime()
+        )
+      ),
+      at
+    );
+  async function useCookie(request: Request, at: Date) {
+    const cookie = parseCookie(request);
+    const used =
+      cookie.sessionId && cookie.secret
+        ? await repository.useSession({
+            sessionId: cookie.sessionId,
+            secretDigest: digest(cookie.secret),
+            at,
+            idleExpiresAt: new Date(at.getTime() + idleLifetimeMs)
+          })
+        : null;
+    return { cookie, used };
+  }
+  async function authenticate(
+    request: Request
+  ): Promise<{ principal: AccountPrincipal | null; cookie?: CookieDirective }> {
+    if (request.headers.has("authorization")) {
+      try {
+        return {
+          principal:
+            classifyCaller(request.headers, config).callerClass === "bot"
+              ? { kind: "automation" }
+              : null
+        };
+      } catch (error) {
+        if (error instanceof AuthenticationError) return { principal: null };
+        throw error;
+      }
+    }
+    const at = now();
+    const { cookie, used } = await useCookie(request, at);
+    if (!used) return cookie.present ? denied() : { principal: null };
+    return {
+      principal: project(used.account),
+      cookie: renew(cookie.token!, used.session, at)
+    };
+  }
+  async function signIn(
+    request: Request
+  ): Promise<{ principal: AccountPrincipal | null; cookie?: CookieDirective }> {
+    const at = now();
+    if (request.headers.has("authorization")) return { principal: null };
+    const body = await mutationBody(request, options.origin);
+    const email =
+      typeof body?.email === "string" ? canonicalizeEmail(body.email) : null;
+    const password = body?.password;
+    if (
+      !email ||
+      typeof password !== "string" ||
+      password.length < 20 ||
+      password.length > 1024
+    ) {
+      await repository.appendEvent({
+        accountId: null,
+        action: "sign_in",
+        outcome: "failure",
+        at
+      });
+      return { principal: null };
+    }
+    const ip = request.headers.get("x-real-ip")?.trim();
+    const trustedIp = ip && isIP(ip) !== 0 ? ip : null;
+    const subjectHash = createHmac("sha256", config.RATE_LIMIT_HASH_SECRET)
+      .update(
+        trustedIp
+          ? `account-login\0${email}\0${trustedIp}`
+          : "account-login-global\0"
+      )
+      .digest("hex");
+    const admitted = await repository.admitLoginAttempt({
+      subjectHash,
+      limit: trustedIp ? 5 : 20,
+      expiresAt: new Date(at.getTime() + loginWindowMs),
+      at
+    });
+    if (admitted.kind === "throttled") {
+      await repository.appendEvent({
+        accountId: null,
+        action: "sign_in",
+        outcome: "failure",
+        at
+      });
+      return { principal: null };
+    }
+    const account = await repository.findCredential(email);
+    if (!(await verifyCredential(password, account)) || !account?.verifiedAt) {
+      await repository.appendEvent({
+        accountId: account?.id ?? null,
+        action: "sign_in",
+        outcome: "failure",
+        at
+      });
+      return { principal: null };
+    }
+    const prior = await useCookie(request, at);
+    if (prior.used) {
+      await repository.revokeSession(prior.used.session.id, at);
+      await repository.appendEvent({
+        accountId: prior.used.account.id,
+        action: "session_revoke",
+        outcome: "success",
+        at
+      });
+    }
+    const id = Buffer.from(random(16));
+    id[6] = (id[6]! & 0x0f) | 0x40;
+    id[8] = (id[8]! & 0x3f) | 0x80;
+    const hex = id.toString("hex");
+    const sessionId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    const secret = Buffer.from(random(32)).toString("base64url");
+    const session = await repository.issueSession({
+      sessionId,
+      secretDigest: digest(secret),
+      accountId: account.id,
+      credentialVersion: account.credentialVersion,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date(at.getTime() + idleLifetimeMs),
+      absoluteExpiresAt: new Date(at.getTime() + absoluteLifetimeMs)
+    });
+    if (!session) {
+      await repository.appendEvent({
+        accountId: account.id,
+        action: "sign_in",
+        outcome: "failure",
+        at
+      });
+      return { principal: null };
+    }
+    await repository.appendEvent({
+      accountId: account.id,
+      action: "sign_in",
+      outcome: "success",
+      at
+    });
+    return {
+      principal: project(account),
+      cookie: renew(`v1.${sessionId}.${secret}`, session, at)
+    };
+  }
+  async function signOut(request: Request): Promise<OperatorSignOut> {
+    const at = now();
+    if (
+      !(await mutationBody(request, options.origin)) ||
+      request.headers.has("authorization")
+    )
+      return { principal: null, accepted: false };
+    const { used } = await useCookie(request, at);
+    if (used) {
+      await repository.revokeSession(used.session.id, at);
+      await repository.appendEvent({
+        accountId: used.account.id,
+        action: "sign_out",
+        outcome: "success",
+        at
+      });
+    }
+    return { ...denied(), accepted: true };
+  }
+  async function changePassword(
+    request: Request
+  ): Promise<{ accepted: boolean; principal: null; cookie?: CookieDirective }> {
+    const at = now();
+    if (request.headers.has("authorization"))
+      return { accepted: false, principal: null };
+    const body = await mutationBody(request, options.origin);
+    if (
+      !body ||
+      typeof body.currentPassword !== "string" ||
+      typeof body.newPassword !== "string" ||
+      body.currentPassword.length > 1024 ||
+      body.newPassword.length < 20 ||
+      body.newPassword.length > 1024
+    )
+      return { accepted: false, principal: null };
+    const { used } = await useCookie(request, at);
+    if (!used) return { accepted: false, principal: null };
+    const account = await repository.findCredential(
+      used.account.canonicalEmail
+    );
+    if (
+      !account ||
+      account.id !== used.account.id ||
+      !(await verifyCredential(body.currentPassword, account))
+    )
+      return { accepted: false, principal: null };
+    const hashed = await hashOperatorCredential(body.newPassword, random);
+    const changed = await repository.changePassword({
+      accountId: account.id,
+      sessionId: used.session.id,
+      expectedCredentialVersion: account.credentialVersion,
+      expectedPasswordHash: account.passwordHash,
+      ...hashed,
+      at
+    });
+    await repository.appendEvent({
+      accountId: account.id,
+      action: "password_change",
+      outcome: changed ? "success" : "failure",
+      at
+    });
+    return changed
+      ? { accepted: true, ...denied() }
+      : { accepted: false, principal: null };
+  }
+  return { authenticate, signIn, signOut, changePassword };
+}
+export type AccountAuth = ReturnType<typeof createAccountAuth>;
