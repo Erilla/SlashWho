@@ -47,6 +47,9 @@ OPERATOR_ORIGIN=https://<exact public web hostname>
 ANONYMOUS_SEARCHES_PER_HOUR=10
 BOT_SEARCHES_PER_HOUR=60
 PUBLIC_READS_PER_MINUTE=300
+# "Search this tier" presses a caller may make an hour, on top of the
+# once-a-day limit on each character's tier.
+TIER_SEARCHES_PER_HOUR=6
 FRESHNESS_HOURS=24
 DOSSIER_RAIDERIO_TIER_CAP=8
 DOSSIER_CHARACTER_CAP=12

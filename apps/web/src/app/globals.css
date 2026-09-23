@@ -438,6 +438,22 @@ a {
   opacity: 0.6;
 }
 
+/* Beneath a tier's heading: a small, quiet action, never competing with the
+   evidence it sits above. */
+.dossier-tier-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  margin: 0 0 0.65rem;
+}
+
+.dossier-tier-search-status {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .dossier-refresh-age {
   margin: 0;
   font-size: 0.74rem;

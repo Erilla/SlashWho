@@ -6,7 +6,8 @@ import {
   dossierResearchStatusSchema,
   safeApiErrorSchema,
   type ApplicantDossier,
-  type CharacterKey
+  type CharacterKey,
+  type DossierTierSearchResponse
 } from "@slashwho/contracts";
 import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -764,6 +765,27 @@ function DossierPageState({
               raids={dossier.raids}
               loading={hasLiveEvidence(dossier)}
               limitations={dossier.limitations}
+              {...(canAddCharacters
+                ? {
+                    onSearchTier: async (raidId: string) => {
+                      const response = await fetch(
+                        `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
+                        { method: "POST" }
+                      );
+                      // 409 is an answer -- busy, or nothing to search from --
+                      // not a failure; anything else unexpected is.
+                      if (!response.ok && response.status !== 409) {
+                        throw new Error("tier_search_failed");
+                      }
+                      const result =
+                        (await response.json()) as DossierTierSearchResponse;
+                      // Re-read so the tier shows the search in flight and the
+                      // page's polling follows it.
+                      if (result.state === "queued") await refreshDossier();
+                      return result;
+                    }
+                  }
+                : {})}
             />
             <DossierLimitations limitations={dossier.limitations} />
           </div>
