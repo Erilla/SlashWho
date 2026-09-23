@@ -23,3 +23,6 @@ CREATE TABLE "character_alias_recollections" (
   "requested_at" timestamptz DEFAULT now() NOT NULL,
   CONSTRAINT "character_alias_recollections_pkey" PRIMARY KEY ("region", "realm_slug", "normalized_name")
 );
+--> statement-breakpoint
+ALTER TABLE "character_evidence_runs"
+  ADD COLUMN "historic_alias_progress" jsonb;

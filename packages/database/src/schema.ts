@@ -643,6 +643,7 @@ export const characterEvidenceRuns = pgTable(
     killScanResumeBoundaryReportCode: text(
       "kill_scan_resume_boundary_report_code"
     ),
+    historicAliasProgress: jsonb("historic_alias_progress"),
     rankedBackfillCursor: jsonb("ranked_backfill_cursor"),
     rankedBackfillAttempted: boolean("ranked_backfill_attempted")
       .default(false)

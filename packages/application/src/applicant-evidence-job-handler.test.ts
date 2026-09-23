@@ -390,6 +390,189 @@ describe("applicant evidence job handler", () => {
     ]);
   });
 
+  it("does not admit more identity scans or parses than the light-run budget", async () => {
+    const evidence = store();
+    let turn = 0;
+    evidence.storedEvidenceTiers = async () => ({
+      kills: [],
+      wipes: [],
+      identityScanTurn: turn
+    });
+    evidence.historicAliases = async () => [
+      { region: "eu", realm: "one", name: "former-one" },
+      { region: "eu", realm: "two", name: "former-two" }
+    ];
+    const getFirstKillReports = vi.fn<
+      WarcraftLogsGateway["getFirstKillReports"]
+    >(async () => ({
+      kind: "evidence" as const,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 1,
+      parseRequestCap: 0,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    expect(getFirstKillReports).toHaveBeenCalledTimes(1);
+    expect(getFirstKillReports.mock.calls[0]?.[1]).toMatchObject({
+      requestCap: 1,
+      parseRequestCap: 0
+    });
+    expect(evidence.published[0]?.result).toMatchObject({
+      state: "partial",
+      limitationCode: "request_cap"
+    });
+    turn = 1;
+    evidence.staged.clear();
+    await handler.execute(run.id);
+    expect(getFirstKillReports.mock.calls[1]?.[0]).toEqual({
+      region: "eu",
+      realm: "one",
+      name: "former-one"
+    });
+  });
+
+  it("resumes a capped alias scan from its own boundary on the next run", async () => {
+    const evidence = store();
+    const alias = { region: "eu", realm: "old-realm", name: "former" } as const;
+    evidence.historicAliases = async () => [alias];
+    let storedProgress: NonNullable<
+      Awaited<
+        ReturnType<ApplicantEvidenceStore["storedEvidenceTiers"]>
+      >["historicAliasProgress"]
+    > = [];
+    evidence.storedEvidenceTiers = async () => ({
+      kills: [],
+      wipes: [],
+      historicAliasProgress: storedProgress,
+      parseOnlyKills: evidence.published[0]?.result.kills ?? []
+    });
+    const oldKill = {
+      raidId: "42",
+      raidName: "Old Tier",
+      bossId: "7",
+      bossName: "Old Boss",
+      journalBossId: "7",
+      bossOrder: 7,
+      killedAt: "2024-01-01T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/oldreport",
+      fightUrl: "https://www.warcraftlogs.com/reports/oldreport#fight=7",
+      reportCode: "oldreport",
+      fightId: 7,
+      difficulty: 5,
+      guild: null,
+      performance: {
+        damage: { state: "unavailable" as const },
+        healing: { state: "unavailable" as const },
+        bossDamage: { state: "unavailable" as const }
+      }
+    };
+    const getFirstKillReports = vi.fn(async (requested: CharacterKey) => ({
+      kind: "evidence" as const,
+      kills: requested.name === "former" ? [oldKill] : [],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [],
+      troubledRaidIds: { parses: [], tierBests: [] },
+      ...(requested.name === "former"
+        ? {
+            limitation: {
+              kind: "limitation" as const,
+              code: "request_cap" as const
+            },
+            parseLimitation: {
+              kind: "limitation" as const,
+              code: "parse_request_cap" as const
+            },
+            historyScanResumePage: 2,
+            historyScanResumeBoundaryReportCode: "old-page-boundary"
+          }
+        : {})
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 4,
+      parseRequestCap: 2,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    storedProgress = evidence.published[0]?.result.historicAliasProgress ?? [];
+    expect(storedProgress).toEqual([
+      expect.objectContaining({
+        historyScanResumePage: 2,
+        historyScanResumeBoundaryReportCode: "old-page-boundary",
+        pendingParseFightUrls: [oldKill.fightUrl]
+      })
+    ]);
+    evidence.staged.clear();
+    await handler.execute(run.id);
+    expect(getFirstKillReports).toHaveBeenLastCalledWith(
+      alias,
+      expect.objectContaining({
+        historyScanStartPage: 2,
+        historyScanResumeBoundaryReportCode: "old-page-boundary",
+        storedKills: [expect.objectContaining({ fightUrl: oldKill.fightUrl })]
+      })
+    );
+  });
+
+  it("collects a declared alias when the current name is not found", async () => {
+    const evidence = store();
+    const alias = { region: "eu", realm: "old-realm", name: "former" } as const;
+    evidence.historicAliases = async () => [alias];
+    const getFirstKillReports = vi.fn(async (requested: CharacterKey) =>
+      requested.name === "former"
+        ? {
+            kind: "evidence" as const,
+            kills: [],
+            wipes: [],
+            tierBests: [],
+            parsedFightUrls: [],
+            troubledRaidIds: { parses: [], tierBests: [] }
+          }
+        : { kind: "limitation" as const, code: "not_found" as const }
+    );
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 4,
+      parseRequestCap: 2,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    expect(getFirstKillReports).toHaveBeenCalledTimes(2);
+    expect(evidence.published[0]?.result).toMatchObject({
+      state: "partial",
+      limitationCode: "not_found"
+    });
+  });
+
   it("publishes gathered kills as partial rather than deleting a prior result", async () => {
     // Break caught: a rate-limit response could erase the last complete scan
     // instead of retaining its evidence and honestly marking the new run partial.

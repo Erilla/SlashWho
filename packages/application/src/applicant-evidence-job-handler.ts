@@ -8,6 +8,7 @@ import type {
   EvidenceRunCost,
   EvidenceRunPhase,
   StagedEvidenceCollection,
+  HistoricAliasScanProgress,
   StoredEvidenceTiers,
   TerminalTier
 } from "@slashwho/database";
@@ -59,7 +60,15 @@ function mergeHistoricAliasResponse(
   current: WarcraftLogsReportResult,
   historic: WarcraftLogsReportResult
 ): WarcraftLogsReportResult {
-  if (current.kind === "limitation") return current;
+  if (current.kind === "limitation") {
+    if (historic.kind === "limitation") return current;
+    return {
+      ...historic,
+      historyScanResumePage: undefined,
+      historyScanResumeBoundaryReportCode: undefined,
+      limitation: current
+    };
+  }
   if (historic.kind === "limitation") {
     return { ...current, limitation: historic };
   }
@@ -170,6 +179,7 @@ export type ApplicantEvidenceStore = {
     runId: string,
     result: Readonly<{
       state: "complete" | "partial";
+      historicAliasProgress?: StagedEvidenceCollection["historicAliasProgress"];
       limitationCode: EvidenceLimitationCode | null;
       parseLimitationCode: EvidenceLimitationCode | null;
       retryAfterAt?: Date | null;
@@ -1152,6 +1162,8 @@ export function createApplicantEvidenceJobHandler(
           now().getTime() -
             new Date(storedEvidence.lastCleanKillScanAt).getTime() <
             KILL_SCAN_FRESHNESS_MS;
+        const historicAliases =
+          (await options.evidence.historicAliases?.(run.key)) ?? [];
         // Freshness alone is not evidence that this run is a parse resume. A
         // recent complete collection followed by a manual refresh still has
         // to look for new kills. The previous publication must also say that
@@ -1160,6 +1172,7 @@ export function createApplicantEvidenceJobHandler(
         // the scan would publish a parse-only run for a request to look.
         const parseOnlyResume =
           tierSearchRaidId === undefined &&
+          historicAliases.length === 0 &&
           scanFresh &&
           storedEvidence.parseWorkOutstanding === true;
         const scanCap = parseOnlyResume
@@ -1431,125 +1444,168 @@ export function createApplicantEvidenceJobHandler(
           activePhase = phaseLedger ? "warcraft_logs_history" : undefined;
           observedPhase = activePhase;
         }
-        const historicAliases =
-          requestCap > 0
-            ? ((await options.evidence.historicAliases?.(run.key)) ?? [])
-            : [];
-        const historyCapPerIdentity =
-          historicAliases.length > 0
-            ? Math.max(1, Math.floor(requestCap / (historicAliases.length + 1)))
-            : requestCap;
-        const parseCapPerIdentity =
-          historicAliases.length > 0
-            ? Math.max(
-                1,
-                Math.floor(parseRequestCap / (historicAliases.length + 1))
-              )
-            : parseRequestCap;
-        let response = await scope.time("warcraftLogs", () =>
-          gateway.getFirstKillReports(run.key, {
-            requestCap: historyCapPerIdentity,
-            parseRequestCap: parseCapPerIdentity,
-            ...(run.className ? { className: run.className } : {}),
-            hydratedFightUrls,
-            collectedTierZones,
-            terminalRaidIds:
-              historicAliases.length > 0
-                ? { ...terminalRaidIds, kills: new Set<string>() }
-                : terminalRaidIds,
-            ...(historicAliases.length === 0 && killScanFloor
-              ? { killScanFloor }
-              : {}),
-            ...(characterId !== undefined ? { characterId } : {}),
-            ...(toSearch.length > 0 ? { verifiedKills: toSearch } : {}),
-            // From stored evidence on every scanning run, whatever Raider.IO
-            // answered: a complete publish keeps only what the run finds again
-            // outside terminal raids, so a kill recovered from attendance is
-            // re-read rather than dropped.
-            ...(requestCap > 1
-              ? {
-                  storedKillReportCodes: storedKillReportCodes(
-                    [...storedEvidence.kills, ...storedEvidence.wipes],
-                    terminalRaidIds.kills
-                  )
-                }
-              : {}),
-            ...(tierSearchAsked
-              ? {
-                  tierSearch: {
-                    ...tierWindow,
-                    guilds: tierSearchGuilds(
-                      verified?.guilds ?? [],
-                      storedEvidence.guilds ?? []
-                    ),
-                    requestCap: tierCaps.tier,
-                    // Every stored kill's report: one in a terminal raid is
-                    // carried by the publish, and one outside it is re-read.
-                    skipReportCodes: storedKillReportCodes(
-                      [...storedEvidence.kills, ...storedEvidence.wipes],
-                      new Set()
-                    )
-                  }
-                }
-              : {}),
-            ...(tierSearchAsked && tierSearchRaidId && rankedCap > 0
-              ? {
-                  rankedBackfill: {
-                    journalRaidId: tierSearchRaidId,
-                    requestCap: rankedCap,
-                    ...(storedEvidence.rankedBackfillCursor
-                      ? { cursor: storedEvidence.rankedBackfillCursor }
-                      : {})
-                  }
-                }
-              : {}),
-            ...historyScanResumeOptions,
-            ...(parseOnlyResume
-              ? {
-                  storedKills: (storedEvidence.parseOnlyKills ?? [])
-                    .map((kill) => storedKillForParse(kill, run.key.region))
-                    .filter(
-                      (kill): kill is WarcraftLogsFirstKillEvidence =>
-                        kill !== null
-                    )
-                }
-              : {}),
-            // `warcraftLogsCalls` counts gateway invocations; one of those is
-            // four classes of upstream request. Counting them apart is what
-            // makes a run's points attributable to the history scan or to
-            // rankings, rather than a total nobody can act on (#303).
-            onRequest: (event) => {
-              observePhase(event.query);
-              scope.increment(`${REQUEST_COUNTER_PREFIX[event.query]}Requests`);
-              if (event.limited) {
-                scope.increment(
-                  `${REQUEST_COUNTER_PREFIX[event.query]}Limited`
-                );
-              }
-              if (event.limitationCode === "schema_drift") {
-                record.limitationQuery = event.query;
-              }
-            },
-            onLimitation: (query, code) => {
-              if (code === "schema_drift") record.limitationQuery = query;
-              observePhase(query);
-              if (phaseLedger) {
-                const limitedPhase = phaseForQuery(query);
-                phaseLimitations.set(limitedPhase, code);
-              }
-            },
-            signal: activeContext.signal
-          })
+        const identities = [run.key, ...historicAliases];
+        const turn = tierSearchAsked
+          ? 0
+          : (storedEvidence.identityScanTurn ?? 0) % identities.length;
+        const chosen = new Set(
+          Array.from(
+            { length: Math.min(requestCap, identities.length) },
+            (_, index) => (turn + index) % identities.length
+          )
         );
+        // A parse-only run without aliases keeps the established zero-scan
+        // path. Otherwise an unchosen identity receives no gateway call.
+        if (historicAliases.length === 0 || tierSearchAsked) chosen.add(0);
+        const capFor = (index: number, total: number): number => {
+          if (!chosen.has(index)) return 0;
+          const ordered = [...chosen];
+          const position = ordered.indexOf(index);
+          return (
+            Math.floor(total / ordered.length) +
+            (position < total % ordered.length ? 1 : 0)
+          );
+        };
+        const deferred = chosen.size < identities.length;
+        const aliasProgress = new Map(
+          (storedEvidence.historicAliasProgress ?? []).map((progress) => [
+            canonicalCharacterId(progress.key),
+            progress
+          ])
+        );
+        let response: WarcraftLogsReportResult = chosen.has(0)
+          ? await scope.time("warcraftLogs", () =>
+              gateway.getFirstKillReports(run.key, {
+                requestCap: capFor(0, requestCap),
+                parseRequestCap: capFor(0, parseRequestCap),
+                ...(run.className ? { className: run.className } : {}),
+                hydratedFightUrls,
+                collectedTierZones,
+                terminalRaidIds:
+                  historicAliases.length > 0
+                    ? { ...terminalRaidIds, kills: new Set<string>() }
+                    : terminalRaidIds,
+                ...(historicAliases.length === 0 && killScanFloor
+                  ? { killScanFloor }
+                  : {}),
+                ...(characterId !== undefined ? { characterId } : {}),
+                ...(toSearch.length > 0 ? { verifiedKills: toSearch } : {}),
+                // From stored evidence on every scanning run, whatever Raider.IO
+                // answered: a complete publish keeps only what the run finds again
+                // outside terminal raids, so a kill recovered from attendance is
+                // re-read rather than dropped.
+                ...(requestCap > 1
+                  ? {
+                      storedKillReportCodes: storedKillReportCodes(
+                        [...storedEvidence.kills, ...storedEvidence.wipes],
+                        terminalRaidIds.kills
+                      )
+                    }
+                  : {}),
+                ...(tierSearchAsked
+                  ? {
+                      tierSearch: {
+                        ...tierWindow,
+                        guilds: tierSearchGuilds(
+                          verified?.guilds ?? [],
+                          storedEvidence.guilds ?? []
+                        ),
+                        requestCap: tierCaps.tier,
+                        // Every stored kill's report: one in a terminal raid is
+                        // carried by the publish, and one outside it is re-read.
+                        skipReportCodes: storedKillReportCodes(
+                          [...storedEvidence.kills, ...storedEvidence.wipes],
+                          new Set()
+                        )
+                      }
+                    }
+                  : {}),
+                ...(tierSearchAsked && tierSearchRaidId && rankedCap > 0
+                  ? {
+                      rankedBackfill: {
+                        journalRaidId: tierSearchRaidId,
+                        requestCap: rankedCap,
+                        ...(storedEvidence.rankedBackfillCursor
+                          ? { cursor: storedEvidence.rankedBackfillCursor }
+                          : {})
+                      }
+                    }
+                  : {}),
+                ...historyScanResumeOptions,
+                ...(parseOnlyResume
+                  ? {
+                      storedKills: (storedEvidence.parseOnlyKills ?? [])
+                        .map((kill) => storedKillForParse(kill, run.key.region))
+                        .filter(
+                          (kill): kill is WarcraftLogsFirstKillEvidence =>
+                            kill !== null
+                        )
+                    }
+                  : {}),
+                // `warcraftLogsCalls` counts gateway invocations; one of those is
+                // four classes of upstream request. Counting them apart is what
+                // makes a run's points attributable to the history scan or to
+                // rankings, rather than a total nobody can act on (#303).
+                onRequest: (event) => {
+                  observePhase(event.query);
+                  scope.increment(
+                    `${REQUEST_COUNTER_PREFIX[event.query]}Requests`
+                  );
+                  if (event.limited) {
+                    scope.increment(
+                      `${REQUEST_COUNTER_PREFIX[event.query]}Limited`
+                    );
+                  }
+                  if (event.limitationCode === "schema_drift") {
+                    record.limitationQuery = event.query;
+                  }
+                },
+                onLimitation: (query, code) => {
+                  if (code === "schema_drift") record.limitationQuery = query;
+                  observePhase(query);
+                  if (phaseLedger) {
+                    const limitedPhase = phaseForQuery(query);
+                    phaseLimitations.set(limitedPhase, code);
+                  }
+                },
+                signal: activeContext.signal
+              })
+            )
+          : {
+              kind: "limitation",
+              code: "request_cap"
+            };
         // A former name is collected by name and realm, then its evidence is
         // published under the connected character's key. No alias becomes a
         // separate dossier character or independent evidence run.
-        for (const alias of historicAliases) {
-          if (response.kind === "limitation") break;
+        for (const [aliasIndex, alias] of historicAliases.entries()) {
+          if (!chosen.has(aliasIndex + 1)) continue;
+          const previous = aliasProgress.get(canonicalCharacterId(alias));
           const historic = await scope.time("warcraftLogsHistoricAlias", () =>
             gateway.getFirstKillReports(alias, {
-              requestCap: historyCapPerIdentity,
-              parseRequestCap: parseCapPerIdentity,
+              requestCap: capFor(aliasIndex + 1, requestCap),
+              parseRequestCap: capFor(aliasIndex + 1, parseRequestCap),
+              ...(previous?.historyScanResumePage &&
+              previous.historyScanResumeBoundaryReportCode
+                ? {
+                    historyScanStartPage: previous.historyScanResumePage,
+                    historyScanResumeBoundaryReportCode:
+                      previous.historyScanResumeBoundaryReportCode
+                  }
+                : {}),
+              ...(previous?.pendingParseFightUrls?.length
+                ? {
+                    storedKills: (storedEvidence.parseOnlyKills ?? [])
+                      .filter((kill) =>
+                        previous.pendingParseFightUrls!.includes(kill.fightUrl)
+                      )
+                      .map((kill) => storedKillForParse(kill, run.key.region))
+                      .filter(
+                        (kill): kill is WarcraftLogsFirstKillEvidence =>
+                          kill !== null
+                      )
+                  }
+                : {}),
               ...(run.className ? { className: run.className } : {}),
               hydratedFightUrls,
               collectedTierZones,
@@ -1567,8 +1623,72 @@ export function createApplicantEvidenceJobHandler(
               signal: activeContext.signal
             })
           );
+          if (historic.kind === "evidence") {
+            const pendingParseFightUrls =
+              historic.parseLimitation || historic.parseLimitations?.length
+                ? [
+                    ...new Set([
+                      ...(previous?.pendingParseFightUrls ?? []),
+                      ...historic.kills.map((kill) => kill.fightUrl)
+                    ])
+                  ].filter(
+                    (url) =>
+                      !historic.parsedFightUrls.includes(url) &&
+                      !hydratedFightUrls.has(url)
+                  )
+                : [];
+            const next: HistoricAliasScanProgress = {
+              key: alias,
+              pendingParseFightUrls,
+              ...(historic.historyScanResumePage !== undefined
+                ? {
+                    historyScanResumePage: historic.historyScanResumePage,
+                    ...(historic.historyScanResumeBoundaryReportCode
+                      ? {
+                          historyScanResumeBoundaryReportCode:
+                            historic.historyScanResumeBoundaryReportCode
+                        }
+                      : {})
+                  }
+                : historic.limitation
+                  ? {
+                      ...(previous?.historyScanResumePage
+                        ? {
+                            historyScanResumePage:
+                              previous.historyScanResumePage
+                          }
+                        : {}),
+                      ...(previous?.historyScanResumeBoundaryReportCode
+                        ? {
+                            historyScanResumeBoundaryReportCode:
+                              previous.historyScanResumeBoundaryReportCode
+                          }
+                        : {})
+                    }
+                  : {}),
+              historyComplete:
+                !historic.limitation &&
+                historic.historyScanResumePage === undefined,
+              parseWorkOutstanding: pendingParseFightUrls.length > 0
+            };
+            aliasProgress.set(canonicalCharacterId(alias), next);
+          }
           response = mergeHistoricAliasResponse(response, historic);
         }
+        if (deferred && response.kind === "evidence") {
+          response = {
+            ...response,
+            limitation: response.limitation ?? {
+              kind: "limitation",
+              code: "request_cap"
+            }
+          };
+        }
+        const historicAliasProgress = historicAliases
+          .map((alias) => aliasProgress.get(canonicalCharacterId(alias)))
+          .filter(
+            (item): item is HistoricAliasScanProgress => item !== undefined
+          );
         await phaseWrites;
         // Only a search this run asked for is the run's to record.
         if (
@@ -1615,6 +1735,7 @@ export function createApplicantEvidenceJobHandler(
           await stageAndPublish(
             {
               state: "partial",
+              ...(historicAliases.length > 0 ? { historicAliasProgress } : {}),
               ...(storedEvidence.historyScanResumePage !== undefined
                 ? {
                     historyScanResumePage: storedEvidence.historyScanResumePage,
@@ -1813,6 +1934,7 @@ export function createApplicantEvidenceJobHandler(
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
+            ...(historicAliases.length > 0 ? { historicAliasProgress } : {}),
             ...(response.scanSkipped ? { scanSkipped: true } : {}),
             ...(response.rankedBackfillCursor !== undefined
               ? { rankedBackfillCursor: response.rankedBackfillCursor }

@@ -28,6 +28,7 @@ export type EvidencePublication = Readonly<{
   /** See StagedEvidenceCollection.historyScanResumePage. */
   historyScanResumePage?: number | null;
   historyScanResumeBoundaryReportCode?: string | null;
+  historicAliasProgress?: StagedEvidenceCollection["historicAliasProgress"];
   rankedBackfillCursor?: StagedEvidenceCollection["rankedBackfillCursor"];
   limitationCode: EvidenceLimitationCode | null;
   /**
@@ -90,6 +91,9 @@ export function toStagedCollection(
             publication.historyScanResumeBoundaryReportCode
         }
       : {}),
+    ...(Object.hasOwn(publication, "historicAliasProgress")
+      ? { historicAliasProgress: publication.historicAliasProgress }
+      : {}),
     ...(Object.hasOwn(publication, "rankedBackfillCursor")
       ? { rankedBackfillCursor: publication.rankedBackfillCursor }
       : {}),
@@ -123,6 +127,9 @@ export function fromStagedCollection(
           historyScanResumeBoundaryReportCode:
             staged.historyScanResumeBoundaryReportCode
         }
+      : {}),
+    ...(Object.hasOwn(staged, "historicAliasProgress")
+      ? { historicAliasProgress: staged.historicAliasProgress }
       : {}),
     ...(Object.hasOwn(staged, "rankedBackfillCursor")
       ? { rankedBackfillCursor: staged.rankedBackfillCursor }

@@ -4827,6 +4827,42 @@ describe("PostgreSQL repositories", () => {
         .historyScanResumePage
     ).toBeUndefined();
 
+    const aliasRun = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-20T12:01:00.000Z"),
+      at: new Date("2026-09-20T12:02:00.000Z")
+    });
+    if (aliasRun.kind !== "reserved") throw new Error("alias_run_not_reserved");
+    await repositories.evidence.publish(aliasRun.run.id, {
+      state: "partial",
+      limitationCode: "request_cap",
+      parseLimitationCode: null,
+      historicAliasProgress: [
+        {
+          key: alias,
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "alias-boundary",
+          historyComplete: false,
+          parseWorkOutstanding: true
+        }
+      ],
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-20T12:03:00.000Z")
+    });
+    await expect(
+      createPostgresRepositories(pool).evidence.storedEvidenceTiers(rootKey)
+    ).resolves.toMatchObject({
+      historicAliasProgress: [
+        {
+          key: alias,
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "alias-boundary"
+        }
+      ]
+    });
+
     await repositories.evidence.markTerminalTiers(
       rootKey,
       [{ raidId: "42", domain: "kills" }],
@@ -4841,6 +4877,9 @@ describe("PostgreSQL repositories", () => {
     await expect(
       repositories.evidence.historicAliases!(rootKey)
     ).resolves.toEqual([]);
+    await expect(
+      repositories.evidence.storedEvidenceTiers(rootKey)
+    ).resolves.toMatchObject({ historicAliasProgress: [] });
     await expect(repositories.evidence.terminalTiers(rootKey)).resolves.toEqual(
       [{ raidId: "42", domain: "parses" }]
     );

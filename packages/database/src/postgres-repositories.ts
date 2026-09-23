@@ -12,6 +12,7 @@ import type {
   EvidenceRunMode,
   StoredEvidenceGuild,
   StoredRankedBackfillCursor,
+  HistoricAliasScanProgress,
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicKillInput,
@@ -1457,7 +1458,8 @@ async function invalidateHistoricAliasKillScan(
     `UPDATE character_evidence_runs
         SET kill_scan_completed_at = NULL,
             kill_scan_resume_page = NULL,
-            kill_scan_resume_boundary_report_code = NULL
+            kill_scan_resume_boundary_report_code = NULL,
+            historic_alias_progress = NULL
       WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
         AND status IN ('complete', 'partial')`,
     values
@@ -4230,6 +4232,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                    ELSE ranked_backfill_cursor
                  END,
                  ranked_backfill_attempted = $13,
+                 historic_alias_progress = CASE
+                   WHEN $15 THEN $16::jsonb
+                   ELSE historic_alias_progress
+                 END,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -4253,7 +4259,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               Object.hasOwn(input, "rankedBackfillCursor"),
               input.rankedBackfillCursor === undefined
                 ? null
-                : JSON.stringify(input.rankedBackfillCursor)
+                : JSON.stringify(input.rankedBackfillCursor),
+              Object.hasOwn(input, "historicAliasProgress"),
+              JSON.stringify(input.historicAliasProgress ?? null)
             ]
           );
           if (publication.rowCount !== 1) {
@@ -4462,6 +4470,26 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               [key.region, key.realm, key.name, tierSearchRaidId]
             )
           : null;
+        const aliasProgress = await pool.query<{
+          historic_alias_progress: HistoricAliasScanProgress[];
+        }>(
+          `SELECT historic_alias_progress
+             FROM character_evidence_runs
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND status IN ('complete', 'partial')
+              AND historic_alias_progress IS NOT NULL
+            ORDER BY completed_at DESC, id DESC
+            LIMIT 1`,
+          [key.region, key.realm, key.name]
+        );
+        const scanTurn = await pool.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+             FROM character_evidence_runs
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND status IN ('complete', 'partial')
+              AND kill_scan_skipped = false`,
+          [key.region, key.realm, key.name]
+        );
         return {
           kills: (completed?.kills ?? []).map((kill) => ({
             raidId: kill.raidId,
@@ -4497,6 +4525,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                   resume.rows[0].kill_scan_resume_boundary_report_code
               }
             : {}),
+          historicAliasProgress:
+            aliasProgress.rows[0]?.historic_alias_progress ?? [],
+          identityScanTurn: Number(scanTurn.rows[0]?.count ?? 0),
           ...(ranked?.rows[0]?.ranked_backfill_cursor
             ? { rankedBackfillCursor: ranked.rows[0].ranked_backfill_cursor }
             : {})
