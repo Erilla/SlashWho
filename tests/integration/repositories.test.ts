@@ -181,11 +181,14 @@ describe("PostgreSQL repositories", () => {
   beforeEach(async () => {
     await pool.query(`TRUNCATE TABLE
       character_mythic_kills,
+      character_alias_recollections,
       character_mythic_wipes,
       character_evidence_runs,
       -- Keyed by character rather than by run, so nothing above cascades to
       -- it and a mark left by one test would be read by the next.
       character_terminal_tiers,
+      character_historic_aliases,
+      dossier_character_exclusions,
       character_attendance_searches,
       snapshot_characters,
       snapshots,
@@ -4774,6 +4777,188 @@ describe("PostgreSQL repositories", () => {
         { excluded: false }
       ]);
     });
+  });
+
+  it("persists historic aliases and invalidates only kill completion and scan cursors", async () => {
+    await seedCompleteSnapshot(repositories);
+    const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+    const at = new Date("2026-09-20T12:00:00.000Z");
+    await repositories.evidence.markTerminalTiers(
+      rootKey,
+      [
+        { raidId: "42", domain: "kills" },
+        { raidId: "42", domain: "parses" }
+      ],
+      at
+    );
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: at,
+      at
+    });
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "partial",
+      limitationCode: "request_cap",
+      parseLimitationCode: null,
+      historyScanResumePage: 3,
+      historyScanResumeBoundaryReportCode: "oldreport",
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: at
+    });
+    expect(
+      (await repositories.evidence.storedEvidenceTiers(rootKey))
+        .historyScanResumePage
+    ).toBe(3);
+
+    await expect(
+      repositories.evidence.addHistoricAlias!(rootKey, alias)
+    ).resolves.toBe("added");
+    await expect(
+      repositories.evidence.addHistoricAlias!(rootKey, alias)
+    ).resolves.toBe("duplicate");
+    await expect(
+      createPostgresRepositories(pool).evidence.historicAliases!(rootKey)
+    ).resolves.toEqual([alias]);
+    await expect(repositories.evidence.terminalTiers(rootKey)).resolves.toEqual(
+      [{ raidId: "42", domain: "parses" }]
+    );
+    expect(
+      (await repositories.evidence.storedEvidenceTiers(rootKey))
+        .historyScanResumePage
+    ).toBeUndefined();
+
+    const aliasRun = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-20T12:01:00.000Z"),
+      at: new Date("2026-09-20T12:02:00.000Z")
+    });
+    if (aliasRun.kind !== "reserved") throw new Error("alias_run_not_reserved");
+    await repositories.evidence.publish(aliasRun.run.id, {
+      state: "partial",
+      limitationCode: "request_cap",
+      parseLimitationCode: null,
+      historicAliasProgress: [
+        {
+          key: alias,
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "alias-boundary",
+          historyComplete: false,
+          parseWorkOutstanding: true
+        }
+      ],
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-20T12:03:00.000Z")
+    });
+    await expect(
+      createPostgresRepositories(pool).evidence.storedEvidenceTiers(rootKey)
+    ).resolves.toMatchObject({
+      historicAliasProgress: [
+        {
+          key: alias,
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "alias-boundary"
+        }
+      ]
+    });
+
+    await repositories.evidence.markTerminalTiers(
+      rootKey,
+      [{ raidId: "42", domain: "kills" }],
+      at
+    );
+    await expect(
+      repositories.evidence.removeHistoricAlias!(rootKey, alias)
+    ).resolves.toBe("removed");
+    await expect(
+      repositories.evidence.removeHistoricAlias!(rootKey, alias)
+    ).resolves.toBe("missing");
+    await expect(
+      repositories.evidence.historicAliases!(rootKey)
+    ).resolves.toEqual([]);
+    await expect(
+      repositories.evidence.storedEvidenceTiers(rootKey)
+    ).resolves.toMatchObject({ historicAliasProgress: [] });
+    await expect(repositories.evidence.terminalTiers(rootKey)).resolves.toEqual(
+      [{ raidId: "42", domain: "parses" }]
+    );
+  });
+
+  it("persists discovered-character exclusions against the dossier root", async () => {
+    await seedCompleteSnapshot(repositories);
+    await expect(
+      repositories.manualConnections.setDiscoveredExcluded!(
+        rootKey,
+        altKey,
+        true
+      )
+    ).resolves.toBe("updated");
+    await expect(
+      createPostgresRepositories(pool).manualConnections
+        .listDiscoveredExclusions!(rootKey)
+    ).resolves.toEqual([altKey]);
+    await expect(
+      repositories.manualConnections.setDiscoveredExcluded!(
+        rootKey,
+        altKey,
+        false
+      )
+    ).resolves.toBe("updated");
+    await expect(
+      repositories.manualConnections.listDiscoveredExclusions!(rootKey)
+    ).resolves.toEqual([]);
+  });
+
+  it("reserves a fresh alias scan after a run that was active during the edit", async () => {
+    await seedCompleteSnapshot(repositories);
+    const alias = { region: "eu", realm: "neptulon", name: "former" } as const;
+    const at = new Date("2026-09-20T12:00:00.000Z");
+    const dueAt = new Date(Date.now() + 5_000);
+    const active = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: at,
+      at
+    });
+    expect(active.kind).toBe("reserved");
+    await expect(
+      repositories.evidence.addHistoricAlias!(rootKey, alias)
+    ).resolves.toBe("added");
+    await expect(
+      repositories.evidence.listResumable(10, dueAt)
+    ).resolves.toEqual([]);
+    await repositories.evidence.publish(active.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date()
+    });
+    await repositories.evidence.markTerminalTiers(
+      rootKey,
+      [{ raidId: "42", domain: "kills" }],
+      new Date()
+    );
+    await expect(
+      repositories.evidence.listResumable(10, dueAt)
+    ).resolves.toEqual([rootKey]);
+    const following = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2020-01-01T00:00:00.000Z"),
+      at: new Date()
+    });
+    expect(following.kind).toBe("reserved");
+    expect(following.run.id).not.toBe(active.run.id);
+    await expect(repositories.evidence.terminalTiers(rootKey)).resolves.toEqual(
+      []
+    );
+    await expect(
+      repositories.evidence.listResumable(10, dueAt)
+    ).resolves.toEqual([]);
   });
 
   afterAll(async () => {

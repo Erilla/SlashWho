@@ -99,6 +99,18 @@ export type DossierGatewayOverrides = Readonly<{
 type WclCredentials = Readonly<{ clientId: string; clientSecret: string }>;
 
 export interface ApplicantDossierService {
+  addHistoricAlias(
+    root: CharacterKey,
+    character: CharacterKey,
+    alias: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<"added" | "duplicate" | "self" | "missing">;
+  removeHistoricAlias(
+    root: CharacterKey,
+    character: CharacterKey,
+    alias: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<"removed" | "missing">;
   start(
     input: CreateDossierCommand,
     scope?: MeasurementScope
@@ -774,7 +786,8 @@ async function restoreMissingHistoricRanks(options: {
 function serializeDossierSubject(
   character: DossierSubject,
   evidence?: { evidenceState: DossierEvidenceState; gathering: boolean },
-  excluded = false
+  excluded = false,
+  historicAliases: readonly CharacterKey[] = []
 ) {
   return {
     key: character.key,
@@ -782,6 +795,7 @@ function serializeDossierSubject(
     className: character.className,
     guild: character.guild,
     raiderIoUrl: character.raiderIoUrl,
+    ...(historicAliases.length > 0 ? { historicAliases } : {}),
     source:
       character.source === "submitted"
         ? ("submitted" as const)
@@ -841,6 +855,12 @@ async function assembleDossier(options: {
         wclCredentials: options.wclCredentials,
         encryptionKey: options.encryptionKey
       })
+    )
+  );
+  const aliases = await Promise.all(
+    [...options.subjects, ...options.excludedSubjects].map(
+      (character) =>
+        options.repositories.evidence.historicAliases?.(character.key) ?? []
     )
   );
   const [cuttingEdgeEvidence, ranked] = await Promise.all([
@@ -932,12 +952,22 @@ async function assembleDossier(options: {
       : options.research,
     characters: [
       ...options.subjects.map((character, index) =>
-        serializeDossierSubject(character, evidence[index])
+        serializeDossierSubject(
+          character,
+          evidence[index],
+          false,
+          aliases[index]
+        )
       ),
       // Excluded rows sit after the researched ones rather than holding their
       // ranked position, so the list reads top-down as evidence then exclusions.
-      ...options.excludedSubjects.map((character) =>
-        serializeDossierSubject(character, undefined, true)
+      ...options.excludedSubjects.map((character, index) =>
+        serializeDossierSubject(
+          character,
+          undefined,
+          true,
+          aliases[options.subjects.length + index]
+        )
       )
     ],
     limitations: dossier.limitations.map((item) => ({
@@ -1082,6 +1112,54 @@ export function createApplicantDossierService(options: {
     if (!scope) return options.repositories;
     return measuredRepositories(options.repositories, scope);
   }
+  async function isConnectedToDossier(
+    repositories: typeof options.repositories,
+    root: CharacterKey,
+    target: CharacterKey
+  ): Promise<boolean> {
+    const wanted = canonicalCharacterId(target);
+    if (wanted === canonicalCharacterId(root)) return true;
+    const snapshot = await repositories.snapshots.getCurrent(root);
+    if (
+      snapshot?.characters.some(
+        (item) => canonicalCharacterId(item.key) === wanted
+      )
+    )
+      return true;
+    for (const connection of await repositories.manualConnections.list(root)) {
+      if (canonicalCharacterId(connection.key) === wanted) return true;
+      if (connection.pending) continue;
+      const discovered = await repositories.snapshots.getCurrent(
+        connection.key
+      );
+      if (
+        discovered?.characters.some(
+          (item) => canonicalCharacterId(item.key) === wanted
+        )
+      )
+        return true;
+    }
+    return false;
+  }
+  async function queueHistoricAliasRecollection(
+    character: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<void> {
+    try {
+      await refreshCharacter({
+        key: character,
+        at: new Date(),
+        cooldownMs: 0,
+        repositories: options.repositories,
+        queue: options.queue,
+        ...(scope ? { scope } : {})
+      });
+    } catch {
+      // The alias edit stored a durable recollection request. The resume
+      // sweep will enqueue it if the immediate dispatch could not finish.
+      options.logger?.info({ event: "historic_alias_enqueue_deferred" });
+    }
+  }
   // Reports this call's admission wait to its own scope rather than the
   // shared limiter's constructor-level onWait, without cloning the limiter
   // itself: the single shared instance must keep bounding the fan-out.
@@ -1208,6 +1286,33 @@ export function createApplicantDossierService(options: {
     };
   }
   return {
+    async addHistoricAlias(root, character, alias, scope) {
+      const repositories = scopedRepositories(scope);
+      if (canonicalCharacterId(character) === canonicalCharacterId(alias))
+        return "self";
+      if (character.region !== alias.region) return "missing";
+      if (!(await isConnectedToDossier(repositories, root, character)))
+        return "missing";
+      const result = await repositories.evidence.addHistoricAlias?.(
+        character,
+        alias
+      );
+      if (result !== "added") return result ?? "missing";
+      await queueHistoricAliasRecollection(character, scope);
+      return "added";
+    },
+    async removeHistoricAlias(root, character, alias, scope) {
+      const repositories = scopedRepositories(scope);
+      if (!(await isConnectedToDossier(repositories, root, character)))
+        return "missing";
+      const result = await repositories.evidence.removeHistoricAlias?.(
+        character,
+        alias
+      );
+      if (result !== "removed") return "missing";
+      await queueHistoricAliasRecollection(character, scope);
+      return "removed";
+    },
     async readEvidencePhases(runId) {
       return options.repositories.evidence.listPhases?.(runId) ?? [];
     },
@@ -1266,10 +1371,24 @@ export function createApplicantDossierService(options: {
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
-      const result = await scopedRepositories(
-        scope
-      ).manualConnections.setExcluded(root, target, input.excluded);
-      return result === "updated" ? { kind: "updated" } : { kind: "missing" };
+      const repositories = scopedRepositories(scope);
+      const result = await repositories.manualConnections.setExcluded(
+        root,
+        target,
+        input.excluded
+      );
+      if (result === "updated") return { kind: "updated" };
+      if (!(await isConnectedToDossier(repositories, root, target)))
+        return { kind: "missing" };
+      const discovered =
+        await repositories.manualConnections.setDiscoveredExcluded?.(
+          root,
+          target,
+          input.excluded
+        );
+      return discovered === "updated"
+        ? { kind: "updated" }
+        : { kind: "missing" };
     },
 
     async removeConnectedCharacter(root, input, scope) {
@@ -1403,9 +1522,13 @@ export function createApplicantDossierService(options: {
       type RankedSubject = DossierSubject & Readonly<{ level: number }>;
       const manual: RankedSubject[] = [];
       const excluded: RankedSubject[] = [];
+      const manualExcludedIds = new Set<string>();
       for (const character of await repositories.manualConnections.list(
         snapshot.rootKey
       )) {
+        if (character.excluded) {
+          manualExcludedIds.add(canonicalCharacterId(character.key));
+        }
         const admit = (candidate: RankedSubject, into = manual) => {
           const id = canonicalCharacterId(candidate.key);
           if (seen.has(id)) return;
@@ -1444,6 +1567,14 @@ export function createApplicantDossierService(options: {
       const rootId = canonicalCharacterId(snapshot.rootKey);
       // Rank before applying the cap so the displayed list and evidence requests
       // prioritise the same characters without changing the immutable snapshot.
+      const discoveredExclusions = new Set(
+        (
+          (await repositories.manualConnections.listDiscoveredExclusions?.(
+            snapshot.rootKey
+          )) ?? []
+        ).map(canonicalCharacterId)
+      );
+      for (const id of manualExcludedIds) discoveredExclusions.add(id);
       const ordered = [...snapshot.characters, ...manual].sort(
         (left, right) => {
           const rootOrder =
@@ -1458,8 +1589,17 @@ export function createApplicantDossierService(options: {
           );
         }
       );
-      const selected = ordered.slice(0, options.config.DOSSIER_CHARACTER_CAP);
-      const skipped = ordered.slice(selected.length);
+      const includedOrdered = ordered.filter((character) => {
+        if (!discoveredExclusions.has(canonicalCharacterId(character.key)))
+          return true;
+        excluded.push(character);
+        return false;
+      });
+      const selected = includedOrdered.slice(
+        0,
+        options.config.DOSSIER_CHARACTER_CAP
+      );
+      const skipped = includedOrdered.slice(selected.length);
       // Excluded characters are ranked among themselves only, so one of them
       // never costs a researchable character its place under the cap.
       const excludedOrdered = [...excluded].sort(

@@ -174,6 +174,12 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         code: "invalid_character_url" as const
       };
     },
+    async addHistoricAlias() {
+      return "added" as const;
+    },
+    async removeHistoricAlias() {
+      return "removed" as const;
+    },
     async read() {
       return { kind: "not_ready" as const };
     },

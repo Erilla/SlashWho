@@ -187,6 +187,15 @@ export interface ManualConnectionCharacter {
 }
 
 export interface ManualConnectionRepository {
+  /** Exclusions for snapshot-discovered characters; manual links keep their flag. */
+  listDiscoveredExclusions?(
+    root: CharacterKey
+  ): Promise<readonly CharacterKey[]>;
+  setDiscoveredExcluded?(
+    root: CharacterKey,
+    character: CharacterKey,
+    excluded: boolean
+  ): Promise<"updated" | "missing">;
   list(root: CharacterKey): Promise<readonly ManualConnectionCharacter[]>;
   add(
     root: CharacterKey,
@@ -537,6 +546,10 @@ export type StoredEvidenceTiers = Readonly<{
   historyScanResumePage?: number;
   /** The final report code on the stored boundary page, used to validate its offset. */
   historyScanResumeBoundaryReportCode?: string;
+  /** Cursor and parse state for each former identity, carried by a published run. */
+  historicAliasProgress?: readonly HistoricAliasScanProgress[];
+  /** Rotates scarce history requests fairly across the current name and aliases. */
+  identityScanTurn?: number;
   rankedBackfillCursor?: StoredRankedBackfillCursor;
   /**
    * Whether the newest completed run established that its only unfinished
@@ -545,6 +558,16 @@ export type StoredEvidenceTiers = Readonly<{
    */
   parseWorkOutstanding?: boolean;
   parseOnlyKills?: readonly CharacterMythicKillInput[];
+}>;
+
+export type HistoricAliasScanProgress = Readonly<{
+  key: CharacterKey;
+  historyScanResumePage?: number;
+  historyScanResumeBoundaryReportCode?: string;
+  historyComplete?: boolean;
+  parseWorkOutstanding?: boolean;
+  /** Alias fights awaiting rankings after a capped parse pass. */
+  pendingParseFightUrls?: readonly string[];
 }>;
 
 /** JSON cursor for an explicit tier's ranked report walk. */
@@ -586,6 +609,7 @@ export interface StagedEvidenceCollection {
    */
   historyScanResumePage?: number | null;
   historyScanResumeBoundaryReportCode?: string | null;
+  historicAliasProgress?: readonly HistoricAliasScanProgress[];
   rankedBackfillCursor?: StoredRankedBackfillCursor | null;
   limitationCode: string | null;
   parseLimitationCode: string | null;
@@ -701,6 +725,16 @@ export type EvidenceRunCost = Readonly<{
 }>;
 
 export interface EvidenceRepository {
+  /** Reviewer-declared former identities of this connected character. */
+  historicAliases?(key: CharacterKey): Promise<readonly CharacterKey[]>;
+  addHistoricAlias?(
+    key: CharacterKey,
+    alias: CharacterKey
+  ): Promise<"added" | "duplicate" | "missing">;
+  removeHistoricAlias?(
+    key: CharacterKey,
+    alias: CharacterKey
+  ): Promise<"removed" | "missing">;
   reserve(input: {
     key: CharacterKey;
     freshnessCutoff: Date;
@@ -752,6 +786,7 @@ export interface EvidenceRepository {
       scanSkipped?: boolean;
       historyScanResumePage?: number | null;
       historyScanResumeBoundaryReportCode?: string | null;
+      historicAliasProgress?: readonly HistoricAliasScanProgress[];
       rankedBackfillCursor?: StoredRankedBackfillCursor | null;
       state: "complete" | "partial";
       limitationCode: string | null;
