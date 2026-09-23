@@ -436,14 +436,16 @@ function characterGuilds(value: unknown): readonly CharacterGuild[] {
 type GuildAttendanceReport = Readonly<{
   code: string;
   /**
-   * Lower-cased names attendance lists for the report, or null when it lists
-   * none or any entry is unreadable. Null means "unknown", never "absent":
-   * only a complete list may rule a report out.
+   * Whether attendance lists the character. Null means "unknown", never
+   * "absent": only a complete, readable list may rule a report out.
    */
-  playerNames: ReadonlySet<string> | null;
+  listsCharacter: boolean | null;
 }>;
 
-function guildAttendancePage(value: unknown): Readonly<{
+function guildAttendancePage(
+  value: unknown,
+  characterName: string
+): Readonly<{
   reports: readonly GuildAttendanceReport[];
   hasMorePages: boolean;
 }> | null {
@@ -457,20 +459,33 @@ function guildAttendancePage(value: unknown): Readonly<{
     const entry = record(value);
     const code = nonEmptyString(entry?.code);
     if (!code) return null;
-    reports.push({ code, playerNames: attendancePlayerNames(entry?.players) });
+    reports.push({
+      code,
+      listsCharacter: attendanceListsCharacter(entry?.players, characterName)
+    });
   }
   return { reports, hasMorePages };
 }
 
-function attendancePlayerNames(value: unknown): ReadonlySet<string> | null {
-  if (!Array.isArray(value) || value.length === 0) return null;
-  const names = new Set<string>();
-  for (const player of value) {
+function attendanceListsCharacter(
+  players: unknown,
+  characterName: string
+): boolean | null {
+  if (!Array.isArray(players) || players.length === 0) return null;
+  const wanted = characterName.normalize("NFC");
+  let unreadable = false;
+  for (const player of players) {
     const name = nonEmptyString(record(player)?.name);
-    if (!name) return null;
-    names.add(name.toLocaleLowerCase("en-US"));
+    if (!name) {
+      unreadable = true;
+      continue;
+    }
+    const listed = name.normalize("NFC").toLocaleLowerCase("en-US");
+    // A player from another realm may be written with a realm suffix. The
+    // hydrated report decides the realm; this may only say "not this name".
+    if (listed === wanted || listed.split("-")[0] === wanted) return true;
   }
-  return names;
+  return unreadable ? null : false;
 }
 
 function decodedHydratedReport(
@@ -1441,16 +1456,8 @@ function decodeZoneRankings(
  * Mythic+ would page straight past its floor (#346).
  */
 function reportPageReach(value: unknown): readonly string[] {
-  const envelope = record(value);
-  const data = envelope && record(envelope.data);
-  const characterData = data && record(data.characterData);
-  const character = characterData && record(characterData.character);
-  const recentReports = character && record(character.recentReports);
-  const reports = recentReports && recentReports.data;
-  if (!Array.isArray(reports)) return [];
-
   const reached: string[] = [];
-  for (const reportValue of reports) {
+  for (const reportValue of recentReportsData(value)) {
     const report = record(reportValue);
     const reportStartTime =
       report && validTimestampMilliseconds(report.startTime);
@@ -1471,39 +1478,37 @@ function reportPageReach(value: unknown): readonly string[] {
 }
 
 function hasMoreReportPages(value: unknown): boolean | null {
-  const envelope = record(value);
-  const data = envelope && record(envelope.data);
-  const characterData = data && record(data.characterData);
-  const character = characterData && record(characterData.character);
-  const recentReports = character && record(character.recentReports);
+  const recentReports = recentReportsOf(value);
   return recentReports && typeof recentReports.has_more_pages === "boolean"
     ? recentReports.has_more_pages
     : null;
 }
 
 function lastReportCode(value: unknown): string | null {
-  const envelope = record(value);
-  const data = envelope && record(envelope.data);
-  const characterData = data && record(data.characterData);
-  const character = characterData && record(characterData.character);
-  const recentReports = character && record(character.recentReports);
-  const reports = recentReports && recentReports.data;
-  if (!Array.isArray(reports) || reports.length === 0) return null;
-  return nonEmptyString(record(reports.at(-1))?.code);
+  const reports = recentReportsData(value);
+  return reports.length === 0
+    ? null
+    : nonEmptyString(record(reports.at(-1))?.code);
 }
 
 function reportCodes(value: unknown): readonly string[] {
+  return recentReportsData(value).flatMap((report) => {
+    const code = nonEmptyString(record(report)?.code);
+    return code ? [code] : [];
+  });
+}
+
+function recentReportsOf(value: unknown): Record<string, unknown> | null {
   const envelope = record(value);
   const data = envelope && record(envelope.data);
   const characterData = data && record(data.characterData);
   const character = characterData && record(characterData.character);
-  const recentReports = character && record(character.recentReports);
-  const reports = recentReports && recentReports.data;
-  if (!Array.isArray(reports)) return [];
-  return reports.flatMap((report) => {
-    const code = nonEmptyString(record(report)?.code);
-    return code ? [code] : [];
-  });
+  return character && record(character.recentReports);
+}
+
+function recentReportsData(value: unknown): readonly unknown[] {
+  const reports = recentReportsOf(value)?.data;
+  return Array.isArray(reports) ? reports : [];
 }
 
 export function createWarcraftLogsClient(
@@ -1748,6 +1753,9 @@ export function createWarcraftLogsClient(
     let invalidatedStoredBoundary = false;
     let historyScanResumeBoundaryReportCode =
       options.historyScanResumeBoundaryReportCode;
+    // Reports this run has already decoded from the character's own history.
+    // Hydrating one again through attendance would re-read the same fights.
+    const scannedReportCodes = new Set<string>();
     if (
       historyScanStartPage > 1 &&
       options.historyScanResumeBoundaryReportCode !== undefined
@@ -1774,6 +1782,11 @@ export function createWarcraftLogsClient(
       const decodedProbe = firstKillReports(probe.value, key);
       if (decodedProbe.kind === "limitation") return decodedProbe;
       if (decodedProbe.limitation) return decodedProbe.limitation;
+      // A cleanly decoded page, whatever it proves about the offset. Keeping
+      // its evidence is what lets attendance skip its reports.
+      for (const kill of decodedProbe.kills) kills.set(kill.fightUrl, kill);
+      for (const wipe of decodedProbe.wipes) wipes.set(wipe.fightUrl, wipe);
+      for (const code of reportCodes(probe.value)) scannedReportCodes.add(code);
       if (
         lastReportCode(probe.value) !==
         options.historyScanResumeBoundaryReportCode
@@ -1791,9 +1804,6 @@ export function createWarcraftLogsClient(
     // what separates a finished scan from one whose budget ran out after the
     // last page it proved.
     let historyScanFinished = false;
-    // Reports this run has already decoded from the character's own history.
-    // Hydrating one again through attendance would re-read the same fights.
-    const scannedReportCodes = new Set<string>();
     for (
       let page = historyScanStartPage;
       historyScanRequests < options.requestCap;
@@ -1828,9 +1838,6 @@ export function createWarcraftLogsClient(
       for (const wipe of normalized.wipes) {
         wipes.set(wipe.fightUrl, wipe);
       }
-      for (const code of reportCodes(result.value)) {
-        scannedReportCodes.add(code);
-      }
       for (const guild of characterGuilds(result.value)) {
         discoveredGuilds.set(
           `${guild.region}\0${guild.realm}\0${guild.name}`,
@@ -1841,6 +1848,11 @@ export function createWarcraftLogsClient(
         options.onLimitation?.("history_scan", normalized.limitation.code);
         scanLimitation = normalized.limitation;
         break;
+      }
+      // Only after the page decoded cleanly: a drifted page stops at its first
+      // bad report, and those after it are left for attendance to recover.
+      for (const code of reportCodes(result.value)) {
+        scannedReportCodes.add(code);
       }
 
       // Below every terminal tier, so any further page can only re-find
@@ -1924,14 +1936,14 @@ export function createWarcraftLogsClient(
           scanLimitation ??= attendance;
           break;
         }
-        const attendancePage = guildAttendancePage(attendance.value);
+        const attendancePage = guildAttendancePage(attendance.value, key.name);
         if (attendancePage === null) {
           scanLimitation ??= { kind: "limitation", code: "schema_drift" };
           break;
         }
-        for (const { code, playerNames } of attendancePage.reports) {
+        for (const { code, listsCharacter } of attendancePage.reports) {
           if (scannedReportCodes.has(code)) continue;
-          if (playerNames && !playerNames.has(key.name)) continue;
+          if (listsCharacter === false) continue;
           if (historyScanRequests >= options.requestCap) {
             scanLimitation ??= { kind: "limitation", code: "request_cap" };
             break;
@@ -2465,42 +2477,43 @@ export function createWarcraftLogsClient(
         : {}),
       ...(parseLimitations.length > 0 ? { parseLimitations } : {})
     });
+    const resume: Readonly<{
+      historyScanResumePage?: number;
+      historyScanResumeBoundaryReportCode?: string;
+    }> = !scanLimitation
+      ? {}
+      : lastDecodedHistoryPage !== undefined
+        ? {
+            historyScanResumePage: lastDecodedHistoryPage + 1,
+            ...(historyScanResumeBoundaryReportCode
+              ? { historyScanResumeBoundaryReportCode }
+              : {})
+          }
+        : invalidatedStoredBoundary
+          ? // A one-request budget may be spent entirely proving that the old
+            // offset moved. Clear its anchor so the next run starts at page
+            // one instead of validating the stale page forever. The probe's
+            // own evidence does not change that, so this holds with kills too.
+            { historyScanResumePage: 1 }
+          : {};
     return sortedKills.length || sortedWipes.length
       ? evidenceResult({
           kills: sortedKills,
           wipes: sortedWipes,
           limitation: scanLimitation,
-          ...(scanLimitation && lastDecodedHistoryPage !== undefined
-            ? { historyScanResumePage: lastDecodedHistoryPage + 1 }
-            : {}),
-          ...(historyScanResumeBoundaryReportCode
-            ? { historyScanResumeBoundaryReportCode }
-            : {})
+          ...resume
         })
-      : scanLimitation && lastDecodedHistoryPage !== undefined
+      : resume.historyScanResumePage !== undefined
         ? evidenceResult({
             kills: [],
             wipes: [],
             limitation: scanLimitation,
-            historyScanResumePage: lastDecodedHistoryPage + 1,
-            ...(historyScanResumeBoundaryReportCode
-              ? { historyScanResumeBoundaryReportCode }
-              : {})
+            ...resume
           })
-        : scanLimitation && invalidatedStoredBoundary
-          ? evidenceResult({
-              kills: [],
-              wipes: [],
-              limitation: scanLimitation,
-              // A one-request budget may be spent entirely proving that the
-              // old offset moved. Clear its anchor so the next run starts at
-              // page one instead of validating the stale page forever.
-              historyScanResumePage: 1
-            })
-          : (scanLimitation ??
-            reportedParseLimitation ?? {
-              ...evidenceResult({ kills: [], wipes: [] })
-            });
+        : (scanLimitation ??
+          reportedParseLimitation ?? {
+            ...evidenceResult({ kills: [], wipes: [] })
+          });
   }
 
   return { getRateLimit, resolveCharacter, getFirstKillReports };
