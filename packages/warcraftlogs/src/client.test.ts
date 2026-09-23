@@ -4702,6 +4702,87 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("never reports a resumed scan as a finished history", async () => {
+    // Break caught: a resumed scan reads only the pages below its cursor.
+    // Reaching their end was reported as a clean read, the run published
+    // complete, and a complete publish keeps only what the run found outside
+    // terminal raids -- then marked raids terminal from that fraction. Ryii
+    // went from 751 kills to 269 on 2026-09-23, and eight characters with it.
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0];
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        const requestedPage = body.variables.page ?? 0;
+        historyPages.push(requestedPage);
+        return jsonResponse(
+          requestedPage === 66
+            ? page
+            : {
+                data: {
+                  characterData: {
+                    character: {
+                      server: { normalizedName: "Silvermoon" },
+                      recentReports: { data: [], has_more_pages: false }
+                    }
+                  }
+                }
+              }
+        );
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 300,
+      parseRequestCap: 10,
+      historyScanStartPage: 67,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    // The whole budget was not needed, and the history below the cursor ran
+    // out -- which is exactly the case that must not read as finished.
+    expect(historyPages).toEqual([66, 67]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "request_cap" },
+      // Page one with no boundary: the next run reads the whole history.
+      historyScanResumePage: 1
+    });
+    expect(result).not.toHaveProperty("historyScanResumeBoundaryReportCode");
+  });
+
+  it("still reports a whole-history scan from page one as finished", async () => {
+    const page = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages[0] as {
+      data: {
+        characterData: {
+          character: { recentReports: { has_more_pages: boolean } };
+        };
+      };
+    };
+    const lastPage = structuredClone(page);
+    lastPage.data.characterData.character.recentReports.has_more_pages = false;
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      if (body.query.includes("RecentReports")) return jsonResponse(lastPage);
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 300,
+      parseRequestCap: 10
+    });
+
+    expect(result).not.toHaveProperty("limitation");
+  });
+
   it("keeps its proved cursor when a resumed scan finds history already exhausted", async () => {
     // Break caught: a scan that ended cleanly and then capped elsewhere saves
     // the page past the end. The resumed run reads that page, finds it empty,
