@@ -20,13 +20,47 @@ describe("searchableKills", () => {
     ]);
   });
 
-  it("drops a kill already held as stored Warcraft Logs evidence", () => {
-    // Break caught: a kill a previous run found, but this run's scan does not
-    // span -- a resume, or a floor-limited scan -- was searched for again on
-    // every run.
+  const storedAzshara = {
+    killedAt: "2020-01-21T19:41:12.000Z",
+    raidId: "23",
+    reportUrl: "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7"
+  };
+
+  it("re-reads a held kill's stored report instead of searching for it", () => {
+    // Break caught: a held kill was dropped from the scan's inputs, and a
+    // complete publish keeps only what the run finds again outside terminal
+    // raids -- so a kill recovered from attendance was stored, dropped, found
+    // again, and dropped again on alternate runs.
+    expect(
+      searchableKills([azshara], { storedKills: [storedAzshara] })
+    ).toEqual([
+      {
+        at: "2020-01-21T19:34:00.000Z",
+        guild,
+        knownReportCode: "zCFtRjmLgvHxynh7"
+      }
+    ]);
+  });
+
+  it("re-reads a held guildless kill too, which has no attendance to search", () => {
+    expect(
+      searchableKills([{ ...azshara, guild: null }], {
+        storedKills: [storedAzshara]
+      })
+    ).toEqual([
+      {
+        at: "2020-01-21T19:34:00.000Z",
+        guild: null,
+        knownReportCode: "zCFtRjmLgvHxynh7"
+      }
+    ]);
+  });
+
+  it("drops a held kill in a terminal raid, which a complete publish keeps", () => {
     expect(
       searchableKills([azshara], {
-        storedKills: [{ killedAt: "2020-01-21T19:41:12.000Z" }]
+        storedKills: [storedAzshara],
+        terminalKillRaidIds: new Set(["23"])
       })
     ).toEqual([]);
   });
@@ -38,9 +72,13 @@ describe("searchableKills", () => {
     // 15-minute match called it unheld, so it would be searched every run.
     expect(
       searchableKills([azshara], {
-        storedKills: [{ killedAt: "2020-01-21T20:34:49.222Z" }]
+        storedKills: [
+          { ...storedAzshara, killedAt: "2020-01-21T20:34:49.222Z" }
+        ]
       })
-    ).toEqual([]);
+    ).toEqual([
+      expect.objectContaining({ knownReportCode: "zCFtRjmLgvHxynh7" })
+    ]);
   });
 
   it("keeps a kill whose only stored neighbour is another night", () => {

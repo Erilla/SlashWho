@@ -35,7 +35,8 @@ export async function raiderIoVerifiedKills(
   raiderio: Pick<RaiderIoGateway, "getHistoricMythicKills">,
   key: CharacterKey,
   options: Readonly<{
-    storedKills: readonly Readonly<{ killedAt: string }>[];
+    storedKills: readonly StoredKillForMatch[];
+    terminalKillRaidIds?: ReadonlySet<string>;
     killScanFloor?: string;
     signal?: AbortSignal;
   }>
@@ -56,38 +57,76 @@ export async function raiderIoVerifiedKills(
   return { kills: searchableKills(result.kills, options) };
 }
 
+export type StoredKillForMatch = Readonly<{
+  killedAt: string;
+  raidId?: string;
+  reportUrl?: string;
+}>;
+
+/**
+ * What the scan should do about each verified kill: nothing, re-read the
+ * report it is already stored from, or search the guild's attendance for it.
+ */
 export function searchableKills(
   kills: readonly HistoricMythicKill[],
   options: Readonly<{
-    storedKills: readonly Readonly<{ killedAt: string }>[];
+    storedKills: readonly StoredKillForMatch[];
+    /** Raids whose kills a complete publish carries forward unread. */
+    terminalKillRaidIds?: ReadonlySet<string>;
     killScanFloor?: string;
   }>
 ): readonly WarcraftLogsVerifiedKill[] {
-  const stored = options.storedKills
-    .map((kill) => Date.parse(kill.killedAt))
-    .filter((at) => !Number.isNaN(at));
+  const stored = options.storedKills.flatMap((kill) => {
+    const at = Date.parse(kill.killedAt);
+    return Number.isNaN(at) ? [] : [{ ...kill, at }];
+  });
   const floor =
     options.killScanFloor === undefined
       ? undefined
       : Date.parse(options.killScanFloor);
-  return kills.flatMap((kill) => {
-    const guild = kill.guild;
+  return kills.flatMap((kill): WarcraftLogsVerifiedKill[] => {
     const at = Date.parse(kill.firstDefeated);
-    // A kill with no guild has no attendance to search.
-    if (!guild || Number.isNaN(at)) return [];
-    const region = guild.region as CharacterKey["region"];
-    if (!supportedRegions.includes(region)) return [];
+    if (Number.isNaN(at)) return [];
     // Below every terminal tier: settled, and searching for it again on every
     // run is the repeated cost this exists to avoid.
     if (floor !== undefined && !Number.isNaN(floor) && at < floor) return [];
-    if (stored.some((held) => Math.abs(held - at) <= STORED_KILL_MATCH_MS)) {
-      return [];
-    }
-    return [
-      {
-        at: new Date(at).toISOString(),
-        guild: { name: guild.name, realm: guild.realm, region }
+    const held = stored.find(
+      (candidate) => Math.abs(candidate.at - at) <= STORED_KILL_MATCH_MS
+    );
+    const guild = searchableGuild(kill.guild);
+    if (held) {
+      // A complete publish carries a terminal raid's kills forward unread.
+      if (
+        held.raidId !== undefined &&
+        options.terminalKillRaidIds?.has(held.raidId)
+      ) {
+        return [];
       }
-    ];
+      // Anywhere else a complete publish keeps only what the run finds
+      // again, and a kill recovered from attendance is not in the
+      // character's own history to be found. Its report is re-read directly.
+      const knownReportCode = reportCodeOf(held.reportUrl);
+      if (knownReportCode !== null) {
+        return [{ at: new Date(at).toISOString(), guild, knownReportCode }];
+      }
+    }
+    // A kill with no guild has no attendance to search.
+    if (guild === null) return [];
+    return [{ at: new Date(at).toISOString(), guild }];
   });
+}
+
+function searchableGuild(
+  guild: HistoricMythicKill["guild"]
+): WarcraftLogsVerifiedKill["guild"] {
+  if (!guild) return null;
+  const region = guild.region as CharacterKey["region"];
+  return supportedRegions.includes(region)
+    ? { name: guild.name, realm: guild.realm, region }
+    : null;
+}
+
+function reportCodeOf(reportUrl: string | undefined): string | null {
+  const code = reportUrl?.match(/\/reports\/([A-Za-z0-9]+)(?:[/?#]|$)/)?.[1];
+  return code ?? null;
 }

@@ -4333,6 +4333,42 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
     });
   });
 
+  it("hands a held kill's stored report over for a re-read unless its raid is terminal", async () => {
+    // Break caught: a held kill vanished from the scan's inputs, so a
+    // complete publish dropped a kill that only attendance had ever found.
+    for (const terminal of [false, true]) {
+      const evidence = store();
+      evidence.storedKills.push({
+        raidId: "23",
+        raidName: "The Eternal Palace",
+        killedAt: "2020-01-21T20:34:49.222Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/zCFtRjmLgvHxynh7"
+      });
+      if (terminal) evidence.stored.push({ raidId: "23", domain: "kills" });
+      const getFirstKillReports = vi.fn(emptyEvidence);
+      const handler = handlerWith(
+        evidence,
+        getFirstKillReports,
+        vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+      );
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        terminal
+          ? expect.not.objectContaining({ verifiedKills: expect.anything() })
+          : expect.objectContaining({
+              verifiedKills: [
+                expect.objectContaining({
+                  knownReportCode: "zCFtRjmLgvHxynh7"
+                })
+              ]
+            })
+      );
+    }
+  });
+
   it("does not ask Raider.IO on a light run, which cannot search attendance", async () => {
     const evidence = store();
     const getHistoricMythicKills = vi.fn();

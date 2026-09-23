@@ -1186,6 +1186,7 @@ export function createApplicantEvidenceJobHandler(
                   run.key,
                   {
                     storedKills: storedEvidence.kills,
+                    terminalKillRaidIds: terminalRaidIds.kills,
                     ...(killScanFloor ? { killScanFloor } : {}),
                     signal: activeContext.signal
                   }

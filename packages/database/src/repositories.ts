@@ -445,6 +445,11 @@ export type StoredKillTier = Readonly<{
   raidId: string;
   raidName: string;
   killedAt: string;
+  /**
+   * The report the kill came from, so a kill the character's own history
+   * does not list can be re-read directly rather than searched for again.
+   */
+  reportUrl?: string;
 }>;
 
 /** Where and when one stored wipe happened, without its evidence. */

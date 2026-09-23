@@ -4083,7 +4083,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           kills: (completed?.kills ?? []).map((kill) => ({
             raidId: kill.raidId,
             raidName: kill.raidName,
-            killedAt: kill.killedAt
+            killedAt: kill.killedAt,
+            reportUrl: kill.reportUrl
           })),
           wipes: (completed?.wipes ?? []).map((wipe) => ({
             raidId: wipe.raidId,

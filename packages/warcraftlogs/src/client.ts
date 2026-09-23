@@ -1933,35 +1933,84 @@ export function createWarcraftLogsClient(
     // actor/fight attribution decoder above, and its player list only ever
     // rules a report out. Wipes in a hydrated report are kept; no report is
     // read for wipes alone.
-    const recoveryTargets = new Map<
-      string,
-      { guild: WarcraftLogsVerifiedKill["guild"]; times: number[] }
-    >();
-    for (const verified of options.verifiedKills ?? []) {
+    const uncovered = (options.verifiedKills ?? []).flatMap((verified) => {
       const at = Date.parse(verified.at);
-      if (Number.isNaN(at)) continue;
+      if (Number.isNaN(at)) return [];
       const covered = scannedSpans.some(
         (span) =>
           span.start - REPORT_COVER_SLACK_MS <= at &&
           at <= span.end + REPORT_COVER_SLACK_MS
       );
-      if (covered) continue;
+      return covered ? [] : [{ ...verified, at }];
+    });
+    const hydrate = async (code: string) => {
+      const report = counted(
+        "report_hydration",
+        await graphql(reportByCodeQuery, { code }, options.signal)
+      );
+      historyScanRequests += 1;
+      if (report.kind !== "success") return report;
+      return decodedHydratedReport(report.value, key);
+    };
+    // Set once a recovery request is actually made, so a run whose budget
+    // was already spent reports no search rather than a search that found
+    // nothing.
+    let recoverySearched = false;
+    let attendanceRecoveredKills = 0;
+
+    // A kill already recovered in an earlier run is held but absent from the
+    // character's own history, and a complete publish keeps only what the run
+    // found again outside terminal raids. Its stored report is re-read
+    // directly, one request, so it is not dropped. A failure here puts that
+    // evidence at risk, so unlike the search below it limits the scan: a
+    // partial publish carries every stored kill forward.
+    const knownCodes = new Set(
+      uncovered.flatMap((verified) =>
+        verified.knownReportCode !== undefined &&
+        !scannedReportCodes.has(verified.knownReportCode)
+          ? [verified.knownReportCode]
+          : []
+      )
+    );
+    for (const code of knownCodes) {
+      if (historyScanRequests >= options.requestCap) {
+        scanLimitation ??= { kind: "limitation", code: "request_cap" };
+        break;
+      }
+      const decoded = await hydrate(code);
+      scannedReportCodes.add(code);
+      if (decoded.kind === "limitation") {
+        scanLimitation ??= decoded;
+        continue;
+      }
+      for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
+      for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
+      if (decoded.limitation) scanLimitation ??= decoded.limitation;
+    }
+
+    // A kill nothing holds is searched for in the guild's attendance. Nothing
+    // stored depends on it, so a search that cannot finish -- a guild Warcraft
+    // Logs does not know, a page it will not serve, a spent budget -- recovers
+    // nothing and limits nothing. Raider.IO names the guild as it was on the
+    // night, and one renamed, moved or never logged since would otherwise hold
+    // the run partial on every retry.
+    const recoveryTargets = new Map<
+      string,
+      { guild: NonNullable<WarcraftLogsVerifiedKill["guild"]>; times: number[] }
+    >();
+    for (const verified of uncovered) {
+      if (verified.knownReportCode !== undefined || verified.guild === null) {
+        continue;
+      }
       const guildKey = `${verified.guild.region}\0${verified.guild.realm}\0${verified.guild.name}`;
       const target = recoveryTargets.get(guildKey) ?? {
         guild: verified.guild,
         times: []
       };
-      target.times.push(at);
+      target.times.push(verified.at);
       recoveryTargets.set(guildKey, target);
     }
-    // Counted only when a search runs, so a run that searched nothing reads
-    // absent rather than a zero it never measured.
-    let attendanceRecoveredKills = 0;
-    for (const { guild, times } of recoveryTargets.values()) {
-      if (historyScanRequests >= options.requestCap) {
-        scanLimitation ??= { kind: "limitation", code: "request_cap" };
-        break;
-      }
+    search: for (const { guild, times } of recoveryTargets.values()) {
       const pagedPast =
         Math.min(...times) -
         ATTENDANCE_REPORT_LEAD_MS -
@@ -1977,10 +2026,8 @@ export function createWarcraftLogsClient(
             startTime >= at - ATTENDANCE_REPORT_LEAD_MS
         );
       for (let page = 1; ; page++) {
-        if (historyScanRequests >= options.requestCap) {
-          scanLimitation ??= { kind: "limitation", code: "request_cap" };
-          break;
-        }
+        if (historyScanRequests >= options.requestCap) break search;
+        recoverySearched = true;
         const attendance = counted(
           "guild_attendance",
           await graphql(
@@ -1995,15 +2042,9 @@ export function createWarcraftLogsClient(
           )
         );
         historyScanRequests += 1;
-        if (attendance.kind !== "success") {
-          scanLimitation ??= attendance;
-          break;
-        }
+        if (attendance.kind !== "success") continue search;
         const attendancePage = guildAttendancePage(attendance.value, key.name);
-        if (attendancePage === null) {
-          scanLimitation ??= { kind: "limitation", code: "schema_drift" };
-          break;
-        }
+        if (attendancePage === null) continue search;
         for (const {
           code,
           startTime,
@@ -2011,32 +2052,17 @@ export function createWarcraftLogsClient(
         } of attendancePage.reports) {
           if (scannedReportCodes.has(code)) continue;
           if (listsCharacter === false || !wanted(startTime)) continue;
-          if (historyScanRequests >= options.requestCap) {
-            scanLimitation ??= { kind: "limitation", code: "request_cap" };
-            break;
-          }
-          const report = counted(
-            "report_hydration",
-            await graphql(reportByCodeQuery, { code }, options.signal)
-          );
-          historyScanRequests += 1;
-          if (report.kind !== "success") {
-            scanLimitation ??= report;
-            continue;
-          }
-          const decoded = decodedHydratedReport(report.value, key);
-          if (decoded.kind === "limitation") {
-            scanLimitation ??= decoded;
-            continue;
-          }
+          if (historyScanRequests >= options.requestCap) break search;
+          const decoded = await hydrate(code);
+          scannedReportCodes.add(code);
+          if (decoded.kind === "limitation") continue;
           for (const kill of decoded.kills) {
             if (!kills.has(kill.fightUrl)) attendanceRecoveredKills += 1;
             kills.set(kill.fightUrl, kill);
           }
           for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
-          if (decoded.limitation) scanLimitation ??= decoded.limitation;
         }
-        if (!attendancePage.hasMorePages || scanLimitation !== undefined) break;
+        if (!attendancePage.hasMorePages) break;
         // Newest first, so a page wholly past every wanted night ends the
         // walk. A page with an undated report says nothing about its reach.
         const starts = attendancePage.reports.map((report) => report.startTime);
@@ -2574,7 +2600,7 @@ export function createWarcraftLogsClient(
         ? { parseLimitation: reportedParseLimitation }
         : {}),
       ...(parseLimitations.length > 0 ? { parseLimitations } : {}),
-      ...(recoveryTargets.size > 0 ? { attendanceRecoveredKills } : {})
+      ...(recoverySearched ? { attendanceRecoveredKills } : {})
     });
     // A resumed scan read only the pages below its cursor, so reaching the end
     // of them is not a finished history. The pages above were read by earlier

@@ -164,11 +164,18 @@ export type WarcraftLogsWipeEvidence = Readonly<{
 export type WarcraftLogsVerifiedKill = Readonly<{
   /** When the kill happened, as an ISO string. */
   at: string;
+  /** The guild the kill was in, whose attendance is searched; null if none. */
   guild: Readonly<{
     name: string;
     realm: string;
     region: CharacterKey["region"];
-  }>;
+  }> | null;
+  /**
+   * The report a stored kill already came from. Present, it is re-read
+   * directly instead of searched for: an earlier run recovered it, and a
+   * complete publish keeps only what the run finds again.
+   */
+  knownReportCode?: string;
 }>;
 
 export type WarcraftLogsReportResult =

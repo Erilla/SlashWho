@@ -3583,6 +3583,182 @@ describe("Warcraft Logs gateway", () => {
       expect(queries).not.toContain("GuildAttendance");
     });
 
+    // A report holding one Mythic Queen Azshara kill by the character.
+    const hydratedKill = (code: string) =>
+      jsonResponse({
+        data: {
+          reportData: {
+            report: {
+              code,
+              startTime: night - hours(1),
+              owner: { name: "Uploader" },
+              guild: null,
+              zone: {
+                id: 23,
+                name: "The Eternal Palace",
+                encounters: [{ id: 2299, journalID: 0 }]
+              },
+              masterData: {
+                actors: [
+                  {
+                    id: 12,
+                    name: "Sentinel",
+                    server: "Silvermoon",
+                    type: "Player"
+                  }
+                ]
+              },
+              fights: [
+                {
+                  id: 8,
+                  encounterID: 2299,
+                  name: "Queen Azshara",
+                  startTime: hours(0.5),
+                  endTime: hours(1),
+                  kill: true,
+                  difficulty: 5,
+                  friendlyPlayers: [12]
+                }
+              ]
+            }
+          }
+        }
+      });
+
+    it("recovers nothing, and limits nothing, from a guild Warcraft Logs does not know", async () => {
+      // Break caught: Raider.IO names the guild as it was on the night. One
+      // renamed, moved or never logged is unknown to Warcraft Logs, and its
+      // refusal marked the scan limited -- so the run was partial, and was
+      // retried, and was partial again, for as long as the kill stayed unheld.
+      for (const refusal of [
+        jsonResponse({
+          errors: [{ message: "No guild exists for this name/server/region" }]
+        }),
+        jsonResponse({ data: { guildData: { guild: null } } }),
+        new Response("upstream-body-marker", { status: 503 })
+      ]) {
+        const { client } = clientFor((url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as { query: string };
+          if (body.query.includes("RecentReports")) return history();
+          if (body.query.includes("GuildAttendance")) return refusal.clone();
+          return emptyZoneRankingsResponse();
+        });
+
+        const result = await client.getFirstKillReports(key, {
+          requestCap: 10,
+          parseRequestCap: 1,
+          verifiedKills: verified
+        });
+
+        expect(result).toMatchObject({ kind: "evidence" });
+        expect(result).not.toHaveProperty("limitation");
+      }
+    });
+
+    it("re-reads a stored recovery directly instead of searching for it", async () => {
+      // Break caught: a kill recovered in an earlier run is held, so it was
+      // not searched for -- and a complete publish, which keeps only what the
+      // run finds again outside terminal raids, dropped it. The next run found
+      // it unheld and recovered it; the one after dropped it again.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { code?: string };
+        };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return hydratedKill(body.variables.code!);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: [
+          { ...verified[0]!, guild: null, knownReportCode: "storedRecovery" }
+        ]
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+      expect(queries.filter((query) => query === "ReportByCode")).toHaveLength(
+        1
+      );
+      expect(result).toMatchObject({
+        kind: "evidence",
+        kills: [
+          {
+            bossName: "Queen Azshara",
+            fightUrl:
+              "https://www.warcraftlogs.com/reports/storedRecovery#fight=8"
+          }
+        ]
+      });
+      expect(result).not.toHaveProperty("limitation");
+      // Re-reading what is already stored is not a search.
+      expect(result).not.toHaveProperty("attendanceRecoveredKills");
+    });
+
+    it("limits the scan when a stored recovery cannot be re-read", async () => {
+      // A complete publish would drop the stored kill this run failed to read
+      // again. A partial one carries every stored kill forward.
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return new Response("upstream-body-marker", { status: 503 });
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: [
+          { ...verified[0]!, guild: null, knownReportCode: "storedRecovery" }
+        ]
+      });
+
+      // With nothing else found, the whole result is the limitation.
+      const code =
+        result.kind === "limitation" ? result.code : result.limitation?.code;
+      expect(code).toBe("unavailable");
+    });
+
+    it("reports no search when the budget was spent before recovery began", async () => {
+      // Break caught: a run whose history scan used the whole cap still read
+      // `attendanceRecoveredKills: 0`, a measured zero for a search that
+      // never ran. The history holds a kill a month later, so the result is
+      // evidence and can carry the count at all.
+      const monthLater = (
+        (await hydratedKill("laterNight").json()) as {
+          data: { reportData: { report: Record<string, unknown> } };
+        }
+      ).data.reportData.report;
+      monthLater.startTime = night + hours(24 * 30);
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) {
+          return history([monthLater]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 1,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(result).not.toHaveProperty("attendanceRecoveredKills");
+    });
+
     it("treats a report as covering a kill Raider.IO dates an hour before it", async () => {
       // Break caught: Raider.IO put Ryun's Queen Azshara at 19:34Z; the log
       // that holds it records the kill at 20:34Z. A whole-hour clock error on
@@ -5077,9 +5253,18 @@ describe("Warcraft Logs gateway", () => {
     });
 
     const result = await client.getFirstKillReports(key, {
-      requestCap: 4,
+      requestCap: 2,
       parseRequestCap: 10,
-      verifiedKills: verifiedIn("Guild"),
+      // A kill an earlier run recovered, re-read directly: the one budget
+      // that still limits a run once its history is done, because the
+      // stored evidence depends on it.
+      verifiedKills: [
+        {
+          at: "2001-01-01T20:00:00.000Z",
+          guild: null,
+          knownReportCode: "storedRecovery"
+        }
+      ],
       historyScanStartPage: 67,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
