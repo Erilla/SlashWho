@@ -1566,21 +1566,34 @@ async function mutateAccountAdmin(
     const target = await client.query<{
       role: Account["role"];
       active: boolean;
-    }>("SELECT role, active FROM accounts WHERE id = $1 FOR UPDATE", [
-      input.targetId
-    ]);
+      verified_at: Date | null;
+    }>(
+      "SELECT role, active, verified_at FROM accounts WHERE id = $1 FOR UPDATE",
+      [input.targetId]
+    );
     if (!target.rows[0]) {
       await client.query("COMMIT");
       return "missing";
     }
+    if (
+      !target.rows[0].verified_at &&
+      ((mutation.kind === "role" && mutation.role === "admin") ||
+        (mutation.kind === "active" &&
+          mutation.active &&
+          target.rows[0].role === "admin"))
+    ) {
+      await client.query("COMMIT");
+      return "forbidden";
+    }
     const removesAdmin =
       target.rows[0].role === "admin" &&
       target.rows[0].active &&
+      target.rows[0].verified_at !== null &&
       ((mutation.kind === "role" && mutation.role !== "admin") ||
         (mutation.kind === "active" && !mutation.active));
     if (removesAdmin) {
       const count = await client.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active"
+        "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active AND verified_at IS NOT NULL"
       );
       if (count.rows[0]!.count <= 1) {
         await client.query("COMMIT");

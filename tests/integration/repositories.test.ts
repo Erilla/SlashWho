@@ -311,6 +311,104 @@ describe("PostgreSQL repositories", () => {
     ).toBe(1);
   });
 
+  it("cannot count a pending expiring account as a replacement admin", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const admin = await repositories.accountAuth.provisionAdmin(
+      registration("owner@example.com", at)
+    );
+    await pool.query(
+      "UPDATE accounts SET password_change_required = false WHERE id = $1",
+      [admin.id]
+    );
+    const pending = await repositories.accountAuth.registerPending(
+      registration(
+        "pending@example.com",
+        new Date(at.getTime() - 8 * 86_400_000)
+      )
+    );
+    expect(
+      await repositories.accountAuth.setRole({
+        actorId: admin.id,
+        targetId: pending.accountId!,
+        role: "admin",
+        at
+      })
+    ).toBe("forbidden");
+    expect(
+      await repositories.accountAuth.setRole({
+        actorId: admin.id,
+        targetId: admin.id,
+        role: "user",
+        at
+      })
+    ).toBe("last_admin");
+    await repositories.accountAuth.registerPending(
+      registration("fresh@example.com", at)
+    );
+    expect(
+      (
+        await pool.query("SELECT id FROM accounts WHERE id = $1", [
+          pending.accountId
+        ])
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active AND verified_at IS NOT NULL"
+        )
+      ).rows[0].count
+    ).toBe(1);
+  });
+
+  it("does not treat a legacy unverified admin row as last-admin coverage during cleanup", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const admin = await repositories.accountAuth.provisionAdmin(
+      registration("owner@example.com", at)
+    );
+    await pool.query(
+      "UPDATE accounts SET password_change_required = false WHERE id = $1",
+      [admin.id]
+    );
+    const pending = await repositories.accountAuth.registerPending(
+      registration(
+        "pending@example.com",
+        new Date(at.getTime() - 8 * 86_400_000)
+      )
+    );
+    await pool.query("UPDATE accounts SET role = 'admin' WHERE id = $1", [
+      pending.accountId
+    ]);
+    expect(
+      await repositories.accountAuth.setActive({
+        actorId: admin.id,
+        targetId: pending.accountId!,
+        active: true,
+        at
+      })
+    ).toBe("forbidden");
+    const [demotion, cleanup] = await Promise.all([
+      repositories.accountAuth.setRole({
+        actorId: admin.id,
+        targetId: admin.id,
+        role: "user",
+        at
+      }),
+      repositories.accountAuth.registerPending(
+        registration("fresh@example.com", at)
+      )
+    ]);
+    expect(demotion).toBe("last_admin");
+    expect(cleanup.kind).toBe("created");
+    expect(
+      (
+        await pool.query("SELECT id FROM accounts WHERE id = $1", [
+          pending.accountId
+        ])
+      ).rowCount
+    ).toBe(0);
+  });
+
   it("requires a live admin actor and revokes target sessions on role, status, and password flags", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const admin = await repositories.accountAuth.provisionAdmin(
