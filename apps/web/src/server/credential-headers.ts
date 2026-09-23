@@ -69,7 +69,9 @@ export function readCredentialOverrides(
 export async function resolveCredentialOverrides(
   request: Request,
   principal:
-    { kind: "account"; accountId: string } | { kind: "automation" } | null,
+    | { kind: "account"; accountId: string; passwordChangeRequired?: boolean }
+    | { kind: "automation" }
+    | null,
   accountCredentials:
     | {
         resolve(
@@ -83,6 +85,7 @@ export async function resolveCredentialOverrides(
 ): Promise<DossierGatewayOverrides> {
   if (principal?.kind !== "account")
     return readCredentialOverrides(request.headers, config);
+  if (principal.passwordChangeRequired) return {};
   if (!accountCredentials) return {};
   const [blizzard, raiderio, wcl] = await Promise.all([
     accountCredentials.resolve(principal.accountId, "blizzard"),

@@ -825,7 +825,7 @@ async function loadCompletedEvidence(
     `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
             evidence_version, attempt, limitation_code, parse_limitation_code,
             retry_after_at, error_code, created_at, started_at,
-            completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+            completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
             ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
      FROM character_evidence_runs
      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -4580,7 +4580,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const active = await client.query<EvidenceRunRow>(
             `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
                     ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
@@ -4823,7 +4823,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const result = await pool.query<EvidenceRunRow>(
           `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
                   attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                  completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted,
+                  completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
                   ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
            FROM character_evidence_runs WHERE id = $1`,
           [id]
@@ -5858,6 +5858,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              run.parse_limitation_code,
              run.error_code, run.created_at, run.started_at, run.completed_at,
              run.wcl_client_id_encrypted, run.wcl_client_secret_encrypted,
+             run.account_credential_owner_id, run.account_credential_version,
              ${evidenceRunClassNameSql("run")}, ${evidenceRunModeSql("run")}
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])

@@ -39,6 +39,7 @@ let readCalls = 0;
 let readInitialCalls = 0;
 let lastReadOverrides: unknown;
 let signedInAccount: string | null = null;
+let passwordChangeRequired = false;
 
 const dossiers = {
   async start() {
@@ -81,7 +82,11 @@ vi.mock("../../../server/container", () => ({
     accountAuth: {
       authenticate: async () => ({
         principal: signedInAccount
-          ? { kind: "account", accountId: signedInAccount }
+          ? {
+              kind: "account",
+              accountId: signedInAccount,
+              passwordChangeRequired
+            }
           : null
       })
     },
@@ -139,6 +144,7 @@ const noncanonicalCharacterContext = {
 
 beforeEach(() => {
   signedInAccount = null;
+  passwordChangeRequired = false;
   started = {
     kind: "job",
     jobId,
@@ -356,6 +362,23 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
       wclCredentialRef: { accountId: "bob", credentialVersion: 2 },
       wclCredentials: { clientSecret: "bob-key" }
     });
+  });
+
+  it("does not reserve an account key for a restricted account", async () => {
+    signedInAccount = "alice";
+    passwordChangeRequired = true;
+    const response = await GET(
+      new Request("https://slashwho.example/api/dossiers/eu/silvermoon/ryii", {
+        headers: {
+          "x-real-ip": "203.0.113.8",
+          "x-wcl-client-id": "stale",
+          "x-wcl-client-secret": "stale-key"
+        }
+      }),
+      characterContext
+    );
+    expect(response.status).toBe(200);
+    expect(lastReadOverrides).toEqual({});
   });
 });
 

@@ -4350,10 +4350,36 @@ describe("PostgreSQL repositories", () => {
     expect(first.kind).toBe("reserved");
     expect(joined.kind).toBe("active");
     expect(joined.run.id).toBe(first.run.id);
+    expect(joined.run.accountCredentialOwnerId).toBe(alice);
+    expect(joined.run.accountCredentialVersion).toBe(1);
+    expect(
+      (await repositories.evidence.find(first.run.id))?.accountCredentialOwnerId
+    ).toBe(alice);
     const claimed = await repositories.evidence.claim(first.run.id, 1);
     expect(claimed?.accountCredentialOwnerId).toBe(alice);
     expect(claimed?.accountCredentialVersion).toBe(1);
     expect(claimed?.wclClientIdEncrypted).toBeNull();
+
+    const concurrentKey = { ...key, name: "Accountconcurrent" };
+    const callers = [alice!, bob!];
+    const concurrent = await Promise.all(
+      callers.map((accountId) =>
+        repositories.evidence.reserve({
+          key: concurrentKey,
+          freshnessCutoff: new Date(0),
+          at: new Date(),
+          credentials: { accountId, credentialVersion: 1 }
+        })
+      )
+    );
+    expect(concurrent.map((result) => result.kind).sort()).toEqual([
+      "active",
+      "reserved"
+    ]);
+    const winner = concurrent.findIndex((result) => result.kind === "reserved");
+    expect(concurrent[0]!.run.id).toBe(concurrent[1]!.run.id);
+    expect(concurrent[0]!.run.accountCredentialOwnerId).toBe(callers[winner]);
+    expect(concurrent[1]!.run.accountCredentialOwnerId).toBe(callers[winner]);
   });
 
   it("clears encrypted WCL credentials when a run is published", async () => {

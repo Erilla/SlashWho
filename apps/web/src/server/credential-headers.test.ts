@@ -19,6 +19,28 @@ const config = loadWebConfig({
 });
 
 describe("resolveCredentialOverrides", () => {
+  it("uses shared gateways for a restricted account and ignores its browser keys", async () => {
+    const request = new Request("https://example.test/api/dossiers", {
+      headers: {
+        "x-wcl-client-id": "stale",
+        "x-wcl-client-secret": "stale-key"
+      }
+    });
+    const credentials = {
+      resolve: vi.fn().mockResolvedValue({
+        values: { clientId: "saved", clientSecret: "saved-key" },
+        version: 2
+      })
+    };
+    const overrides = await resolveCredentialOverrides(
+      request,
+      { kind: "account", accountId: "alice", passwordChangeRequired: true },
+      credentials,
+      config
+    );
+    expect(overrides).toEqual({});
+    expect(credentials.resolve).not.toHaveBeenCalled();
+  });
   it("uses the active account's saved keys and ignores stale browser headers", async () => {
     const request = new Request("https://example.test/api/dossiers", {
       headers: {

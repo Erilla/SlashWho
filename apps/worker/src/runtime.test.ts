@@ -1,4 +1,5 @@
-import { encryptAccountMail } from "@slashwho/application";
+import { encryptAccountMail, encryptCredential } from "@slashwho/application";
+import { hkdfSync } from "node:crypto";
 import type {
   ApplicantEvidenceJobHandler,
   ApplicantEvidenceJobHandlerOptions,
@@ -26,8 +27,34 @@ import {
   createFingerprintAlertNotifier,
   createFingerprintIntegration,
   createRaiderIoGateway,
-  createWorkerRuntime
+  createWorkerRuntime,
+  createAccountWarcraftLogsResolver
 } from "./runtime";
+
+it("resolves the worker account key only while active and at the reserved version", async () => {
+  const masterKey = Buffer.alloc(32, 7);
+  const key = Buffer.from(
+    hkdfSync("sha256", masterKey, "", "account-provider-credentials-v1", 32)
+  );
+  let row: { encryptedPayload: string; version: number } | null = {
+    encryptedPayload: encryptCredential(
+      JSON.stringify({ clientId: "alice-id", clientSecret: "alice-key" }),
+      key
+    ),
+    version: 1
+  };
+  const get = vi.fn(async () => row);
+  const resolve = createAccountWarcraftLogsResolver({ get }, masterKey);
+  expect(await resolve("alice", 1)).toEqual({
+    values: { clientId: "alice-id", clientSecret: "alice-key" },
+    version: 1
+  });
+  row = { ...row, version: 2 };
+  expect(await resolve("alice", 1)).toBeNull();
+  row = null;
+  expect(await resolve("alice", 1)).toBeNull();
+  expect(get).toHaveBeenCalledWith("alice", "warcraftlogs");
+});
 
 const config: WorkerConfig = {
   applicantWatcher: {
