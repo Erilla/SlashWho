@@ -40,6 +40,7 @@ export function operatorMutation(
 
 export async function accountAuthFixture() {
   const at = new Date();
+  let time = at;
   let account: AccountCredential = {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     canonicalEmail: accountEmail,
@@ -116,12 +117,16 @@ export async function accountAuthFixture() {
     repository,
     config,
     origin: operatorOrigin,
-    sessionHashSecret: "s".repeat(32)
+    sessionHashSecret: "s".repeat(32),
+    now: () => time
   });
   return {
     auth,
     repository,
     config,
+    setTime(value: Date) {
+      time = value;
+    },
     setAccount(change: Partial<AccountCredential>) {
       account = { ...account, ...change };
     },

@@ -12,6 +12,10 @@ import {
   createOperatorAuth,
   hashOperatorCredential
 } from "./operator-auth";
+import {
+  accountAuthFixture,
+  operatorOrigin
+} from "./operator-auth-test-fixture";
 import type {
   AccountCredential,
   OperatorLoginAdmission
@@ -25,6 +29,50 @@ const config = applicationConfigSchema.parse({
 });
 const initialTime = new Date("2026-09-21T12:00:00.000Z");
 const operatorId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+it.each([
+  "disabled",
+  "unverified",
+  "credential-version",
+  "idle-expired",
+  "absolute-expired"
+] as const)(
+  "denies an existing account session when %s without relying on revocation",
+  async (reason) => {
+    const fixture = await accountAuthFixture();
+    const cookie = await fixture.cookie();
+    const issuedAt = vi.mocked(fixture.repository.issueSession).mock
+      .calls[0]![0].issuedAt;
+    if (reason === "disabled") fixture.setAccount({ active: false });
+    if (reason === "unverified") fixture.setAccount({ verifiedAt: null });
+    if (reason === "credential-version")
+      fixture.setAccount({ credentialVersion: 2 });
+    if (reason === "idle-expired")
+      fixture.setTime(new Date(issuedAt.getTime() + 30 * 60_000));
+    if (reason === "absolute-expired") {
+      for (let minutes = 20; minutes <= 460; minutes += 20) {
+        fixture.setTime(new Date(issuedAt.getTime() + minutes * 60_000));
+        expect(
+          (
+            await fixture.auth.authenticate(
+              new Request(operatorOrigin, { headers: { cookie } })
+            )
+          ).principal?.kind
+        ).toBe("account");
+      }
+      fixture.setTime(new Date(issuedAt.getTime() + 8 * 60 * 60_000));
+    }
+    expect(
+      await fixture.auth.authenticate(
+        new Request(operatorOrigin, { headers: { cookie } })
+      )
+    ).toMatchObject({
+      principal: null,
+      cookie: { maxAge: 0 }
+    });
+    expect(fixture.repository.revokeSession).not.toHaveBeenCalled();
+  }
+);
 
 it("authenticates verified accounts and reads current role and required-change state", async () => {
   let account: AccountCredential = {

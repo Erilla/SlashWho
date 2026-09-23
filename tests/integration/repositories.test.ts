@@ -288,6 +288,63 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("rejects account sessions for each independent live-state and expiry predicate", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.provisionAdmin(
+      registration("predicates@example.com", at)
+    );
+    const session = await repositories.accountAuth.issueSession({
+      sessionId: crypto.randomUUID(),
+      secretDigest: "predicate-secret",
+      accountId: account.id,
+      credentialVersion: 1,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date(at.getTime() + 30 * 60_000),
+      absoluteExpiresAt: new Date(at.getTime() + 8 * 60 * 60_000)
+    });
+    if (!session) throw new Error("expected session");
+    const use = (atUse: Date) =>
+      repositories.accountAuth.useSession({
+        sessionId: session.id,
+        secretDigest: "predicate-secret",
+        at: atUse,
+        idleExpiresAt: new Date(atUse.getTime() + 30 * 60_000)
+      });
+    const early = new Date(at.getTime() + 60_000);
+    expect((await use(early))?.account.id).toBe(account.id);
+    await pool.query("UPDATE accounts SET active = false WHERE id = $1", [
+      account.id
+    ]);
+    expect(await use(early)).toBeNull();
+    await pool.query(
+      "UPDATE accounts SET active = true, verified_at = NULL WHERE id = $1",
+      [account.id]
+    );
+    expect(await use(early)).toBeNull();
+    await pool.query(
+      "UPDATE accounts SET verified_at = $2, credential_version = 2 WHERE id = $1",
+      [account.id, at]
+    );
+    expect(await use(early)).toBeNull();
+    await pool.query(
+      "UPDATE accounts SET credential_version = 1 WHERE id = $1",
+      [account.id]
+    );
+    expect((await use(early))?.account.id).toBe(account.id);
+    expect(await use(new Date(early.getTime() + 30 * 60_000))).toBeNull();
+    await pool.query(
+      "UPDATE account_sessions SET idle_expires_at = $2 WHERE id = $1",
+      [session.id, new Date(at.getTime() + 9 * 60 * 60_000)]
+    );
+    expect(await use(new Date(at.getTime() + 8 * 60 * 60_000))).toBeNull();
+    const persisted = await pool.query<{ revoked_at: Date | null }>(
+      "SELECT revoked_at FROM account_sessions WHERE id = $1",
+      [session.id]
+    );
+    expect(persisted.rows[0]?.revoked_at).toBeNull();
+  });
+
   it("consumes verification once only after matching the registration credential", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const account = await repositories.accountAuth.registerPending(
