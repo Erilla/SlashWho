@@ -336,6 +336,7 @@ describe("PostgreSQL repositories", () => {
       accountId: account.accountId!,
       purpose: "reset",
       destination: "recover@example.com",
+      expectedCanonicalEmail: "recover@example.com",
       encryptedMessage: "encrypted",
       tokenDigest: "reset-digest",
       expiresAt: new Date(at.getTime() + 1_800_000),
@@ -400,6 +401,7 @@ describe("PostgreSQL repositories", () => {
         accountId: account.accountId!,
         purpose: "reset",
         destination: "reset-expiry@example.com",
+        expectedCanonicalEmail: "reset-expiry@example.com",
         encryptedMessage: "encrypted",
         tokenDigest,
         expiresAt: new Date(at.getTime() + 1_800_000),
@@ -455,6 +457,9 @@ describe("PostgreSQL repositories", () => {
       repositories.accountTokens.issueEmailChange({
         accountId: account.accountId!,
         expectedPasswordHash: "derived-password-hash",
+        expectedCurrentCanonicalEmail:
+          suffix === "first" ? "old@example.com" : "first@example.com",
+        expectedCredentialVersion: suffix === "first" ? 1 : 2,
         canonicalEmail: `${suffix}@example.com`,
         email: `${suffix}@example.com`,
         current: {
@@ -531,6 +536,215 @@ describe("PostgreSQL repositories", () => {
     ).toBe("second@example.com");
   });
 
+  it("does not issue approvals to a former current address after an email change", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("former@example.com", at)
+    );
+    await pool.query(
+      "UPDATE accounts SET verified_at = $2, canonical_email = 'current@example.com', email = 'current@example.com', credential_version = credential_version + 1 WHERE id = $1",
+      [account.accountId, at]
+    );
+    expect(
+      await repositories.accountTokens.issueEmailChange({
+        accountId: account.accountId!,
+        expectedPasswordHash: "derived-password-hash",
+        expectedCurrentCanonicalEmail: "former@example.com",
+        expectedCredentialVersion: 1,
+        canonicalEmail: "destination@example.com",
+        email: "destination@example.com",
+        current: {
+          digest: "former-current",
+          encryptedMessage: "mail-to-former"
+        },
+        next: {
+          digest: "former-next",
+          encryptedMessage: "mail-to-destination"
+        },
+        expiresAt: new Date(at.getTime() + 86_400_000),
+        at
+      })
+    ).toBe(false);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_outbox"
+        )
+      ).rows[0].count
+    ).toBe(0);
+  });
+
+  it("invalidates old reset links when the login address changes", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("reset-old@example.com", at)
+    );
+    await pool.query("UPDATE accounts SET verified_at = $2 WHERE id = $1", [
+      account.accountId,
+      at
+    ]);
+    await repositories.accountMail.issue({
+      accountId: account.accountId!,
+      purpose: "reset",
+      expectedCanonicalEmail: "reset-old@example.com",
+      destination: "reset-old@example.com",
+      encryptedMessage: "reset-to-old",
+      tokenDigest: "reset-before-email",
+      expiresAt: new Date(at.getTime() + 1_800_000),
+      at
+    });
+    await repositories.accountTokens.issueEmailChange({
+      accountId: account.accountId!,
+      expectedPasswordHash: "derived-password-hash",
+      expectedCurrentCanonicalEmail: "reset-old@example.com",
+      expectedCredentialVersion: 1,
+      canonicalEmail: "reset-new@example.com",
+      email: "reset-new@example.com",
+      current: {
+        digest: "change-reset-current",
+        encryptedMessage: "old-proof"
+      },
+      next: { digest: "change-reset-next", encryptedMessage: "new-proof" },
+      expiresAt: new Date(at.getTime() + 86_400_000),
+      at
+    });
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "change-reset-current",
+        purpose: "email_change_current",
+        at
+      })
+    ).toBe("pending");
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "change-reset-next",
+        purpose: "email_change_new",
+        at
+      })
+    ).toBe("changed");
+    expect(
+      await repositories.accountTokens.completeReset({
+        digest: "reset-before-email",
+        passwordHash: "attacker-hash",
+        passwordSalt: "attacker-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at
+      })
+    ).toBe(false);
+  });
+
+  it("does not persist a reset link based on an address changed during issuance", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("race-old@example.com", at)
+    );
+    await pool.query("UPDATE accounts SET verified_at = $2 WHERE id = $1", [
+      account.accountId,
+      at
+    ]);
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "UPDATE accounts SET canonical_email = 'race-new@example.com', email = 'race-new@example.com' WHERE id = $1",
+        [account.accountId]
+      );
+      const issuing = repositories.accountMail.issue({
+        accountId: account.accountId!,
+        purpose: "reset",
+        expectedCanonicalEmail: "race-old@example.com",
+        destination: "race-old@example.com",
+        encryptedMessage: "mail-to-old",
+        tokenDigest: "racing-reset",
+        expiresAt: new Date(at.getTime() + 1_800_000),
+        at
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await blocker.query("COMMIT");
+      await issuing;
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS count FROM account_mail_tokens WHERE token_digest = 'racing-reset'"
+          )
+        ).rows[0].count
+      ).toBe(0);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it("returns invalid to the loser when two accounts claim one email concurrently", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const accounts = await Promise.all(
+      ["collision-a@example.com", "collision-b@example.com"].map((email) =>
+        repositories.accountAuth.registerPending(registration(email, at))
+      )
+    );
+    await pool.query(
+      "UPDATE accounts SET verified_at = $2 WHERE id = ANY($1::uuid[])",
+      [accounts.map((account) => account.accountId), at]
+    );
+    await pool.query(
+      `CREATE FUNCTION test_delay_email_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.canonical_email = 'collision@example.com' THEN PERFORM pg_sleep(0.2); END IF; RETURN NEW; END $$`
+    );
+    await pool.query(
+      "CREATE TRIGGER test_delay_email_claim_trigger BEFORE UPDATE OF canonical_email ON accounts FOR EACH ROW EXECUTE FUNCTION test_delay_email_claim()"
+    );
+    try {
+      for (const [index, account] of accounts.entries()) {
+        const suffix = index.toString();
+        await repositories.accountTokens.issueEmailChange({
+          accountId: account.accountId!,
+          expectedPasswordHash: "derived-password-hash",
+          expectedCurrentCanonicalEmail: `collision-${index === 0 ? "a" : "b"}@example.com`,
+          expectedCredentialVersion: 1,
+          canonicalEmail: "collision@example.com",
+          email: "collision@example.com",
+          current: {
+            digest: `collision-current-${suffix}`,
+            encryptedMessage: "current-proof"
+          },
+          next: {
+            digest: `collision-new-${suffix}`,
+            encryptedMessage: "new-proof"
+          },
+          expiresAt: new Date(at.getTime() + 86_400_000),
+          at
+        });
+        expect(
+          await repositories.accountTokens.confirmEmailChange({
+            digest: `collision-current-${suffix}`,
+            purpose: "email_change_current",
+            at
+          })
+        ).toBe("pending");
+      }
+      const results = await Promise.allSettled(
+        accounts.map((_account, index) =>
+          repositories.accountTokens.confirmEmailChange({
+            digest: `collision-new-${index}`,
+            purpose: "email_change_new",
+            at
+          })
+        )
+      );
+      expect(results).toEqual(
+        expect.arrayContaining([
+          { status: "fulfilled", value: "changed" },
+          { status: "fulfilled", value: "invalid" }
+        ])
+      );
+    } finally {
+      await pool.query(
+        "DROP TRIGGER test_delay_email_claim_trigger ON accounts"
+      );
+      await pool.query("DROP FUNCTION test_delay_email_claim()");
+    }
+  });
+
   it("rolls back both email-change tokens and mail rows when either message fails", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const account = await repositories.accountAuth.registerPending(
@@ -544,6 +758,8 @@ describe("PostgreSQL repositories", () => {
       repositories.accountTokens.issueEmailChange({
         accountId: account.accountId!,
         expectedPasswordHash: "derived-password-hash",
+        expectedCurrentCanonicalEmail: "original@example.com",
+        expectedCredentialVersion: 1,
         canonicalEmail: "replacement@example.com",
         email: "replacement@example.com",
         current: { digest: "current-rollback", encryptedMessage: "encrypted" },

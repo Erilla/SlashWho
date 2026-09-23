@@ -1830,8 +1830,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await client.query("BEGIN");
           const account = await client.query<{ id: string; email: string }>(
             `SELECT id, email FROM accounts WHERE id = $1 AND password_hash = $2
+             AND canonical_email = $3 AND credential_version = $4
              AND active AND verified_at IS NOT NULL FOR UPDATE`,
-            [input.accountId, input.expectedPasswordHash]
+            [
+              input.accountId,
+              input.expectedPasswordHash,
+              input.expectedCurrentCanonicalEmail,
+              input.expectedCredentialVersion
+            ]
           );
           if (!account.rows[0] || input.expiresAt <= input.at) {
             await client.query("COMMIT");
@@ -1957,6 +1963,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [account.rows[0].id, input.at]
           );
           await client.query(
+            "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose = 'reset' AND consumed_at IS NULL",
+            [account.rows[0].id, input.at]
+          );
+          await client.query(
             "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose IN ('email_change_current', 'email_change_new') AND consumed_at IS NULL",
             [account.rows[0].id, input.at]
           );
@@ -1964,6 +1974,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           return "changed";
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
+          if (
+            (error as { code?: string; constraint?: string }).code ===
+              "23505" &&
+            (error as { constraint?: string }).constraint ===
+              "accounts_canonical_email_idx"
+          )
+            return "invalid";
           throw error;
         } finally {
           client.release();
@@ -1974,9 +1991,22 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async issue(input) {
         if (input.expiresAt <= input.at)
           throw new Error("account_mail_expired");
+        if (input.purpose === "reset" && !input.expectedCanonicalEmail)
+          throw new Error("account_reset_expected_email_required");
         const client = await pool.connect();
         try {
           await client.query("BEGIN");
+          if (input.purpose === "reset") {
+            const account = await client.query(
+              `SELECT id FROM accounts WHERE id = $1 AND canonical_email = $2
+               AND active AND (verified_at IS NOT NULL OR created_at > $3::timestamptz - interval '7 days') FOR UPDATE`,
+              [input.accountId, input.expectedCanonicalEmail, input.at]
+            );
+            if (!account.rows[0]) {
+              await client.query("COMMIT");
+              return;
+            }
+          }
           const token = await client.query<{ id: string }>(
             `INSERT INTO account_mail_tokens
              (account_id, purpose, token_digest, expires_at, created_at)

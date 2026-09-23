@@ -12,7 +12,7 @@ async function fixture() {
   const credential: AccountCredential = {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     canonicalEmail: "person@example.com",
-    email: "person@example.com",
+    email: "Person@Example.com",
     role: "user",
     active: true,
     verifiedAt: null,
@@ -27,6 +27,7 @@ async function fixture() {
     tokenDigest: string;
     encryptedMessage: string;
     expiresAt: Date;
+    expectedCanonicalEmail?: string;
   }> = [];
   const admissions: Array<{ purpose: string; subjectHash: string }> = [];
   const repository = {
@@ -81,6 +82,7 @@ async function fixture() {
       tokenDigest: string;
       encryptedMessage: string;
       expiresAt: Date;
+      expectedCanonicalEmail?: string;
     }) => {
       mail.push(input);
     }
@@ -131,6 +133,7 @@ describe("account tokens", () => {
     await f.service.requestReset(" PERSON@EXAMPLE.COM ", at);
     expect(f.mail[0]!.purpose).toBe("reset");
     expect(f.mail[0]!.expiresAt).toEqual(new Date(at.getTime() + 1_800_000));
+    expect(f.mail[0]!.expectedCanonicalEmail).toBe("person@example.com");
   });
 
   it("checks reset admission before looking up an address", async () => {

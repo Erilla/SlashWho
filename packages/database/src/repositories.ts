@@ -1248,6 +1248,8 @@ export interface AccountMailRepository {
     purpose: "verify" | "reset" | "email_change_current" | "email_change_new";
     /** Kept only inside encryptedMessage, never duplicated as plaintext. */
     destination: string;
+    /** Required for reset: guards a mailbox snapshot under the account row lock. */
+    expectedCanonicalEmail?: string;
     encryptedMessage: string;
     tokenDigest: string;
     expiresAt: Date;
@@ -1290,6 +1292,8 @@ export interface AccountTokenRepository {
   issueEmailChange(input: {
     accountId: string;
     expectedPasswordHash: string;
+    expectedCurrentCanonicalEmail: string;
+    expectedCredentialVersion: number;
     canonicalEmail: string;
     email: string;
     current: { digest: string; encryptedMessage: string };

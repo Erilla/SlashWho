@@ -74,13 +74,15 @@ export function createAccountTokens(config: {
     accountId: string,
     destination: string,
     purpose: "verify" | "reset",
-    at: Date
+    at: Date,
+    expectedCanonicalEmail?: string
   ) {
     const token = randomBytes(32).toString("base64url");
     await accountMail.issue({
       accountId,
       destination,
       purpose,
+      expectedCanonicalEmail,
       tokenDigest: digest(purpose, token),
       encryptedMessage: message(destination, purpose, token),
       expiresAt: new Date(
@@ -138,7 +140,13 @@ export function createAccountTokens(config: {
           account.createdAt.getTime() <= at.getTime() - 7 * day)
       )
         return;
-      await issue(account.id, account.email, "reset", at);
+      await issue(
+        account.id,
+        account.email,
+        "reset",
+        at,
+        account.canonicalEmail
+      );
     },
     async completeReset(
       token: string,
@@ -185,6 +193,8 @@ export function createAccountTokens(config: {
       await repository.issueEmailChange({
         accountId,
         expectedPasswordHash: account.passwordHash,
+        expectedCurrentCanonicalEmail: account.canonicalEmail,
+        expectedCredentialVersion: account.credentialVersion,
         canonicalEmail: canonical,
         email: canonical,
         current: {
