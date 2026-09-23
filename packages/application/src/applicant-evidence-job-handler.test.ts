@@ -5209,7 +5209,8 @@ describe("searching one tier from the dossier", () => {
   it("publishes a previously accepted historic-name ranked kill when the resumed scan finishes", async () => {
     const evidence = withStoredTier(store(tierRun as typeof run));
     const historicKill = {
-      raidId: eternalPalace.raidId,
+      // Stored WCL kills use the zone ID; the cursor's journalRaidId is 1179.
+      raidId: "23",
       raidName: "The Eternal Palace",
       bossId: "2299",
       bossName: "Queen Azshara",
@@ -5250,6 +5251,12 @@ describe("searching one tier from the dossier", () => {
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
 
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        rankedBackfill: expect.objectContaining({ cursor })
+      })
+    );
     expect(evidence.published.at(-1)?.result).toMatchObject({
       state: "complete",
       kills: [expect.objectContaining({ fightUrl: historicKill.fightUrl })]

@@ -1155,7 +1155,10 @@ export function createApplicantEvidenceJobHandler(
           .filter(
             (kill): kill is WarcraftLogsFirstKillEvidence =>
               kill !== null &&
-              kill.raidId === savedRankedCursor?.journalRaidId &&
+              // Stored WCL kills use zone IDs; journalRaidId names the
+              // Encounter Journal raid selected for this search.
+              savedRankedCursor?.zoneIds.includes(Number(kill.raidId)) ===
+                true &&
               acceptedRankedKeys.has(`${kill.reportCode}:${kill.fightId}`)
           );
         const carriedRankedKeys = new Set(
