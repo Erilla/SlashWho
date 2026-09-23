@@ -9,7 +9,8 @@ import {
   admitCanonicalIntent,
   claimNext,
   drainApplicantIntents,
-  pollApplicantSheet
+  pollApplicantSheet,
+  wasSuppressedAt
 } from "../../apps/worker/src/applicant-watcher";
 import type { WorkerConfig } from "../../apps/worker/src/config";
 import { startPostgres } from "./postgres";
@@ -96,6 +97,119 @@ it("settles suppression at observation and defers unresolved IDs", async () => {
       )
     ).rows
   ).toEqual([{ state: "suppressed" }]);
+});
+
+it("keeps the first observation time for a deferred numeric link", async () => {
+  const firstSeen = new Date("2026-01-01T00:00:00.000Z");
+  const later = new Date("2026-01-02T00:00:00.000Z");
+  const deferred = await pollApplicantSheet({
+    pool,
+    readColumn: async () => [
+      a,
+      b,
+      b,
+      c,
+      id,
+      "https://www.warcraftlogs.com/character/id/43"
+    ],
+    backlogLimit: 20,
+    now: () => firstSeen,
+    isSuppressed: async () => "defer"
+  });
+  expect(deferred.created).toBe(0);
+  const observed: Date[] = [];
+  const settled = await pollApplicantSheet({
+    pool,
+    readColumn: async () => [
+      a,
+      b,
+      b,
+      c,
+      id,
+      "https://www.warcraftlogs.com/character/id/43"
+    ],
+    backlogLimit: 20,
+    now: () => later,
+    isSuppressed: async (_identity, at) => {
+      observed.push(at);
+      return true;
+    }
+  });
+  expect(settled.created).toBe(1);
+  expect(observed).toEqual([firstSeen]);
+  const saved = await pool.query<{ observed_at: Date; state: string }>(
+    "SELECT observed_at, state FROM applicant_source_intents WHERE identity = 'warcraftlogs_id:43'"
+  );
+  expect(saved.rows).toEqual([{ observed_at: firstSeen, state: "suppressed" }]);
+});
+
+it("recalls suppression at observation after expiry cleanup", async () => {
+  const repositories = createPostgresRepositories(pool);
+  const key = { region: "eu" as const, realm: "example", name: "historic" };
+  const observedAt = new Date(Date.now() + 1000);
+  const expiresAt = new Date(observedAt.getTime() + 1000);
+  await repositories.suppressions.suppress(key, "test", expiresAt);
+  expect(await wasSuppressedAt(pool, key, observedAt)).toBe(true);
+  await repositories.suppressions.cleanupExpired(
+    new Date(expiresAt.getTime() + 1000)
+  );
+  expect(await wasSuppressedAt(pool, key, observedAt)).toBe(true);
+  expect(
+    await wasSuppressedAt(pool, key, new Date(expiresAt.getTime() + 1000))
+  ).toBe(false);
+});
+
+it("settles a deferred ID using suppression from its first poll", async () => {
+  const repositories = createPostgresRepositories(pool);
+  const key = { region: "eu" as const, realm: "example", name: "deferred" };
+  const firstSeen = new Date(Date.now() + 1000);
+  const expiry = new Date(firstSeen.getTime() + 1000);
+  await repositories.suppressions.suppress(key, "test", expiry);
+  const cells = [
+    a,
+    b,
+    b,
+    c,
+    id,
+    "https://www.warcraftlogs.com/character/id/44"
+  ];
+  await pollApplicantSheet({
+    pool,
+    readColumn: async () => cells,
+    backlogLimit: 20,
+    now: () => firstSeen,
+    isSuppressed: async () => "defer"
+  });
+  await repositories.suppressions.cleanupExpired(
+    new Date(expiry.getTime() + 1000)
+  );
+  const result = await pollApplicantSheet({
+    pool,
+    readColumn: async () => cells,
+    backlogLimit: 20,
+    now: () => new Date(expiry.getTime() + 1000),
+    isSuppressed: async (identity, observedAt) =>
+      identity === "warcraftlogs_id:44"
+        ? wasSuppressedAt(pool, key, observedAt)
+        : false
+  });
+  expect(result.created).toBe(1);
+  const rows = await pool.query<{ observed_at: Date; state: string }>(
+    "SELECT observed_at, state FROM applicant_source_intents WHERE identity = 'warcraftlogs_id:44'"
+  );
+  expect(rows.rows).toEqual([{ observed_at: firstSeen, state: "suppressed" }]);
+});
+
+it("closes an older indefinite suppression when a new policy replaces it", async () => {
+  const repositories = createPostgresRepositories(pool);
+  const key = { region: "eu" as const, realm: "example", name: "renewed" };
+  await repositories.suppressions.suppress(key, "test", null);
+  const replacedAt = new Date();
+  const expiresAt = new Date(replacedAt.getTime() + 1000);
+  await repositories.suppressions.suppress(key, "test", expiresAt);
+  expect(
+    await wasSuppressedAt(pool, key, new Date(expiresAt.getTime() + 1000))
+  ).toBe(false);
 });
 
 it("reclaims the same outbox intent after a crashed lease", async () => {

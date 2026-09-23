@@ -16,6 +16,6 @@ Choose the Sheet URL and column before first activation. Changing either after p
 
 Only normalized character identities, numeric Warcraft Logs IDs, occurrence counts, timestamps, and outbox state are stored. Raw Sheet cells, URLs, adjacent applicant answers, and credentials are never stored or logged by this watcher. No production Sheet access or permission changes are part of issue #444's code delivery.
 
-Each value in the configured column is limited to 4,096 characters and 16 literal URL candidates. An over-limit value raises a count-only `applicant_input_truncated` alert for operator correction; candidates beyond the bound are not admitted. Increase these bounds only with a matching response-size and backlog review.
+Each value in the configured column is limited to 4,096 characters. Every literal URL within that bound is inspected. An over-limit value raises a count-only `applicant_input_truncated` alert for operator correction; candidates beyond the character bound are not admitted. Increase the bound only with a matching response-size and backlog review.
 
 When the planned Admin Settings page is available, move the Sheet URL and column controls there, with server-side validation and access restricted to admins. Until then, these are worker environment settings; changing them requires a worker restart.

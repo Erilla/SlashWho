@@ -16,7 +16,6 @@ export type CandidateParse = {
 };
 
 const maxCellLength = 4096;
-const maxCandidates = 16;
 const urlPattern = /https:\/\/[^\s<>"'`]+/gi;
 
 /** Only literal, recognized HTTPS character links leave this parser. */
@@ -28,10 +27,7 @@ export function parseApplicantCandidates(value: unknown): CandidateParse {
   const candidates: ApplicantCandidate[] = [];
   const seen = new Set<string>();
   let invalid = 0;
-  let inspected = 0;
   for (const match of text.matchAll(urlPattern)) {
-    if (++inspected > maxCandidates)
-      return { candidates, invalid, truncated: true };
     const literal = match[0].replace(/[),.;!?\]}]+$/g, "");
     let url: URL;
     try {

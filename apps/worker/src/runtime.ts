@@ -38,7 +38,11 @@ import { Pool } from "pg";
 
 import { createApplicantSheetClient } from "./applicant-sheet";
 import { decodeApplicantIdentity } from "./applicant-identity";
-import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
+import {
+  drainApplicantIntents,
+  pollApplicantSheet,
+  wasSuppressedAt
+} from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
 
@@ -748,7 +752,7 @@ export async function createWorkerRuntime(
               const poll = await pollApplicantSheet({
                 pool: pool as Pool,
                 readColumn: () => applicantSheet.readColumn(),
-                isSuppressed: async (identity) => {
+                isSuppressed: async (identity, observedAt) => {
                   const decoded = decodeApplicantIdentity(identity);
                   if (decoded.kind === "warcraftlogs_id") {
                     if (
@@ -769,18 +773,16 @@ export async function createWorkerRuntime(
                       const resolved =
                         await evidenceGateway.resolveCharacterById(decoded.id);
                       if (resolved.kind !== "identity") return "defer";
-                      return repositories.suppressions.isActive(
+                      return wasSuppressedAt(
+                        pool as Pool,
                         resolved.key,
-                        new Date()
+                        observedAt
                       );
                     } catch {
                       return "defer";
                     }
                   }
-                  return repositories.suppressions.isActive(
-                    decoded.key,
-                    new Date()
-                  );
+                  return wasSuppressedAt(pool as Pool, decoded.key, observedAt);
                 },
                 backlogLimit: config.applicantWatcher.backlog
               });

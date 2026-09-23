@@ -11,7 +11,28 @@ import {
 import type { WorkerConfig } from "./config";
 
 const source = "applicant_sheet";
-type CountRow = { identity: string; occurrence_count: number };
+
+/** Expired suppressions may have been deleted before a deferred ID resolves. */
+export async function wasSuppressedAt(
+  pool: Pool,
+  key: CharacterKey,
+  at: Date
+): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM applicant_suppression_history
+     WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+       AND suppressed_at <= $4 AND (expires_at IS NULL OR expires_at > $4)
+       AND (ended_at IS NULL OR ended_at > $4)
+     LIMIT 1`,
+    [key.region, key.realm, key.name, at]
+  );
+  return result.rowCount === 1;
+}
+type CountRow = {
+  identity: string;
+  occurrence_count: number;
+  deferred_observed_at: Date | null;
+};
 type IntentRow = {
   sequence: string;
   identity: string;
@@ -25,7 +46,10 @@ export async function reconcileApplicantCounts(
   counts: ReadonlyMap<string, number>,
   backlogLimit: number,
   at = new Date(),
-  isSuppressed?: (identity: string) => Promise<boolean | "defer">
+  isSuppressed?: (
+    identity: string,
+    observedAt: Date
+  ) => Promise<boolean | "defer">
 ): Promise<{ baseline: boolean; created: number; backlog: number }> {
   const client = await pool.connect();
   try {
@@ -52,11 +76,14 @@ export async function reconcileApplicantCounts(
       return { baseline: true, created: 0, backlog: 0 };
     }
     const existing = await client.query<CountRow>(
-      "SELECT identity, occurrence_count FROM applicant_source_counts WHERE source = $1",
+      "SELECT identity, occurrence_count, deferred_observed_at FROM applicant_source_counts WHERE source = $1",
       [source]
     );
     const previous = new Map(
       existing.rows.map((row) => [row.identity, row.occurrence_count])
+    );
+    const deferredAt = new Map(
+      existing.rows.map((row) => [row.identity, row.deferred_observed_at])
     );
     const pending = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM applicant_source_intents WHERE source = $1 AND state IN ('pending', 'claimed')",
@@ -68,7 +95,9 @@ export async function reconcileApplicantCounts(
       const before = previous.get(identity) ?? 0;
       const current = counts.get(identity) ?? 0;
       const increase = Math.max(0, current - before);
-      const decision = increase > 0 ? await isSuppressed?.(identity) : false;
+      const observedAt = deferredAt.get(identity) ?? at;
+      const decision =
+        increase > 0 ? await isSuppressed?.(identity, observedAt) : false;
       const admitted =
         decision === "defer"
           ? 0
@@ -79,20 +108,22 @@ export async function reconcileApplicantCounts(
         const suppressed = decision === true;
         await client.query(
           "INSERT INTO applicant_source_intents (source, identity, observed_at, state) VALUES ($1, $2, $3, $4)",
-          [source, identity, at, suppressed ? "suppressed" : "pending"]
+          [source, identity, observedAt, suppressed ? "suppressed" : "pending"]
         );
         if (suppressed) backlog--;
       }
       const recorded = current < before ? current : before + admitted;
+      const stillDeferred =
+        current > recorded ? (deferredAt.get(identity) ?? at) : null;
       if (previous.has(identity))
         await client.query(
-          "UPDATE applicant_source_counts SET occurrence_count = $3 WHERE source = $1 AND identity = $2",
-          [source, identity, recorded]
+          "UPDATE applicant_source_counts SET occurrence_count = $3, deferred_observed_at = $4 WHERE source = $1 AND identity = $2",
+          [source, identity, recorded, stillDeferred]
         );
       else
         await client.query(
-          "INSERT INTO applicant_source_counts (source, identity, occurrence_count) VALUES ($1, $2, $3)",
-          [source, identity, recorded]
+          "INSERT INTO applicant_source_counts (source, identity, occurrence_count, deferred_observed_at) VALUES ($1, $2, $3, $4)",
+          [source, identity, recorded, stillDeferred]
         );
       backlog += admitted;
       created += admitted;
@@ -116,7 +147,10 @@ export async function pollApplicantSheet(input: {
   readColumn(): Promise<unknown[]>;
   backlogLimit: number;
   now?: () => Date;
-  isSuppressed?: (identity: string) => Promise<boolean | "defer">;
+  isSuppressed?: (
+    identity: string,
+    observedAt: Date
+  ) => Promise<boolean | "defer">;
 }): Promise<{
   baseline: boolean;
   created: number;
