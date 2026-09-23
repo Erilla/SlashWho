@@ -186,6 +186,7 @@ describe("PostgreSQL repositories", () => {
       -- Keyed by character rather than by run, so nothing above cascades to
       -- it and a mark left by one test would be read by the next.
       character_terminal_tiers,
+      character_attendance_searches,
       snapshot_characters,
       snapshots,
       discovery_runs,
@@ -2280,6 +2281,74 @@ describe("PostgreSQL repositories", () => {
     await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
   });
 
+  it("remembers each character's resolved Warcraft Logs ID and its latest resolution", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "ryun"
+    } as const;
+    const former = {
+      region: "eu",
+      realm: "neptulon",
+      name: "erilla"
+    } as const;
+
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(key)
+    ).resolves.toBeNull();
+
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      key,
+      40989140,
+      new Date("2026-09-22T09:00:00.000Z")
+    );
+    // A former name resolving to the same ID is the rename #424 links, so the
+    // ID must not be unique across keys.
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      former,
+      40989140,
+      new Date("2026-09-22T09:00:00.000Z")
+    );
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(key)
+    ).resolves.toBe(40989140);
+
+    // A name can be released and taken by somebody else; the latest answer
+    // replaces the old one rather than failing on the key.
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      key,
+      51234567,
+      new Date("2026-09-23T09:00:00.000Z")
+    );
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(key)
+    ).resolves.toBe(51234567);
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(former)
+    ).resolves.toBe(40989140);
+    const stored = await pool.query<{ resolved_at: Date }>(
+      `SELECT resolved_at FROM warcraft_logs_character_ids
+        WHERE region = 'eu' AND realm_slug = 'silvermoon'
+          AND normalized_name = 'ryun'`
+    );
+    expect(stored.rows[0]?.resolved_at.toISOString()).toBe(
+      "2026-09-23T09:00:00.000Z"
+    );
+  });
+
+  it("refuses to store a Warcraft Logs ID that is not a positive integer", async () => {
+    const key = { region: "eu", realm: "silvermoon", name: "badid" } as const;
+    for (const id of [0, -1, 1.5]) {
+      await expect(
+        repositories.evidence.recordWarcraftLogsCharacterId(
+          key,
+          id,
+          new Date("2026-09-22T09:00:00.000Z")
+        )
+      ).rejects.toThrow();
+    }
+  });
+
   it("forgets marks on a rebuild without discarding the evidence they cover", async () => {
     // A rebuild must not leave a dossier empty while it waits for the
     // replacement evidence to arrive.
@@ -3744,6 +3813,84 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  describe("attendance searches found empty (#434)", () => {
+    const search = {
+      at: "2020-01-21T19:34:00.000Z",
+      guild: { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" }
+    };
+
+    it("returns a search recorded within the window", async () => {
+      const at = new Date("2026-09-23T12:00:00.000Z");
+      await repositories.evidence.recordEmptyAttendanceSearches(
+        rootKey,
+        [search],
+        at
+      );
+
+      await expect(
+        repositories.evidence.emptyAttendanceSearches(
+          rootKey,
+          new Date("2026-09-16T12:00:00.000Z")
+        )
+      ).resolves.toEqual([search]);
+      // Scoped to the character that searched.
+      await expect(
+        repositories.evidence.emptyAttendanceSearches(
+          altKey,
+          new Date("2026-09-16T12:00:00.000Z")
+        )
+      ).resolves.toEqual([]);
+    });
+
+    it("lets a search go stale, so its night is searched again", async () => {
+      await repositories.evidence.recordEmptyAttendanceSearches(
+        rootKey,
+        [search],
+        new Date("2026-09-01T12:00:00.000Z")
+      );
+
+      await expect(
+        repositories.evidence.emptyAttendanceSearches(
+          rootKey,
+          new Date("2026-09-16T12:00:00.000Z")
+        )
+      ).resolves.toEqual([]);
+
+      // Searching it again refreshes the one row rather than adding another.
+      await repositories.evidence.recordEmptyAttendanceSearches(
+        rootKey,
+        [search],
+        new Date("2026-09-23T12:00:00.000Z")
+      );
+      const rows = await pool.query(
+        "SELECT searched_at FROM character_attendance_searches"
+      );
+      expect(rows.rows).toEqual([
+        { searched_at: new Date("2026-09-23T12:00:00.000Z") }
+      ]);
+    });
+
+    it("forgets a search made under an older kill collection", async () => {
+      // A collection-version bump re-collects kills, and a night that held
+      // nothing to the old decoder may hold something to the new one.
+      await repositories.evidence.recordEmptyAttendanceSearches(
+        rootKey,
+        [search],
+        new Date("2026-09-23T12:00:00.000Z")
+      );
+      await pool.query(
+        "UPDATE character_attendance_searches SET collection_version = collection_version - 1"
+      );
+
+      await expect(
+        repositories.evidence.emptyAttendanceSearches(
+          rootKey,
+          new Date("2026-09-16T12:00:00.000Z")
+        )
+      ).resolves.toEqual([]);
+    });
+  });
+
   describe("evidence run costs", () => {
     // What a run spent, and the configuration it spent it under. Before #342
     // this existed only in the worker's deployment logs, which serve the
@@ -3790,6 +3937,7 @@ describe("PostgreSQL repositories", () => {
           raiderIoOutcome: "evidence",
           raiderIoMs: 840,
           verifiedKillsSearched: 3,
+          verifiedKillsSkippedEmpty: 1,
           recoveredKills: 1
         },
         ...overrides
@@ -3830,7 +3978,8 @@ describe("PostgreSQL repositories", () => {
           raiderio_historic_outcome: "evidence",
           raiderio_historic_ms: 840,
           verified_kills_searched: 3,
-          attendance_recovered_kills: 1
+          attendance_recovered_kills: 1,
+          verified_kills_skipped_empty: 1
         })
       ]);
     });
@@ -3895,6 +4044,7 @@ describe("PostgreSQL repositories", () => {
             raiderIoOutcome: null,
             raiderIoMs: null,
             verifiedKillsSearched: null,
+            verifiedKillsSkippedEmpty: null,
             recoveredKills: null
           }
         })
@@ -4098,6 +4248,7 @@ describe("PostgreSQL repositories", () => {
               raiderIoOutcome: null,
               raiderIoMs: null,
               verifiedKillsSearched: null,
+              verifiedKillsSkippedEmpty: null,
               recoveredKills: null
             }
           })
@@ -4108,6 +4259,7 @@ describe("PostgreSQL repositories", () => {
               raiderIoOutcome: "private",
               raiderIoMs: 120,
               verifiedKillsSearched: 0,
+              verifiedKillsSkippedEmpty: 0,
               recoveredKills: null
             }
           })
@@ -4122,6 +4274,7 @@ describe("PostgreSQL repositories", () => {
           attempts: "1",
           asked: "1",
           kills_searched: "3",
+          kills_skipped_empty: "1",
           searches: "1",
           kills_recovered: "1",
           attendance_pages: "4",

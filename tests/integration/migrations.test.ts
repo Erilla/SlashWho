@@ -28,6 +28,7 @@ describe("database migrations", () => {
     `);
 
     expect(result.rows.map(({ name }) => name)).toEqual([
+      "character_attendance_searches",
       "character_evidence_collections",
       "character_evidence_cutting_edges",
       "character_evidence_run_costs",
@@ -52,7 +53,8 @@ describe("database migrations", () => {
       "rate_limit_events",
       "snapshot_characters",
       "snapshots",
-      "suppressed_characters"
+      "suppressed_characters",
+      "warcraft_logs_character_ids"
     ]);
 
     const cursor = await pool.query<{ column_name: string }>(`
@@ -117,8 +119,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-18).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 25, tag: "0026_unstick_parse_drift_runs" },
-      { idx: 26, tag: "0027_kill_parses_read_at" },
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
       { idx: 29, tag: "0030_unstick_schema_drift_runs" },
@@ -134,7 +134,9 @@ describe("database migrations", () => {
       { idx: 39, tag: "0040_mythic_kill_world_rank" },
       { idx: 40, tag: "0041_mythic_kill_rank_checked" },
       { idx: 41, tag: "0042_evidence_run_recovery_costs" },
-      { idx: 42, tag: "0043_tier_search_runs" }
+      { idx: 42, tag: "0043_character_attendance_searches" },
+      { idx: 43, tag: "0044_warcraft_logs_character_ids" },
+      { idx: 44, tag: "0045_tier_search_runs" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

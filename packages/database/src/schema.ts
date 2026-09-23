@@ -791,6 +791,12 @@ export const characterEvidenceRunCosts = pgTable(
     raiderIoHistoricOutcome: text("raiderio_historic_outcome"),
     raiderIoHistoricMs: integer("raiderio_historic_ms"),
     verifiedKillsSearched: integer("verified_kills_searched"),
+    /**
+     * Kills Raider.IO verified that were not searched for because an earlier
+     * run searched their night to the end and found nothing (#434). Null when
+     * Raider.IO was not asked.
+     */
+    verifiedKillsSkippedEmpty: integer("verified_kills_skipped_empty"),
     attendanceRecoveredKills: integer("attendance_recovered_kills"),
     /** The run's mode, so a tier search's cost can be read apart (#435). */
     mode: text("mode").default("full").notNull(),
@@ -1054,5 +1060,82 @@ export const characterTerminalTiers = pgTable(
         table.domain
       ]
     })
+  ]
+);
+
+/**
+ * Raider.IO-verified kills whose night was searched to the end in the named
+ * guild's attendance and held nothing (#434).
+ *
+ * A kill whose first defeat was never logged can never be held, so without
+ * this every full run walked that guild's attendance back to its night again:
+ * characters with no stored Warcraft Logs evidence at all never get a scan
+ * floor, and a current tier never settles. A row lets the run skip the search
+ * until it goes stale, because logs and attendance can still be uploaded late.
+ *
+ * Keyed by character, like `character_terminal_tiers`, so it outlives run
+ * cleanup; `collectionVersion` drops rows out of every read when the kill
+ * collection changes, as it does for terminal marks. It holds a guild the
+ * character was in and a kill time, both already public on Raider.IO and no
+ * more identifying than a stored kill's guild.
+ */
+export const characterAttendanceSearches = pgTable(
+  "character_attendance_searches",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    guildRegion: text("guild_region").notNull(),
+    guildRealm: text("guild_realm").notNull(),
+    guildName: text("guild_name").notNull(),
+    /** Raider.IO's first-defeated time for the kill that was searched for. */
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    collectionVersion: integer("collection_version").notNull(),
+    searchedAt: timestamp("searched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_attendance_searches_pkey",
+      columns: [
+        table.region,
+        table.realmSlug,
+        table.normalizedName,
+        table.guildRegion,
+        table.guildRealm,
+        table.guildName,
+        table.verifiedAt
+      ]
+    })
+  ]
+);
+
+/**
+ * The stable Warcraft Logs character ID each name, realm and region last
+ * resolved to. The ID survives renames and realm transfers where the key does
+ * not, so it is what can tell a character's former name from its current one.
+ *
+ * Deliberately not unique on `character_id`: a former name and a current name
+ * resolving to the same ID is exactly the rename that links them (#424). And a
+ * released name can later resolve to somebody else, so a new answer replaces
+ * the old one.
+ */
+export const warcraftLogsCharacterIds = pgTable(
+  "warcraft_logs_character_ids",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    characterId: integer("character_id").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "warcraft_logs_character_ids_pkey",
+      columns: [table.region, table.realmSlug, table.normalizedName]
+    }),
+    index("warcraft_logs_character_ids_character_id_idx").on(table.characterId),
+    check("warcraft_logs_character_ids_positive", sql`${table.characterId} > 0`)
   ]
 );

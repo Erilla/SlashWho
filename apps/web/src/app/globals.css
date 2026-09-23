@@ -252,6 +252,21 @@ a {
   display: grid;
 }
 
+/* Overlays the end of the character input while a pasted Warcraft Logs ID
+   resolves; the field's lookup error, when there is one, flows below. */
+.search-input-spinner {
+  grid-area: 1 / 1;
+  align-self: center;
+  justify-self: end;
+  margin-inline-end: 0.75rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.search-field > .form-error {
+  margin: 0.35rem 0 0;
+}
+
 .search-region-field {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.625rem;

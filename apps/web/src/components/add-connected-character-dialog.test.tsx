@@ -244,3 +244,25 @@ it("reports an unreachable server rather than failing silently", async () => {
     )
   ).toBeVisible();
 });
+
+it("waits for a pasted Warcraft Logs ID URL to resolve before adding", async () => {
+  const user = userEvent.setup();
+  const fetch = vi.fn(() => new Promise<Response>(() => undefined));
+  vi.stubGlobal("fetch", fetch);
+  renderDialog();
+
+  await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+  await user.paste("https://www.warcraftlogs.com/character/id/40989140");
+  await user.click(
+    screen.getByRole("button", { name: "Add connected character" })
+  );
+
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/warcraft-logs/characters/40989140",
+    expect.anything()
+  );
+  expect(
+    screen.getByRole("status", { name: "Looking up Warcraft Logs character" })
+  ).toBeVisible();
+});

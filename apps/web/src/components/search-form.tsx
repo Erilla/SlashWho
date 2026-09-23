@@ -10,7 +10,8 @@ import { useState, type FormEvent } from "react";
 
 import {
   CharacterIdentityFields,
-  emptyCharacterIdentity
+  emptyCharacterIdentity,
+  isUnresolvedCharacterIdUrl
 } from "./character-identity-fields";
 
 const invalidStructuredUrlMessage =
@@ -43,6 +44,9 @@ export function SearchForm() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    // The fields are still resolving a pasted ID URL, or showing why they
+    // could not; either way there is no realm or region to submit yet.
+    if (isUnresolvedCharacterIdUrl(character)) return;
 
     let identity: ReturnType<typeof parseApplicantCharacterUrl>;
     try {

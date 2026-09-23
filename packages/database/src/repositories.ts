@@ -463,6 +463,13 @@ export type EvidenceReservationResult =
  */
 export type EvidenceCollectionDomain = "kills" | "parses" | "tier_bests";
 
+/** A verified kill whose night was searched to the end and held nothing. */
+export type EmptyAttendanceSearch = Readonly<{
+  /** Raider.IO's first-defeated time, as an ISO string. */
+  at: string;
+  guild: Readonly<{ name: string; realm: string; region: string }>;
+}>;
+
 /** Where and when one stored kill happened, without its evidence. */
 export type StoredKillTier = Readonly<{
   raidId: string;
@@ -641,6 +648,8 @@ export type EvidenceRunCost = Readonly<{
     raiderIoOutcome: string | null;
     raiderIoMs: number | null;
     verifiedKillsSearched: number | null;
+    /** Kills not searched for because a recent search found them empty. */
+    verifiedKillsSkippedEmpty: number | null;
     recoveredKills: number | null;
   }>;
   /**
@@ -838,6 +847,33 @@ export interface EvidenceRepository {
    * arrive. Returns the number of marks forgotten.
    */
   clearTerminalTiers(key: CharacterKey): Promise<number>;
+  /**
+   * Records the stable Warcraft Logs character ID a key resolved to, replacing
+   * any earlier answer: a released name can come to belong to somebody else.
+   * Rejects an ID that is not a positive integer.
+   */
+  recordWarcraftLogsCharacterId(
+    key: CharacterKey,
+    characterId: number,
+    at: Date
+  ): Promise<void>;
+  /** The Warcraft Logs character ID a key last resolved to, if any. */
+  warcraftLogsCharacterId(key: CharacterKey): Promise<number | null>;
+  /**
+   * Verified kills whose night an attendance search covered to the end and
+   * found empty, searched at or after `searchedSince` and at the current kill
+   * collection version (#434).
+   */
+  emptyAttendanceSearches(
+    key: CharacterKey,
+    searchedSince: Date
+  ): Promise<readonly EmptyAttendanceSearch[]>;
+  /** Records searches that came up empty; a repeat refreshes `searched_at`. */
+  recordEmptyAttendanceSearches(
+    key: CharacterKey,
+    searches: readonly EmptyAttendanceSearch[],
+    at: Date
+  ): Promise<void>;
   /**
    * Characters whose last completed run asked to be resumed and whose deadline
    * has passed, oldest deadline first, with nothing already in flight for them.

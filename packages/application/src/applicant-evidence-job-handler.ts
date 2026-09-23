@@ -4,6 +4,7 @@ import type {
   CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
+  EmptyAttendanceSearch,
   EvidenceRunCost,
   EvidenceRunPhase,
   StagedEvidenceCollection,
@@ -12,7 +13,10 @@ import type {
 } from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
-import { isAccountWideCuttingEdgeAchievement } from "@slashwho/domain";
+import {
+  canonicalCharacterId,
+  isAccountWideCuttingEdgeAchievement
+} from "@slashwho/domain";
 import type {
   MythicBossRanking,
   MythicBossRankingsOptions,
@@ -48,7 +52,12 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
-import { raiderIoVerifiedKills, storedKillReportCodes } from "./verified-kills";
+import {
+  EMPTY_SEARCH_RECHECK_MS,
+  emptySearchKey,
+  raiderIoVerifiedKills,
+  storedKillReportCodes
+} from "./verified-kills";
 import {
   DEFAULT_TIER_SEARCH_REQUEST_CAP,
   tierSearchGuilds,
@@ -132,6 +141,20 @@ export type ApplicantEvidenceStore = {
    */
   recordRunCost(cost: EvidenceRunCost): Promise<void>;
   /**
+   * Verified kills whose night an attendance search covered to the end and
+   * found empty since `searchedSince` (#434). Optional: a store without it
+   * searches every verified kill, which is only slower.
+   */
+  emptyAttendanceSearches?(
+    key: CharacterKey,
+    searchedSince: Date
+  ): Promise<readonly EmptyAttendanceSearch[]>;
+  recordEmptyAttendanceSearches?(
+    key: CharacterKey,
+    searches: readonly EmptyAttendanceSearch[],
+    at: Date
+  ): Promise<void>;
+  /**
    * Holds a finished collection between the scan that paid for it and the
    * publication that stores it, so a retry republishes rather than re-collects.
    */
@@ -141,6 +164,15 @@ export type ApplicantEvidenceStore = {
   ): Promise<void>;
   /** The stage this run already holds, if a previous attempt left one. */
   stagedCollection(runId: string): Promise<StagedEvidenceCollection | null>;
+  /**
+   * Remembers the stable Warcraft Logs character ID the run's key resolved to.
+   * Optional so a store without it still collects, reading by name.
+   */
+  recordWarcraftLogsCharacterId?(
+    key: CharacterKey,
+    characterId: number,
+    at: Date
+  ): Promise<void>;
   /**
    * Fight URLs whose parses are already stored for this character, so a
    * budget-limited run spends its requests on what is still missing rather
@@ -763,6 +795,7 @@ export function createApplicantEvidenceJobHandler(
         killCount: 0,
         raiderIoHistoricOutcome: null,
         verifiedKillsSearched: null,
+        verifiedKillsSkippedEmpty: null,
         attendanceRecoveredKills: null,
         // Null on a run that searched no tier, like every recovery field.
         tierSearchRaidId: null,
@@ -1161,6 +1194,10 @@ export function createApplicantEvidenceJobHandler(
           // A corrupt progress projection must not discard collected evidence.
           phaseLedger = undefined;
         }
+        // Set only when Warcraft Logs resolved the run's own key: reads by
+        // ID still match report actors against that key, so an ID for
+        // whatever the name resolves to instead would read somebody else.
+        let characterId: number | undefined;
         if (gateway.resolveCharacter) {
           await phaseLedger?.transition(
             "warcraft_logs_identity_resolution",
@@ -1171,6 +1208,18 @@ export function createApplicantEvidenceJobHandler(
               run.key,
               activeContext.signal
             );
+            if (
+              identity.kind === "identity" &&
+              canonicalCharacterId(identity.key) ===
+                canonicalCharacterId(run.key)
+            ) {
+              characterId = identity.characterId;
+              // Bookkeeping, not evidence: a failed write must not cost the
+              // collection it accompanies.
+              await evidence
+                .recordWarcraftLogsCharacterId?.(run.key, characterId, now())
+                .catch(() => undefined);
+            }
             await phaseLedger?.transition(
               "warcraft_logs_identity_resolution",
               identity.kind === "identity" ? "completed" : "limited",
@@ -1267,7 +1316,31 @@ export function createApplicantEvidenceJobHandler(
         record.raiderIoHistoricOutcome = verified
           ? (verified.limitation ?? "evidence")
           : null;
-        record.verifiedKillsSearched = verified ? verified.kills.length : null;
+        // A night searched to the end and found empty in the last week is not
+        // searched again (#434). A failure to read that memory costs a search,
+        // never a kill, so it is not allowed to fail the run.
+        const remembered =
+          verified &&
+          verified.kills.length > 0 &&
+          evidence.emptyAttendanceSearches
+            ? new Set(
+                (
+                  await evidence
+                    .emptyAttendanceSearches(
+                      run.key,
+                      new Date(now().getTime() - EMPTY_SEARCH_RECHECK_MS)
+                    )
+                    .catch(() => [])
+                ).map(emptySearchKey)
+              )
+            : new Set<string>();
+        const toSearch = (verified?.kills ?? []).filter(
+          (kill) => !remembered.has(emptySearchKey(kill))
+        );
+        record.verifiedKillsSearched = verified ? toSearch.length : null;
+        record.verifiedKillsSkippedEmpty = verified
+          ? verified.kills.length - toSearch.length
+          : null;
         // The history scan is the first real upstream boundary for a normal
         // collection. Persist it before entering the gateway, rather than
         // after its promise settles: an interrupted long scan is then plainly
@@ -1286,9 +1359,8 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
-            ...(verified?.kills.length
-              ? { verifiedKills: verified.kills }
-              : {}),
+            ...(characterId !== undefined ? { characterId } : {}),
+            ...(toSearch.length > 0 ? { verifiedKills: toSearch } : {}),
             // From stored evidence on every scanning run, whatever Raider.IO
             // answered: a complete publish keeps only what the run finds again
             // outside terminal raids, so a kill recovered from attendance is
@@ -1587,6 +1659,17 @@ export function createApplicantEvidenceJobHandler(
         record.killCount = response.kills.length;
         record.attendanceRecoveredKills =
           response.attendanceRecoveredKills ?? null;
+        if (response.attendanceSearchedEmpty?.length) {
+          // A cache of where not to look, not evidence: losing a write costs
+          // one repeated search next run.
+          await evidence
+            .recordEmptyAttendanceSearches?.(
+              run.key,
+              response.attendanceSearchedEmpty,
+              now()
+            )
+            .catch(() => undefined);
+        }
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
@@ -1833,7 +1916,10 @@ export function createApplicantEvidenceJobHandler(
                     : null,
                 verifiedKillsSearched: record.verifiedKillsSearched as
                   number | null,
-                recoveredKills: record.attendanceRecoveredKills as number | null
+                recoveredKills: record.attendanceRecoveredKills as
+                  number | null,
+                verifiedKillsSkippedEmpty: record.verifiedKillsSkippedEmpty as
+                  number | null
               }
             });
           } catch {

@@ -271,6 +271,7 @@ it("clears a rejected startup promise so the next request can recover", async ()
       dossiers: {} as never,
       collectionMonitor: {} as never,
       operatorAuth: {} as never,
+      characterIds: {} as never,
       async ready() {
         return true;
       },

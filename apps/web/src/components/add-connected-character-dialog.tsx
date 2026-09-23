@@ -14,6 +14,7 @@ import { closeDialog, openDialog, supportsModalDialog } from "./modal-dialog";
 import {
   CharacterIdentityFields,
   emptyCharacterIdentity,
+  isUnresolvedCharacterIdUrl,
   type CharacterIdentity
 } from "./character-identity-fields";
 
@@ -123,6 +124,9 @@ export function AddConnectedCharacterDialog({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setStatus({ kind: "idle" });
+    // The fields are still resolving a pasted ID URL, or showing why they
+    // could not; either way there is no realm or region to submit yet.
+    if (isUnresolvedCharacterIdUrl(identity.character)) return;
 
     const key = resolveIdentity(identity);
     if (!key) {

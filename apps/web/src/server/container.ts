@@ -14,6 +14,10 @@ import {
 } from "@slashwho/database";
 import { createRaiderIoClient, type RaiderIoGateway } from "@slashwho/raiderio";
 import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
+import {
+  createWarcraftLogsClient,
+  type WarcraftLogsGateway
+} from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
 
 import { loadWebConfig, type WebConfig } from "./config";
@@ -22,6 +26,10 @@ import {
   type CollectionMonitorService
 } from "./collection-monitor";
 import { webLogger } from "./logger";
+import {
+  createCharacterIdResolver,
+  type CharacterIdResolver
+} from "./warcraft-logs-characters";
 import { createOperatorAuth, type OperatorAuth } from "./operator-auth";
 
 type WebPool = {
@@ -34,6 +42,7 @@ export type WebContainer = Readonly<{
   dossiers: ApplicantDossierService;
   collectionMonitor: CollectionMonitorService;
   operatorAuth: OperatorAuth;
+  characterIds: CharacterIdResolver;
   ready(): Promise<boolean>;
   close(): Promise<void>;
 }>;
@@ -62,6 +71,14 @@ export type WebContainerDependencies = Readonly<{
     clientSecret: string;
     onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): BlizzardGateway;
+  /** Defaults to the real client; only character-ID resolution uses it. */
+  createWarcraftLogsGateway?(options: {
+    fetch: typeof globalThis.fetch;
+    clientId: string;
+    clientSecret: string;
+    baseUrl?: string;
+    onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  }): Pick<WarcraftLogsGateway, "resolveCharacterById">;
   createApplicantDossierService(options: {
     repositories: Pick<
       Repositories,
@@ -148,11 +165,28 @@ export async function createWebContainer(
         config.dossier.evidenceJobCredentialEncryptionKey,
       logger: webLogger
     });
+    const createWarcraftLogsGateway =
+      dependencies.createWarcraftLogsGateway ?? createWarcraftLogsClient;
+    const characterIds = createCharacterIdResolver({
+      credentials: config.dossier.warcraftLogs,
+      createGateway: (credentials) =>
+        createWarcraftLogsGateway({
+          fetch: globalThis.fetch,
+          ...credentials,
+          onThrottle: (event) =>
+            webLogger.info({
+              event: "upstream_throttle",
+              provider: "warcraftlogs",
+              retryAfterMs: event.retryAfterMs ?? null
+            })
+        })
+    });
     return {
       searches,
       dossiers,
       collectionMonitor,
       operatorAuth,
+      characterIds,
       async ready() {
         try {
           await pool.query("SELECT 1");

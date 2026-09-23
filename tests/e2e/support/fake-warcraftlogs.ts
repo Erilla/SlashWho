@@ -1,5 +1,11 @@
 import { createServer, type Server } from "node:http";
 
+/**
+ * The one character ID the fake knows: Ryun-Silvermoon (EU), a character no
+ * other spec researches, so the evidence run it starts shares no state.
+ */
+export const fakeWarcraftLogsCharacterId = 40989140;
+
 type FakeWarcraftLogs = Readonly<{ baseUrl: string; close(): Promise<void> }>;
 
 async function listen(server: Server): Promise<number> {
@@ -32,8 +38,30 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
         query?: string;
-        variables?: { name?: string; realm?: string };
+        variables?: { name?: string; realm?: string; id?: number };
       };
+      // A pasted character-ID URL resolves to Ryun; any other ID is
+      // absent, as Warcraft Logs answers an unknown one.
+      if (body.query?.includes("ResolveCharacterById")) {
+        const id = body.variables?.id;
+        response.end(
+          JSON.stringify({
+            data: {
+              characterData: {
+                character:
+                  id === fakeWarcraftLogsCharacterId
+                    ? {
+                        id,
+                        name: "Ryun",
+                        server: { slug: "silvermoon", region: { slug: "eu" } }
+                      }
+                    : null
+              }
+            }
+          })
+        );
+        return;
+      }
       const name = body.variables?.name ?? "fixture";
       const serverName = body.variables?.realm ?? "fixture-realm";
       // Zone rankings are a separate request from the report list. Answering

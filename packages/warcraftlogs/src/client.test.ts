@@ -527,6 +527,7 @@ describe("Warcraft Logs gateway", () => {
         data: {
           characterData: {
             character: {
+              id: 40989140,
               name: "Sentinel",
               server: { slug: "Silvermoon", region: { slug: "EU" } }
             }
@@ -538,8 +539,133 @@ describe("Warcraft Logs gateway", () => {
     await expect(client.resolveCharacter(key)).resolves.toEqual({
       kind: "identity",
       key,
-      displayName: "Sentinel"
+      displayName: "Sentinel",
+      characterId: 40989140
     });
+  });
+
+  it("asks for the stable character ID when resolving by name", async () => {
+    // Break caught: without `id` in the selection the ID could never be
+    // persisted, and every later read would stay name-keyed.
+    const { client, fetch } = clientFor((url) => {
+      if (url.pathname === "/oauth/token") return token();
+      return jsonResponse({ data: { characterData: { character: null } } });
+    });
+
+    await client.resolveCharacter(key);
+
+    const body = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body)) as {
+      query: string;
+    };
+    expect(body.query).toMatch(/character\([^)]*\)\s*\{\s*id\b/);
+  });
+
+  it("reports schema drift when a resolved character carries no usable ID", async () => {
+    // Break caught: a missing ID read as absent would persist a character with
+    // no stable identity and silently fall back to name lookups forever.
+    for (const id of [undefined, null, 0, -3, 1.5, "40989140"]) {
+      const { client } = clientFor((url) =>
+        url.pathname === "/oauth/token"
+          ? token()
+          : jsonResponse({
+              data: {
+                characterData: {
+                  character: {
+                    id,
+                    name: "Sentinel",
+                    server: { slug: "silvermoon", region: { slug: "eu" } }
+                  }
+                }
+              }
+            })
+      );
+      await expect(client.resolveCharacter(key)).resolves.toEqual({
+        kind: "limitation",
+        code: "schema_drift"
+      });
+    }
+  });
+
+  it("resolves a stable character ID to its current name, realm and region", async () => {
+    // Break caught: a renamed or transferred character pasted by ID would be
+    // resolved by some other means, or to the name it held when first logged.
+    let variables: unknown;
+    let query = "";
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      ({ query, variables } = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: unknown;
+      });
+      return jsonResponse({
+        data: {
+          characterData: {
+            character: {
+              id: 40989140,
+              name: "Ryun",
+              server: { slug: "silvermoon", region: { slug: "eu" } }
+            }
+          }
+        }
+      });
+    });
+
+    await expect(client.resolveCharacterById(40989140)).resolves.toEqual({
+      kind: "identity",
+      key: { region: "eu", realm: "silvermoon", name: "ryun" },
+      displayName: "Ryun",
+      characterId: 40989140
+    });
+    expect(variables).toEqual({ id: 40989140 });
+    expect(query).toContain("character(id: $id)");
+  });
+
+  it("represents an unknown character ID as not found", async () => {
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({ data: { characterData: { character: null } } })
+    );
+
+    await expect(client.resolveCharacterById(7)).resolves.toEqual({
+      kind: "limitation",
+      code: "not_found"
+    });
+  });
+
+  it("reports schema drift when an ID lookup answers for another character", async () => {
+    // Break caught: trusting the payload over the request would attach one
+    // character's identity to a different pasted ID.
+    const { client } = clientFor((url) =>
+      url.pathname === "/oauth/token"
+        ? token()
+        : jsonResponse({
+            data: {
+              characterData: {
+                character: {
+                  id: 8,
+                  name: "Ryun",
+                  server: { slug: "silvermoon", region: { slug: "eu" } }
+                }
+              }
+            }
+          })
+    );
+
+    await expect(client.resolveCharacterById(7)).resolves.toEqual({
+      kind: "limitation",
+      code: "schema_drift"
+    });
+  });
+
+  it("refuses an ID that is not a positive safe integer without a request", async () => {
+    const { client, fetch } = clientFor(() => token());
+    for (const id of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN]) {
+      await expect(client.resolveCharacterById(id)).rejects.toThrow(
+        "invalid_character_id"
+      );
+    }
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("normalizes exact-fight performance parses", async () => {
@@ -3019,6 +3145,53 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("reads a character's history and tier bests by its stable ID when given one", async () => {
+    // Break caught: a renamed character's former name could since belong to
+    // somebody else, so a name lookup would read the wrong history.
+    const pages = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages;
+    let page = 0;
+    const lookups: { query: string; variables: Record<string, unknown> }[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown> & { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables.code!);
+      }
+      if (
+        body.query.includes("RecentReports") ||
+        body.query.includes("CharacterZoneParses")
+      ) {
+        lookups.push(body);
+      }
+      if (body.query.includes("CharacterZoneParses")) {
+        return emptyZoneRankingsResponse();
+      }
+      return jsonResponse(pages[page++]!);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 10,
+        characterId: 40989140
+      })
+    ).resolves.toMatchObject({ kind: "evidence" });
+
+    expect(lookups.map(({ query }) => query.match(/query (\w+)/)?.[1])).toEqual(
+      expect.arrayContaining(["RecentReports", "CharacterZoneParses"])
+    );
+    for (const { query, variables } of lookups) {
+      expect(query).toContain("character(id: $characterId)");
+      expect(query).not.toContain("serverSlug");
+      expect(variables).toMatchObject({ characterId: 40989140 });
+      expect(variables).not.toHaveProperty("name");
+    }
+  });
+
   it("paginates public reports and retains every distinct Mythic kill", async () => {
     // Break caught: collapsing report pages to one kill per encounter hid the
     // complete chronological evidence needed by an applicant dossier.
@@ -3803,6 +3976,118 @@ describe("Warcraft Logs gateway", () => {
 
         expect(hydrated).toEqual(resumed ? [] : ["storedRecovery"]);
       }
+    });
+
+    describe("reporting a night searched to the end and found empty (#434)", () => {
+      // What a verified kill's search concluded, from one attendance setup.
+      const searchWith = async (
+        attendance: (page: number) => Response,
+        options: Readonly<{
+          requestCap?: number;
+          hydration?: (code: string) => Response;
+        }> = {}
+      ) => {
+        const { client } = clientFor((url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: { page?: number; code?: string };
+          };
+          if (body.query.includes("RecentReports")) return history();
+          if (body.query.includes("GuildAttendance")) {
+            return attendance(body.variables.page!);
+          }
+          if (body.query.includes("ReportByCode")) {
+            return (
+              options.hydration?.(body.variables.code!) ??
+              jsonResponse({ data: { reportData: { report: null } } })
+            );
+          }
+          return emptyZoneRankingsResponse();
+        });
+        return client.getFirstKillReports(key, {
+          requestCap: options.requestCap ?? 20,
+          parseRequestCap: 1,
+          verifiedKills: verified
+        });
+      };
+      // Factories: a response body can be read once, and these serve many runs.
+      const pastTheNight = () =>
+        attendancePage(
+          [{ code: "monthBefore", startTime: night - hours(24 * 30) }],
+          true
+        );
+      const onTheNight = () =>
+        attendancePage(
+          [{ code: "killNight", startTime: night - hours(1) }],
+          true
+        );
+
+      it("reports a night the walk passed without finding the kill", async () => {
+        // Break caught: a kill whose first defeat was never logged has
+        // nothing to hold it, so every full run walked the guild's
+        // attendance back to its night again. Yawnersw spent 39 pages, about
+        // 1,090 of its 1,168 points, finding nothing (2026-09-23).
+        const result = await searchWith((page) =>
+          page === 1 ? onTheNight() : pastTheNight()
+        );
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
+      it("reports a guild Warcraft Logs does not have", async () => {
+        // Recorded 2026-09-23: an unknown guild is `guild: null`, no errors.
+        const result = await searchWith(() =>
+          jsonResponse({ data: { guildData: { guild: null } } })
+        );
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
+      it("reports a guild whose attendance is empty", async () => {
+        const result = await searchWith(() => attendancePage([], false));
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
+      it("does not report a kill the search recovered", async () => {
+        const result = await searchWith(
+          (page) => (page === 1 ? onTheNight() : pastTheNight()),
+          { hydration: (code) => hydratedKill(code) }
+        );
+
+        expect(result).toMatchObject({ attendanceRecoveredKills: 1 });
+        expect(result).not.toHaveProperty("attendanceSearchedEmpty");
+      });
+
+      it("proves nothing from a walk that did not finish", async () => {
+        // A transient refusal, a report that could not be read, or a budget
+        // spent before the night was reached leaves the kill unproven: it is
+        // searched for again rather than forgotten.
+        for (const run of [
+          () =>
+            searchWith(
+              () => new Response("upstream-body-marker", { status: 503 })
+            ),
+          () =>
+            searchWith((page) => (page === 1 ? onTheNight() : pastTheNight()), {
+              hydration: () =>
+                new Response("upstream-body-marker", { status: 503 })
+            }),
+          () =>
+            searchWith(
+              () =>
+                attendancePage(
+                  [{ code: "weekLater", startTime: night + hours(24 * 7) }],
+                  true
+                ),
+              { requestCap: 3 }
+            )
+        ]) {
+          const result = await run();
+          expect(result).not.toHaveProperty("attendanceSearchedEmpty");
+        }
+      });
     });
 
     it("reports no search when the budget was spent before recovery began", async () => {

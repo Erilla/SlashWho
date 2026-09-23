@@ -84,6 +84,36 @@ export function parseApplicantCharacterUrl(input: string): CharacterKey {
   return invalidCharacterUrl();
 }
 
+/**
+ * Reads the stable character ID from a Warcraft Logs `/character/id/<n>` URL,
+ * or `undefined` for anything else. The ID names a character across renames
+ * and realm transfers, but carries no name, realm or region: those have to be
+ * resolved through Warcraft Logs before the character can be looked up
+ * anywhere else, so it is deliberately not an applicant character URL.
+ */
+export function parseWarcraftLogsCharacterIdUrl(
+  input: string
+): number | undefined {
+  let url: URL;
+  try {
+    url = parseAbsoluteHttpsUrl(input);
+  } catch {
+    return undefined;
+  }
+  if (url.hostname !== "www.warcraftlogs.com") return undefined;
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (
+    parts.length !== 3 ||
+    parts[0].toLowerCase() !== "character" ||
+    parts[1].toLowerCase() !== "id" ||
+    !/^[1-9][0-9]*$/.test(parts[2])
+  ) {
+    return undefined;
+  }
+  const id = Number(parts[2]);
+  return Number.isSafeInteger(id) ? id : undefined;
+}
+
 export function toCharacterPath(key: CharacterKey): string {
   return `/characters/${key.region}/${key.realm}/${key.name}`;
 }

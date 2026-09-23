@@ -38,6 +38,65 @@ describe("SearchForm", () => {
     );
   });
 
+  it("researches a pasted Warcraft Logs ID URL under the name it resolves to", async () => {
+    // Break caught: an ID URL would be submitted as it stands, which the
+    // dossier endpoint cannot parse, or before its realm is known.
+    const user = userEvent.setup();
+    let resolveLookup!: (response: Response) => void;
+    const fetch = vi.fn((input: RequestInfo | URL) =>
+      String(input).startsWith("/api/warcraft-logs/")
+        ? new Promise<Response>((resolve) => {
+            resolveLookup = resolve;
+          })
+        : Promise.resolve(
+            Response.json(
+              {
+                kind: "job",
+                jobId: "ca3ccfdf-1e8b-49b1-9729-459f42a104c0",
+                status: "queued"
+              },
+              { status: 202 }
+            )
+          )
+    );
+    vi.stubGlobal("fetch", fetch);
+    render(<SearchForm />);
+
+    await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+    await user.paste("https://www.warcraftlogs.com/character/id/40989140");
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    resolveLookup(
+      Response.json({
+        characterId: 40989140,
+        region: "eu",
+        realm: "silvermoon",
+        name: "Ryun"
+      })
+    );
+    await screen.findByRole("textbox", { name: "Realm" });
+    await user.click(
+      screen.getByRole("button", { name: "Research applicant" })
+    );
+
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/dossiers",
+      expect.objectContaining({
+        body: JSON.stringify({
+          characterUrl:
+            "https://www.warcraftlogs.com/character/eu/silvermoon/ryun"
+        })
+      })
+    );
+    expect(push).toHaveBeenCalledWith(
+      "/dossiers/eu/silvermoon/ryun?job=ca3ccfdf-1e8b-49b1-9729-459f42a104c0"
+    );
+  });
+
   it("submits a Raider.IO applicant URL and navigates to its dossier", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(

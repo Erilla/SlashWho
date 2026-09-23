@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseApplicantCharacterUrl,
+  parseWarcraftLogsCharacterIdUrl,
   parseRaiderIoCharacterUrl,
   toCharacterPath,
   toRaiderIoUrl
@@ -51,5 +52,40 @@ describe("applicant character identity", () => {
     expect(() => parseApplicantCharacterUrl(value)).toThrow(
       "invalid_character_url"
     );
+  });
+});
+
+describe("Warcraft Logs character ID URL", () => {
+  it.each([
+    "https://www.warcraftlogs.com/character/id/40989140",
+    "https://www.warcraftlogs.com/character/ID/40989140/"
+  ])("reads the stable character ID from %s", (value) => {
+    expect(parseWarcraftLogsCharacterIdUrl(value)).toBe(40989140);
+  });
+
+  it.each([
+    "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii",
+    "https://www.warcraftlogs.com/character/id/0",
+    "https://www.warcraftlogs.com/character/id/-4",
+    "https://www.warcraftlogs.com/character/id/4.5",
+    "https://www.warcraftlogs.com/character/id/1e6",
+    "https://www.warcraftlogs.com/character/id/99999999999999999999",
+    "https://www.warcraftlogs.com/character/id/40989140/extra",
+    "https://www.warcraftlogs.com/character/id/40989140?zone=38",
+    "https://www.warcraftlogs.com/character/id/40989140#raids",
+    "http://www.warcraftlogs.com/character/id/40989140",
+    "https://classic.warcraftlogs.com/character/id/40989140",
+    "https://raider.io/character/id/40989140",
+    "not a url"
+  ])("rejects %s", (value) => {
+    expect(parseWarcraftLogsCharacterIdUrl(value)).toBeUndefined();
+  });
+
+  it("is not an applicant character URL on its own", () => {
+    expect(() =>
+      parseApplicantCharacterUrl(
+        "https://www.warcraftlogs.com/character/id/40989140"
+      )
+    ).toThrow("invalid_character_url");
   });
 });

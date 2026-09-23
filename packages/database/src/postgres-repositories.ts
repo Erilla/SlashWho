@@ -4267,6 +4267,34 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }));
       },
 
+      async recordWarcraftLogsCharacterId(key, characterId, at) {
+        if (!Number.isSafeInteger(characterId) || characterId <= 0) {
+          throw new RangeError("warcraft_logs_character_id_invalid");
+        }
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("warcraft_logs_character_id_time_invalid");
+        }
+        await pool.query(
+          `INSERT INTO warcraft_logs_character_ids
+             (region, realm_slug, normalized_name, character_id, resolved_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (region, realm_slug, normalized_name)
+           DO UPDATE SET character_id = EXCLUDED.character_id,
+                         resolved_at = EXCLUDED.resolved_at`,
+          [key.region, key.realm, key.name, characterId, at]
+        );
+      },
+
+      async warcraftLogsCharacterId(key) {
+        const result = await pool.query<{ character_id: number }>(
+          `SELECT character_id
+             FROM warcraft_logs_character_ids
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows[0]?.character_id ?? null;
+      },
+
       async markTerminalTiers(key, tiers, at) {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("character_terminal_tier_time_invalid");
@@ -4312,6 +4340,70 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [key.region, key.realm, key.name]
         );
         return result.rowCount ?? 0;
+      },
+      async emptyAttendanceSearches(key, searchedSince) {
+        if (Number.isNaN(searchedSince.valueOf())) {
+          throw new RangeError("character_attendance_search_time_invalid");
+        }
+        const result = await pool.query<{
+          guild_region: string;
+          guild_realm: string;
+          guild_name: string;
+          verified_at: Date;
+        }>(
+          `SELECT guild_region, guild_realm, guild_name, verified_at
+             FROM character_attendance_searches
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND searched_at >= $4
+              AND collection_version >= $5`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            searchedSince,
+            CURRENT_COLLECTION_VERSIONS.kills
+          ]
+        );
+        return result.rows.map((row) => ({
+          at: row.verified_at.toISOString(),
+          guild: {
+            name: row.guild_name,
+            realm: row.guild_realm,
+            region: row.guild_region
+          }
+        }));
+      },
+
+      async recordEmptyAttendanceSearches(key, searches, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_attendance_search_time_invalid");
+        }
+        if (searches.length === 0) return;
+        await pool.query(
+          `INSERT INTO character_attendance_searches
+             (region, realm_slug, normalized_name, guild_region, guild_realm,
+              guild_name, verified_at, collection_version, searched_at)
+           SELECT $1, $2, $3, entry.guild_region, entry.guild_realm,
+                  entry.guild_name, entry.verified_at, $8, $9
+             FROM unnest($4::text[], $5::text[], $6::text[],
+                         $7::timestamptz[])
+                  AS entry(guild_region, guild_realm, guild_name, verified_at)
+           ON CONFLICT (region, realm_slug, normalized_name, guild_region,
+                        guild_realm, guild_name, verified_at)
+           DO UPDATE SET collection_version = EXCLUDED.collection_version,
+                         searched_at = EXCLUDED.searched_at`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            searches.map((search) => search.guild.region),
+            searches.map((search) => search.guild.realm),
+            searches.map((search) => search.guild.name),
+            searches.map((search) => new Date(search.at)),
+            CURRENT_COLLECTION_VERSIONS.kills,
+            at
+          ]
+        );
       },
 
       async listResumable(limit, at) {
@@ -4528,6 +4620,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              guild_attendance_requests, report_hydration_requests,
              raiderio_historic_outcome, raiderio_historic_ms,
              verified_kills_searched, attendance_recovered_kills,
+             verified_kills_skipped_empty,
              mode, character_guilds_requests, tier_search_raid_id,
              tier_search_outcome, tier_search_requests, tier_search_guilds,
              tier_search_reports_hydrated, tier_search_recovered_kills,
@@ -4535,7 +4628,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                   $23, $24, $25, $26, $27, $28, $29, $30, $31)
+                   $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -4558,6 +4651,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              raiderio_historic_ms = EXCLUDED.raiderio_historic_ms,
              verified_kills_searched = EXCLUDED.verified_kills_searched,
              attendance_recovered_kills = EXCLUDED.attendance_recovered_kills,
+             verified_kills_skipped_empty = EXCLUDED.verified_kills_skipped_empty,
              mode = EXCLUDED.mode,
              character_guilds_requests = EXCLUDED.character_guilds_requests,
              tier_search_raid_id = EXCLUDED.tier_search_raid_id,
@@ -4590,6 +4684,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             cost.recovery.raiderIoMs,
             cost.recovery.verifiedKillsSearched,
             cost.recovery.recoveredKills,
+            cost.recovery.verifiedKillsSkippedEmpty,
             cost.mode ?? "full",
             cost.requests.characterGuilds ?? 0,
             cost.tierSearch?.raidId ?? null,

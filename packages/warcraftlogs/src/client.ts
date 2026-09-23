@@ -36,6 +36,7 @@ const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
     characterData {
       character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        id
         name
         server {
           slug
@@ -46,10 +47,67 @@ const resolveCharacterQuery = `
   }
 `;
 
-const recentReportsQuery = `
-  query RecentReports($name: String!, $realm: String!, $region: String!, $page: Int!) {
+const resolveCharacterByIdQuery = `
+  query ResolveCharacterById($id: Int!) {
     characterData {
-      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+      character(id: $id) {
+        id
+        name
+        server {
+          slug
+          region { slug }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * How a query names its character: by the stable ID when one is known, which
+ * survives renames and transfers, and by name, realm and region otherwise.
+ * The two differ only in the argument list and the variables they bind.
+ */
+type CharacterLookup =
+  | Readonly<{ kind: "name"; key: CharacterKey }>
+  | Readonly<{ kind: "id"; characterId: number }>;
+
+function characterLookup(
+  key: CharacterKey,
+  characterId: number | undefined
+): CharacterLookup {
+  return characterId === undefined
+    ? { kind: "name", key }
+    : { kind: "id", characterId };
+}
+
+function characterParameters(lookup: CharacterLookup): string {
+  return lookup.kind === "id"
+    ? "$characterId: Int!"
+    : "$name: String!, $realm: String!, $region: String!";
+}
+
+function characterArguments(lookup: CharacterLookup): string {
+  return lookup.kind === "id"
+    ? "id: $characterId"
+    : "name: $name, serverSlug: $realm, serverRegion: $region";
+}
+
+function characterVariables(
+  lookup: CharacterLookup
+): Record<string, string | number> {
+  return lookup.kind === "id"
+    ? { characterId: lookup.characterId }
+    : {
+        name: lookup.key.name,
+        realm: lookup.key.realm,
+        region: lookup.key.region
+      };
+}
+
+const recentReportsQuery = (lookup: CharacterLookup) => `
+  query RecentReports(${characterParameters(lookup)}, $page: Int!) {
+    characterData {
+      character(${characterArguments(lookup)}) {
         server { normalizedName }
         recentReports(limit: ${REPORTS_PER_PAGE}, page: $page) {
           data {
@@ -159,10 +217,10 @@ const reportFightParsesQuery = `
 // bounded way to get it: report rankings cost one request per report and a
 // character's history is unbounded, so a budget-capped scan could only ever
 // report the best of whatever reports it happened to reach.
-const characterZoneParsesQuery = `
-  query CharacterZoneParses($name: String!, $realm: String!, $region: String!, $zoneID: Int!) {
+const characterZoneParsesQuery = (lookup: CharacterLookup) => `
+  query CharacterZoneParses(${characterParameters(lookup)}, $zoneID: Int!) {
     characterData {
-      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+      character(${characterArguments(lookup)}) {
         damage: zoneRankings(
           zoneID: $zoneID
           metric: dps
@@ -400,10 +458,11 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   const entry = record(character);
   const server = entry && record(entry.server);
   const region = server && record(server.region);
+  const characterId = entry && positiveInteger(entry.id);
   const displayName = entry && nonEmptyString(entry.name);
   const realm = server && nonEmptyString(server.slug);
   const regionSlug = region && nonEmptyString(region.slug);
-  if (!displayName || !realm || !regionSlug) {
+  if (!characterId || !displayName || !realm || !regionSlug) {
     return { kind: "limitation", code: "schema_drift" };
   }
 
@@ -417,7 +476,7 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   } catch {
     return { kind: "limitation", code: "schema_drift" };
   }
-  return { kind: "identity", key, displayName };
+  return { kind: "identity", key, displayName, characterId };
 }
 
 /**
@@ -498,6 +557,15 @@ function guildAttendancePage(
     });
   }
   return { reports, hasMorePages };
+}
+
+/**
+ * Whether an attendance response is Warcraft Logs saying it has no such guild,
+ * as opposed to a page it could not read.
+ */
+function guildIsAbsent(value: unknown): boolean {
+  const guildData = record(record(record(value)?.data)?.guildData);
+  return guildData !== null && guildData.guild === null;
 }
 
 function attendanceListsCharacter(
@@ -1715,6 +1783,27 @@ export function createWarcraftLogsClient(
     return result.kind === "success" ? canonicalIdentity(result.value) : result;
   }
 
+  async function resolveCharacterById(
+    characterId: number,
+    signal?: AbortSignal
+  ): Promise<WarcraftLogsIdentityResult> {
+    if (positiveInteger(characterId) === null) {
+      throw new Error("invalid_character_id");
+    }
+    const result = await graphql(
+      resolveCharacterByIdQuery,
+      { id: characterId },
+      signal
+    );
+    if (result.kind !== "success") return result;
+    const identity = canonicalIdentity(result.value);
+    // The payload must answer for the ID asked about, or a pasted ID would
+    // be attached to some other character's name and realm.
+    return identity.kind === "identity" && identity.characterId !== characterId
+      ? { kind: "limitation", code: "schema_drift" }
+      : identity;
+  }
+
   async function getFirstKillReports(
     requestedKey: CharacterKey,
     options: Readonly<{
@@ -1753,6 +1842,12 @@ export function createWarcraftLogsClient(
        */
       killScanFloor?: string;
       /**
+       * The character's stable Warcraft Logs ID. When given, history and tier
+       * bests are read by it rather than by name; the key still identifies
+       * the character among report actors and ranking rows.
+       */
+      characterId?: number;
+      /**
        * Kills to search guild attendance for, when no decoded report covers
        * them. Absent or empty, attendance is not read.
        */
@@ -1781,6 +1876,13 @@ export function createWarcraftLogsClient(
     }>
   ): Promise<WarcraftLogsReportResult> {
     const key = validCharacterKey(requestedKey);
+    if (
+      options.characterId !== undefined &&
+      positiveInteger(options.characterId) === null
+    ) {
+      throw new Error("invalid_character_id");
+    }
+    const lookup = characterLookup(key, options.characterId);
     if (!Number.isSafeInteger(options.requestCap) || options.requestCap < 0) {
       return { kind: "limitation", code: "request_cap" };
     }
@@ -1853,13 +1955,8 @@ export function createWarcraftLogsClient(
       const probe = counted(
         "history_scan",
         await graphql(
-          recentReportsQuery,
-          {
-            name: key.name,
-            realm: key.realm,
-            region: key.region,
-            page: historyScanStartPage - 1
-          },
+          recentReportsQuery(lookup),
+          { ...characterVariables(lookup), page: historyScanStartPage - 1 },
           options.signal
         )
       );
@@ -1902,8 +1999,8 @@ export function createWarcraftLogsClient(
       const result = counted(
         "history_scan",
         await graphql(
-          recentReportsQuery,
-          { name: key.name, realm: key.realm, region: key.region, page },
+          recentReportsQuery(lookup),
+          { ...characterVariables(lookup), page },
           options.signal
         ).catch((error: unknown) => {
           if (options.signal?.reason?.name !== "TimeoutError") throw error;
@@ -2004,7 +2101,7 @@ export function createWarcraftLogsClient(
           span.start - REPORT_COVER_SLACK_MS <= at &&
           at <= span.end + REPORT_COVER_SLACK_MS
       );
-      return covered ? [] : [{ ...verified, at }];
+      return covered ? [] : [{ verified, at }];
     });
     const hydrate = async (code: string) => {
       const report = counted(
@@ -2066,18 +2163,27 @@ export function createWarcraftLogsClient(
     // the run partial on every retry.
     const recoveryTargets = new Map<
       string,
-      { guild: WarcraftLogsVerifiedKill["guild"]; times: number[] }
+      {
+        guild: WarcraftLogsVerifiedKill["guild"];
+        wanted: { verified: WarcraftLogsVerifiedKill; at: number }[];
+      }
     >();
-    for (const verified of uncovered) {
+    for (const { verified, at } of uncovered) {
       const guildKey = `${verified.guild.region}\0${verified.guild.realm}\0${verified.guild.name}`;
       const target = recoveryTargets.get(guildKey) ?? {
         guild: verified.guild,
-        times: []
+        wanted: []
       };
-      target.times.push(verified.at);
+      target.wanted.push({ verified, at });
       recoveryTargets.set(guildKey, target);
     }
-    search: for (const { guild, times } of recoveryTargets.values()) {
+    // Kills whose night was searched to the end and held nothing, reported so
+    // the caller can stop searching for them for a while (#434). Only a walk
+    // that finished counts: a spent budget, a transient refusal or a report
+    // that could not be read leaves a kill unproven, and it is searched again.
+    const searchedEmpty: WarcraftLogsVerifiedKill[] = [];
+    search: for (const { guild, wanted: targets } of recoveryTargets.values()) {
+      const times = targets.map((target) => target.at);
       const pagedPast =
         Math.min(...times) -
         ATTENDANCE_REPORT_LEAD_MS -
@@ -2092,7 +2198,11 @@ export function createWarcraftLogsClient(
             startTime <= at + REPORT_COVER_SLACK_MS &&
             startTime >= at - ATTENDANCE_REPORT_LEAD_MS
         );
-      for (let page = 1; ; page++) {
+      // Whether this guild's walk reached a conclusion: past every wanted
+      // night, out of pages, or told the guild does not exist.
+      let concluded: boolean;
+      let unreadable = false;
+      walk: for (let page = 1; ; page++) {
         if (historyScanRequests >= options.requestCap) break search;
         recoverySearched = true;
         const attendance = counted(
@@ -2109,9 +2219,19 @@ export function createWarcraftLogsClient(
           )
         );
         historyScanRequests += 1;
-        if (attendance.kind !== "success") continue search;
+        if (attendance.kind !== "success") {
+          // A guild Warcraft Logs does not have holds nothing to find. Any
+          // other refusal may pass, so it proves nothing.
+          concluded = attendance.code === "not_found";
+          break walk;
+        }
         const attendancePage = guildAttendancePage(attendance.value, key.name);
-        if (attendancePage === null) continue search;
+        if (attendancePage === null) {
+          // `guild: null` is Warcraft Logs saying it has no such guild; a
+          // page that is otherwise unreadable proves nothing.
+          concluded = guildIsAbsent(attendance.value);
+          break walk;
+        }
         for (const {
           code,
           startTime,
@@ -2122,14 +2242,24 @@ export function createWarcraftLogsClient(
           if (historyScanRequests >= options.requestCap) break search;
           const decoded = await hydrate(code);
           scannedReportCodes.add(code);
-          if (decoded.kind === "limitation") continue;
+          if (decoded.kind === "limitation") {
+            // A report that is gone holds nothing; one that could not be
+            // read might have held the kill.
+            if (decoded.code !== "not_found" && decoded.code !== "private") {
+              unreadable = true;
+            }
+            continue;
+          }
           for (const kill of decoded.kills) {
             if (!kills.has(kill.fightUrl)) attendanceRecoveredKills += 1;
             kills.set(kill.fightUrl, kill);
           }
           for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
         }
-        if (!attendancePage.hasMorePages) break;
+        if (!attendancePage.hasMorePages) {
+          concluded = true;
+          break walk;
+        }
         // Newest first, so a page wholly past every wanted night ends the
         // walk. A page with an undated report says nothing about its reach.
         const starts = attendancePage.reports.map((report) => report.startTime);
@@ -2137,8 +2267,17 @@ export function createWarcraftLogsClient(
           starts.length > 0 &&
           starts.every((start) => start !== null && start < pagedPast)
         ) {
-          break;
+          concluded = true;
+          break walk;
         }
+      }
+      if (!concluded || unreadable) continue;
+      for (const { verified, at } of targets) {
+        const found = [...kills.values()].some((kill) => {
+          const killedAt = Date.parse(kill.killedAt);
+          return Math.abs(killedAt - at) <= REPORT_COVER_SLACK_MS;
+        });
+        if (!found) searchedEmpty.push(verified);
       }
     }
 
@@ -2482,13 +2621,8 @@ export function createWarcraftLogsClient(
       const rankings = counted(
         "zone_rankings",
         await graphql(
-          characterZoneParsesQuery,
-          {
-            name: key.name,
-            realm: key.realm,
-            region: key.region,
-            zoneID: zone.zoneId
-          },
+          characterZoneParsesQuery(lookup),
+          { ...characterVariables(lookup), zoneID: zone.zoneId },
           options.signal
         ).catch((error: unknown) => {
           if (options.signal?.reason?.name !== "TimeoutError") throw error;
@@ -2876,6 +3010,9 @@ export function createWarcraftLogsClient(
         : {}),
       ...(parseLimitations.length > 0 ? { parseLimitations } : {}),
       ...(recoverySearched ? { attendanceRecoveredKills } : {}),
+      ...(searchedEmpty.length > 0
+        ? { attendanceSearchedEmpty: searchedEmpty }
+        : {}),
       ...(tierSearchOutcome ? { tierSearch: tierSearchOutcome } : {})
     });
     // A resumed scan read only the pages below its cursor, so reaching the end
@@ -2931,5 +3068,10 @@ export function createWarcraftLogsClient(
           });
   }
 
-  return { getRateLimit, resolveCharacter, getFirstKillReports };
+  return {
+    getRateLimit,
+    resolveCharacter,
+    resolveCharacterById,
+    getFirstKillReports
+  };
 }

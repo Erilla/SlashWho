@@ -1,6 +1,7 @@
 export {
   parseApplicantCharacterUrl,
   parseRaiderIoCharacterUrl,
+  parseWarcraftLogsCharacterIdUrl,
   supportedRegions,
   toCharacterPath,
   toRaiderIoUrl

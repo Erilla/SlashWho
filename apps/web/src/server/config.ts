@@ -15,7 +15,19 @@ export type WebConfig = Readonly<{
     blizzardClientId: string;
     blizzardClientSecret: string;
     evidenceJobCredentialEncryptionKey: Buffer;
+    /**
+     * Resolves pasted Warcraft Logs character-ID URLs. Optional: without it
+     * the web process still serves everything else, and an ID URL reports
+     * the upstream as unavailable.
+     */
+    warcraftLogs?: WarcraftLogsCredentials;
   }>;
+}>;
+
+export type WarcraftLogsCredentials = Readonly<{
+  clientId: string;
+  clientSecret: string;
+  baseUrl?: string;
 }>;
 
 function parseDatabaseUrl(value: string | undefined): string {
@@ -34,6 +46,19 @@ function parseDatabaseUrl(value: string | undefined): string {
 
 function optionalSecret(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
+}
+
+function optionalWarcraftLogsCredentials(
+  environment: Readonly<Record<string, string | undefined>>
+): WarcraftLogsCredentials | undefined {
+  const clientId = optionalSecret(environment.WARCRAFT_LOGS_CLIENT_ID);
+  const clientSecret = optionalSecret(environment.WARCRAFT_LOGS_CLIENT_SECRET);
+  if (!clientId && !clientSecret) return undefined;
+  if (!clientId || !clientSecret) {
+    throw new Error("incomplete_warcraft_logs_credentials");
+  }
+  const baseUrl = environment.WARCRAFT_LOGS_BASE_URL?.trim() || undefined;
+  return { clientId, clientSecret, ...(baseUrl ? { baseUrl } : {}) };
 }
 
 function operatorOrigin(
@@ -122,7 +147,8 @@ export function loadWebConfig(
       ),
       evidenceJobCredentialEncryptionKey: requiredEncryptionKey(
         environment.EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY
-      )
+      ),
+      warcraftLogs: optionalWarcraftLogsCredentials(environment)
     }
   };
 }

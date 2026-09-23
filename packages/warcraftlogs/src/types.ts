@@ -76,6 +76,12 @@ export type WarcraftLogsIdentity = Readonly<{
   kind: "identity";
   key: CharacterKey;
   displayName: string;
+  /**
+   * Warcraft Logs' stable character ID. It survives renames and realm
+   * transfers, so it names the character where `key` names only its current
+   * name and realm. It is the ranking `characters[].id`, not a report actor ID.
+   */
+  characterId: number;
 }>;
 
 export type WarcraftLogsIdentityResult =
@@ -304,6 +310,13 @@ export type WarcraftLogsReportResult =
        * search ran, which is not the same as a search that found nothing.
        */
       attendanceRecoveredKills?: number;
+      /**
+       * Verified kills whose night was searched to the end and held nothing:
+       * the guild's attendance was walked past it, or Warcraft Logs has no such
+       * guild, and no report read could have held it. A caller may stop
+       * searching for these for a while. Absent when none qualified.
+       */
+      attendanceSearchedEmpty?: readonly WarcraftLogsVerifiedKill[];
       /** Present only when a tier search was asked for. */
       tierSearch?: WarcraftLogsTierSearchOutcome;
     }>
@@ -312,6 +325,15 @@ export type WarcraftLogsReportResult =
 export interface WarcraftLogsGateway {
   resolveCharacter(
     key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<WarcraftLogsIdentityResult>;
+  /**
+   * Resolves a stable character ID to the character's current name, realm and
+   * region. Throws `invalid_character_id` for an ID that is not a positive
+   * safe integer, without issuing a request.
+   */
+  resolveCharacterById(
+    characterId: number,
     signal?: AbortSignal
   ): Promise<WarcraftLogsIdentityResult>;
   getRateLimit(signal?: AbortSignal): Promise<WarcraftLogsRateLimitResult>;
@@ -368,6 +390,13 @@ export interface WarcraftLogsGateway {
        * that allowed the stop, so the character would never settle.
        */
       killScanFloor?: string;
+      /**
+       * The character's stable Warcraft Logs ID, from `resolveCharacter`. When
+       * given, history and tier bests are read by it rather than by name. The
+       * key still identifies the character among report actors and ranking
+       * rows, so the two must name the same character.
+       */
+      characterId?: number;
       /**
        * Kills another provider attributes to the character, with the guild
        * they were in. They are where to look, never evidence: one that no

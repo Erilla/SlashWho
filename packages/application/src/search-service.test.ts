@@ -339,6 +339,14 @@ function policyFixture(
       async clearTerminalTiers() {
         return 0;
       },
+      async recordWarcraftLogsCharacterId() {},
+      async warcraftLogsCharacterId() {
+        return null;
+      },
+      async emptyAttendanceSearches() {
+        return [];
+      },
+      async recordEmptyAttendanceSearches() {},
       async recordLimitation() {},
       async listActive() {
         return [];
