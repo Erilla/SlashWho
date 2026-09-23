@@ -4144,6 +4144,34 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }));
       },
 
+      async recordWarcraftLogsCharacterId(key, characterId, at) {
+        if (!Number.isSafeInteger(characterId) || characterId <= 0) {
+          throw new RangeError("warcraft_logs_character_id_invalid");
+        }
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("warcraft_logs_character_id_time_invalid");
+        }
+        await pool.query(
+          `INSERT INTO warcraft_logs_character_ids
+             (region, realm_slug, normalized_name, character_id, resolved_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (region, realm_slug, normalized_name)
+           DO UPDATE SET character_id = EXCLUDED.character_id,
+                         resolved_at = EXCLUDED.resolved_at`,
+          [key.region, key.realm, key.name, characterId, at]
+        );
+      },
+
+      async warcraftLogsCharacterId(key) {
+        const result = await pool.query<{ character_id: number }>(
+          `SELECT character_id
+             FROM warcraft_logs_character_ids
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows[0]?.character_id ?? null;
+      },
+
       async markTerminalTiers(key, tiers, at) {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("character_terminal_tier_time_invalid");

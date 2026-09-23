@@ -202,6 +202,20 @@ export const createDossierRequestSchema = z
   .object({ characterUrl: z.url() })
   .strict();
 
+/**
+ * A pasted Warcraft Logs character-ID URL, resolved to the character's current
+ * name, realm and region. `name` keeps Warcraft Logs' display casing so the
+ * form can show it as the reviewer would recognise it.
+ */
+export const warcraftLogsCharacterResolutionSchema = z
+  .object({
+    characterId: z.number().int().positive(),
+    region: regionSchema,
+    realm: z.string().regex(/^[a-z0-9-]+$/),
+    name: z.string().min(1)
+  })
+  .strict();
+
 /** Hides a manually added character from the dossier evidence, or restores it. */
 export const connectedCharacterExclusionRequestSchema = z
   .object({ characterUrl: z.url(), excluded: z.boolean() })
@@ -251,6 +265,9 @@ export type ApplicantDossierCharacterParses = z.infer<
   typeof applicantDossierCharacterParsesSchema
 >;
 export type CreateDossierRequest = z.infer<typeof createDossierRequestSchema>;
+export type WarcraftLogsCharacterResolution = z.infer<
+  typeof warcraftLogsCharacterResolutionSchema
+>;
 export type ConnectedCharacterExclusionRequest = z.infer<
   typeof connectedCharacterExclusionRequestSchema
 >;

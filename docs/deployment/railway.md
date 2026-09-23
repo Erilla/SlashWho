@@ -65,13 +65,21 @@ RAIDER_IO_ACCESS_KEY=<Raider.IO API key>
 # while its evidence job is queued. Must be identical in both services.
 # 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
 EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the worker's value>
+# Optional secrets, the same pair the worker holds: resolve a pasted Warcraft
+# Logs character-ID URL (/character/id/<n>) to its current name and realm,
+# one request per paste. Set both or neither. Without them every other route
+# still works, and an ID URL reports Warcraft Logs as unavailable.
+WARCRAFT_LOGS_CLIENT_ID=<Warcraft Logs OAuth client ID secret>
+WARCRAFT_LOGS_CLIENT_SECRET=<Warcraft Logs OAuth client secret>
 ```
 
-The web service never receives the server's own Warcraft Logs credentials —
-those stay worker-only and never reach the web service. It does receive a
-visitor's own WCL client ID and secret, as request headers on a dossier read,
-but encrypts that pair immediately and never persists it in plaintext; only
-the ciphertext is written to a queued evidence run for the worker to decrypt.
+The web service uses the server's own Warcraft Logs credentials for one thing
+only: resolving a pasted character-ID URL, throttled as a public read. Evidence
+collection stays in the worker. The web service also receives a visitor's own
+WCL client ID and secret, as request headers. It prefers them for an ID
+resolution, and on a dossier read it encrypts the pair immediately and never
+persists it in plaintext; only the ciphertext is written to a queued evidence
+run for the worker to decrypt.
 
 `OPERATOR_ORIGIN` is the exact public HTTPS origin for browser operator
 authentication, with no trailing slash, path, query, or user information.

@@ -2281,6 +2281,74 @@ describe("PostgreSQL repositories", () => {
     await expect(repositories.evidence.terminalTiers(key)).resolves.toEqual([]);
   });
 
+  it("remembers each character's resolved Warcraft Logs ID and its latest resolution", async () => {
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "ryun"
+    } as const;
+    const former = {
+      region: "eu",
+      realm: "neptulon",
+      name: "erilla"
+    } as const;
+
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(key)
+    ).resolves.toBeNull();
+
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      key,
+      40989140,
+      new Date("2026-09-22T09:00:00.000Z")
+    );
+    // A former name resolving to the same ID is the rename #424 links, so the
+    // ID must not be unique across keys.
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      former,
+      40989140,
+      new Date("2026-09-22T09:00:00.000Z")
+    );
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(key)
+    ).resolves.toBe(40989140);
+
+    // A name can be released and taken by somebody else; the latest answer
+    // replaces the old one rather than failing on the key.
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      key,
+      51234567,
+      new Date("2026-09-23T09:00:00.000Z")
+    );
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(key)
+    ).resolves.toBe(51234567);
+    await expect(
+      repositories.evidence.warcraftLogsCharacterId(former)
+    ).resolves.toBe(40989140);
+    const stored = await pool.query<{ resolved_at: Date }>(
+      `SELECT resolved_at FROM warcraft_logs_character_ids
+        WHERE region = 'eu' AND realm_slug = 'silvermoon'
+          AND normalized_name = 'ryun'`
+    );
+    expect(stored.rows[0]?.resolved_at.toISOString()).toBe(
+      "2026-09-23T09:00:00.000Z"
+    );
+  });
+
+  it("refuses to store a Warcraft Logs ID that is not a positive integer", async () => {
+    const key = { region: "eu", realm: "silvermoon", name: "badid" } as const;
+    for (const id of [0, -1, 1.5]) {
+      await expect(
+        repositories.evidence.recordWarcraftLogsCharacterId(
+          key,
+          id,
+          new Date("2026-09-22T09:00:00.000Z")
+        )
+      ).rejects.toThrow();
+    }
+  });
+
   it("forgets marks on a rebuild without discarding the evidence they cover", async () => {
     // A rebuild must not leave a dossier empty while it waits for the
     // replacement evidence to arrive.

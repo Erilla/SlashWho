@@ -3977,7 +3977,12 @@ describe("applicant evidence job handler", () => {
                   code: "not_found" as const
                 };
               }
-              return { kind: "identity" as const, key, displayName: "Rinn" };
+              return {
+                kind: "identity" as const,
+                key,
+                displayName: "Rinn",
+                characterId: 40989140
+              };
             },
             async getFirstKillReports(_key, options) {
               collectionAttempts += 1;
@@ -4173,6 +4178,120 @@ describe("applicant evidence job handler", () => {
       });
     });
 
+    it("remembers the resolved Warcraft Logs ID and reads the character by it", async () => {
+      // Break caught: the stable ID was resolved every run and thrown away, so
+      // nothing downstream could tell a renamed character from a new one.
+      const evidence = store();
+      const recorded: Array<{ key: unknown; characterId: number; at: Date }> =
+        [];
+      evidence.recordWarcraftLogsCharacterId = async (
+        recordedKey,
+        characterId,
+        at
+      ) => {
+        recorded.push({ key: recordedKey, characterId, at });
+      };
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        parsedFightUrls: [],
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      }));
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports,
+          resolveCharacter: vi.fn(async () => ({
+            kind: "identity" as const,
+            key,
+            displayName: "Rinn",
+            characterId: 40989140
+          }))
+        }
+      );
+
+      await handler.execute(run.id);
+
+      expect(recorded).toEqual([
+        { key, characterId: 40989140, at: expect.any(Date) }
+      ]);
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({ characterId: 40989140 })
+      );
+    });
+
+    it("reads by name when Warcraft Logs resolves the key to another character", async () => {
+      // Break caught: the ID of whatever the name now resolves to would be
+      // read while report actors are still matched against the run's key.
+      const evidence = store();
+      const recordWarcraftLogsCharacterId = vi.fn(async () => undefined);
+      evidence.recordWarcraftLogsCharacterId = recordWarcraftLogsCharacterId;
+      const getFirstKillReports = vi.fn(async () => ({
+        kind: "evidence" as const,
+        parsedFightUrls: [],
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      }));
+      const handler = handlerFor(
+        evidence,
+        {},
+        {
+          getFirstKillReports,
+          resolveCharacter: vi.fn(async () => ({
+            kind: "identity" as const,
+            key: { ...key, realm: "argent-dawn" },
+            displayName: "Rinn",
+            characterId: 40989140
+          }))
+        }
+      );
+
+      await handler.execute(run.id);
+
+      expect(recordWarcraftLogsCharacterId).not.toHaveBeenCalled();
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.not.objectContaining({ characterId: expect.anything() })
+      );
+    });
+
+    it("still collects evidence when the ID cannot be remembered", async () => {
+      // Break caught: a failed bookkeeping write would cost the whole run.
+      const evidence = store();
+      evidence.recordWarcraftLogsCharacterId = async () => {
+        throw new Error("database_unavailable");
+      };
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {
+          resolveCharacter: vi.fn(async () => ({
+            kind: "identity" as const,
+            key,
+            displayName: "Rinn",
+            characterId: 40989140
+          }))
+        }
+      );
+
+      await handler.execute(run.id);
+
+      expect(evidence.published).toHaveLength(1);
+    });
+
     it("resolves the Warcraft Logs identity as its own persisted phase", async () => {
       const evidence = store();
       const transitions: Array<{ id: string; state: string }> = [];
@@ -4200,7 +4319,8 @@ describe("applicant evidence job handler", () => {
       const resolveCharacter = vi.fn(async () => ({
         kind: "identity" as const,
         key,
-        displayName: "Rinn-Silvermoon"
+        displayName: "Rinn-Silvermoon",
+        characterId: 40989140
       }));
       const handler = handlerFor(
         evidence,

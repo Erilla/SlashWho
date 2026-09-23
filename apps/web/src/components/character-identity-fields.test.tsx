@@ -15,6 +15,7 @@ import {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 /**
@@ -154,4 +155,134 @@ it("describes every control by the error it shares when one is given", () => {
     );
     expect(control).toHaveAttribute("aria-invalid", "true");
   }
+});
+
+const idUrl = "https://www.warcraftlogs.com/character/id/40989140";
+
+function deferredFetch() {
+  let respond!: (response: Response) => void;
+  const fetch = vi.fn<typeof globalThis.fetch>(
+    () =>
+      new Promise<Response>((resolve) => {
+        respond = resolve;
+      })
+  );
+  vi.stubGlobal("fetch", fetch);
+  return { fetch, respond: (response: Response) => respond(response) };
+}
+
+it("shows a spinner and no realm or region while a pasted ID URL resolves", async () => {
+  // Break caught: realm and region would appear empty beside an ID URL,
+  // inviting the reviewer to type a guess over what Warcraft Logs will say.
+  deferredFetch();
+  const user = userEvent.setup();
+  render(<Harness />);
+
+  await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+  await user.paste(idUrl);
+
+  expect(
+    screen.getByRole("status", { name: "Looking up Warcraft Logs character" })
+  ).toBeVisible();
+  expect(screen.queryByRole("textbox", { name: "Realm" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Region" })).toBeNull();
+});
+
+it("fills the name, realm and region Warcraft Logs resolves the ID to", async () => {
+  const { fetch, respond } = deferredFetch();
+  const user = userEvent.setup();
+  render(<Harness />);
+
+  await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+  await user.paste(idUrl);
+  respond(
+    Response.json({
+      characterId: 40989140,
+      region: "us",
+      realm: "illidan",
+      name: "Ryun"
+    })
+  );
+
+  expect(await screen.findByRole("textbox", { name: "Realm" })).toHaveValue(
+    "illidan"
+  );
+  expect(screen.getByRole("textbox", { name: "Character/URL" })).toHaveValue(
+    "Ryun"
+  );
+  expect(screen.getByRole("combobox", { name: "Region" })).toHaveValue("us");
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/warcraft-logs/characters/40989140",
+    expect.objectContaining({ signal: expect.any(AbortSignal) })
+  );
+});
+
+it("sends the visitor's own Warcraft Logs key with the lookup", async () => {
+  window.localStorage.setItem(
+    "slashwho:api-credentials",
+    JSON.stringify({
+      wclClientId: "visitor-id",
+      wclClientSecret: "visitor-secret"
+    })
+  );
+  const { fetch } = deferredFetch();
+  const user = userEvent.setup();
+  render(<Harness />);
+
+  await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+  await user.paste(idUrl);
+
+  const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+  expect(headers.get("x-wcl-client-id")).toBe("visitor-id");
+  window.localStorage.clear();
+});
+
+it.each([
+  [404, "No Warcraft Logs character has that ID."],
+  [
+    503,
+    "Warcraft Logs could not be reached. Enter the character's name and realm instead."
+  ]
+])("explains a lookup answered %i", async (status, message) => {
+  const { respond } = deferredFetch();
+  const user = userEvent.setup();
+  render(<Harness />);
+
+  await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
+  await user.paste(idUrl);
+  respond(new Response(null, { status }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(
+    screen.getByRole("textbox", { name: "Character/URL" })
+  ).toHaveAttribute("aria-invalid", "true");
+});
+
+it("abandons a lookup the reviewer typed over", async () => {
+  // Break caught: a slow answer for an abandoned paste would overwrite the
+  // character the reviewer went on to type.
+  const { fetch, respond } = deferredFetch();
+  const user = userEvent.setup();
+  render(<Harness />);
+
+  const characterField = screen.getByRole("textbox", { name: "Character/URL" });
+  await user.click(characterField);
+  await user.paste(idUrl);
+  await user.clear(characterField);
+  await user.type(characterField, "Ryii");
+  respond(
+    Response.json({
+      characterId: 40989140,
+      region: "us",
+      realm: "illidan",
+      name: "Ryun"
+    })
+  );
+
+  expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(characterField).toHaveValue("Ryii");
+  expect(screen.getByRole("textbox", { name: "Realm" })).toHaveValue("");
 });

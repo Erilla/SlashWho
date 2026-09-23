@@ -18,6 +18,13 @@ const queuedCharacter = {
   name: "Queued"
 } as const;
 
+// Reached only through a pasted Warcraft Logs character-ID URL, so the
+// evidence run its research starts shares no state with Ryii's specs.
+const ryun = {
+  ...ryii,
+  name: "Ryun"
+} as const;
+
 const frostalt = {
   name: "Frostalt",
   level: 80,
@@ -237,6 +244,11 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
 
     if (url.pathname === "/api/characters/eu/tarren-mill/nightalt") {
       declaredCharacter(nightalt, null);
+      return;
+    }
+
+    if (url.pathname === "/api/characters/eu/silvermoon/ryun") {
+      declaredCharacter(ryun, null);
       return;
     }
 

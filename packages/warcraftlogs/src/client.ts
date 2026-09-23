@@ -34,6 +34,7 @@ const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
     characterData {
       character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        id
         name
         server {
           slug
@@ -44,10 +45,67 @@ const resolveCharacterQuery = `
   }
 `;
 
-const recentReportsQuery = `
-  query RecentReports($name: String!, $realm: String!, $region: String!, $page: Int!) {
+const resolveCharacterByIdQuery = `
+  query ResolveCharacterById($id: Int!) {
     characterData {
-      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+      character(id: $id) {
+        id
+        name
+        server {
+          slug
+          region { slug }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * How a query names its character: by the stable ID when one is known, which
+ * survives renames and transfers, and by name, realm and region otherwise.
+ * The two differ only in the argument list and the variables they bind.
+ */
+type CharacterLookup =
+  | Readonly<{ kind: "name"; key: CharacterKey }>
+  | Readonly<{ kind: "id"; characterId: number }>;
+
+function characterLookup(
+  key: CharacterKey,
+  characterId: number | undefined
+): CharacterLookup {
+  return characterId === undefined
+    ? { kind: "name", key }
+    : { kind: "id", characterId };
+}
+
+function characterParameters(lookup: CharacterLookup): string {
+  return lookup.kind === "id"
+    ? "$characterId: Int!"
+    : "$name: String!, $realm: String!, $region: String!";
+}
+
+function characterArguments(lookup: CharacterLookup): string {
+  return lookup.kind === "id"
+    ? "id: $characterId"
+    : "name: $name, serverSlug: $realm, serverRegion: $region";
+}
+
+function characterVariables(
+  lookup: CharacterLookup
+): Record<string, string | number> {
+  return lookup.kind === "id"
+    ? { characterId: lookup.characterId }
+    : {
+        name: lookup.key.name,
+        realm: lookup.key.realm,
+        region: lookup.key.region
+      };
+}
+
+const recentReportsQuery = (lookup: CharacterLookup) => `
+  query RecentReports(${characterParameters(lookup)}, $page: Int!) {
+    characterData {
+      character(${characterArguments(lookup)}) {
         server { normalizedName }
         recentReports(limit: ${REPORTS_PER_PAGE}, page: $page) {
           data {
@@ -147,10 +205,10 @@ const reportFightParsesQuery = `
 // bounded way to get it: report rankings cost one request per report and a
 // character's history is unbounded, so a budget-capped scan could only ever
 // report the best of whatever reports it happened to reach.
-const characterZoneParsesQuery = `
-  query CharacterZoneParses($name: String!, $realm: String!, $region: String!, $zoneID: Int!) {
+const characterZoneParsesQuery = (lookup: CharacterLookup) => `
+  query CharacterZoneParses(${characterParameters(lookup)}, $zoneID: Int!) {
     characterData {
-      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+      character(${characterArguments(lookup)}) {
         damage: zoneRankings(
           zoneID: $zoneID
           metric: dps
@@ -388,10 +446,11 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   const entry = record(character);
   const server = entry && record(entry.server);
   const region = server && record(server.region);
+  const characterId = entry && positiveInteger(entry.id);
   const displayName = entry && nonEmptyString(entry.name);
   const realm = server && nonEmptyString(server.slug);
   const regionSlug = region && nonEmptyString(region.slug);
-  if (!displayName || !realm || !regionSlug) {
+  if (!characterId || !displayName || !realm || !regionSlug) {
     return { kind: "limitation", code: "schema_drift" };
   }
 
@@ -405,7 +464,7 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   } catch {
     return { kind: "limitation", code: "schema_drift" };
   }
-  return { kind: "identity", key, displayName };
+  return { kind: "identity", key, displayName, characterId };
 }
 
 /**
@@ -1680,6 +1739,27 @@ export function createWarcraftLogsClient(
     return result.kind === "success" ? canonicalIdentity(result.value) : result;
   }
 
+  async function resolveCharacterById(
+    characterId: number,
+    signal?: AbortSignal
+  ): Promise<WarcraftLogsIdentityResult> {
+    if (positiveInteger(characterId) === null) {
+      throw new Error("invalid_character_id");
+    }
+    const result = await graphql(
+      resolveCharacterByIdQuery,
+      { id: characterId },
+      signal
+    );
+    if (result.kind !== "success") return result;
+    const identity = canonicalIdentity(result.value);
+    // The payload must answer for the ID asked about, or a pasted ID would
+    // be attached to some other character's name and realm.
+    return identity.kind === "identity" && identity.characterId !== characterId
+      ? { kind: "limitation", code: "schema_drift" }
+      : identity;
+  }
+
   async function getFirstKillReports(
     requestedKey: CharacterKey,
     options: Readonly<{
@@ -1718,6 +1798,12 @@ export function createWarcraftLogsClient(
        */
       killScanFloor?: string;
       /**
+       * The character's stable Warcraft Logs ID. When given, history and tier
+       * bests are read by it rather than by name; the key still identifies
+       * the character among report actors and ranking rows.
+       */
+      characterId?: number;
+      /**
        * Kills to search guild attendance for, when no decoded report covers
        * them. Absent or empty, attendance is not read.
        */
@@ -1744,6 +1830,13 @@ export function createWarcraftLogsClient(
     }>
   ): Promise<WarcraftLogsReportResult> {
     const key = validCharacterKey(requestedKey);
+    if (
+      options.characterId !== undefined &&
+      positiveInteger(options.characterId) === null
+    ) {
+      throw new Error("invalid_character_id");
+    }
+    const lookup = characterLookup(key, options.characterId);
     if (!Number.isSafeInteger(options.requestCap) || options.requestCap < 0) {
       return { kind: "limitation", code: "request_cap" };
     }
@@ -1816,13 +1909,8 @@ export function createWarcraftLogsClient(
       const probe = counted(
         "history_scan",
         await graphql(
-          recentReportsQuery,
-          {
-            name: key.name,
-            realm: key.realm,
-            region: key.region,
-            page: historyScanStartPage - 1
-          },
+          recentReportsQuery(lookup),
+          { ...characterVariables(lookup), page: historyScanStartPage - 1 },
           options.signal
         )
       );
@@ -1865,8 +1953,8 @@ export function createWarcraftLogsClient(
       const result = counted(
         "history_scan",
         await graphql(
-          recentReportsQuery,
-          { name: key.name, realm: key.realm, region: key.region, page },
+          recentReportsQuery(lookup),
+          { ...characterVariables(lookup), page },
           options.signal
         ).catch((error: unknown) => {
           if (options.signal?.reason?.name !== "TimeoutError") throw error;
@@ -2279,13 +2367,8 @@ export function createWarcraftLogsClient(
       const rankings = counted(
         "zone_rankings",
         await graphql(
-          characterZoneParsesQuery,
-          {
-            name: key.name,
-            realm: key.realm,
-            region: key.region,
-            zoneID: zone.zoneId
-          },
+          characterZoneParsesQuery(lookup),
+          { ...characterVariables(lookup), zoneID: zone.zoneId },
           options.signal
         ).catch((error: unknown) => {
           if (options.signal?.reason?.name !== "TimeoutError") throw error;
@@ -2730,5 +2813,10 @@ export function createWarcraftLogsClient(
           });
   }
 
-  return { getRateLimit, resolveCharacter, getFirstKillReports };
+  return {
+    getRateLimit,
+    resolveCharacter,
+    resolveCharacterById,
+    getFirstKillReports
+  };
 }

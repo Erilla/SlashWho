@@ -13,7 +13,10 @@ import type {
 } from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
-import { isAccountWideCuttingEdgeAchievement } from "@slashwho/domain";
+import {
+  canonicalCharacterId,
+  isAccountWideCuttingEdgeAchievement
+} from "@slashwho/domain";
 import type {
   MythicBossRanking,
   MythicBossRankingsOptions,
@@ -146,6 +149,15 @@ export type ApplicantEvidenceStore = {
   ): Promise<void>;
   /** The stage this run already holds, if a previous attempt left one. */
   stagedCollection(runId: string): Promise<StagedEvidenceCollection | null>;
+  /**
+   * Remembers the stable Warcraft Logs character ID the run's key resolved to.
+   * Optional so a store without it still collects, reading by name.
+   */
+  recordWarcraftLogsCharacterId?(
+    key: CharacterKey,
+    characterId: number,
+    at: Date
+  ): Promise<void>;
   /**
    * Fight URLs whose parses are already stored for this character, so a
    * budget-limited run spends its requests on what is still missing rather
@@ -1113,6 +1125,10 @@ export function createApplicantEvidenceJobHandler(
           // A corrupt progress projection must not discard collected evidence.
           phaseLedger = undefined;
         }
+        // Set only when Warcraft Logs resolved the run's own key: reads by
+        // ID still match report actors against that key, so an ID for
+        // whatever the name resolves to instead would read somebody else.
+        let characterId: number | undefined;
         if (gateway.resolveCharacter) {
           await phaseLedger?.transition(
             "warcraft_logs_identity_resolution",
@@ -1123,6 +1139,18 @@ export function createApplicantEvidenceJobHandler(
               run.key,
               activeContext.signal
             );
+            if (
+              identity.kind === "identity" &&
+              canonicalCharacterId(identity.key) ===
+                canonicalCharacterId(run.key)
+            ) {
+              characterId = identity.characterId;
+              // Bookkeeping, not evidence: a failed write must not cost the
+              // collection it accompanies.
+              await evidence
+                .recordWarcraftLogsCharacterId?.(run.key, characterId, now())
+                .catch(() => undefined);
+            }
             await phaseLedger?.transition(
               "warcraft_logs_identity_resolution",
               identity.kind === "identity" ? "completed" : "limited",
@@ -1261,6 +1289,7 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            ...(characterId !== undefined ? { characterId } : {}),
             ...(toSearch.length > 0 ? { verifiedKills: toSearch } : {}),
             // From stored evidence on every scanning run, whatever Raider.IO
             // answered: a complete publish keeps only what the run finds again
