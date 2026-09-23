@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { loadWebConfig } from "../../../server/config";
 import { getContainer } from "../../../server/container";
+import { authorizes } from "../../../server/operator-auth";
 
 import { CollectionMonitorClient } from "./collection-monitor-client";
 
@@ -17,8 +18,8 @@ export const metadata: Metadata = {
 export default async function CollectionMonitorPage() {
   // The page proxy applies renewal/expiry cookies to the navigation response.
   // Recheck here before reading data; never trust a client-supplied principal.
-  const { collectionMonitor, operatorAuth } = await getContainer();
-  const authentication = await operatorAuth.authenticateOperator(
+  const { collectionMonitor, accountAuth } = await getContainer();
+  const authentication = await accountAuth.authenticate(
     new Request(
       new URL(
         "/operations/collection-monitor",
@@ -27,7 +28,7 @@ export default async function CollectionMonitorPage() {
       { headers: await headers() }
     )
   );
-  if (!authentication.principal) {
+  if (!authorizes(authentication.principal, "admin")) {
     redirect("/operations/login");
   }
   return (

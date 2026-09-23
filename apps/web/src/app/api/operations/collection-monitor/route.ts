@@ -2,6 +2,7 @@ import { collectionMonitorResponseSchema } from "@slashwho/contracts";
 
 import { getContainer } from "../../../../server/container";
 import { apiError, withHttpRequest } from "../../../../server/http";
+import { authorizes } from "../../../../server/operator-auth";
 
 function unauthorized(): Response {
   const response = apiError("unauthorized");
@@ -11,8 +12,25 @@ function unauthorized(): Response {
 
 export async function GET(request: Request): Promise<Response> {
   return withHttpRequest("collection_monitor", async () => {
-    const { collectionMonitor, operatorAuth } = await getContainer();
-    const authentication = await operatorAuth.authenticateOperator(request);
+    const { collectionMonitor, accountAuth } = await getContainer();
+    const authentication = await accountAuth.authenticate(request);
+    if (
+      authentication.principal?.kind === "account" &&
+      !authorizes(authentication.principal, "admin")
+    ) {
+      return Response.json(
+        { error: "forbidden" },
+        {
+          status: 403,
+          headers: {
+            "cache-control": "no-store",
+            ...(authentication.cookie
+              ? { "set-cookie": authentication.cookie.header }
+              : {})
+          }
+        }
+      );
+    }
     if (!authentication.principal) {
       const response = unauthorized();
       if (authentication.cookie)

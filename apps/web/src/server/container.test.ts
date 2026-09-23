@@ -4,8 +4,8 @@ import { expect, it, vi } from "vitest";
 import { createWebContainer } from "./container";
 import { createContainerProvider } from "./container";
 import {
-  operatorAuthFixture,
-  operatorLogin,
+  accountAuthFixture,
+  accountEmail,
   operatorCredential,
   operatorMutation
 } from "./operator-auth-test-fixture";
@@ -52,8 +52,10 @@ it("migrates and initializes the durable queue before serving searches", async (
       return true;
     }
   } satisfies DiscoveryQueue;
-  const fixture = await operatorAuthFixture();
-  const repositories = { operatorAuth: fixture.repository } as Repositories;
+  const fixture = await accountAuthFixture();
+  const repositories = {
+    accountAuth: fixture.repository
+  } as unknown as Repositories;
 
   const container = await createWebContainer(
     {
@@ -114,16 +116,16 @@ it("migrates and initializes the durable queue before serving searches", async (
   );
 
   expect(events).toEqual(["migrate", "repositories", "queue", "service"]);
-  const signedIn = await container.operatorAuth.signIn(
-    operatorMutation({ login: operatorLogin, credential: operatorCredential })
+  const signedIn = await container.accountAuth.signIn(
+    operatorMutation({ email: accountEmail, password: operatorCredential })
   );
   expect(signedIn.principal).toMatchObject({
-    kind: "operator",
-    login: operatorLogin
+    kind: "account",
+    email: accountEmail
   });
   expect(fixture.repository.issueSession).toHaveBeenCalledOnce();
   await expect(
-    container.operatorAuth.authenticateOperator(
+    container.accountAuth.authenticate(
       new Request("https://slashwho.example", {
         headers: { authorization: `Bearer ${"b".repeat(32)}` }
       })
@@ -281,8 +283,8 @@ it("clears a rejected startup promise so the next request can recover", async ()
       searches: {} as never,
       dossiers: {} as never,
       collectionMonitor: {} as never,
-      operatorAuth: {} as never,
       accountAuth: {} as never,
+      accountAdmin: {} as never,
       accountTokens: null,
       accountRegistration: {} as never,
       registrationHashSecret: "test",

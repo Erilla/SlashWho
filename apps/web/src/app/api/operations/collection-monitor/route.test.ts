@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   automationKey,
-  operatorAuthFixture
+  accountAuthFixture
 } from "../../../../server/operator-auth-test-fixture";
-let fixture: Awaited<ReturnType<typeof operatorAuthFixture>>;
+let fixture: Awaited<ReturnType<typeof accountAuthFixture>>;
 
 const operatorKey = automationKey;
 const list = vi.fn();
@@ -13,7 +13,7 @@ const list = vi.fn();
 vi.mock("../../../../server/container", () => ({
   getContainer: async () => ({
     collectionMonitor: { list },
-    operatorAuth: fixture.auth
+    accountAuth: fixture.auth
   })
 }));
 
@@ -49,7 +49,7 @@ function request(headers: Record<string, string> = {}): Request {
 }
 
 beforeEach(async () => {
-  fixture = await operatorAuthFixture();
+  fixture = await accountAuthFixture();
   list.mockReset();
   list.mockResolvedValue(monitor);
 });
@@ -91,7 +91,8 @@ describe("GET /api/operations/collection-monitor", () => {
     expect(list).toHaveBeenCalledOnce();
   });
 
-  it("accepts the short-lived browser session cookie", async () => {
+  it("accepts the short-lived admin browser session cookie", async () => {
+    fixture.setAccount({ role: "admin" });
     const cookie = await fixture.cookie();
     const response = await GET(request({ cookie }));
     expect(response.headers.get("set-cookie")).toContain(cookie);
@@ -100,6 +101,12 @@ describe("GET /api/operations/collection-monitor", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual(monitor);
     expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("denies an ordinary account before monitor reads", async () => {
+    const response = await GET(request({ cookie: await fixture.cookie() }));
+    expect(response.status).toBe(403);
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("fails closed if an internal field reaches the response boundary", async () => {

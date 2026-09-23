@@ -3,13 +3,13 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   automationKey,
-  operatorAuthFixture,
+  accountAuthFixture,
   operatorOrigin
 } from "./server/operator-auth-test-fixture";
 
-let fixture: Awaited<ReturnType<typeof operatorAuthFixture>>;
+let fixture: Awaited<ReturnType<typeof accountAuthFixture>>;
 vi.mock("./server/container", () => ({
-  getContainer: async () => ({ operatorAuth: fixture.auth })
+  getContainer: async () => ({ accountAuth: fixture.auth })
 }));
 vi.mock("./server/config", () => ({
   loadWebConfig: () => ({ operatorAuth: { origin: operatorOrigin } })
@@ -27,13 +27,16 @@ function navigation(headers: Record<string, string> = {}, method = "GET") {
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-09-21T12:00:00.000Z"));
-  fixture = await operatorAuthFixture();
+  fixture = await accountAuthFixture();
+  fixture.setAccount({ role: "admin" });
+  fixture.setTime(new Date("2026-09-21T12:00:00.000Z"));
 });
 afterEach(() => vi.useRealTimers());
 
 it("renews the browser cookie during page-only navigation beyond its initial idle expiry", async () => {
   const cookie = await fixture.cookie();
   vi.setSystemTime(new Date("2026-09-21T12:20:00.000Z"));
+  fixture.setTime(new Date("2026-09-21T12:20:00.000Z"));
   const first = await proxy(navigation({ cookie }));
   expect(first.headers.get("x-middleware-next")).toBe("1");
   expect(first.headers.get("cache-control")).toBe("no-store");
@@ -46,6 +49,7 @@ it("renews the browser cookie during page-only navigation beyond its initial idl
   );
 
   vi.setSystemTime(new Date("2026-09-21T12:40:00.000Z"));
+  fixture.setTime(new Date("2026-09-21T12:40:00.000Z"));
   const second = await proxy(navigation({ cookie }));
   expect(second.headers.get("x-middleware-next")).toBe("1");
   expect(second.headers.get("set-cookie")).toContain(
@@ -83,14 +87,14 @@ it("denies an invalid Bearer credential without falling back to or mutating a va
   expect(fixture.repository.useSession).not.toHaveBeenCalled();
 });
 
-it("preserves valid Bearer navigation without touching stale cookies", async () => {
+it("denies valid Bearer navigation without touching stale cookies", async () => {
   const response = await proxy(
     navigation({
       authorization: `Bearer ${automationKey}`,
       cookie: "__Host-slashwho-operator=legacy"
     })
   );
-  expect(response.headers.get("x-middleware-next")).toBe("1");
+  expect(response.status).toBe(307);
   expect(response.headers.get("set-cookie")).toBeNull();
   expect(fixture.repository.useSession).not.toHaveBeenCalled();
 });
@@ -106,6 +110,7 @@ it("does not apply cookies on a non-navigation method", async () => {
 it.each([
   ["/operations/collection-monitor", true],
   ["/operations/collection-monitor?_rsc=abc", true],
+  ["/admin/settings", true],
   ["/operations/login", false],
   ["/api/operations/session", false],
   ["/api/operations/session/logout", false],
