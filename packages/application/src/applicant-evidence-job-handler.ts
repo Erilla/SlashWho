@@ -1445,39 +1445,62 @@ export function createApplicantEvidenceJobHandler(
           observedPhase = activePhase;
         }
         const identities = [run.key, ...historicAliases];
-        const turn = tierSearchAsked
-          ? 0
-          : (storedEvidence.identityScanTurn ?? 0) % identities.length;
-        const chosen = new Set(
-          Array.from(
-            { length: Math.min(requestCap, identities.length) },
-            (_, index) => (turn + index) % identities.length
-          )
-        );
-        // A parse-only run without aliases keeps the established zero-scan
-        // path. Otherwise an unchosen identity receives no gateway call.
-        if (historicAliases.length === 0 || tierSearchAsked) chosen.add(0);
-        const capFor = (index: number, total: number): number => {
-          if (!chosen.has(index)) return 0;
-          const ordered = [...chosen];
-          const position = ordered.indexOf(index);
-          return (
-            Math.floor(total / ordered.length) +
-            (position < total % ordered.length ? 1 : 0)
-          );
-        };
-        const deferred = chosen.size < identities.length;
         const aliasProgress = new Map(
           (storedEvidence.historicAliasProgress ?? []).map((progress) => [
             canonicalCharacterId(progress.key),
             progress
           ])
         );
-        let response: WarcraftLogsReportResult = chosen.has(0)
+        const turn = tierSearchAsked
+          ? 0
+          : (storedEvidence.identityScanTurn ?? 0) % identities.length;
+        const historyCaps = new Map<number, number>();
+        if (historicAliases.length === 0 || tierSearchAsked) {
+          // Explicit tier searches belong to the current identity. With no
+          // aliases this is also the established parse-only zero-scan path.
+          historyCaps.set(0, requestCap);
+        } else {
+          let available = requestCap;
+          for (let offset = 0; offset < identities.length; offset += 1) {
+            const index = (turn + offset) % identities.length;
+            const progress =
+              index === 0
+                ? historyScanResumeOptions
+                : aliasProgress.get(canonicalCharacterId(identities[index]!));
+            // A resumed scan spends one request proving its saved boundary;
+            // admitting it with only one repeats the probe forever.
+            const minimum = progress?.historyScanResumeBoundaryReportCode
+              ? 2
+              : 1;
+            if (minimum > available) continue;
+            historyCaps.set(index, minimum);
+            available -= minimum;
+          }
+          const selected = [...historyCaps.keys()];
+          for (
+            let extra = 0;
+            extra < available && selected.length > 0;
+            extra += 1
+          ) {
+            const index = selected[extra % selected.length]!;
+            historyCaps.set(index, historyCaps.get(index)! + 1);
+          }
+        }
+        const parseCapFor = (index: number): number => {
+          if (!historyCaps.has(index)) return 0;
+          const selected = [...historyCaps.keys()];
+          const position = selected.indexOf(index);
+          return (
+            Math.floor(parseRequestCap / selected.length) +
+            (position < parseRequestCap % selected.length ? 1 : 0)
+          );
+        };
+        const deferred = historyCaps.size < identities.length;
+        let response: WarcraftLogsReportResult = historyCaps.has(0)
           ? await scope.time("warcraftLogs", () =>
               gateway.getFirstKillReports(run.key, {
-                requestCap: capFor(0, requestCap),
-                parseRequestCap: capFor(0, parseRequestCap),
+                requestCap: historyCaps.get(0)!,
+                parseRequestCap: parseCapFor(0),
                 ...(run.className ? { className: run.className } : {}),
                 hydratedFightUrls,
                 collectedTierZones,
@@ -1579,12 +1602,12 @@ export function createApplicantEvidenceJobHandler(
         // published under the connected character's key. No alias becomes a
         // separate dossier character or independent evidence run.
         for (const [aliasIndex, alias] of historicAliases.entries()) {
-          if (!chosen.has(aliasIndex + 1)) continue;
+          if (!historyCaps.has(aliasIndex + 1)) continue;
           const previous = aliasProgress.get(canonicalCharacterId(alias));
           const historic = await scope.time("warcraftLogsHistoricAlias", () =>
             gateway.getFirstKillReports(alias, {
-              requestCap: capFor(aliasIndex + 1, requestCap),
-              parseRequestCap: capFor(aliasIndex + 1, parseRequestCap),
+              requestCap: historyCaps.get(aliasIndex + 1)!,
+              parseRequestCap: parseCapFor(aliasIndex + 1),
               ...(previous?.historyScanResumePage &&
               previous.historyScanResumeBoundaryReportCode
                 ? {

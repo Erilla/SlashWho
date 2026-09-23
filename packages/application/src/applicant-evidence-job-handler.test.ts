@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type {
   EvidenceRunPhase,
   EvidenceRunCost,
@@ -6,7 +8,10 @@ import type {
   StoredWipeTier,
   TerminalTier
 } from "@slashwho/database";
-import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
+import {
+  createWarcraftLogsClient,
+  type WarcraftLogsGateway
+} from "@slashwho/warcraftlogs";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { supportedRaidCatalogue, type CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
@@ -555,6 +560,114 @@ describe("applicant evidence job handler", () => {
       expect.objectContaining({ bossName: "Old Boss" }),
       expect.objectContaining({ bossName: "Older Boss" })
     ]);
+  });
+
+  it("spends two requests so a resumed alias advances beyond the real gateway boundary probe", async () => {
+    const evidence = store();
+    const alias = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "sentinel"
+    } as const;
+    let turn = 0;
+    let storedProgress: NonNullable<
+      Awaited<
+        ReturnType<ApplicantEvidenceStore["storedEvidenceTiers"]>
+      >["historicAliasProgress"]
+    > = [];
+    evidence.historicAliases = async () => [alias];
+    evidence.storedEvidenceTiers = async () => ({
+      kills: [],
+      wipes: [],
+      identityScanTurn: turn,
+      historicAliasProgress: storedProgress
+    });
+    const pages = (
+      JSON.parse(
+        readFileSync(
+          new URL(
+            "../../../tests/fixtures/warcraftlogs/character-report-valid.json",
+            import.meta.url
+          ),
+          "utf8"
+        )
+      ) as { pages: unknown[] }
+    ).pages;
+    const historyPages: number[] = [];
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "test-token",
+              expires_in: 3600
+            })
+          );
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { page?: number };
+        };
+        if (body.query.includes("RecentReports")) {
+          const page = body.variables.page ?? 1;
+          historyPages.push(page);
+          return new Response(JSON.stringify(pages[page === 2 ? 1 : 0]));
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              characterData: {
+                character: {
+                  damage: { rankings: [] },
+                  healing: { rankings: [] },
+                  bossDamage: { rankings: [] }
+                }
+              }
+            }
+          })
+        );
+      }
+    );
+    const client = createWarcraftLogsClient({
+      fetch: fetch as typeof globalThis.fetch,
+      clientId: "test-id",
+      clientSecret: "test-secret"
+    });
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        getRateLimit: openGate.getRateLimit,
+        getFirstKillReports: client.getFirstKillReports
+      },
+      requestCap: 2,
+      parseRequestCap: 4,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id);
+    expect(evidence.failed).toEqual([]);
+    expect(evidence.published).toHaveLength(1);
+    storedProgress = evidence.published[0]?.result.historicAliasProgress ?? [];
+    expect(storedProgress[0]).toMatchObject({ historyScanResumePage: 2 });
+    evidence.staged.clear();
+    turn = 1;
+    await handler.execute(run.id);
+    expect(historyPages.slice(-2)).toEqual([1, 2]);
+    expect(evidence.published[1]?.result.kills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reportUrl: expect.stringContaining("earlyReport")
+        })
+      ])
+    );
   });
 
   it("collects a declared alias when the current name is not found", async () => {
