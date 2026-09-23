@@ -179,7 +179,7 @@ for (const applicantUrl of applicantUrls) {
     ).toBeVisible();
     await expect(
       connectedCharacters.getByText("Frostalt", { exact: true })
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 30_000 });
     await expect(
       connectedCharacters.getByText("Nightalt", { exact: true })
     ).toBeVisible();

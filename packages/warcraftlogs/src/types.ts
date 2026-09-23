@@ -227,6 +227,10 @@ export type WarcraftLogsRankedBackfillCursor = Readonly<{
   journalRaidId: string;
   characterId?: number;
   zoneIds: readonly number[];
+  /** Aligned with zoneIds; absent only on a cursor saved before partition scans. */
+  partitionIds?: readonly number[];
+  /** Public fights already accepted by a capped scan, for resumed deduplication. */
+  acceptedFightKeys?: readonly string[];
   zonesLoaded: boolean;
   zoneIndex: number;
   encounterIds: readonly number[];
