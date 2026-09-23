@@ -64,6 +64,13 @@ export function tierSearchZoneIds(
 }
 
 /**
+ * Below this a run's scan cap is not split. A history cap of one is a light
+ * read, which re-reads no stored report, and a complete publish would then
+ * drop what attendance recovered earlier: the search would cost evidence.
+ */
+const MINIMUM_SPLIT_SCAN_CAP = 4;
+
+/**
  * Splits a run's scan cap between its history scan and its tier search. The
  * search takes at most half, so the history scan still advances, and the two
  * together never exceed what `evidenceRunBudget` granted the run.
@@ -72,8 +79,11 @@ export function tierSearchRequestCaps(
   scanCap: number,
   configured: number
 ): Readonly<{ history: number; tier: number }> {
+  if (scanCap < MINIMUM_SPLIT_SCAN_CAP) {
+    return { history: Math.max(1, scanCap), tier: 0 };
+  }
   const tier = Math.max(0, Math.min(configured, Math.floor(scanCap / 2)));
-  return { history: Math.max(1, scanCap - tier), tier };
+  return { history: scanCap - tier, tier };
 }
 
 /** Every guild known for the character, each once, in the order first seen. */

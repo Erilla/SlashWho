@@ -499,6 +499,12 @@ export type StoredWipeTier = Readonly<{
    */
   raidName: string;
   attemptedAt: string;
+  /**
+   * The report the wipe came from, so a wipe found through guild attendance,
+   * absent from the character's own history, can be re-read rather than
+   * dropped by the next complete publish.
+   */
+  reportUrl?: string;
 }>;
 
 /**

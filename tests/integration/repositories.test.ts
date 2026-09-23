@@ -2164,7 +2164,9 @@ describe("PostgreSQL repositories", () => {
           {
             raidId: "43",
             raidName: "Nerub-ar Palace",
-            attemptedAt: "2026-03-01T11:00:00.000Z"
+            attemptedAt: "2026-03-01T11:00:00.000Z",
+            // So a wipe found through attendance can be re-read (#435).
+            reportUrl: "https://www.warcraftlogs.com/reports/wipe"
           }
         ]
       })

@@ -122,10 +122,13 @@ export function searchableKills(
 }
 
 /**
- * The reports stored kills outside terminal raids came from. A complete
- * publish keeps only what the run finds again there, so these are re-read
- * after a fresh scan that did not reach them -- which is how a kill recovered
- * from guild attendance, absent from the character's own history, survives.
+ * The reports stored kills -- and wipes -- outside terminal raids came from. A
+ * complete publish keeps only what the run finds again there, so these are
+ * re-read after a fresh scan that did not reach them -- which is how evidence
+ * recovered from guild attendance, absent from the character's own history,
+ * survives. A wipe-only night a tier search found (#435) has no kill to carry
+ * its report, so wipes are named here too. A report the scan read costs
+ * nothing: the gateway skips it.
  */
 export function storedKillReportCodes(
   storedKills: readonly Readonly<{ raidId: string; reportUrl?: string }>[],

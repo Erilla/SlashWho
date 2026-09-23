@@ -6197,6 +6197,9 @@ describe("searching one tier's guild attendance", () => {
       }
       if (query === "GuildAttendance") {
         const guild = body.variables.name!;
+        if (guild === "Ghost") {
+          return jsonResponse({ data: { guildData: { guild: null } } });
+        }
         if (guild === options.refuseGuild) {
           return new Response("upstream-body-marker", { status: 503 });
         }
@@ -6383,6 +6386,26 @@ describe("searching one tier's guild attendance", () => {
       tierSearch: { outcome: "incomplete", recoveredKills: 21 }
     });
     expect(result).not.toHaveProperty("limitation");
+  });
+
+  it("counts a guild Warcraft Logs has no record of as walked, not unreadable", async () => {
+    const { client } = tierClient({ guildReports: { Guild: 500 } });
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild, { ...guild, name: "Ghost" }],
+        requestCap: 60
+      }
+    });
+
+    // "Ghost" answers with `guild: null`, which is Warcraft Logs saying it
+    // has no such guild: nothing to walk, so the search still completes.
+    expect(result).toMatchObject({
+      tierSearch: { outcome: "complete", guildsSearched: 2 }
+    });
   });
 
   it("hydrates nothing from a guild whose attendance is all newer than the tier", async () => {

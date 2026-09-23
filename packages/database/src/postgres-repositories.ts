@@ -4211,7 +4211,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           wipes: (completed?.wipes ?? []).map((wipe) => ({
             raidId: wipe.raidId,
             raidName: wipe.raidName,
-            attemptedAt: wipe.attemptedAt
+            attemptedAt: wipe.attemptedAt,
+            reportUrl: wipe.reportUrl
           })),
           guilds: storedEvidenceGuilds(completed?.kills ?? [], key.region),
           ...(completed?.kills ? { parseOnlyKills: completed.kills } : {}),

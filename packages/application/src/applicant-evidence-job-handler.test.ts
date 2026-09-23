@@ -4802,6 +4802,68 @@ describe("searching one tier from the dossier", () => {
     );
   });
 
+  it("re-reads a stored wipe's report, so a wipe-only night it found survives", async () => {
+    // Break caught (review): only kill reports were re-read after a fresh
+    // scan, so a wipe-only night a search recovered from attendance was
+    // dropped by the next ordinary complete publish.
+    const evidence = store();
+    evidence.storedWipes.push({
+      raidId: "23",
+      raidName: "The Eternal Palace",
+      attemptedAt: "2019-08-01T19:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/wipeOnlyNight"
+    });
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({ storedKillReportCodes: ["wipeOnlyNight"] })
+    );
+  });
+
+  it("records a search its budget could not afford as capped, not as never asked", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const getFirstKillReports = vi.fn(evidenceFound);
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: {
+        getFirstKillReports,
+        getRateLimit: async () => ({
+          kind: "rate_limit" as const,
+          limitPerHour: 150,
+          pointsSpentThisHour: 0,
+          pointsResetInSeconds: 949
+        })
+      } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      requestCap: 500,
+      parseRequestCap: 24,
+      tierSearchRequestCap: 60,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
+    });
+
+    await handler.execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ tierSearch: expect.anything() })
+    );
+    expect(evidence.costs.at(-1)?.tierSearch).toMatchObject({
+      outcome: "request_cap",
+      requests: 0,
+      recoveredKills: null
+    });
+  });
+
   it("collects as an ordinary run for a raid with no window to search", async () => {
     const evidence = withStoredTier(
       store({ ...tierRun, tierSearchRaidId: "not-a-raid" } as typeof run)

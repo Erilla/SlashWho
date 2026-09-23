@@ -840,6 +840,7 @@ export function createApplicantEvidenceJobHandler(
       // re-claimed attempt is still a search. Undefined on every other run.
       let tierSearchRaidId: string | undefined;
       let tierSearchResult: WarcraftLogsTierSearchOutcome | undefined;
+      let tierSearchStarved = false;
       let collectionBegan = false;
       // Whose allowance this attempt spent. Read in the `finally` as well as
       // by the budget, so it outlives the `try` that decides it.
@@ -1124,6 +1125,9 @@ export function createApplicantEvidenceJobHandler(
           job.mode === "light" ? 1 : tierCaps ? tierCaps.history : scanCap;
         const tierSearchAsked =
           tierWindow !== null && tierCaps !== null && tierCaps.tier > 0;
+        // Asked for, with a tier to search, and no budget to search it with.
+        // Recorded as such rather than as a search that never ran.
+        tierSearchStarved = tierWindow !== null && !tierSearchAsked;
         // The search ignores the tier's terminal marks for its one run, so a
         // kill it recovers there is parsed and the tier's bests re-read. The
         // kill marks stay: they are what carries the tier's stored kills
@@ -1368,7 +1372,7 @@ export function createApplicantEvidenceJobHandler(
             ...(requestCap > 1
               ? {
                   storedKillReportCodes: storedKillReportCodes(
-                    storedEvidence.kills,
+                    [...storedEvidence.kills, ...storedEvidence.wipes],
                     terminalRaidIds.kills
                   )
                 }
@@ -1385,7 +1389,7 @@ export function createApplicantEvidenceJobHandler(
                     // Every stored kill's report: one in a terminal raid is
                     // carried by the publish, and one outside it is re-read.
                     skipReportCodes: storedKillReportCodes(
-                      storedEvidence.kills,
+                      [...storedEvidence.kills, ...storedEvidence.wipes],
                       new Set()
                     )
                   }
@@ -1882,8 +1886,12 @@ export function createApplicantEvidenceJobHandler(
                   ? null
                   : {
                       raidId: tierSearchRaidId,
-                      outcome: tierSearchResult?.outcome ?? null,
-                      requests: tierSearchResult?.requests ?? null,
+                      outcome:
+                        tierSearchResult?.outcome ??
+                        (tierSearchStarved ? "request_cap" : null),
+                      requests:
+                        tierSearchResult?.requests ??
+                        (tierSearchStarved ? 0 : null),
                       guilds: tierSearchResult?.guildsSearched ?? null,
                       reportsHydrated:
                         tierSearchResult?.reportsHydrated ?? null,

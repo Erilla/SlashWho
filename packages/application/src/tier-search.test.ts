@@ -63,6 +63,15 @@ describe("tier search policy", () => {
     // own on top would spend past it unseen.
     expect(tierSearchRequestCaps(300, 60)).toEqual({ history: 240, tier: 60 });
     expect(tierSearchRequestCaps(18, 60)).toEqual({ history: 9, tier: 9 });
+    expect(tierSearchRequestCaps(4, 60)).toEqual({ history: 2, tier: 2 });
+  });
+
+  it("does not split a cap so small the history scan could not re-read", () => {
+    // Break caught (review): a scan cap of 2 split to 1 + 1 left a one-request
+    // history scan, which re-reads no stored report -- so its complete
+    // publish dropped kills attendance had recovered on an earlier run.
+    expect(tierSearchRequestCaps(3, 60)).toEqual({ history: 3, tier: 0 });
+    expect(tierSearchRequestCaps(2, 60)).toEqual({ history: 2, tier: 0 });
     expect(tierSearchRequestCaps(1, 60)).toEqual({ history: 1, tier: 0 });
   });
 

@@ -2376,10 +2376,14 @@ export function createWarcraftLogsClient(
               options.signal
             )
           );
+          // A guild Warcraft Logs says it has no record of has nothing to
+          // walk, which is a finished walk rather than an unreadable one.
           const decoded =
-            attendance.kind === "success"
-              ? guildAttendancePage(attendance.value, key.name)
-              : null;
+            attendance.kind !== "success"
+              ? null
+              : guildIsAbsent(attendance.value)
+                ? { reports: [], hasMorePages: false }
+                : guildAttendancePage(attendance.value, key.name);
           pages.set(number, decoded);
           return decoded;
         };
