@@ -1151,6 +1151,63 @@ export type Operator = Readonly<{
   updatedAt: Date;
 }>;
 
+/** Safe account projection; credential material is confined to a separate type. */
+export type Account = Readonly<{
+  id: string;
+  canonicalEmail: string;
+  email: string;
+  role: "user" | "admin";
+  active: boolean;
+  verifiedAt: Date | null;
+  passwordChangeRequired: boolean;
+  credentialVersion: number;
+  createdAt: Date;
+  updatedAt: Date;
+}>;
+
+export type AccountSummary = Pick<
+  Account,
+  "id" | "email" | "role" | "active" | "verifiedAt" | "createdAt"
+>;
+
+export type AccountCredential = Account &
+  Readonly<{
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+  }>;
+
+export type MailOutboxRow = Readonly<{
+  id: string;
+  encryptedMessage: string;
+  idempotencyKey: string;
+  expiresAt: Date;
+  attempt: number;
+}>;
+
+export type Provider = "blizzard" | "raiderio" | "warcraftlogs";
+export type ProviderPresence = Readonly<{
+  provider: Provider;
+  present: boolean;
+  version: number;
+  updatedAt: Date | null;
+}>;
+export type ProviderCredentials =
+  | { provider: "blizzard"; clientId: string; clientSecret: string }
+  | { provider: "raiderio"; accessKey: string }
+  | { provider: "warcraftlogs"; clientId: string; clientSecret: string };
+
+/** Concrete auth methods are supplied with the account repository implementation. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AccountAuthRepository {}
+/** Concrete token and outbox methods are supplied with the mail implementation. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AccountMailRepository {}
+/** Concrete key methods are supplied with the credential implementation. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AccountCredentialRepository {}
+
 /**
  * The derived material needed only to verify an operator credential. This is
  * intentionally distinct from `Operator`, so ordinary callers never receive
@@ -1253,6 +1310,10 @@ export interface OperatorAuthRepository {
 }
 
 export interface Repositories {
+  /** Transitional until the corresponding repository implementations land. */
+  accountAuth?: AccountAuthRepository;
+  accountMail?: AccountMailRepository;
+  accountCredentials?: AccountCredentialRepository;
   operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;
   runs: {

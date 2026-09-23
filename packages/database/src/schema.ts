@@ -452,6 +452,198 @@ export const operatorAuthEvents = pgTable(
   ]
 );
 
+/** Account sign-in names are canonical ASCII lowercase mailbox addresses. */
+export const accountCanonicalEmailMaxLength = 254;
+
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    canonicalEmail: text("canonical_email").notNull(),
+    email: text("email").notNull(),
+    role: text("role").default("user").notNull(),
+    active: boolean("active").default(true).notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    passwordChangeRequired: boolean("password_change_required")
+      .default(false)
+      .notNull(),
+    passwordHash: text("password_hash").notNull(),
+    passwordSalt: text("password_salt").notNull(),
+    scryptVersion: integer("scrypt_version").notNull(),
+    scryptCost: integer("scrypt_cost").notNull(),
+    credentialVersion: integer("credential_version").default(1).notNull(),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("accounts_canonical_email_idx").on(table.canonicalEmail),
+    index("accounts_unverified_created_idx")
+      .on(table.createdAt)
+      .where(sql`${table.verifiedAt} IS NULL`),
+    check("accounts_role_check", sql`${table.role} IN ('user', 'admin')`),
+    check(
+      "accounts_canonical_email_check",
+      sql`char_length(${table.canonicalEmail}) BETWEEN 3 AND ${accountCanonicalEmailMaxLength} AND ${table.canonicalEmail} ~ '^[a-z0-9.!#$%&''*+/=?^_\x60{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$'`
+    )
+  ]
+);
+
+export const accountSessions = pgTable(
+  "account_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    secretDigest: text("secret_digest").notNull(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    credentialVersion: integer("credential_version").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+    idleExpiresAt: timestamp("idle_expires_at", {
+      withTimezone: true
+    }).notNull(),
+    absoluteExpiresAt: timestamp("absolute_expires_at", {
+      withTimezone: true
+    }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true })
+  },
+  (table) => [
+    index("account_sessions_live_account_idx")
+      .on(table.accountId)
+      .where(sql`${table.revokedAt} IS NULL`),
+    index("account_sessions_absolute_expiry_idx").on(table.absoluteExpiresAt)
+  ]
+);
+
+export const accountRequestAttempts = pgTable(
+  "account_request_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    purpose: text("purpose").notNull(),
+    subjectHash: text("subject_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    index("account_request_attempts_subject_expiry_idx").on(
+      table.purpose,
+      table.subjectHash,
+      table.expiresAt
+    ),
+    index("account_request_attempts_expiry_idx").on(table.expiresAt)
+  ]
+);
+
+export const accountMailTokens = pgTable(
+  "account_mail_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    tokenDigest: text("token_digest").notNull(),
+    purpose: text("purpose").notNull(),
+    flowId: uuid("flow_id"),
+    proposedCanonicalEmail: text("proposed_canonical_email"),
+    proposedEmail: text("proposed_email"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    uniqueIndex("account_mail_tokens_digest_idx").on(table.tokenDigest),
+    index("account_mail_tokens_account_purpose_idx").on(
+      table.accountId,
+      table.purpose,
+      table.expiresAt
+    ),
+    index("account_mail_tokens_flow_idx").on(table.flowId),
+    index("account_mail_tokens_expiry_idx").on(table.expiresAt),
+    check(
+      "account_mail_tokens_purpose_check",
+      sql`${table.purpose} IN ('verify', 'reset', 'email_change_current', 'email_change_new')`
+    )
+  ]
+);
+
+export const accountMailOutbox = pgTable(
+  "account_mail_outbox",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tokenId: uuid("token_id").references(() => accountMailTokens.id, {
+      onDelete: "cascade"
+    }),
+    encryptedMessage: text("encrypted_message").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    attempt: integer("attempt").default(0).notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    uniqueIndex("account_mail_outbox_idempotency_idx").on(table.idempotencyKey),
+    index("account_mail_outbox_due_idx")
+      .on(table.nextAttemptAt, table.expiresAt)
+      .where(sql`${table.sentAt} IS NULL`),
+    index("account_mail_outbox_expiry_idx").on(table.expiresAt)
+  ]
+);
+
+export const accountApiCredentials = pgTable(
+  "account_api_credentials",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    // Removal clears ciphertext but retains the row's version, so a later
+    // replacement cannot match a previously queued job's key reference.
+    encryptedPayload: text("encrypted_payload"),
+    version: integer("version").default(1).notNull(),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({
+      name: "account_api_credentials_pkey",
+      columns: [table.accountId, table.provider]
+    }),
+    check(
+      "account_api_credentials_provider_check",
+      sql`${table.provider} IN ('blizzard', 'raiderio', 'warcraftlogs')`
+    )
+  ]
+);
+
+export const accountAuthEvents = pgTable(
+  "account_auth_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    accountId: uuid("account_id").references(() => accounts.id, {
+      onDelete: "set null"
+    }),
+    action: text("action").notNull(),
+    outcome: text("outcome").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    index("account_auth_events_account_occurred_idx").on(
+      table.accountId,
+      table.occurredAt
+    ),
+    check(
+      "account_auth_events_outcome_check",
+      sql`${table.outcome} IN ('success', 'failure')`
+    )
+  ]
+);
+
 export const negativeCharacterCache = pgTable(
   "negative_character_cache",
   {
@@ -650,6 +842,11 @@ export const characterEvidenceRuns = pgTable(
       .notNull(),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
+    accountCredentialOwnerId: uuid("account_credential_owner_id").references(
+      () => accounts.id,
+      { onDelete: "set null" }
+    ),
+    accountCredentialVersion: integer("account_credential_version"),
     // What the run was reserved to do. `tier_search` is a full collection
     // that also walks one tier's guild attendance, asked for from the
     // dossier (#435). It lives on the run rather than only in the queue
