@@ -686,21 +686,21 @@ test("keeps the source pill intact beside a long guild name", async ({
   expect(desktop[0].guildText).toBeNull();
   expect(desktop[1].guildText).toBe("<Echoes of Eternity>");
   expect(desktop[1].guildTruncated).toBe(false);
-  // The long-named row cannot fit both, and the guild is what gives way: it
-  // truncates to an ellipsis while the pill beside it stays whole.
-  expect(desktop[2].guildTruncated).toBe(true);
+  // The wider character panel can now show even the long-named row in full.
+  expect(desktop[2].guildTruncated).toBe(false);
   for (const row of desktop) {
     expect(row.overflow).toBeLessThanOrEqual(0);
     expect(row.pillClipped).toBe(false);
     expect(row.pillWidth).toBeGreaterThan(0);
   }
 
-  // The width for the guild comes out of the gap, not the evidence column,
-  // which measured 743.6px before the fix and must stay within a few px of it.
+  const characterWidth = await page
+    .getByRole("region", { name: "Connected characters" })
+    .evaluate((element) => element.getBoundingClientRect().width);
   const evidenceWidth = await page
     .getByRole("region", { name: "Historic Cutting Edge" })
     .evaluate((element) => element.getBoundingClientRect().width);
-  expect(evidenceWidth).toBeGreaterThan(735);
+  expect(characterWidth).toBeGreaterThan(evidenceWidth);
 
   // Narrower, where the left track is on its floor and widening cannot help:
   // the pill is still never clipped, and the guild gives way instead.

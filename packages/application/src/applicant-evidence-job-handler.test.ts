@@ -8,7 +8,7 @@ import type {
 } from "@slashwho/database";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
-import { supportedRaidCatalogue } from "@slashwho/domain";
+import { supportedRaidCatalogue, type CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -323,6 +323,70 @@ describe("applicant evidence job handler", () => {
           completedAt: new Date("2026-09-13T12:01:00.000Z")
         }
       }
+    ]);
+  });
+
+  it("collects a former name without applying the terminal kill scan floor", async () => {
+    const evidence = store();
+    const alias = { region: "eu", realm: "neptulon", name: "former" } as const;
+    evidence.historicAliases = vi.fn().mockResolvedValue([alias]);
+    const getFirstKillReports = vi.fn(async (requested: CharacterKey) => ({
+      kind: "evidence" as const,
+      kills:
+        requested.name === "former"
+          ? [
+              {
+                raidId: "42",
+                raidName: "Old Tier",
+                bossId: "7",
+                bossName: "Old Boss",
+                journalBossId: "7",
+                bossOrder: 7,
+                killedAt: "2024-01-01T20:00:00.000Z",
+                reportUrl: "https://www.warcraftlogs.com/reports/oldreport",
+                fightUrl:
+                  "https://www.warcraftlogs.com/reports/oldreport#fight=7",
+                reportCode: "oldreport",
+                fightId: 7,
+                difficulty: 5,
+                guild: null,
+                performance: {
+                  damage: { state: "unavailable" as const },
+                  healing: { state: "unavailable" as const },
+                  bossDamage: { state: "unavailable" as const }
+                }
+              }
+            ]
+          : [],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    }));
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { ...openGate, getFirstKillReports },
+      requestCap: 500,
+      parseRequestCap: 8,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 1_500,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      now: () => new Date("2026-09-13T12:01:00.000Z")
+    });
+    await handler.execute(run.id, {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    });
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      alias,
+      expect.not.objectContaining({ killScanFloor: expect.anything() })
+    );
+    expect(evidence.published[0]?.result.kills).toEqual([
+      expect.objectContaining({ bossName: "Old Boss" })
     ]);
   });
 

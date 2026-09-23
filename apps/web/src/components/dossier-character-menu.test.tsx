@@ -44,6 +44,72 @@ async function openMenu() {
   return { trigger, user };
 }
 
+it("links a historic name and realm from a discovered character's keyboard menu", async () => {
+  const fetchMock = stubFetch();
+  const onChanged = vi.fn();
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, source: "fingerprint_derived" }}
+      root={root}
+      onChanged={onChanged}
+    />
+  );
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "Actions for Ryalts" });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  const action = screen.getByRole("menuitem", {
+    name: "Link historic alias…"
+  });
+  await user.keyboard("{ArrowDown}");
+  expect(action).toHaveFocus();
+  await user.keyboard("{Enter}");
+  const dialog = screen.getByRole("dialog", {
+    name: "Link historic alias to Ryalts"
+  });
+  expect(dialog).toBeVisible();
+  expect(
+    screen.queryByRole("textbox", { name: /url/i })
+  ).not.toBeInTheDocument();
+  await user.type(
+    screen.getByRole("textbox", { name: "Character name" }),
+    "Erilla"
+  );
+  await user.type(screen.getByRole("textbox", { name: "Realm" }), "Neptulon");
+  await user.click(screen.getByRole("button", { name: "Link historic alias" }));
+  await waitFor(() =>
+    expect(onChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "alias_added" })
+    )
+  );
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/dossiers/eu/silvermoon/ryii/historic-aliases",
+    expect.objectContaining({
+      body: JSON.stringify({
+        character: character.key,
+        name: "Erilla",
+        realm: "Neptulon"
+      })
+    })
+  );
+});
+
+it("offers Exclude for a discovered character", async () => {
+  const fetchMock = stubFetch();
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, source: "fingerprint_derived" }}
+      root={root}
+    />
+  );
+  const { user } = await openMenu();
+  await user.click(screen.getByRole("menuitem", { name: "Exclude" }));
+  expect(fetchMock).toHaveBeenCalledWith(
+    connectionsPath,
+    expect.objectContaining({ method: "PATCH" })
+  );
+});
+
 it("keeps the menu closed until its trigger is used", () => {
   render(<DossierCharacterMenu character={character} root={root} />);
 

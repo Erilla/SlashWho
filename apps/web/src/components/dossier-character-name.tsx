@@ -2,7 +2,13 @@
 
 import type { CharacterKey, DossierCharacter } from "@slashwho/contracts";
 import { formatCharacterDisplayName } from "@slashwho/domain";
-import { createContext, Fragment, type ReactNode, useContext } from "react";
+import {
+  createContext,
+  Fragment,
+  type ReactNode,
+  useContext,
+  useId
+} from "react";
 
 import { CharacterProfileLinks } from "./profile-links";
 
@@ -41,6 +47,7 @@ function resolveCharacter(
   displayName: string;
   className: string | null;
   guild?: DossierCharacter["guild"];
+  historicAliases?: DossierCharacter["historicAliases"];
 }> {
   if ("displayName" in reference) return reference;
 
@@ -90,6 +97,8 @@ export function DossierCharacterName({
 }>) {
   const characters = useContext(DossierCharactersContext);
   const resolved = resolveCharacter(character, characters);
+  const tooltipId = useId();
+  const historicAliases = showGuild ? (resolved.historicAliases ?? []) : [];
   const modifier = colourClass(resolved.className);
   const className = [
     modifier
@@ -102,8 +111,33 @@ export function DossierCharacterName({
 
   return (
     <>
-      <span className={className}>
-        {formatCharacterDisplayName(resolved.displayName)}
+      <span
+        className={
+          historicAliases.length ? "dossier-character-alias-anchor" : undefined
+        }
+      >
+        <span
+          aria-describedby={historicAliases.length ? tooltipId : undefined}
+          className={className}
+          tabIndex={historicAliases.length ? 0 : undefined}
+        >
+          {formatCharacterDisplayName(resolved.displayName)}
+        </span>
+        {historicAliases.length ? (
+          <span
+            className="dossier-character-alias-tooltip"
+            id={tooltipId}
+            role="tooltip"
+          >
+            Also known as:{" "}
+            {historicAliases
+              .map(
+                (alias) =>
+                  `${formatCharacterDisplayName(alias.name)}-${formatCharacterDisplayName(alias.realm)}`
+              )
+              .join(", ")}
+          </span>
+        ) : null}
       </span>
       {showGuild && resolved.guild ? (
         <span className="dossier-character-guild">

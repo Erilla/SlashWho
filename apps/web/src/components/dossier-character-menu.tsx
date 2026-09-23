@@ -5,6 +5,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
 import { closeDialog, openDialog, supportsModalDialog } from "./modal-dialog";
+import { HistoricAliasDialog } from "./historic-alias-dialog";
 
 const unreachableMessage =
   "The character could not be updated. Please check your connection.";
@@ -28,7 +29,7 @@ function refusalMessage(response: Response, body: unknown): string {
 export type ConnectedCharacterChange = Readonly<{
   key: CharacterKey;
   displayName: string;
-  kind: "excluded" | "included" | "removed";
+  kind: "excluded" | "included" | "removed" | "alias_added" | "alias_removed";
 }>;
 
 export type DossierCharacterMenuProps = Readonly<{
@@ -51,6 +52,7 @@ export function DossierCharacterMenu({
 }: DossierCharacterMenuProps) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [linkingAlias, setLinkingAlias] = useState(false);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -95,7 +97,47 @@ export function DossierCharacterMenu({
   function dismiss() {
     setOpen(false);
     setConfirming(false);
+    setLinkingAlias(false);
     triggerRef.current?.focus();
+  }
+
+  async function removeAlias(alias: CharacterKey) {
+    setPending(true);
+    setStatus({ kind: "idle" });
+    try {
+      const response = await fetch(
+        `/api/dossiers/${root.region}/${root.realm}/${root.name}/historic-aliases`,
+        {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            character: character.key,
+            name: alias.name,
+            realm: alias.realm
+          })
+        }
+      );
+      if (!response.ok) {
+        const parsed = safeApiErrorSchema.safeParse(
+          await response.json().catch(() => null)
+        );
+        setStatus({
+          kind: "error",
+          message: parsed.success ? parsed.data.error.message : failedMessage
+        });
+        return;
+      }
+      dismiss();
+      onChanged?.({
+        key: character.key,
+        displayName: character.displayName,
+        kind: "alias_removed"
+      });
+    } catch {
+      setStatus({ kind: "error", message: unreachableMessage });
+    } finally {
+      setPending(false);
+    }
   }
 
   async function send(
@@ -160,9 +202,32 @@ export function DossierCharacterMenu({
         <div
           className="dossier-character-menu-items"
           onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.stopPropagation();
-            dismiss();
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              dismiss();
+              return;
+            }
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
+              return;
+            const items = Array.from(
+              menuRef.current?.querySelectorAll<HTMLButtonElement>(
+                '[role="menuitem"]:not(:disabled)'
+              ) ?? []
+            );
+            if (items.length === 0) return;
+            event.preventDefault();
+            const index = items.indexOf(
+              document.activeElement as HTMLButtonElement
+            );
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? items.length - 1
+                  : event.key === "ArrowDown"
+                    ? (index + 1) % items.length
+                    : (index - 1 + items.length) % items.length;
+            items[next]?.focus();
           }}
           ref={menuRef}
           role="menu"
@@ -187,14 +252,40 @@ export function DossierCharacterMenu({
             {character.excluded ? "Include" : "Exclude"}
           </button>
           <button
-            className="dossier-character-menu-item dossier-character-menu-item--destructive"
+            className="dossier-character-menu-item"
             disabled={pending}
-            onClick={() => setConfirming(true)}
+            onClick={() => {
+              setOpen(false);
+              setLinkingAlias(true);
+            }}
             role="menuitem"
             type="button"
           >
-            Remove…
+            Link historic alias…
           </button>
+          {(character.historicAliases ?? []).map((alias) => (
+            <button
+              className="dossier-character-menu-item"
+              disabled={pending}
+              key={`${alias.region}/${alias.realm}/${alias.name}`}
+              onClick={() => void removeAlias(alias)}
+              role="menuitem"
+              type="button"
+            >
+              Remove historic alias {alias.name}-{alias.realm}
+            </button>
+          ))}
+          {character.source === "manually_added" ? (
+            <button
+              className="dossier-character-menu-item dossier-character-menu-item--destructive"
+              disabled={pending}
+              onClick={() => setConfirming(true)}
+              role="menuitem"
+              type="button"
+            >
+              Remove…
+            </button>
+          ) : null}
         </div>
       ) : null}
       {status.kind === "error" ? (
@@ -260,6 +351,22 @@ export function DossierCharacterMenu({
           </div>
         </dialog>
       ) : null}
+      <HistoricAliasDialog
+        character={character}
+        root={root}
+        open={linkingAlias}
+        onClose={() => {
+          setLinkingAlias(false);
+          triggerRef.current?.focus();
+        }}
+        onAdded={() =>
+          onChanged?.({
+            key: character.key,
+            displayName: character.displayName,
+            kind: "alias_added"
+          })
+        }
+      />
     </div>
   );
 }

@@ -307,9 +307,7 @@ it("passes the already-connected characters to the dialog", async () => {
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-it("offers row actions only for manually added characters", () => {
-  // #186: source-discovered links are not a reviewer's to exclude or unlink,
-  // so only a manual link carries the actions menu.
+it("offers row actions for every connected character", () => {
   render(
     <DossierCharacterList
       characters={[
@@ -343,11 +341,11 @@ it("offers row actions only for manually added characters", () => {
     screen.getByRole("button", { name: "Actions for Manual" })
   ).toBeVisible();
   expect(
-    screen.queryByRole("button", { name: "Actions for Ryalts" })
-  ).not.toBeInTheDocument();
+    screen.getByRole("button", { name: "Actions for Ryalts" })
+  ).toBeVisible();
   expect(
-    screen.queryByRole("button", { name: "Actions for Ryii" })
-  ).not.toBeInTheDocument();
+    screen.getByRole("button", { name: "Actions for Ryii" })
+  ).toBeVisible();
 });
 
 it("hides the row actions from a read-only dossier", () => {

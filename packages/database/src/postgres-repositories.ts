@@ -1440,6 +1440,48 @@ async function requireUpdated(
   if (result.rowCount !== 1) throw new Error("discovery_run_not_found");
 }
 
+/** A changed alias makes every old kill-tier conclusion and scan cursor stale. */
+async function invalidateHistoricAliasKillScan(
+  client: PoolClient,
+  key: CharacterKey
+): Promise<void> {
+  const values = [key.region, key.realm, key.name];
+  await client.query(
+    `DELETE FROM character_terminal_tiers
+      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+        AND domain = 'kills'`,
+    values
+  );
+  await client.query(
+    `UPDATE character_evidence_runs
+        SET kill_scan_completed_at = NULL,
+            kill_scan_resume_page = NULL,
+            kill_scan_resume_boundary_report_code = NULL
+      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+        AND status IN ('complete', 'partial')`,
+    values
+  );
+  await client.query(
+    `DELETE FROM character_attendance_searches
+      WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+    values
+  );
+}
+
+async function requestHistoricAliasRecollection(
+  client: PoolClient,
+  key: CharacterKey
+): Promise<void> {
+  await client.query(
+    `INSERT INTO character_alias_recollections
+       (region, realm_slug, normalized_name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (region, realm_slug, normalized_name)
+     DO UPDATE SET requested_at = now()`,
+    [key.region, key.realm, key.name]
+  );
+}
+
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
     operatorAuth: {
@@ -2595,6 +2637,56 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     manualConnections: {
+      async listDiscoveredExclusions(root) {
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+        }>(
+          `SELECT exclusion.region, exclusion.realm_slug, exclusion.normalized_name
+             FROM dossier_character_exclusions exclusion
+             JOIN characters owner ON owner.id = exclusion.root_character_id
+            WHERE owner.region = $1 AND owner.realm_slug = $2
+              AND owner.normalized_name = $3`,
+          [root.region, root.realm, root.name]
+        );
+        return result.rows.map((row) => ({
+          region: row.region,
+          realm: row.realm_slug,
+          name: row.normalized_name
+        }));
+      },
+      async setDiscoveredExcluded(root, character, excluded) {
+        const values = [
+          root.region,
+          root.realm,
+          root.name,
+          character.region,
+          character.realm,
+          character.name
+        ];
+        if (excluded) {
+          const result = await pool.query(
+            `INSERT INTO dossier_character_exclusions
+               (root_character_id, region, realm_slug, normalized_name)
+             SELECT id, $4, $5, $6 FROM characters
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+             ON CONFLICT DO NOTHING`,
+            values
+          );
+          return result.rowCount === 1 ? "updated" : "missing";
+        }
+        await pool.query(
+          `DELETE FROM dossier_character_exclusions exclusion USING characters owner
+            WHERE exclusion.root_character_id = owner.id
+              AND owner.region = $1 AND owner.realm_slug = $2
+              AND owner.normalized_name = $3
+              AND exclusion.region = $4 AND exclusion.realm_slug = $5
+              AND exclusion.normalized_name = $6`,
+          values
+        );
+        return "updated";
+      },
       async add(root, character) {
         // The connected side is a key, so this records the link whether or not
         // the character has been discovered yet. Only the root must exist.
@@ -3293,6 +3385,107 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     },
 
     evidence: {
+      async historicAliases(key) {
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+        }>(
+          `SELECT alias.region, alias.realm_slug, alias.normalized_name
+             FROM character_historic_aliases alias
+             JOIN characters character ON character.id = alias.character_id
+            WHERE character.region = $1 AND character.realm_slug = $2
+              AND character.normalized_name = $3
+            ORDER BY alias.created_at, alias.region, alias.realm_slug, alias.normalized_name`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows.map((row) => ({
+          region: row.region,
+          realm: row.realm_slug,
+          name: row.normalized_name
+        }));
+      },
+      async addHistoricAlias(key, alias) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockCharacterEvidence(client, key);
+          const result = await client.query(
+            `INSERT INTO character_historic_aliases
+               (character_id, region, realm_slug, normalized_name)
+             SELECT id, $4, $5, $6 FROM characters
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+             ON CONFLICT DO NOTHING RETURNING character_id`,
+            [
+              key.region,
+              key.realm,
+              key.name,
+              alias.region,
+              alias.realm,
+              alias.name
+            ]
+          );
+          if (result.rowCount === 1) {
+            await invalidateHistoricAliasKillScan(client, key);
+            await requestHistoricAliasRecollection(client, key);
+          }
+          const exists =
+            result.rowCount === 1
+              ? true
+              : (
+                  await client.query(
+                    `SELECT 1 FROM characters WHERE region = $1
+                  AND realm_slug = $2 AND normalized_name = $3`,
+                    [key.region, key.realm, key.name]
+                  )
+                ).rowCount === 1;
+          await client.query("COMMIT");
+          return result.rowCount === 1
+            ? "added"
+            : exists
+              ? "duplicate"
+              : "missing";
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async removeHistoricAlias(key, alias) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await lockCharacterEvidence(client, key);
+          const result = await client.query(
+            `DELETE FROM character_historic_aliases alias USING characters character
+              WHERE alias.character_id = character.id
+                AND character.region = $1 AND character.realm_slug = $2
+                AND character.normalized_name = $3
+                AND alias.region = $4 AND alias.realm_slug = $5
+                AND alias.normalized_name = $6`,
+            [
+              key.region,
+              key.realm,
+              key.name,
+              alias.region,
+              alias.realm,
+              alias.name
+            ]
+          );
+          if (result.rowCount === 1) {
+            await invalidateHistoricAliasKillScan(client, key);
+            await requestHistoricAliasRecollection(client, key);
+          }
+          await client.query("COMMIT");
+          return result.rowCount === 1 ? "removed" : "missing";
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
       async reserve({ key, freshnessCutoff, at, credentials, phasePlan }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
@@ -3304,6 +3497,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           await lockCharacterEvidence(client, key);
+          const aliasRecollection = await client.query(
+            `SELECT 1 FROM character_alias_recollections
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+            [key.region, key.realm, key.name]
+          );
+          const aliasRecollectionPending = aliasRecollection.rowCount === 1;
           const completed = await loadCompletedEvidence(client, key);
           // Asked before the freshness check, not after it. A refresh forces a
           // run past the freshness window, so a caller reading fresh evidence
@@ -3329,6 +3528,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             completed.evidenceVersion !== undefined &&
             completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION &&
             completed.run.completedAt !== null &&
+            !aliasRecollectionPending &&
             isEvidenceFresh(
               completed.run.completedAt,
               completed.run.retryAfterAt,
@@ -3353,6 +3553,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               completed,
               active: activeRun
             } satisfies EvidenceReservationResult;
+          }
+
+          if (aliasRecollectionPending) {
+            // An older active run may have re-marked stale tiers after the edit.
+            // Clear them again at the reservation that will actually re-read
+            // the aliases, then consume the request in the same transaction.
+            await invalidateHistoricAliasKillScan(client, key);
+            await client.query(
+              `DELETE FROM character_alias_recollections
+                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+              [key.region, key.realm, key.name]
+            );
           }
 
           const inserted = await client.query<EvidenceRunRow>(
@@ -4449,26 +4661,35 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           realm_slug: string;
           normalized_name: string;
         }>(
-          `SELECT latest.region, latest.realm_slug, latest.normalized_name
-           FROM (
+          `WITH latest AS (
              SELECT DISTINCT ON (region, realm_slug, normalized_name)
-               region, realm_slug, normalized_name, retry_after_at
+               region, realm_slug, normalized_name, retry_after_at AS due_at
              FROM character_evidence_runs
              WHERE status IN ('complete', 'partial')
              ORDER BY region, realm_slug, normalized_name,
                completed_at DESC, id DESC
-           ) AS latest
-           WHERE latest.retry_after_at IS NOT NULL
-             AND latest.retry_after_at <= $1
-             AND NOT EXISTS (
+           ), due AS (
+             SELECT latest.region, latest.realm_slug, latest.normalized_name,
+                    latest.due_at
+               FROM latest
+              WHERE latest.due_at IS NOT NULL AND latest.due_at <= $1
+             UNION ALL
+             SELECT region, realm_slug, normalized_name, requested_at AS due_at
+               FROM character_alias_recollections
+              WHERE requested_at <= $1
+           )
+           SELECT due.region, due.realm_slug, due.normalized_name
+             FROM due
+            WHERE NOT EXISTS (
                SELECT 1 FROM character_evidence_runs active
-               WHERE active.region = latest.region
-                 AND active.realm_slug = latest.realm_slug
-                 AND active.normalized_name = latest.normalized_name
+               WHERE active.region = due.region
+                 AND active.realm_slug = due.realm_slug
+                 AND active.normalized_name = due.normalized_name
                  AND active.status IN ('queued', 'running', 'retrying')
              )
-           ORDER BY latest.retry_after_at
-           LIMIT $2`,
+            GROUP BY due.region, due.realm_slug, due.normalized_name
+            ORDER BY min(due.due_at)
+            LIMIT $2`,
           [at, limit]
         );
         return result.rows.map((row) => ({

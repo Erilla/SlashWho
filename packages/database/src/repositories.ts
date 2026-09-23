@@ -187,6 +187,15 @@ export interface ManualConnectionCharacter {
 }
 
 export interface ManualConnectionRepository {
+  /** Exclusions for snapshot-discovered characters; manual links keep their flag. */
+  listDiscoveredExclusions?(
+    root: CharacterKey
+  ): Promise<readonly CharacterKey[]>;
+  setDiscoveredExcluded?(
+    root: CharacterKey,
+    character: CharacterKey,
+    excluded: boolean
+  ): Promise<"updated" | "missing">;
   list(root: CharacterKey): Promise<readonly ManualConnectionCharacter[]>;
   add(
     root: CharacterKey,
@@ -683,6 +692,16 @@ export type EvidenceRunCost = Readonly<{
 }>;
 
 export interface EvidenceRepository {
+  /** Reviewer-declared former identities of this connected character. */
+  historicAliases?(key: CharacterKey): Promise<readonly CharacterKey[]>;
+  addHistoricAlias?(
+    key: CharacterKey,
+    alias: CharacterKey
+  ): Promise<"added" | "duplicate" | "missing">;
+  removeHistoricAlias?(
+    key: CharacterKey,
+    alias: CharacterKey
+  ): Promise<"removed" | "missing">;
   reserve(input: {
     key: CharacterKey;
     freshnessCutoff: Date;

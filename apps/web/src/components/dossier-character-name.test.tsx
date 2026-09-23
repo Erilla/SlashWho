@@ -45,6 +45,34 @@ const sameNamedPriest: DossierCharacter = {
 
 afterEach(cleanup);
 
+it("shows comma-separated historic identities on hover and keyboard focus", () => {
+  render(
+    <DossierCharacterName
+      character={{
+        ...mage,
+        historicAliases: [
+          { region: "eu", realm: "neptulon", name: "erilla" },
+          { region: "eu", realm: "draenor", name: "former" }
+        ]
+      }}
+      showGuild
+    />
+  );
+  const name = screen.getByText("Ryii");
+  const tooltip = screen.getByRole("tooltip");
+  expect(name).toHaveAttribute("tabindex", "0");
+  expect(name).toHaveAttribute("aria-describedby", tooltip.id);
+  expect(tooltip).toHaveTextContent(
+    "Also known as: Erilla-Neptulon, Former-Draenor"
+  );
+});
+
+it("does not create an alias tooltip when no aliases exist", () => {
+  render(<DossierCharacterName character={mage} showGuild />);
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(screen.getByText("Ryii")).not.toHaveAttribute("tabindex");
+});
+
 function dossierCharacter(
   className: DossierCharacter["className"],
   name = "Ryii"

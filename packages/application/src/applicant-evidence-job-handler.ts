@@ -25,6 +25,7 @@ import type {
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
+  WarcraftLogsReportResult,
   WarcraftLogsLimitationCode,
   WarcraftLogsQueryType,
   WarcraftLogsRateLimit,
@@ -52,6 +53,64 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
+
+/** Keep one publication under the connected key while scanning former names. */
+function mergeHistoricAliasResponse(
+  current: WarcraftLogsReportResult,
+  historic: WarcraftLogsReportResult
+): WarcraftLogsReportResult {
+  if (current.kind === "limitation") return current;
+  if (historic.kind === "limitation") {
+    return { ...current, limitation: historic };
+  }
+  const distinct = <T>(
+    values: readonly T[],
+    key: (value: T) => string
+  ): T[] => [...new Map(values.map((value) => [key(value), value])).values()];
+  return {
+    ...current,
+    kills: distinct(
+      [...current.kills, ...historic.kills],
+      (kill) => kill.fightUrl
+    ),
+    wipes: distinct(
+      [...current.wipes, ...historic.wipes],
+      (wipe) => wipe.fightUrl
+    ),
+    tierBests: distinct(
+      [...current.tierBests, ...historic.tierBests],
+      (parse) => `${parse.raidId}/${parse.bossId}/${parse.rankingsUrl}`
+    ),
+    parsedFightUrls: distinct(
+      [...current.parsedFightUrls, ...historic.parsedFightUrls],
+      (url) => url
+    ),
+    troubledRaidIds: {
+      parses: [
+        ...new Set([
+          ...current.troubledRaidIds.parses,
+          ...historic.troubledRaidIds.parses
+        ])
+      ],
+      tierBests: [
+        ...new Set([
+          ...current.troubledRaidIds.tierBests,
+          ...historic.troubledRaidIds.tierBests
+        ])
+      ]
+    },
+    ...(current.limitation || historic.limitation
+      ? { limitation: current.limitation ?? historic.limitation }
+      : {}),
+    ...(current.parseLimitation || historic.parseLimitation
+      ? { parseLimitation: current.parseLimitation ?? historic.parseLimitation }
+      : {}),
+    parseLimitations: [
+      ...(current.parseLimitations ?? []),
+      ...(historic.parseLimitations ?? [])
+    ]
+  };
+}
 import {
   EMPTY_SEARCH_RECHECK_MS,
   emptySearchKey,
@@ -164,6 +223,8 @@ export type ApplicantEvidenceStore = {
   ): Promise<void>;
   /** The stage this run already holds, if a previous attempt left one. */
   stagedCollection(runId: string): Promise<StagedEvidenceCollection | null>;
+  /** Former names explicitly linked to this character by a reviewer. */
+  historicAliases?(key: CharacterKey): Promise<readonly CharacterKey[]>;
   /**
    * Remembers the stable Warcraft Logs character ID the run's key resolved to.
    * Optional so a store without it still collects, reading by name.
@@ -1354,15 +1415,35 @@ export function createApplicantEvidenceJobHandler(
           activePhase = phaseLedger ? "warcraft_logs_history" : undefined;
           observedPhase = activePhase;
         }
-        const response = await scope.time("warcraftLogs", () =>
+        const historicAliases =
+          requestCap > 0
+            ? ((await options.evidence.historicAliases?.(run.key)) ?? [])
+            : [];
+        const historyCapPerIdentity =
+          historicAliases.length > 0
+            ? Math.max(1, Math.floor(requestCap / (historicAliases.length + 1)))
+            : requestCap;
+        const parseCapPerIdentity =
+          historicAliases.length > 0
+            ? Math.max(
+                1,
+                Math.floor(parseRequestCap / (historicAliases.length + 1))
+              )
+            : parseRequestCap;
+        let response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
-            requestCap,
-            parseRequestCap,
+            requestCap: historyCapPerIdentity,
+            parseRequestCap: parseCapPerIdentity,
             ...(run.className ? { className: run.className } : {}),
             hydratedFightUrls,
             collectedTierZones,
-            terminalRaidIds,
-            ...(killScanFloor ? { killScanFloor } : {}),
+            terminalRaidIds:
+              historicAliases.length > 0
+                ? { ...terminalRaidIds, kills: new Set<string>() }
+                : terminalRaidIds,
+            ...(historicAliases.length === 0 && killScanFloor
+              ? { killScanFloor }
+              : {}),
             ...(characterId !== undefined ? { characterId } : {}),
             ...(toSearch.length > 0 ? { verifiedKills: toSearch } : {}),
             // From stored evidence on every scanning run, whatever Raider.IO
@@ -1433,6 +1514,34 @@ export function createApplicantEvidenceJobHandler(
             signal: activeContext.signal
           })
         );
+        // A former name is collected by name and realm, then its evidence is
+        // published under the connected character's key. No alias becomes a
+        // separate dossier character or independent evidence run.
+        for (const alias of historicAliases) {
+          if (response.kind === "limitation") break;
+          const historic = await scope.time("warcraftLogsHistoricAlias", () =>
+            gateway.getFirstKillReports(alias, {
+              requestCap: historyCapPerIdentity,
+              parseRequestCap: parseCapPerIdentity,
+              ...(run.className ? { className: run.className } : {}),
+              hydratedFightUrls,
+              collectedTierZones,
+              terminalRaidIds: {
+                kills: new Set<string>(),
+                parses: new Set<string>(),
+                tierBests: new Set<string>()
+              },
+              onRequest: (event) => {
+                observePhase(event.query);
+                scope.increment(
+                  `${REQUEST_COUNTER_PREFIX[event.query]}Requests`
+                );
+              },
+              signal: activeContext.signal
+            })
+          );
+          response = mergeHistoricAliasResponse(response, historic);
+        }
         await phaseWrites;
         // Only a search this run asked for is the run's to record.
         if (
