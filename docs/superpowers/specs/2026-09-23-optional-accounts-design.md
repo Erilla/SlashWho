@@ -47,10 +47,16 @@ when mail delivery fails.
 Password recovery always gives a generic acknowledgement, including unknown,
 disabled, and unverified addresses. A reset token is random, stored only as a
 digest, single-use, and valid for 30 minutes. Completing a reset changes the
-password, consumes all outstanding reset tokens, increments the credential
-version, and revokes all sessions atomically. Signed-in password change
-requires the current password and has the same session effects, followed by
-a fresh sign-in. Account holders may request an email change after entering
+password, consumes all outstanding reset tokens, clears any required-change
+flag, increments the credential version, and revokes all sessions atomically.
+Signed-in password change requires the current password and has the same
+session effects, followed by a fresh sign-in. An account marked as requiring
+a password change may sign in with its current password, but its session can
+reach only the password-change, sign-out, and own-session endpoints. The
+password-change page focuses the new-password field and explains the required
+step. Successful change clears the flag and requires a fresh sign-in. Public
+features remain available without account authorization. Account holders may
+request an email change after entering
 their password; the new address becomes the login only after confirmation
 through a 24-hour single-use link sent to that address. Confirmation revokes
 existing sessions. Admins may initiate the same pending verified email-change
@@ -63,7 +69,10 @@ but have their former operator reference cleared before account deletion;
 login-attempt rows may be cleared. It does not delete public search, dossier,
 or evidence data, and `BOT_API_KEY` remains valid. A revised
 interactive CLI provisions the first admin using an email address and a hidden
-password prompt; it creates an already verified admin. The web registration
+temporary-password prompt; it creates an already verified admin marked as
+requiring a password change. The new admin signs in with that temporary
+password, changes it, then signs in again before admin access is granted.
+The web registration
 path can never create an admin. Deploy the migration and bootstrap command as
 one operational rollout; until bootstrap, public features continue to work
 and no admin page is accessible. Document the destructive account reset and
@@ -82,8 +91,12 @@ operation, and focus management after navigation and errors.
 
 Admin settings lists email, role, verification and active status, and creation
 date; it never displays password material or API keys. Admins may change
-`user`/`admin` roles, disable or reactivate accounts, and initiate a verified
-email change. There is no account deletion or arbitrary profile editing.
+`user`/`admin` roles, disable or reactivate accounts, require a password
+change, and initiate a verified email change. Requiring a password change
+revokes existing sessions immediately; the user signs in with their current
+password or follows the ordinary emailed recovery flow if it is lost. Admins
+cannot set or see another account's password through the web UI. There is no
+account deletion or arbitrary profile editing.
 The repository performs admin mutations in transactions, immediately revokes
 sessions after role or status change, prevents self-promotion, and prevents
 demotion or disablement of the last active admin. Disabling an account blocks
@@ -137,8 +150,8 @@ changing public allowance rules.
 ## Verification and release
 
 Repository and integration tests cover unique normalized email, legacy
-account reset, first-admin bootstrap, last-admin protection, token expiry and
-single use, session revocation, encrypted key storage, account isolation,
+account reset, first-admin bootstrap and forced password change, last-admin
+protection, token expiry and single use, session revocation, encrypted key storage, account isolation,
 versioned queued work, and safe audit/response projections. Route tests cover
 registration, sign-in, verification, recovery, account mutations, admin and
 monitor API denial, bearer automation, and unchanged anonymous operations.
