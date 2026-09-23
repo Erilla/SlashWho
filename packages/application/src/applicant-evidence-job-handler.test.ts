@@ -4215,3 +4215,111 @@ describe("applicant evidence job handler", () => {
     });
   });
 });
+
+describe("searching attendance only for Raider.IO-verified kills", () => {
+  const verifiedAzshara = {
+    raidSlug: "the-eternal-palace",
+    bossSlug: "queen-azshara",
+    firstDefeated: "2020-01-21T19:34:00.000Z",
+    guild: { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" }
+  };
+  const emptyEvidence = async () => ({
+    kind: "evidence" as const,
+    parsedFightUrls: [],
+    kills: [],
+    wipes: [],
+    tierBests: [],
+    troubledRaidIds: { parses: [], tierBests: [] }
+  });
+  const handlerWith = (
+    evidence: ReturnType<typeof store>,
+    getFirstKillReports: ReturnType<typeof vi.fn>,
+    getHistoricMythicKills: ReturnType<typeof vi.fn>
+  ) =>
+    createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      raiderio: {
+        getMythicBossRankings: vi.fn(),
+        getHistoricMythicKills
+      } as never,
+      requestCap: 500,
+      parseRequestCap: 24,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
+    });
+
+  it("hands the scan the verified kills stored evidence does not hold", async () => {
+    const evidence = store();
+    const getFirstKillReports = vi.fn(emptyEvidence);
+    const handler = handlerWith(
+      evidence,
+      getFirstKillReports,
+      vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+    );
+
+    await handler.execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        verifiedKills: [
+          {
+            at: "2020-01-21T19:34:00.000Z",
+            guild: {
+              name: "SeriouslyCasual",
+              realm: "silvermoon",
+              region: "eu"
+            }
+          }
+        ]
+      })
+    );
+  });
+
+  it("skips recovery and stays complete when Raider.IO cannot answer", async () => {
+    // A private profile would retry forever if it made the run partial --
+    // the same loop that pinned Ryii at the request cap.
+    const evidence = store();
+    const getFirstKillReports = vi.fn(emptyEvidence);
+    const handler = handlerWith(
+      evidence,
+      getFirstKillReports,
+      vi.fn(async () => ({ kind: "limitation", code: "private" }))
+    );
+
+    await handler.execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ verifiedKills: expect.anything() })
+    );
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      state: "complete"
+    });
+  });
+
+  it("does not ask Raider.IO on a light run, which cannot search attendance", async () => {
+    const evidence = store();
+    const getHistoricMythicKills = vi.fn();
+    const handler = handlerWith(
+      evidence,
+      vi.fn(emptyEvidence),
+      getHistoricMythicKills
+    );
+
+    await handler.execute(
+      { runId: run.id, mode: "light" },
+      { attempt: 1, maxAttempts: 5, signal: new AbortController().signal }
+    );
+
+    expect(getHistoricMythicKills).not.toHaveBeenCalled();
+  });
+});

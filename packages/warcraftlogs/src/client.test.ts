@@ -24,6 +24,19 @@ const key: CharacterKey = {
   name: "sentinel"
 };
 
+/**
+ * One verified kill in the named guild, on a night no fixture report spans,
+ * so attendance is searched for it. Attendance is read for nothing else.
+ */
+function verifiedIn(name: string, realm = "silvermoon") {
+  return [
+    {
+      at: "2001-01-01T20:00:00.000Z",
+      guild: { name, realm, region: "eu" as const }
+    }
+  ];
+}
+
 function fixture(name: FixtureName): unknown {
   return JSON.parse(
     readFileSync(resolve(fixtureDirectory, `${name}.json`), "utf8")
@@ -3344,7 +3357,8 @@ describe("Warcraft Logs gateway", () => {
     await expect(
       client.getFirstKillReports(multiwordRealmKey, {
         requestCap: 10,
-        parseRequestCap: 1
+        parseRequestCap: 1,
+        verifiedKills: verifiedIn("SeriouslyCasual", "aerie-peak")
       })
     ).resolves.toMatchObject({
       kind: "evidence",
@@ -3444,7 +3458,8 @@ describe("Warcraft Logs gateway", () => {
 
     await client.getFirstKillReports(key, {
       requestCap: 20,
-      parseRequestCap: 1
+      parseRequestCap: 1,
+      verifiedKills: verifiedIn("Guild")
     });
 
     expect(hydrated).toEqual([
@@ -3454,6 +3469,167 @@ describe("Warcraft Logs gateway", () => {
       "malformedListReport",
       "suffixedReport"
     ]);
+  });
+
+  describe("searching attendance only for verified kills", () => {
+    const night = Date.parse("2020-01-21T19:34:00.000Z");
+    const hours = (count: number) => count * 60 * 60 * 1_000;
+    const history = (reports: unknown[] = []) =>
+      jsonResponse({
+        data: {
+          characterData: {
+            character: {
+              server: { normalizedName: "Silvermoon" },
+              // The guild the old walk read attendance for on every run.
+              guilds: [
+                {
+                  name: "Guild",
+                  server: { slug: "silvermoon", region: { slug: "EU" } }
+                }
+              ],
+              recentReports: { data: reports, has_more_pages: false }
+            }
+          }
+        }
+      });
+    const attendancePage = (
+      data: ReadonlyArray<{ code: string; startTime: number }>,
+      hasMorePages: boolean
+    ) =>
+      jsonResponse({
+        data: {
+          guildData: {
+            guild: {
+              attendance: {
+                data: data.map((entry) => ({
+                  ...entry,
+                  players: [{ name: "Sentinel" }]
+                })),
+                has_more_pages: hasMorePages
+              }
+            }
+          }
+        }
+      });
+    const verified = [
+      {
+        at: new Date(night).toISOString(),
+        guild: { name: "Guild", realm: "silvermoon", region: "eu" as const }
+      }
+    ];
+
+    it("reads no attendance without a verified kill to search for", async () => {
+      // Break caught: walking every guild the history names is what pinned
+      // Ryii at the cap. With nothing verified to find, there is no search.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) return history();
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+      expect(queries).not.toContain("ReportByCode");
+    });
+
+    it("does not search for a verified kill a decoded report already spans", async () => {
+      // Break caught: a kill the history scan read -- or read and found was
+      // not the character's -- sent the run into attendance to find it again.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) {
+          return history([
+            {
+              code: "raidNight",
+              startTime: night - hours(1),
+              zone: { id: 23, name: "The Eternal Palace" },
+              masterData: { actors: [] },
+              fights: [
+                {
+                  id: 1,
+                  encounterID: 0,
+                  name: "Trash",
+                  startTime: 0,
+                  endTime: hours(2),
+                  kill: null,
+                  difficulty: null,
+                  friendlyPlayers: []
+                }
+              ]
+            }
+          ]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+    });
+
+    it("searches only the kill's guild, on its night, and stops paging once past it", async () => {
+      // Break caught: the walk read every page of every guild and hydrated
+      // every report on them. Only the named guild's reports from the night
+      // of the kill can hold it, and pages are newest first.
+      const walked: string[] = [];
+      const hydrated: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { name?: string; page?: number; code?: string };
+        };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("GuildAttendance")) {
+          walked.push(`${body.variables.name}:${body.variables.page}`);
+          return body.variables.page === 1
+            ? attendancePage(
+                [
+                  { code: "weekLater", startTime: night + hours(24 * 7) },
+                  { code: "killNight", startTime: night - hours(1) },
+                  { code: "nightBefore", startTime: night - hours(20) }
+                ],
+                true
+              )
+            : body.variables.page === 2
+              ? attendancePage(
+                  [{ code: "monthBefore", startTime: night - hours(24 * 30) }],
+                  true
+                )
+              : attendancePage([], false);
+        }
+        if (body.query.includes("ReportByCode")) {
+          hydrated.push(body.variables.code!);
+          return jsonResponse({ data: { reportData: { report: null } } });
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 20,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(hydrated).toEqual(["killNight"]);
+      // Page two is wholly older than the night by more than the overlap
+      // pages can have at a boundary, so page three is never asked for.
+      expect(walked).toEqual(["Guild:1", "Guild:2"]);
+    });
   });
 
   it("matches an attendance name written in another Unicode form", async () => {
@@ -3512,7 +3688,7 @@ describe("Warcraft Logs gateway", () => {
 
     await client.getFirstKillReports(
       { region: "eu", realm: "silvermoon", name: "zoë" },
-      { requestCap: 5, parseRequestCap: 1 }
+      { requestCap: 5, parseRequestCap: 1, verifiedKills: verifiedIn("Guild") }
     );
 
     expect(hydrated).toEqual(["decomposedReport"]);
@@ -3573,7 +3749,8 @@ describe("Warcraft Logs gateway", () => {
 
     const result = await client.getFirstKillReports(key, {
       requestCap: 10,
-      parseRequestCap: 1
+      parseRequestCap: 1,
+      verifiedKills: verifiedIn("Guild")
     });
 
     expect(result).toMatchObject({
@@ -3647,6 +3824,7 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 10,
       parseRequestCap: 1,
+      verifiedKills: verifiedIn("Guild"),
       historyScanStartPage: 19,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
@@ -4837,6 +5015,7 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 4,
       parseRequestCap: 10,
+      verifiedKills: verifiedIn("Guild"),
       historyScanStartPage: 67,
       historyScanResumeBoundaryReportCode: "lateReport"
     });

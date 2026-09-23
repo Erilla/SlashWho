@@ -47,6 +47,7 @@ import {
   type EvidencePublication
 } from "./evidence-publication";
 import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
+import { raiderIoVerifiedKills } from "./verified-kills";
 import {
   createEvidencePhaseLedger,
   fullEvidencePhasePlan,
@@ -203,7 +204,8 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
   > &
     Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
   blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
-  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
+  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings"> &
+    Partial<Pick<RaiderIoGateway, "getHistoricMythicKills">>;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
@@ -1161,6 +1163,33 @@ export function createApplicantEvidenceJobHandler(
                   storedEvidence.historyScanResumeBoundaryReportCode
               }
             : {};
+        // Raider.IO names the kills worth searching guild attendance for, and
+        // attendance is read for nothing else. It is asked only when the run
+        // scans history in earnest, and never decides the run's status: a
+        // lookup that fails skips recovery, and the run is judged by its
+        // history scan alone.
+        const historicKills = options.raiderio?.getHistoricMythicKills;
+        const verified =
+          historicKills && requestCap > 1
+            ? await scope.time("raiderIoHistoricKills", () =>
+                raiderIoVerifiedKills(
+                  { getHistoricMythicKills: historicKills },
+                  run.key,
+                  {
+                    storedKills: storedEvidence.kills,
+                    ...(killScanFloor ? { killScanFloor } : {}),
+                    signal: activeContext.signal
+                  }
+                )
+              )
+            : undefined;
+        if (verified) {
+          scope.increment(
+            "raiderIoVerifiedKillsSearched",
+            verified.kills.length
+          );
+          if (verified.limitation) scope.mark("raiderIoHistoricKillsLimited");
+        }
         // The history scan is the first real upstream boundary for a normal
         // collection. Persist it before entering the gateway, rather than
         // after its promise settles: an interrupted long scan is then plainly
@@ -1179,6 +1208,9 @@ export function createApplicantEvidenceJobHandler(
             collectedTierZones,
             terminalRaidIds,
             ...(killScanFloor ? { killScanFloor } : {}),
+            ...(verified?.kills.length
+              ? { verifiedKills: verified.kills }
+              : {}),
             ...historyScanResumeOptions,
             ...(parseOnlyResume
               ? {

@@ -156,6 +156,16 @@ export type WarcraftLogsWipeEvidence = Readonly<{
   uploader?: string | null;
 }>;
 
+export type WarcraftLogsVerifiedKill = Readonly<{
+  /** When the kill happened, as an ISO string. */
+  at: string;
+  guild: Readonly<{
+    name: string;
+    realm: string;
+    region: CharacterKey["region"];
+  }>;
+}>;
+
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
@@ -300,6 +310,14 @@ export interface WarcraftLogsGateway {
        * that allowed the stop, so the character would never settle.
        */
       killScanFloor?: string;
+      /**
+       * Kills another provider attributes to the character, with the guild
+       * they were in. They are where to look, never evidence: one that no
+       * decoded report covers is searched for in that guild's attendance, on
+       * that night, and counts only if a hydrated report attributes it.
+       * Absent or empty, attendance is not read at all.
+       */
+      verifiedKills?: readonly WarcraftLogsVerifiedKill[];
       /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call rather than to the client so the counts

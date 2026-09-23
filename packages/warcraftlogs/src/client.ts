@@ -3,7 +3,6 @@ import {
   isNonRaidZone,
   raidOffersMythicRankings,
   supportedRegions,
-  type CharacterGuild,
   type CharacterKey
 } from "@slashwho/domain";
 
@@ -20,6 +19,7 @@ import type {
   WarcraftLogsRateLimitResult,
   WarcraftLogsReportResult,
   WarcraftLogsRequestEvent,
+  WarcraftLogsVerifiedKill,
   WarcraftLogsWipeEvidence
 } from "./types";
 
@@ -49,7 +49,6 @@ const recentReportsQuery = `
     characterData {
       character(name: $name, serverSlug: $realm, serverRegion: $region) {
         server { normalizedName }
-        guilds { name server { slug region { slug } } }
         recentReports(limit: ${REPORTS_PER_PAGE}, page: $page) {
           data {
             code
@@ -82,7 +81,7 @@ const guildAttendanceQuery = `
     guildData {
       guild(name: $name, serverSlug: $realm, serverRegion: $region) {
         attendance(limit: 25, page: $page) {
-          data { code players { name } }
+          data { code startTime players { name } }
           has_more_pages
         }
       }
@@ -401,40 +400,48 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   return { kind: "identity", key, displayName };
 }
 
-function characterGuilds(value: unknown): readonly CharacterGuild[] {
-  const character = record(
-    record(record(value)?.data)?.characterData
-  )?.character;
-  const guilds = record(character)?.guilds;
-  if (!Array.isArray(guilds)) return [];
-  const found = new Map<string, CharacterGuild>();
-  for (const value of guilds) {
-    const guild = record(value);
-    const server = guild && record(guild.server);
-    const region = server && record(server.region);
-    const name = guild && nonEmptyString(guild.name);
-    const realm = server && nonEmptyString(server.slug);
-    const regionSlug = region && nonEmptyString(region.slug);
-    const normalizedRegion = regionSlug?.toLocaleLowerCase("en-US");
-    if (
-      !name ||
-      !realm ||
-      !normalizedRegion ||
-      !supportedRegions.includes(normalizedRegion as CharacterKey["region"])
-    )
-      continue;
-    const item = {
-      name,
-      realm,
-      region: normalizedRegion as CharacterKey["region"]
-    };
-    found.set(`${item.region}\0${item.realm}\0${item.name}`, item);
-  }
-  return [...found.values()];
+/**
+ * How long before a kill its report may have started. A raid night's log
+ * opens at the pull, but some loggers leave one running across an evening.
+ */
+const ATTENDANCE_REPORT_LEAD_MS = 16 * 60 * 60 * 1_000;
+/**
+ * How far past the earliest wanted report the attendance walk still pages.
+ * Pages are newest first but overlap by hours at a boundary (measured
+ * 2026-09-23), so one page wholly older than a kill does not prove the next
+ * holds nothing newer.
+ */
+const ATTENDANCE_PAGE_OVERLAP_MS = 2 * 24 * 60 * 60 * 1_000;
+/** How long after a report's last fight it still accounts for a kill. */
+const REPORT_COVER_SLACK_MS = 15 * 60 * 1_000;
+
+type ReportSpan = Readonly<{ start: number; end: number }>;
+
+/**
+ * From a report's start to its last fight's end, for each report on a history
+ * page. A verified kill inside one was either decoded from it or is not the
+ * character's to claim from it, so attendance has nothing to add.
+ */
+function reportSpans(value: unknown): readonly ReportSpan[] {
+  return recentReportsData(value).flatMap((reportValue) => {
+    const report = record(reportValue);
+    const start = report && validTimestampMilliseconds(report.startTime);
+    if (report === null || start === null || !Array.isArray(report.fights)) {
+      return [];
+    }
+    let end = start;
+    for (const fightValue of report.fights) {
+      const fightEnd = validTimestampMilliseconds(record(fightValue)?.endTime);
+      if (fightEnd !== null) end = Math.max(end, start + fightEnd);
+    }
+    return [{ start, end }];
+  });
 }
 
 type GuildAttendanceReport = Readonly<{
   code: string;
+  /** When the report started, or null when attendance does not say. */
+  startTime: number | null;
   /**
    * Whether attendance lists the character. Null means "unknown", never
    * "absent": only a complete, readable list may rule a report out.
@@ -461,6 +468,7 @@ function guildAttendancePage(
     if (!code) return null;
     reports.push({
       code,
+      startTime: validTimestampMilliseconds(entry?.startTime),
       listsCharacter: attendanceListsCharacter(entry?.players, characterName)
     });
   }
@@ -1688,6 +1696,11 @@ export function createWarcraftLogsClient(
        */
       killScanFloor?: string;
       /**
+       * Kills to search guild attendance for, when no decoded report covers
+       * them. Absent or empty, attendance is not read.
+       */
+      verifiedKills?: readonly WarcraftLogsVerifiedKill[];
+      /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call so the counts attribute to one run.
        */
@@ -1744,7 +1757,9 @@ export function createWarcraftLogsClient(
       (options.storedKills ?? []).map((kill) => [kill.fightUrl, kill])
     );
     const wipes = new Map<string, WarcraftLogsWipeEvidence>();
-    const discoveredGuilds = new Map<string, CharacterGuild>();
+    // What the cleanly decoded history pages span, so a verified kill they
+    // already account for is not searched for again in attendance.
+    const scannedSpans: ReportSpan[] = [];
     let scanLimitation: WarcraftLogsLimitation | undefined;
     const scanSkipped = options.requestCap === 0;
     let historyScanStartPage = options.historyScanStartPage ?? 1;
@@ -1790,6 +1805,7 @@ export function createWarcraftLogsClient(
       for (const kill of decodedProbe.kills) kills.set(kill.fightUrl, kill);
       for (const wipe of decodedProbe.wipes) wipes.set(wipe.fightUrl, wipe);
       for (const code of reportCodes(probe.value)) scannedReportCodes.add(code);
+      scannedSpans.push(...reportSpans(probe.value));
       if (
         lastReportCode(probe.value) !==
         options.historyScanResumeBoundaryReportCode
@@ -1844,12 +1860,6 @@ export function createWarcraftLogsClient(
       for (const wipe of normalized.wipes) {
         wipes.set(wipe.fightUrl, wipe);
       }
-      for (const guild of characterGuilds(result.value)) {
-        discoveredGuilds.set(
-          `${guild.region}\0${guild.realm}\0${guild.name}`,
-          guild
-        );
-      }
       if (normalized.limitation) {
         options.onLimitation?.("history_scan", normalized.limitation.code);
         scanLimitation = normalized.limitation;
@@ -1860,6 +1870,7 @@ export function createWarcraftLogsClient(
       for (const code of reportCodes(result.value)) {
         scannedReportCodes.add(code);
       }
+      scannedSpans.push(...reportSpans(result.value));
 
       // Below every terminal tier, so any further page can only re-find
       // evidence already stored. This is a clean stop: it sets no limitation,
@@ -1908,17 +1919,50 @@ export function createWarcraftLogsClient(
       scanLimitation = { kind: "limitation", code: "request_cap" };
     }
 
-    // Character histories can omit reports that are still listed in a known
-    // guild's attendance history. Attendance is discovery only: a report is
-    // hydrated and run through the same actor/fight attribution decoder above,
-    // and its player list only ever rules a report out, never in. A guild's
-    // attendance is every report it has logged, so reading each one cost
-    // Ryii 1,811 requests a run against a 300 cap.
-    for (const guild of discoveredGuilds.values()) {
+    // Character histories can omit reports that are still listed in a guild's
+    // attendance history. Attendance is searched only for a verified kill no
+    // decoded report accounts for, in the guild that kill was in and on its
+    // night: a guild's attendance is every report it ever logged, and walking
+    // all of it cost Ryii 1,811 requests a run against a 300 cap. It is
+    // discovery only -- a report is hydrated and run through the same
+    // actor/fight attribution decoder above, and its player list only ever
+    // rules a report out. Wipes in a hydrated report are kept; no report is
+    // read for wipes alone.
+    const recoveryTargets = new Map<
+      string,
+      { guild: WarcraftLogsVerifiedKill["guild"]; times: number[] }
+    >();
+    for (const verified of options.verifiedKills ?? []) {
+      const at = Date.parse(verified.at);
+      if (Number.isNaN(at)) continue;
+      const covered = scannedSpans.some(
+        (span) => span.start <= at && at <= span.end + REPORT_COVER_SLACK_MS
+      );
+      if (covered) continue;
+      const guildKey = `${verified.guild.region}\0${verified.guild.realm}\0${verified.guild.name}`;
+      const target = recoveryTargets.get(guildKey) ?? {
+        guild: verified.guild,
+        times: []
+      };
+      target.times.push(at);
+      recoveryTargets.set(guildKey, target);
+    }
+    for (const { guild, times } of recoveryTargets.values()) {
       if (historyScanRequests >= options.requestCap) {
         scanLimitation ??= { kind: "limitation", code: "request_cap" };
         break;
       }
+      const pagedPast =
+        Math.min(...times) -
+        ATTENDANCE_REPORT_LEAD_MS -
+        ATTENDANCE_PAGE_OVERLAP_MS;
+      // A report with no start time cannot be placed, so it is read rather
+      // than assumed to be from another night.
+      const wanted = (startTime: number | null) =>
+        startTime === null ||
+        times.some(
+          (at) => startTime <= at && startTime >= at - ATTENDANCE_REPORT_LEAD_MS
+        );
       for (let page = 1; ; page++) {
         if (historyScanRequests >= options.requestCap) {
           scanLimitation ??= { kind: "limitation", code: "request_cap" };
@@ -1947,9 +1991,13 @@ export function createWarcraftLogsClient(
           scanLimitation ??= { kind: "limitation", code: "schema_drift" };
           break;
         }
-        for (const { code, listsCharacter } of attendancePage.reports) {
+        for (const {
+          code,
+          startTime,
+          listsCharacter
+        } of attendancePage.reports) {
           if (scannedReportCodes.has(code)) continue;
-          if (listsCharacter === false) continue;
+          if (listsCharacter === false || !wanted(startTime)) continue;
           if (historyScanRequests >= options.requestCap) {
             scanLimitation ??= { kind: "limitation", code: "request_cap" };
             break;
@@ -1973,6 +2021,15 @@ export function createWarcraftLogsClient(
           if (decoded.limitation) scanLimitation ??= decoded.limitation;
         }
         if (!attendancePage.hasMorePages || scanLimitation !== undefined) break;
+        // Newest first, so a page wholly past every wanted night ends the
+        // walk. A page with an undated report says nothing about its reach.
+        const starts = attendancePage.reports.map((report) => report.startTime);
+        if (
+          starts.length > 0 &&
+          starts.every((start) => start !== null && start < pagedPast)
+        ) {
+          break;
+        }
       }
     }
 

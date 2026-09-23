@@ -2,13 +2,12 @@
   "status": 200,
   "body": {
     "characterRaidProgress": {
+      "tier": "32",
       "raidProgress": [
         {
-          "raid": {
-            "id": "nerub-ar-palace"
-          },
+          "raid": "nerubar-palace",
           "encountersDefeated": {
-            "mythic": []
+            "mythic": [{ "slug": "queen-ansurek" }]
           }
         }
       ]

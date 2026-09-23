@@ -253,17 +253,19 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
         characterRaidProgress: {
           raidProgress: [
             {
-              raid: { id: "nerub-ar-palace", name: "Nerub-ar Palace" },
+              raid: "nerubar-palace",
               encountersDefeated: {
+                normal: [],
+                heroic: [],
                 mythic: [
                   {
                     slug: "queen-ansurek",
-                    name: "Queen Ansurek",
-                    ordinal: 8,
-                    isFinalBoss: true,
                     firstDefeated: "2025-01-14T20:30:00.000Z",
-                    guild: { name: "Arachnid", realm: { slug: "Silvermoon" } },
-                    historicWorldRank: 147
+                    guild: {
+                      name: "Arachnid",
+                      realm: { slug: "silvermoon" },
+                      region: { slug: "eu" }
+                    }
                   }
                 ]
               }

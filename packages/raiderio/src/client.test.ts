@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
-import { createRaiderIoClient } from "./index";
+import { createRaiderIoClient, raiderIoHistoricTierOrdinals } from "./index";
 import recordedRankings from "./fixtures/queen-ansurek-rankings.json";
 
 type FixtureName =
@@ -633,6 +633,9 @@ describe("Raider.IO gateway", () => {
   it("normalizes historic Mythic kills without retaining an upstream payload", async () => {
     // Break caught: a changed normalizer could turn dated, attributed Mythic
     // kills into anonymous raid-progress data or leak an upstream envelope.
+    // The fixture is the recorded shape: `raid` is a bare slug and an
+    // encounter has no name, ordinal or final-boss flag. The guessed shape
+    // this replaced failed every live call as schema drift.
     const client = createRaiderIoClient({
       fetch: fixtureFetch("raid-progress-valid"),
       baseUrl: "https://fixtures.invalid",
@@ -640,34 +643,33 @@ describe("Raider.IO gateway", () => {
     });
 
     await expect(
-      client.getHistoricMythicKills(sentinel, { tierOrdinals: [30] })
+      client.getHistoricMythicKills(sentinel, { tierOrdinals: [32] })
     ).resolves.toEqual({
       kind: "evidence",
       kills: [
         {
-          raidId: "nerub-ar-palace",
-          raidName: "Nerub-ar Palace",
-          bossId: "queen-ansurek",
-          bossName: "Queen Ansurek",
-          bossOrder: 8,
-          isFinalBoss: true,
+          raidSlug: "nerubar-palace",
+          bossSlug: "queen-ansurek",
           firstDefeated: "2025-02-04T17:59:00.000Z",
-          guild: { name: "Example Guild", realm: "silvermoon" },
-          historicWorldRank: 147
+          guild: { name: "Example Guild", realm: "silvermoon", region: "eu" }
         },
         {
-          raidId: "nerub-ar-palace",
-          raidName: "Nerub-ar Palace",
-          bossId: "the-silken-court",
-          bossName: "The Silken Court",
-          bossOrder: 7,
-          isFinalBoss: false,
+          raidSlug: "nerubar-palace",
+          bossSlug: "the-silken-court",
           firstDefeated: "2025-01-29T20:00:00.000Z",
-          guild: null,
-          historicWorldRank: null
+          guild: null
         }
       ]
     });
+  });
+
+  it("pins the tiers that hold every Raider.IO raid from Legion onwards", () => {
+    // Break caught: Raider.IO answers an unknown tier with the current raid
+    // instead of an error, so a guessed range reads as valid and silently
+    // covers nothing older. Recorded by sweeping tiers 0-45 on 2026-09-23.
+    expect(raiderIoHistoricTierOrdinals).toEqual([
+      19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
+    ]);
   });
 
   it("keeps the earliest duplicate Mythic kill returned by overlapping tiers", async () => {
@@ -687,10 +689,10 @@ describe("Raider.IO gateway", () => {
       kind: "evidence",
       kills: [
         expect.objectContaining({
-          bossId: "queen-ansurek",
+          bossSlug: "queen-ansurek",
           firstDefeated: "2025-02-04T17:59:00.000Z"
         }),
-        expect.objectContaining({ bossId: "the-silken-court" })
+        expect.objectContaining({ bossSlug: "the-silken-court" })
       ]
     });
   });
