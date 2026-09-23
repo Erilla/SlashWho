@@ -4769,6 +4769,35 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("does not probe a stored boundary on a run with no history budget", async () => {
+    // Break caught: the probe went out before the cap was consulted, so a
+    // parse-only resume spent a request it did not have -- and an unavailable
+    // probe returned early and dropped the whole parse-only run.
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        historyPages.push(body.variables.page ?? 0);
+        return new Response("upstream-body-marker", { status: 503 });
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 0,
+      parseRequestCap: 10,
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport"
+    });
+
+    expect(historyPages).toEqual([]);
+    expect(result).not.toEqual({ kind: "limitation", code: "unavailable" });
+  });
+
   it("reports the cap when a resume spends its whole budget proving the boundary", async () => {
     // Break caught: the proved boundary page counts as decoded, which must not
     // let a run that read nothing past it look like a finished history.

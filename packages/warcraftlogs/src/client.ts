@@ -1756,7 +1756,10 @@ export function createWarcraftLogsClient(
     // Reports this run has already decoded from the character's own history.
     // Hydrating one again through attendance would re-read the same fights.
     const scannedReportCodes = new Set<string>();
+    // A run with no history budget -- a parse-only resume -- has no request to
+    // spend proving a boundary it will not scan from.
     if (
+      options.requestCap > 0 &&
       historyScanStartPage > 1 &&
       options.historyScanResumeBoundaryReportCode !== undefined
     ) {
