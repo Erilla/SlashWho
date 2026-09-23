@@ -52,7 +52,8 @@ describe("database migrations", () => {
       "rate_limit_events",
       "snapshot_characters",
       "snapshots",
-      "suppressed_characters"
+      "suppressed_characters",
+      "warcraft_logs_character_ids"
     ]);
 
     const cursor = await pool.query<{ column_name: string }>(`
