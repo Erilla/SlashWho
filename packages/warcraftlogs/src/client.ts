@@ -184,27 +184,27 @@ const reportByCodeQuery = `
 
 const historicRaidZonesQuery = `
   query HistoricRaidZones {
-    worldData { zones { id name } }
+    worldData { zones { id name partitions { id } } }
   }
 `;
 
 const historicZoneRankingsQuery = (lookup: CharacterLookup) => `
-  query HistoricZoneRankings(${characterParameters(lookup)}, $zoneId: Int!) {
+  query HistoricZoneRankings(${characterParameters(lookup)}, $zoneId: Int!, $partition: Int!) {
     characterData {
       character(${characterArguments(lookup)}) {
         id
-        damage: zoneRankings(zoneID: $zoneId, difficulty: 5, partition: -1, metric: dps, timeframe: Historical)
-        healing: zoneRankings(zoneID: $zoneId, difficulty: 5, partition: -1, metric: hps, timeframe: Historical)
+        damage: zoneRankings(zoneID: $zoneId, difficulty: 5, partition: $partition, metric: dps, timeframe: Historical)
+        healing: zoneRankings(zoneID: $zoneId, difficulty: 5, partition: $partition, metric: hps, timeframe: Historical)
       }
     }
   }
 `;
 
 const historicEncounterRankingsQuery = (metric: "dps" | "hps") => `
-  query HistoricEncounterRankings($characterId: Int!, $encounterId: Int!) {
+  query HistoricEncounterRankings($characterId: Int!, $encounterId: Int!, $partition: Int!) {
     characterData {
       character(id: $characterId) {
-        encounterRankings(encounterID: $encounterId, difficulty: 5, partition: -1, metric: ${metric}, timeframe: Historical)
+        encounterRankings(encounterID: $encounterId, difficulty: 5, partition: $partition, metric: ${metric}, timeframe: Historical)
       }
     }
   }
@@ -218,7 +218,7 @@ const historicRankedReportQuery = `
         owner { name }
         guild { name server { slug region { slug } } }
         zone { id name encounters { id journalID } }
-        rankedCharacters { id canonicalID name server }
+        rankedCharacters { id canonicalID name server { slug name } }
         masterData { actors { id name server type } }
         fights(fightIDs: [$fightId]) {
           id encounterID name startTime endTime kill difficulty friendlyPlayers friendlySpecs
@@ -699,18 +699,31 @@ function decodedHydratedReport(
 function historicZoneIds(
   value: unknown,
   journalRaidId: string
-): number[] | null {
+): { zoneIds: number[]; partitionIds: number[] } | null {
   const zones = record(record(record(value)?.data)?.worldData)?.zones;
   if (!Array.isArray(zones)) return null;
-  const ids = new Set<number>();
+  const scopes = new Set<string>();
   for (const value of zones) {
     const zone = record(value);
     const id = positiveInteger(zone?.id);
     const name = nonEmptyString(zone?.name);
     if (!id || !name) return null;
-    if (lookupRaidByName(name)?.raidId === journalRaidId) ids.add(id);
+    if (lookupRaidByName(name)?.raidId !== journalRaidId) continue;
+    if (!Array.isArray(zone?.partitions)) return null;
+    const partitions = zone.partitions.length ? zone.partitions : [{ id: -1 }];
+    for (const value of partitions) {
+      const partitionId = Number(record(value)?.id);
+      if (!Number.isSafeInteger(partitionId) || partitionId === 0) return null;
+      scopes.add(`${id}:${partitionId}`);
+    }
   }
-  return [...ids].sort((a, b) => a - b);
+  const ordered = [...scopes]
+    .map((scope) => scope.split(":").map(Number) as [number, number])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  return {
+    zoneIds: ordered.map(([zoneId]) => zoneId),
+    partitionIds: ordered.map(([, partitionId]) => partitionId)
+  };
 }
 
 function historicEncounterIds(
@@ -802,6 +815,7 @@ function decodedRankedKill(
     return [];
   const ranked = entry.rankedCharacters;
   const actors = record(entry.masterData)?.actors;
+  if (ranked === null) return [];
   if (!Array.isArray(ranked) || !Array.isArray(actors))
     return { kind: "limitation", code: "schema_drift" };
   const identities = ranked.map(record);
@@ -812,15 +826,19 @@ function decodedRankedKill(
   const same = (
     item: Record<string, unknown> | null,
     actor: Record<string, unknown> | null
-  ) =>
-    typeof item?.name === "string" &&
-    typeof item.server === "string" &&
-    typeof actor?.name === "string" &&
-    typeof actor.server === "string" &&
-    item.name.toLocaleLowerCase("en-US") ===
-      actor.name.toLocaleLowerCase("en-US") &&
-    item.server.toLocaleLowerCase("en-US") ===
-      actor.server.toLocaleLowerCase("en-US");
+  ) => {
+    const server = record(item?.server);
+    return (
+      typeof item?.name === "string" &&
+      typeof server?.name === "string" &&
+      typeof actor?.name === "string" &&
+      typeof actor.server === "string" &&
+      item.name.toLocaleLowerCase("en-US") ===
+        actor.name.toLocaleLowerCase("en-US") &&
+      server.name.toLocaleLowerCase("en-US") ===
+        actor.server.toLocaleLowerCase("en-US")
+    );
+  };
   const matches = actors
     .map(record)
     .filter(
@@ -2061,12 +2079,29 @@ export function createWarcraftLogsClient(
       metricIndex: 0,
       reportIndex: 0
     };
+    // A cursor saved by the first ranked backfill named zones but not their
+    // partitions. Restart discovery so it cannot silently skip older ranks.
+    if (progress.zonesLoaded && !progress.partitionIds) {
+      progress = {
+        ...progress,
+        zoneIds: [],
+        zonesLoaded: false,
+        zoneIndex: 0,
+        encounterIds: [],
+        encountersLoaded: false,
+        encounterIndex: 0,
+        metricIndex: 0,
+        reportIndex: 0
+      };
+    }
+    const acceptedFights = new Set(progress.acceptedFightKeys ?? []);
+    const hydratedFights = new Set(acceptedFights);
     const limited = (
       limitation: WarcraftLogsLimitation
     ): WarcraftLogsRankedBackfillResult => ({
       kind: "evidence",
       kills: [...kills.values()],
-      cursor: progress,
+      cursor: { ...progress, acceptedFightKeys: [...acceptedFights] },
       limitation
     });
     const request = async (
@@ -2094,20 +2129,23 @@ export function createWarcraftLogsClient(
       const zones = await request("zone_rankings", historicRaidZonesQuery, {});
       if (!zones) return limited({ kind: "limitation", code: "request_cap" });
       if (zones.kind !== "success") return limited(zones);
-      const zoneIds = historicZoneIds(zones.value, options.journalRaidId);
-      if (!zoneIds)
-        return limited({ kind: "limitation", code: "schema_drift" });
-      progress = { ...progress, zoneIds, zonesLoaded: true };
+      const scopes = historicZoneIds(zones.value, options.journalRaidId);
+      if (!scopes) return limited({ kind: "limitation", code: "schema_drift" });
+      progress = { ...progress, ...scopes, zonesLoaded: true };
     }
     while (progress.zoneIndex < progress.zoneIds.length) {
       const zoneId = progress.zoneIds[progress.zoneIndex]!;
+      const partition = progress.partitionIds?.[progress.zoneIndex];
+      if (partition === undefined)
+        return limited({ kind: "limitation", code: "schema_drift" });
       if (!progress.encountersLoaded) {
         const ranking = await request(
           "zone_rankings",
           historicZoneRankingsQuery(lookup),
           {
             ...characterVariables(lookup),
-            zoneId
+            zoneId,
+            partition
           }
         );
         if (!ranking)
@@ -2140,7 +2178,8 @@ export function createWarcraftLogsClient(
             historicEncounterRankingsQuery(metric),
             {
               characterId: progress.characterId!,
-              encounterId
+              encounterId,
+              partition
             }
           );
           if (!ranking)
@@ -2155,6 +2194,8 @@ export function createWarcraftLogsClient(
             progress = { ...progress, reportIndex: progress.reportIndex + 1 }
           ) {
             const ref = refs[progress.reportIndex]!;
+            const fightKey = `${ref.code}:${ref.fightId}`;
+            if (hydratedFights.has(fightKey)) continue;
             const detail = await request(
               "report_hydration",
               historicRankedReportQuery,
@@ -2166,8 +2207,10 @@ export function createWarcraftLogsClient(
             if (!detail)
               return limited({ kind: "limitation", code: "request_cap" });
             if (detail.kind !== "success") {
-              if (detail.code === "not_found" || detail.code === "private")
+              if (detail.code === "not_found" || detail.code === "private") {
+                hydratedFights.add(fightKey);
                 continue;
+              }
               return limited(detail);
             }
             const decoded = decodedRankedKill(detail.value, {
@@ -2180,6 +2223,16 @@ export function createWarcraftLogsClient(
             });
             if (!Array.isArray(decoded))
               return limited(decoded as WarcraftLogsLimitation);
+            const report = record(
+              record(record(detail.value)?.data)?.reportData
+            )?.report;
+            if (decoded.length > 0) acceptedFights.add(fightKey);
+            if (
+              decoded.length > 0 ||
+              report === null ||
+              record(report)?.rankedCharacters === null
+            )
+              hydratedFights.add(fightKey);
             for (const kill of decoded) kills.set(kill.fightUrl, kill);
           }
         }

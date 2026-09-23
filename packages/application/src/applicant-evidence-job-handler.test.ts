@@ -4769,6 +4769,8 @@ describe("searching one tier from the dossier", () => {
       journalRaidId: eternalPalace.raidId,
       characterId: 40989140,
       zoneIds: [23],
+      partitionIds: [1],
+      acceptedFightKeys: ["publicReport:10"],
       zonesLoaded: true,
       zoneIndex: 0,
       encounterIds: [2299],

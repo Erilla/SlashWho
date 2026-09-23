@@ -552,6 +552,8 @@ export type StoredRankedBackfillCursor = Readonly<{
   journalRaidId: string;
   characterId?: number;
   zoneIds: readonly number[];
+  partitionIds?: readonly number[];
+  acceptedFightKeys?: readonly string[];
   zonesLoaded: boolean;
   zoneIndex: number;
   encounterIds: readonly number[];
