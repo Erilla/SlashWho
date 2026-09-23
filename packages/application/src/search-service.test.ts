@@ -336,6 +336,10 @@ function policyFixture(
       async clearTerminalTiers() {
         return 0;
       },
+      async emptyAttendanceSearches() {
+        return [];
+      },
+      async recordEmptyAttendanceSearches() {},
       async recordLimitation() {},
       async listActive() {
         return [];

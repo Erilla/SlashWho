@@ -2563,6 +2563,7 @@ describe("applicant evidence job handler", () => {
               raiderIoOutcome: null,
               raiderIoMs: null,
               verifiedKillsSearched: null,
+              verifiedKillsSkippedEmpty: null,
               recoveredKills: null
             }
           }
@@ -4302,6 +4303,7 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
       raiderIoOutcome: "evidence",
       raiderIoMs: expect.any(Number),
       verifiedKillsSearched: 1,
+      verifiedKillsSkippedEmpty: 0,
       recoveredKills: 1
     });
   });
@@ -4368,6 +4370,103 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
     }
   });
 
+  describe("remembering a night searched to the end and found empty (#434)", () => {
+    const azsharaSearch = {
+      at: "2020-01-21T19:34:00.000Z",
+      guild: { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" }
+    };
+
+    it("does not search again for a night searched empty this week", async () => {
+      // Break caught: a kill whose first defeat was never logged has nothing
+      // to hold it, so every full run walked its guild's attendance again.
+      // Yawnersw spent 39 pages, about 1,090 of its 1,168 points, on it.
+      const evidence = Object.assign(store(), {
+        emptyAttendanceSearches: vi.fn<
+          (key: unknown, since: Date) => Promise<(typeof azsharaSearch)[]>
+        >(async () => [azsharaSearch]),
+        recordEmptyAttendanceSearches: vi.fn(async () => undefined)
+      });
+      const getFirstKillReports = vi.fn(emptyEvidence);
+      const handler = handlerWith(
+        evidence,
+        getFirstKillReports,
+        vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+      );
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.not.objectContaining({ verifiedKills: expect.anything() })
+      );
+      // Asked a week back, not further: an older empty search is retried.
+      const [, since] = evidence.emptyAttendanceSearches.mock.calls[0]!;
+      expect(Date.now() - since.getTime()).toBeGreaterThanOrEqual(
+        7 * 24 * 60 * 60 * 1_000 - 60_000
+      );
+      expect(evidence.costs.at(-1)?.recovery).toMatchObject({
+        verifiedKillsSearched: 0,
+        verifiedKillsSkippedEmpty: 1
+      });
+    });
+
+    it("remembers the nights the scan searched to the end and found empty", async () => {
+      const evidence = Object.assign(store(), {
+        emptyAttendanceSearches: vi.fn(async () => []),
+        recordEmptyAttendanceSearches: vi.fn(async () => undefined)
+      });
+      const handler = handlerWith(
+        evidence,
+        vi.fn(async () => ({
+          ...(await emptyEvidence()),
+          attendanceRecoveredKills: 0,
+          attendanceSearchedEmpty: [azsharaSearch]
+        })),
+        vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+      );
+
+      await handler.execute(run.id);
+
+      expect(evidence.recordEmptyAttendanceSearches).toHaveBeenCalledWith(
+        key,
+        [azsharaSearch],
+        expect.any(Date)
+      );
+    });
+
+    it("searches anyway when that memory cannot be read or written", async () => {
+      // A cache of where not to look: losing it costs a search, never a kill,
+      // and never the run.
+      const evidence = Object.assign(store(), {
+        emptyAttendanceSearches: vi.fn(async () => {
+          throw new Error("connection reset");
+        }),
+        recordEmptyAttendanceSearches: vi.fn(async () => {
+          throw new Error("connection reset");
+        })
+      });
+      const getFirstKillReports = vi.fn(async () => ({
+        ...(await emptyEvidence()),
+        attendanceSearchedEmpty: [azsharaSearch]
+      }));
+      const handler = handlerWith(
+        evidence,
+        getFirstKillReports,
+        vi.fn(async () => ({ kind: "evidence", kills: [verifiedAzshara] }))
+      );
+
+      await handler.execute(run.id);
+
+      expect(getFirstKillReports).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({ verifiedKills: [azsharaSearch] })
+      );
+      expect(evidence.published.at(-1)?.result).toMatchObject({
+        state: "complete"
+      });
+    });
+  });
+
   it("does not ask Raider.IO on a light run, which cannot search attendance", async () => {
     const evidence = store();
     const getHistoricMythicKills = vi.fn();
@@ -4388,6 +4487,7 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
       raiderIoOutcome: null,
       raiderIoMs: null,
       verifiedKillsSearched: null,
+      verifiedKillsSkippedEmpty: null,
       recoveredKills: null
     });
   });
