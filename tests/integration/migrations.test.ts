@@ -31,6 +31,7 @@ describe("database migrations", () => {
       "applicant_source_counts",
       "applicant_source_intents",
       "applicant_source_state",
+      "applicant_suppression_history",
       "character_alias_recollections",
       "character_attendance_searches",
       "character_evidence_collections",
