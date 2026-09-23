@@ -64,6 +64,67 @@ test("reports an absent character before creating discovery work", async ({
   expect(polledJobs).toEqual([]);
 });
 
+test("researches an applicant pasted as a Warcraft Logs character-ID URL", async ({
+  page
+}) => {
+  // Break caught: an ID URL names no realm or region, so without resolving it
+  // in place the search either refuses it or submits a guess.
+  await seedSnapshot({
+    key: { region: "eu", realm: "silvermoon", name: "ryii" },
+    displayName: "Ryii",
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z")
+  });
+  let answerLookup!: () => void;
+  const lookupHeld = new Promise<void>((resolve) => {
+    answerLookup = resolve;
+  });
+  await page.route("**/api/warcraft-logs/characters/*", async (route) => {
+    await lookupHeld;
+    await route.continue();
+  });
+  await page.goto("/");
+
+  const character = page.getByLabel("Character/URL");
+  await character.focus();
+  await page.keyboard.insertText(
+    "https://www.warcraftlogs.com/character/id/40989140"
+  );
+  await expect(
+    page.getByRole("status", { name: "Looking up Warcraft Logs character" })
+  ).toBeVisible();
+  await expect(page.getByLabel("Realm")).toHaveCount(0);
+
+  answerLookup();
+  await expect(page.getByLabel("Realm")).toHaveValue("silvermoon");
+  await expect(character).toHaveValue("Ryii");
+  await expect(page.getByLabel("Region")).toHaveValue("eu");
+  await expect(character).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(
+    /\/dossiers\/eu\/silvermoon\/ryii(?:\?job=[\da-f-]+)?$/
+  );
+});
+
+test("explains a Warcraft Logs character ID it cannot find", async ({
+  page
+}) => {
+  await page.goto("/");
+
+  await page
+    .getByLabel("Character/URL")
+    .fill("https://www.warcraftlogs.com/character/id/7");
+
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "No Warcraft Logs character has that ID." })
+  ).toBeVisible();
+  await expect(page.getByLabel("Character/URL")).toHaveAccessibleDescription(
+    "No Warcraft Logs character has that ID."
+  );
+});
+
 for (const applicantUrl of applicantUrls) {
   test(`researches an applicant dossier from ${new URL(applicantUrl).hostname}`, async ({
     page
