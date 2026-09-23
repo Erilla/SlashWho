@@ -19,6 +19,10 @@ afterEach(() => {
 });
 
 it("submits email and password, clears the password, and navigates", async () => {
+  const changed = vi.fn();
+  window.addEventListener("slashwho:account-session-changed", changed, {
+    once: true
+  });
   const password = "password-at-least-20-characters";
   const fetchMock = vi
     .fn()
@@ -37,6 +41,7 @@ it("submits email and password, clears the password, and navigates", async () =>
   });
   expect(input).toHaveValue("");
   expect(router.replace).toHaveBeenCalledWith("/account");
+  expect(changed).toHaveBeenCalledOnce();
 });
 
 it("directs a required password change to its own form", async () => {

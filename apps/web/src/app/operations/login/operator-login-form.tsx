@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { notifyAccountSessionChanged } from "../../../lib/account-session-events";
 
 export function OperatorLoginForm() {
   const router = useRouter();
@@ -31,6 +32,7 @@ export function OperatorLoginForm() {
         setFailed(true);
         return;
       }
+      notifyAccountSessionChanged();
       router.replace(
         response.headers.get("x-password-change-required") === "1"
           ? "/account/change-password"

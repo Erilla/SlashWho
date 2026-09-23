@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import {
   accountAuthFixture,
   accountEmail,
+  automationKey,
   operatorCredential,
   operatorMutation
 } from "../../../../server/operator-auth-test-fixture";
@@ -22,6 +23,14 @@ it("signs in a verified email and issues an opaque cookie", async () => {
   expect(response.headers.get("set-cookie")).toMatch(
     /^__Host-slashwho-operator=v1\./
   );
+  for (const attribute of [
+    "Path=/",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Strict",
+    "Max-Age=1800"
+  ])
+    expect(response.headers.get("set-cookie")).toContain(attribute);
   expect(response.headers.get("set-cookie")).not.toContain(accountEmail);
   expect(response.headers.get("set-cookie")).not.toContain(operatorCredential);
   expect(response.headers.get("cache-control")).toBe("no-store");
@@ -41,6 +50,10 @@ it.each([
   [
     { email: accountEmail, password: operatorCredential },
     { authorization: "Bearer bad" }
+  ],
+  [
+    { email: accountEmail, password: operatorCredential },
+    { authorization: `Bearer ${automationKey}` }
   ],
   [{ email: "unknown@example.test", password: operatorCredential }, {}],
   ["{", {}],
@@ -83,4 +96,17 @@ it("rejects an unverified account without issuing a cookie", async () => {
   );
   expect(response.status).toBe(401);
   expect(response.headers.get("set-cookie")).toBeNull();
+});
+
+it("does not apply a cookie directive from a rejected sign-in", async () => {
+  const signIn = vi.spyOn(fixture.auth, "signIn").mockResolvedValue({
+    principal: null,
+    cookie: { header: "__Host-slashwho-operator=invalid" } as never
+  });
+  const response = await POST(
+    operatorMutation({ email: accountEmail, password: operatorCredential })
+  );
+  expect(response.status).toBe(401);
+  expect(response.headers.get("set-cookie")).toBeNull();
+  signIn.mockRestore();
 });

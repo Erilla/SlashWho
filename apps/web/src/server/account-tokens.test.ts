@@ -3,13 +3,14 @@ import { decryptAccountMail } from "@slashwho/application";
 import type { AccountCredential, Repositories } from "@slashwho/database";
 import { hashOperatorCredential } from "./operator-auth";
 import { createAccountTokens } from "./account-tokens";
+import { registrationSubjects } from "./account-email";
 
 const at = new Date("2026-09-23T12:00:00Z");
 const password = "registration-password-123456";
 const key = Buffer.alloc(32, 7);
 
 async function fixture() {
-  const credential: AccountCredential = {
+  let credential: AccountCredential = {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     canonicalEmail: "person@example.com",
     email: "Person@Example.com",
@@ -38,7 +39,7 @@ async function fixture() {
           (value) =>
             value.purpose === input.purpose &&
             value.subjectHash === input.subjectHash
-        ).length <= 1
+        ).length <= (input.purpose === "verify" ? 3 : 1)
       );
     },
     findAccountById: async (id: string) =>
@@ -97,7 +98,15 @@ async function fixture() {
     origin: "https://slashwho.example",
     from: "Accounts <accounts@example.com>"
   });
-  return { service, credential, mail, admissions };
+  return {
+    service,
+    credential,
+    mail,
+    admissions,
+    setAccount(change: Partial<AccountCredential>) {
+      credential = { ...credential, ...change };
+    }
+  };
 }
 
 describe("account tokens", () => {
@@ -146,4 +155,31 @@ describe("account tokens", () => {
       "reset"
     ]);
   });
+
+  it.each(["unknown", "verified", "pending"] as const)(
+    "charges resend to the registration address bucket for %s addresses",
+    async (state) => {
+      const f = await fixture();
+      if (state === "verified") f.setAccount({ verifiedAt: at });
+      const address =
+        state === "unknown" ? "missing@example.com" : "person@example.com";
+      for (let count = 0; count < 3; count++)
+        await f.service.resendVerification(address, at);
+      const subject = registrationSubjects(
+        new Request("https://slashwho.example"),
+        address,
+        "h".repeat(32)
+      ).emailSubjectHash;
+      expect(f.admissions).toHaveLength(3);
+      expect(
+        f.admissions.every(
+          (entry) => entry.purpose === "verify" && entry.subjectHash === subject
+        )
+      ).toBe(true);
+      // Registration reads the same subject count and must reject a fourth request.
+      expect(
+        f.admissions.filter((entry) => entry.subjectHash === subject)
+      ).toHaveLength(3);
+    }
+  );
 });

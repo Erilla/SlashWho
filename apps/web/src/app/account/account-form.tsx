@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { notifyAccountSessionChanged } from "../../lib/account-session-events";
 
 export type Flow =
   | "create"
@@ -122,6 +123,11 @@ export function AccountForm({ flow }: { flow: Flow }) {
       setFeedback(result.message ?? "The request could not be completed.");
       if (
         response.ok &&
+        ["reset", "change-password", "confirm-email"].includes(actualFlow)
+      )
+        notifyAccountSessionChanged();
+      if (
+        response.ok &&
         (flow === "verify" || flow === "reset" || flow === "change-password")
       )
         router.refresh();
@@ -141,7 +147,9 @@ export function AccountForm({ flow }: { flow: Flow }) {
         )}
       </div>
       {!token &&
-      (flow === "verify" || flow === "reset" || flow === "confirm-email") ? (
+      (actualFlow === "verify" ||
+        actualFlow === "reset" ||
+        actualFlow === "confirm-email") ? (
         <p role="alert">This link is missing a token.</p>
       ) : (
         <form className="operator-login-form" onSubmit={submit}>

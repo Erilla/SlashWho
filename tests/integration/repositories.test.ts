@@ -1505,6 +1505,30 @@ describe("PostgreSQL repositories", () => {
     ).toBe("admitted");
   });
 
+  it("shares the daily address cap between resend and registration", async () => {
+    const at = new Date("2026-09-23T12:00:00.000Z");
+    for (const state of ["unknown", "verified", "pending"]) {
+      const subjectHash = `resend-before-registration-${state}`;
+      for (let count = 0; count < 3; count++)
+        expect(
+          await repositories.accountTokens.admitRequest({
+            purpose: "verify",
+            subjectHash,
+            limit: 3,
+            expiresAt: new Date(at.getTime() + 86_400_000),
+            at
+          })
+        ).toBe(true);
+      expect(
+        await repositories.accountAuth.admitRegistration({
+          ipSubjectHash: `fresh-ip-${state}`,
+          emailSubjectHash: subjectHash,
+          at
+        })
+      ).toBe("throttled");
+    }
+  });
+
   async function provisionOperator() {
     return repositories.operatorAuth.provision({
       canonicalLogin: "operator_one",

@@ -95,8 +95,9 @@ export function createAccountTokens(config: {
     async resendVerification(email: string, at: Date): Promise<void> {
       const canonical = canonicalizeEmail(email);
       if (!canonical) return;
+      if (!(await admit("verify", canonical, at))) return;
       const account = await repository.findAccountByEmail(canonical);
-      if (account) await this.issueVerification(account.id, at);
+      if (account) await this.issueVerification(account.id, at, true);
     },
     async issueVerification(
       accountId: string,

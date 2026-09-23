@@ -14,6 +14,7 @@ beforeEach(async () => {
 
 it("revokes the presented account session", async () => {
   const cookie = await fixture.cookie();
+  const other = await fixture.cookie();
   const response = await POST(operatorMutation({}, { cookie }));
   expect(response.status).toBe(204);
   expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
@@ -24,6 +25,13 @@ it("revokes the presented account session", async () => {
       )
     ).principal
   ).toBeNull();
+  expect(
+    (
+      await fixture.auth.authenticate(
+        new Request("https://slashwho.example", { headers: { cookie: other } })
+      )
+    ).principal?.kind
+  ).toBe("account");
 });
 
 it("denies cross-site sign-out", async () => {
