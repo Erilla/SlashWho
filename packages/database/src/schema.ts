@@ -570,6 +570,10 @@ export const characterEvidenceRuns = pgTable(
     killScanResumeBoundaryReportCode: text(
       "kill_scan_resume_boundary_report_code"
     ),
+    rankedBackfillCursor: jsonb("ranked_backfill_cursor"),
+    rankedBackfillAttempted: boolean("ranked_backfill_attempted")
+      .default(false)
+      .notNull(),
     wclClientIdEncrypted: text("wcl_client_id_encrypted"),
     wclClientSecretEncrypted: text("wcl_client_secret_encrypted"),
     // What the run was reserved to do. `tier_search` is a full collection

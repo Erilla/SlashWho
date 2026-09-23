@@ -12,6 +12,8 @@ export type {
   WarcraftLogsQueryType,
   WarcraftLogsRateLimit,
   WarcraftLogsRateLimitResult,
+  WarcraftLogsRankedBackfillCursor,
+  WarcraftLogsRankedBackfillResult,
   WarcraftLogsReportResult,
   WarcraftLogsRequestEvent,
   WarcraftLogsTierBestParse,

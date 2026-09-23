@@ -28,6 +28,7 @@ export type EvidencePublication = Readonly<{
   /** See StagedEvidenceCollection.historyScanResumePage. */
   historyScanResumePage?: number | null;
   historyScanResumeBoundaryReportCode?: string | null;
+  rankedBackfillCursor?: StagedEvidenceCollection["rankedBackfillCursor"];
   limitationCode: EvidenceLimitationCode | null;
   /**
    * The parse limitation this run is judged by: the one that decides whether
@@ -89,6 +90,9 @@ export function toStagedCollection(
             publication.historyScanResumeBoundaryReportCode
         }
       : {}),
+    ...(Object.hasOwn(publication, "rankedBackfillCursor")
+      ? { rankedBackfillCursor: publication.rankedBackfillCursor }
+      : {}),
     limitationCode: publication.limitationCode,
     parseLimitationCode: publication.parseLimitationCode,
     parseLimitationCodesSeen: publication.parseLimitationCodesSeen,
@@ -119,6 +123,9 @@ export function fromStagedCollection(
           historyScanResumeBoundaryReportCode:
             staged.historyScanResumeBoundaryReportCode
         }
+      : {}),
+    ...(Object.hasOwn(staged, "rankedBackfillCursor")
+      ? { rankedBackfillCursor: staged.rankedBackfillCursor }
       : {}),
     limitationCode: staged.limitationCode as EvidenceLimitationCode | null,
     parseLimitationCode:

@@ -222,6 +222,29 @@ export type WarcraftLogsTierSearchOutcome = Readonly<{
   recoveredWipes: number;
 }>;
 
+/** Position in one tier's ranked discovery, persisted across capped runs. */
+export type WarcraftLogsRankedBackfillCursor = Readonly<{
+  journalRaidId: string;
+  characterId?: number;
+  zoneIds: readonly number[];
+  zonesLoaded: boolean;
+  zoneIndex: number;
+  encounterIds: readonly number[];
+  encountersLoaded: boolean;
+  encounterIndex: number;
+  metricIndex: number;
+  reportIndex: number;
+}>;
+
+export type WarcraftLogsRankedBackfillResult =
+  | Readonly<{
+      kind: "evidence";
+      kills: readonly WarcraftLogsFirstKillEvidence[];
+      cursor?: WarcraftLogsRankedBackfillCursor;
+      limitation?: WarcraftLogsLimitation;
+    }>
+  | WarcraftLogsLimitation;
+
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
@@ -319,10 +342,23 @@ export type WarcraftLogsReportResult =
       attendanceSearchedEmpty?: readonly WarcraftLogsVerifiedKill[];
       /** Present only when a tier search was asked for. */
       tierSearch?: WarcraftLogsTierSearchOutcome;
+      /** Position after a capped ranked search; null means it completed. */
+      rankedBackfillCursor?: WarcraftLogsRankedBackfillCursor | null;
     }>
   | WarcraftLogsLimitation;
 
 export interface WarcraftLogsGateway {
+  getRankedKillReports(
+    key: CharacterKey,
+    options: Readonly<{
+      journalRaidId: string;
+      requestCap: number;
+      characterId?: number;
+      cursor?: WarcraftLogsRankedBackfillCursor;
+      onRequest?(event: WarcraftLogsRequestEvent): void;
+      signal?: AbortSignal;
+    }>
+  ): Promise<WarcraftLogsRankedBackfillResult>;
   resolveCharacter(
     key: CharacterKey,
     signal?: AbortSignal
@@ -416,6 +452,12 @@ export interface WarcraftLogsGateway {
       storedKillReportCodes?: readonly string[];
       /** An explicit search of one tier's guild attendance (#435). */
       tierSearch?: WarcraftLogsTierSearch;
+      /** Ranked reports for the same explicit tier search, with durable resume. */
+      rankedBackfill?: Readonly<{
+        journalRaidId: string;
+        requestCap: number;
+        cursor?: WarcraftLogsRankedBackfillCursor;
+      }>;
       /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call rather than to the client so the counts
