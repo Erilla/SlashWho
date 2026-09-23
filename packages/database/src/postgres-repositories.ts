@@ -26,6 +26,8 @@ import type {
   EvidenceRunPhase,
   FingerprintAdmission,
   FingerprintContinuationAdmission,
+  Account,
+  AccountSummary,
   Operator,
   OperatorCredential,
   OperatorSession,
@@ -66,6 +68,45 @@ interface OperatorRow {
   credential_version: number;
   created_at: Date;
   updated_at: Date;
+}
+
+interface AccountRow {
+  id: string;
+  canonical_email: string;
+  email: string;
+  role: Account["role"];
+  active: boolean;
+  verified_at: Date | null;
+  password_change_required: boolean;
+  credential_version: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+function mapAccount(row: AccountRow): Account {
+  return {
+    id: row.id,
+    canonicalEmail: row.canonical_email,
+    email: row.email,
+    role: row.role,
+    active: row.active,
+    verifiedAt: row.verified_at,
+    passwordChangeRequired: row.password_change_required,
+    credentialVersion: row.credential_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapAccountSummary(row: AccountRow): AccountSummary {
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role,
+    active: row.active,
+    verifiedAt: row.verified_at,
+    createdAt: row.created_at
+  };
 }
 
 interface OperatorCredentialRow extends OperatorRow {
@@ -1486,6 +1527,105 @@ async function requestHistoricAliasRecollection(
   );
 }
 
+type AdminMutation =
+  | { kind: "role"; role: Account["role"] }
+  | { kind: "active"; active: boolean }
+  | { kind: "password_change" };
+
+async function mutateAccountAdmin(
+  pool: Pool,
+  input: { actorId: string; targetId: string; at: Date },
+  mutation: AdminMutation
+): Promise<"updated" | "last_admin" | "forbidden" | "missing"> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Serialize admin changes even when separate requests target different rows.
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended('account-admin', 1))"
+    );
+    const actor = await client.query<{
+      role: Account["role"];
+      active: boolean;
+      verified_at: Date | null;
+      password_change_required: boolean;
+    }>(
+      `SELECT role, active, verified_at, password_change_required
+       FROM accounts WHERE id = $1 FOR UPDATE`,
+      [input.actorId]
+    );
+    if (
+      actor.rows[0]?.role !== "admin" ||
+      !actor.rows[0].active ||
+      !actor.rows[0].verified_at ||
+      actor.rows[0].password_change_required
+    ) {
+      await client.query("COMMIT");
+      return "forbidden";
+    }
+    const target = await client.query<{
+      role: Account["role"];
+      active: boolean;
+    }>("SELECT role, active FROM accounts WHERE id = $1 FOR UPDATE", [
+      input.targetId
+    ]);
+    if (!target.rows[0]) {
+      await client.query("COMMIT");
+      return "missing";
+    }
+    const removesAdmin =
+      target.rows[0].role === "admin" &&
+      target.rows[0].active &&
+      ((mutation.kind === "role" && mutation.role !== "admin") ||
+        (mutation.kind === "active" && !mutation.active));
+    if (removesAdmin) {
+      const count = await client.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active"
+      );
+      if (count.rows[0]!.count <= 1) {
+        await client.query("COMMIT");
+        return "last_admin";
+      }
+    }
+    if (mutation.kind === "role") {
+      await client.query(
+        `UPDATE accounts SET role = $2, credential_version = credential_version + 1,
+         updated_at = $3 WHERE id = $1`,
+        [input.targetId, mutation.role, input.at]
+      );
+    } else if (mutation.kind === "active") {
+      await client.query(
+        `UPDATE accounts SET active = $2, credential_version = credential_version + 1,
+         updated_at = $3 WHERE id = $1`,
+        [input.targetId, mutation.active, input.at]
+      );
+    } else {
+      await client.query(
+        `UPDATE accounts SET password_change_required = true,
+         credential_version = credential_version + 1, updated_at = $2 WHERE id = $1`,
+        [input.targetId, input.at]
+      );
+    }
+    await client.query(
+      `UPDATE account_sessions SET revoked_at = $2
+       WHERE account_id = $1 AND revoked_at IS NULL`,
+      [input.targetId, input.at]
+    );
+    await client.query(
+      `INSERT INTO account_auth_events (account_id, action, outcome, occurred_at)
+       VALUES ($1, $2, 'success', $3)`,
+      [input.targetId, mutation.kind, input.at]
+    );
+    await client.query("COMMIT");
+    return "updated";
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
     accountMail: {
@@ -1576,6 +1716,83 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       }
     },
     accountAuth: {
+      async provisionAdmin(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const result = await client.query<AccountRow>(
+            `INSERT INTO accounts
+               (canonical_email, email, role, verified_at, password_change_required,
+                password_hash, password_salt, scrypt_version, scrypt_cost,
+                created_at, updated_at)
+             VALUES ($1, $2, 'admin', $7, true, $3, $4, $5, $6, $7, $7)
+             RETURNING id, canonical_email, email, role, active, verified_at,
+                       password_change_required, credential_version, created_at, updated_at`,
+            [
+              input.canonicalEmail,
+              input.email,
+              input.passwordHash,
+              input.passwordSalt,
+              input.scryptVersion,
+              input.scryptCost,
+              input.at
+            ]
+          );
+          const account = mapAccount(result.rows[0]!);
+          await client.query(
+            `INSERT INTO account_auth_events (account_id, action, outcome, occurred_at)
+             VALUES ($1, 'provision_admin', 'success', $2)`,
+            [account.id, input.at]
+          );
+          await client.query("COMMIT");
+          return account;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+
+      setRole(input) {
+        return mutateAccountAdmin(pool, input, {
+          kind: "role",
+          role: input.role
+        });
+      },
+
+      setActive(input) {
+        return mutateAccountAdmin(pool, input, {
+          kind: "active",
+          active: input.active
+        });
+      },
+
+      async requirePasswordChange(input) {
+        return (
+          (await mutateAccountAdmin(pool, input, {
+            kind: "password_change"
+          })) === "updated"
+        );
+      },
+
+      async listAccounts(actorId) {
+        const result = await pool.query<AccountRow>(
+          `SELECT id, canonical_email, email, role, active, verified_at,
+                  password_change_required, credential_version, created_at, updated_at
+           FROM accounts
+           WHERE EXISTS (
+             SELECT 1 FROM accounts AS actor
+             WHERE actor.id = $1 AND actor.role = 'admin' AND actor.active
+               AND actor.verified_at IS NOT NULL
+               AND NOT actor.password_change_required
+           )
+           ORDER BY canonical_email`,
+          [actorId]
+        );
+        return result.rows.map(mapAccountSummary);
+      },
+
       async registerPending(input) {
         const client = await pool.connect();
         try {

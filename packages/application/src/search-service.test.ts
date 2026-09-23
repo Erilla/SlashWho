@@ -112,6 +112,21 @@ function policyFixture(
       }
     },
     accountAuth: {
+      async provisionAdmin() {
+        throw new Error("not_used");
+      },
+      async setRole() {
+        throw new Error("not_used");
+      },
+      async setActive() {
+        throw new Error("not_used");
+      },
+      async requirePasswordChange() {
+        throw new Error("not_used");
+      },
+      async listAccounts() {
+        throw new Error("not_used");
+      },
       async registerPending() {
         throw new Error("not_used");
       },

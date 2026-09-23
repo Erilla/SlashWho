@@ -1,12 +1,20 @@
 import {
   createPostgresRepositories,
+  type AccountAuthRepository,
   type OperatorAuthRepository
 } from "@slashwho/database";
+import { canonicalizeEmail } from "../apps/web/src/server/account-email";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 
-const commands = ["provision", "rotate", "disable", "list"] as const;
+const commands = [
+  "provision",
+  "rotate",
+  "disable",
+  "list",
+  "provision-admin"
+] as const;
 type Command = (typeof commands)[number];
 type CredentialHash = Readonly<{
   passwordHash: string;
@@ -25,6 +33,7 @@ export type OperatorOperation =
   | Readonly<{ command: "provision"; login: string }>
   | Readonly<{ command: "rotate"; operatorId: string }>
   | Readonly<{ command: "disable"; operatorId: string }>
+  | Readonly<{ command: "provision-admin"; email: string }>
   | Readonly<{ command: "list" }>;
 
 function canonicalLogin(login: string): string | null {
@@ -52,7 +61,9 @@ export function parseOperatorOperation(
     );
   return command === "provision"
     ? { command, login: value }
-    : { command, operatorId: value };
+    : command === "provision-admin"
+      ? { command, email: value }
+      : { command, operatorId: value };
 }
 
 export async function runOperatorOperation(
@@ -62,6 +73,7 @@ export async function runOperatorOperation(
       OperatorAuthRepository,
       "provision" | "rotateCredential" | "disable" | "list"
     >;
+    accountRepository?: Pick<AccountAuthRepository, "provisionAdmin">;
     readCredential(): Promise<string>;
     hashCredential(credential: string): Promise<CredentialHash>;
     now(): Date;
@@ -77,10 +89,27 @@ export async function runOperatorOperation(
     if (!operator) throw new Error("operator_not_found");
     return { action: "disable", operatorId: operator.id };
   }
+  const canonicalEmail =
+    operation.command === "provision-admin"
+      ? canonicalizeEmail(operation.email)
+      : null;
+  if (operation.command === "provision-admin" && !canonicalEmail)
+    throw new Error("invalid_account_email");
   const credential = await dependencies.readCredential();
   if (credential.length < 20 || credential.length > 1024)
     throw new Error("invalid_operator_credential");
   const hash = await dependencies.hashCredential(credential);
+  if (operation.command === "provision-admin") {
+    if (!dependencies.accountRepository)
+      throw new Error("account_repository_required");
+    const account = await dependencies.accountRepository.provisionAdmin({
+      canonicalEmail: canonicalEmail!,
+      email: operation.email.trim(),
+      ...hash,
+      at
+    });
+    return { action: "provision-admin", accountId: account.id };
+  }
   if (operation.command === "provision") {
     const canonical = canonicalLogin(operation.login);
     if (!canonical) throw new Error("invalid_operator_login");
@@ -147,8 +176,10 @@ async function main(): Promise<void> {
   if (!databaseUrl) throw new Error("database_url_required");
   const pool = new Pool({ connectionString: databaseUrl });
   try {
+    const repositories = createPostgresRepositories(pool);
     const result = await runOperatorOperation(operation, {
-      repository: createPostgresRepositories(pool).operatorAuth,
+      repository: repositories.operatorAuth,
+      accountRepository: repositories.accountAuth,
       readCredential: () =>
         readHiddenCredential({ input: process.stdin, output: process.stderr }),
       hashCredential,

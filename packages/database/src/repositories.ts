@@ -1199,6 +1199,33 @@ export type ProviderCredentials =
   | { provider: "warcraftlogs"; clientId: string; clientSecret: string };
 
 export interface AccountAuthRepository {
+  provisionAdmin(input: {
+    canonicalEmail: string;
+    email: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<Account>;
+  setRole(input: {
+    actorId: string;
+    targetId: string;
+    role: Account["role"];
+    at: Date;
+  }): Promise<"updated" | "last_admin" | "forbidden" | "missing">;
+  setActive(input: {
+    actorId: string;
+    targetId: string;
+    active: boolean;
+    at: Date;
+  }): Promise<"updated" | "last_admin" | "forbidden" | "missing">;
+  requirePasswordChange(input: {
+    actorId: string;
+    targetId: string;
+    at: Date;
+  }): Promise<boolean>;
+  listAccounts(actorId: string): Promise<readonly AccountSummary[]>;
   registerPending(input: {
     canonicalEmail: string;
     email: string;

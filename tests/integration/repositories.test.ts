@@ -217,6 +217,257 @@ describe("PostgreSQL repositories", () => {
     at
   });
 
+  it("bootstraps a verified admin that must replace the temporary password", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const admin = await repositories.accountAuth.provisionAdmin(
+      registration("owner@example.com", at)
+    );
+    expect(admin).toMatchObject({
+      canonicalEmail: "owner@example.com",
+      role: "admin",
+      active: true,
+      verifiedAt: at,
+      passwordChangeRequired: true
+    });
+    const row = await pool.query(
+      "SELECT password_hash FROM accounts WHERE id = $1",
+      [admin.id]
+    );
+    expect(row.rows[0].password_hash).toBe("derived-password-hash");
+    expect(
+      (await pool.query("SELECT action, outcome FROM account_auth_events")).rows
+    ).toEqual([{ action: "provision_admin", outcome: "success" }]);
+  });
+
+  it("keeps one active admin when two admins demote concurrently", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const a = await repositories.accountAuth.provisionAdmin(
+      registration("a@example.com", at)
+    );
+    const b = await repositories.accountAuth.provisionAdmin(
+      registration("b@example.com", at)
+    );
+    await pool.query(
+      "UPDATE accounts SET password_change_required = false WHERE id = ANY($1::uuid[])",
+      [[a.id, b.id]]
+    );
+    const outcomes = await Promise.all([
+      repositories.accountAuth.setRole({
+        actorId: a.id,
+        targetId: a.id,
+        role: "user",
+        at
+      }),
+      repositories.accountAuth.setRole({
+        actorId: b.id,
+        targetId: b.id,
+        role: "user",
+        at
+      })
+    ]);
+    expect(outcomes.sort()).toEqual(["last_admin", "updated"]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active"
+        )
+      ).rows[0].count
+    ).toBe(1);
+  });
+
+  it("keeps one active admin when two admins disable concurrently", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const a = await repositories.accountAuth.provisionAdmin(
+      registration("a@example.com", at)
+    );
+    const b = await repositories.accountAuth.provisionAdmin(
+      registration("b@example.com", at)
+    );
+    await pool.query(
+      "UPDATE accounts SET password_change_required = false WHERE id = ANY($1::uuid[])",
+      [[a.id, b.id]]
+    );
+    const outcomes = await Promise.all([
+      repositories.accountAuth.setActive({
+        actorId: a.id,
+        targetId: a.id,
+        active: false,
+        at
+      }),
+      repositories.accountAuth.setActive({
+        actorId: b.id,
+        targetId: b.id,
+        active: false,
+        at
+      })
+    ]);
+    expect(outcomes.sort()).toEqual(["last_admin", "updated"]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active"
+        )
+      ).rows[0].count
+    ).toBe(1);
+  });
+
+  it("requires a live admin actor and revokes target sessions on role, status, and password flags", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const admin = await repositories.accountAuth.provisionAdmin(
+      registration("owner@example.com", at)
+    );
+    const peer = await repositories.accountAuth.provisionAdmin(
+      registration("peer@example.com", at)
+    );
+    await pool.query(
+      "UPDATE accounts SET password_change_required = false WHERE id = ANY($1::uuid[])",
+      [[admin.id, peer.id]]
+    );
+    const created = await repositories.accountAuth.registerPending(
+      registration("user@example.com", at)
+    );
+    const userId = created.accountId!;
+    const issueSession = async (accountId: string) => {
+      const id = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO account_sessions
+        (id, secret_digest, account_id, credential_version, issued_at,
+         last_used_at, idle_expires_at, absolute_expires_at)
+        VALUES ($1, 'digest', $2, 1, $3, $3, $4, $4)`,
+        [id, accountId, at, new Date(at.getTime() + 3600000)]
+      );
+      return id;
+    };
+    const userSession = await issueSession(userId);
+    expect(
+      await repositories.accountAuth.requirePasswordChange({
+        actorId: admin.id,
+        targetId: userId,
+        at
+      })
+    ).toBe(true);
+    expect(
+      (
+        await pool.query(
+          "SELECT revoked_at FROM account_sessions WHERE id = $1",
+          [userSession]
+        )
+      ).rows[0].revoked_at
+    ).toEqual(at);
+    expect(
+      (
+        await pool.query(
+          "SELECT password_change_required FROM accounts WHERE id = $1",
+          [userId]
+        )
+      ).rows[0].password_change_required
+    ).toBe(true);
+    expect(
+      await repositories.accountAuth.setRole({
+        actorId: userId,
+        targetId: peer.id,
+        role: "user",
+        at
+      })
+    ).toBe("forbidden");
+    const peerSession = await issueSession(peer.id);
+    expect(
+      await repositories.accountAuth.setRole({
+        actorId: admin.id,
+        targetId: peer.id,
+        role: "user",
+        at
+      })
+    ).toBe("updated");
+    expect(
+      (
+        await pool.query(
+          "SELECT revoked_at FROM account_sessions WHERE id = $1",
+          [peerSession]
+        )
+      ).rows[0].revoked_at
+    ).toEqual(at);
+    expect(
+      await repositories.accountAuth.setRole({
+        actorId: peer.id,
+        targetId: admin.id,
+        role: "user",
+        at
+      })
+    ).toBe("forbidden");
+    expect(
+      await repositories.accountAuth.setRole({
+        actorId: userId,
+        targetId: userId,
+        role: "admin",
+        at
+      })
+    ).toBe("forbidden");
+    const adminSession = await issueSession(admin.id);
+    const secondUserSession = await issueSession(userId);
+    expect(
+      await repositories.accountAuth.setActive({
+        actorId: admin.id,
+        targetId: admin.id,
+        active: false,
+        at
+      })
+    ).toBe("last_admin");
+    expect(
+      await repositories.accountAuth.setActive({
+        actorId: admin.id,
+        targetId: userId,
+        active: false,
+        at
+      })
+    ).toBe("updated");
+    expect(
+      (
+        await pool.query(
+          "SELECT revoked_at FROM account_sessions WHERE id = $1",
+          [secondUserSession]
+        )
+      ).rows[0].revoked_at
+    ).toEqual(at);
+    expect(
+      (
+        await pool.query(
+          "SELECT revoked_at FROM account_sessions WHERE id = $1",
+          [adminSession]
+        )
+      ).rows[0].revoked_at
+    ).toBeNull();
+    expect(
+      await repositories.accountAuth.setActive({
+        actorId: admin.id,
+        targetId: "00000000-0000-0000-0000-000000000000",
+        active: false,
+        at
+      })
+    ).toBe("missing");
+    expect(await repositories.accountAuth.listAccounts(userId)).toEqual([]);
+    expect(await repositories.accountAuth.listAccounts(admin.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: userId, role: "user", active: false })
+      ])
+    );
+    expect(
+      JSON.stringify(await repositories.accountAuth.listAccounts(admin.id))
+    ).not.toContain("derived-password-hash");
+    await pool.query("UPDATE accounts SET active = false WHERE id = $1", [
+      admin.id
+    ]);
+    expect(
+      await repositories.accountAuth.setActive({
+        actorId: admin.id,
+        targetId: userId,
+        active: true,
+        at
+      })
+    ).toBe("forbidden");
+    expect(await repositories.accountAuth.listAccounts(admin.id)).toEqual([]);
+  });
+
   it("atomically issues mail, leases retries, and removes delivered and expired ciphertext", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const account = await repositories.accountAuth.registerPending(
