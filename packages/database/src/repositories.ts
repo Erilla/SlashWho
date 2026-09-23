@@ -753,6 +753,18 @@ export interface EvidenceRepository {
    */
   clearTerminalTiers(key: CharacterKey): Promise<number>;
   /**
+   * Records the stable Warcraft Logs character ID a key resolved to, replacing
+   * any earlier answer: a released name can come to belong to somebody else.
+   * Rejects an ID that is not a positive integer.
+   */
+  recordWarcraftLogsCharacterId(
+    key: CharacterKey,
+    characterId: number,
+    at: Date
+  ): Promise<void>;
+  /** The Warcraft Logs character ID a key last resolved to, if any. */
+  warcraftLogsCharacterId(key: CharacterKey): Promise<number | null>;
+  /**
    * Characters whose last completed run asked to be resumed and whose deadline
    * has passed, oldest deadline first, with nothing already in flight for them.
    *

@@ -993,3 +993,37 @@ export const characterTerminalTiers = pgTable(
     })
   ]
 );
+
+/**
+ * The stable Warcraft Logs character ID each name, realm and region last
+ * resolved to. The ID survives renames and realm transfers where the key does
+ * not, so it is what can tell a character's former name from its current one.
+ *
+ * Deliberately not unique on `character_id`: a former name and a current name
+ * resolving to the same ID is exactly the rename that links them (#424). And a
+ * released name can later resolve to somebody else, so a new answer replaces
+ * the old one.
+ */
+export const warcraftLogsCharacterIds = pgTable(
+  "warcraft_logs_character_ids",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    characterId: integer("character_id").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "warcraft_logs_character_ids_pkey",
+      columns: [table.region, table.realmSlug, table.normalizedName]
+    }),
+    index("warcraft_logs_character_ids_character_id_idx").on(
+      table.characterId
+    ),
+    check(
+      "warcraft_logs_character_ids_positive",
+      sql`${table.characterId} > 0`
+    )
+  ]
+);

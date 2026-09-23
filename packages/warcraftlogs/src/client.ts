@@ -60,10 +60,52 @@ const resolveCharacterByIdQuery = `
   }
 `;
 
-const recentReportsQuery = `
-  query RecentReports($name: String!, $realm: String!, $region: String!, $page: Int!) {
+/**
+ * How a query names its character: by the stable ID when one is known, which
+ * survives renames and transfers, and by name, realm and region otherwise.
+ * The two differ only in the argument list and the variables they bind.
+ */
+type CharacterLookup =
+  | Readonly<{ kind: "name"; key: CharacterKey }>
+  | Readonly<{ kind: "id"; characterId: number }>;
+
+function characterLookup(
+  key: CharacterKey,
+  characterId: number | undefined
+): CharacterLookup {
+  return characterId === undefined
+    ? { kind: "name", key }
+    : { kind: "id", characterId };
+}
+
+function characterParameters(lookup: CharacterLookup): string {
+  return lookup.kind === "id"
+    ? "$characterId: Int!"
+    : "$name: String!, $realm: String!, $region: String!";
+}
+
+function characterArguments(lookup: CharacterLookup): string {
+  return lookup.kind === "id"
+    ? "id: $characterId"
+    : "name: $name, serverSlug: $realm, serverRegion: $region";
+}
+
+function characterVariables(
+  lookup: CharacterLookup
+): Record<string, string | number> {
+  return lookup.kind === "id"
+    ? { characterId: lookup.characterId }
+    : {
+        name: lookup.key.name,
+        realm: lookup.key.realm,
+        region: lookup.key.region
+      };
+}
+
+const recentReportsQuery = (lookup: CharacterLookup) => `
+  query RecentReports(${characterParameters(lookup)}, $page: Int!) {
     characterData {
-      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+      character(${characterArguments(lookup)}) {
         server { normalizedName }
         guilds { name server { slug region { slug } } }
         recentReports(limit: ${REPORTS_PER_PAGE}, page: $page) {
@@ -164,10 +206,10 @@ const reportFightParsesQuery = `
 // bounded way to get it: report rankings cost one request per report and a
 // character's history is unbounded, so a budget-capped scan could only ever
 // report the best of whatever reports it happened to reach.
-const characterZoneParsesQuery = `
-  query CharacterZoneParses($name: String!, $realm: String!, $region: String!, $zoneID: Int!) {
+const characterZoneParsesQuery = (lookup: CharacterLookup) => `
+  query CharacterZoneParses(${characterParameters(lookup)}, $zoneID: Int!) {
     characterData {
-      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+      character(${characterArguments(lookup)}) {
         damage: zoneRankings(
           zoneID: $zoneID
           metric: dps
@@ -1726,6 +1768,12 @@ export function createWarcraftLogsClient(
        */
       killScanFloor?: string;
       /**
+       * The character's stable Warcraft Logs ID. When given, history and tier
+       * bests are read by it rather than by name; the key still identifies
+       * the character among report actors and ranking rows.
+       */
+      characterId?: number;
+      /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call so the counts attribute to one run.
        */
@@ -1738,6 +1786,13 @@ export function createWarcraftLogsClient(
     }>
   ): Promise<WarcraftLogsReportResult> {
     const key = validCharacterKey(requestedKey);
+    if (
+      options.characterId !== undefined &&
+      positiveInteger(options.characterId) === null
+    ) {
+      throw new Error("invalid_character_id");
+    }
+    const lookup = characterLookup(key, options.characterId);
     if (!Number.isSafeInteger(options.requestCap) || options.requestCap < 0) {
       return { kind: "limitation", code: "request_cap" };
     }
@@ -1808,13 +1863,8 @@ export function createWarcraftLogsClient(
       const probe = counted(
         "history_scan",
         await graphql(
-          recentReportsQuery,
-          {
-            name: key.name,
-            realm: key.realm,
-            region: key.region,
-            page: historyScanStartPage - 1
-          },
+          recentReportsQuery(lookup),
+          { ...characterVariables(lookup), page: historyScanStartPage - 1 },
           options.signal
         )
       );
@@ -1853,8 +1903,8 @@ export function createWarcraftLogsClient(
       const result = counted(
         "history_scan",
         await graphql(
-          recentReportsQuery,
-          { name: key.name, realm: key.realm, region: key.region, page },
+          recentReportsQuery(lookup),
+          { ...characterVariables(lookup), page },
           options.signal
         ).catch((error: unknown) => {
           if (options.signal?.reason?.name !== "TimeoutError") throw error;
@@ -2143,13 +2193,8 @@ export function createWarcraftLogsClient(
       const rankings = counted(
         "zone_rankings",
         await graphql(
-          characterZoneParsesQuery,
-          {
-            name: key.name,
-            realm: key.realm,
-            region: key.region,
-            zoneID: zone.zoneId
-          },
+          characterZoneParsesQuery(lookup),
+          { ...characterVariables(lookup), zoneID: zone.zoneId },
           options.signal
         ).catch((error: unknown) => {
           if (options.signal?.reason?.name !== "TimeoutError") throw error;

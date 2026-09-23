@@ -316,6 +316,13 @@ export interface WarcraftLogsGateway {
        */
       killScanFloor?: string;
       /**
+       * The character's stable Warcraft Logs ID, from `resolveCharacter`. When
+       * given, history and tier bests are read by it rather than by name. The
+       * key still identifies the character among report actors and ranking
+       * rows, so the two must name the same character.
+       */
+      characterId?: number;
+      /**
        * Called once per upstream request this call issues, naming the class of
        * query. Scoped to the call rather than to the client so the counts
        * attribute to one run: the client is a process-wide singleton.

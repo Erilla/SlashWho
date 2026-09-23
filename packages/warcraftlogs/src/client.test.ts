@@ -3132,6 +3132,53 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("reads a character's history and tier bests by its stable ID when given one", async () => {
+    // Break caught: a renamed character's former name could since belong to
+    // somebody else, so a name lookup would read the wrong history.
+    const pages = (fixture("character-report-valid") as { pages: unknown[] })
+      .pages;
+    let page = 0;
+    const lookups: { query: string; variables: Record<string, unknown> }[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, unknown> & { code?: string };
+      };
+      if (body.query.includes("ReportFightParses")) {
+        return emptyRankingsResponse(body.variables.code!);
+      }
+      if (
+        body.query.includes("RecentReports") ||
+        body.query.includes("CharacterZoneParses")
+      ) {
+        lookups.push(body);
+      }
+      if (body.query.includes("CharacterZoneParses")) {
+        return emptyZoneRankingsResponse();
+      }
+      return jsonResponse(pages[page++]!);
+    });
+
+    await expect(
+      client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 10,
+        characterId: 40989140
+      })
+    ).resolves.toMatchObject({ kind: "evidence" });
+
+    expect(lookups.map(({ query }) => query.match(/query (\w+)/)?.[1])).toEqual(
+      expect.arrayContaining(["RecentReports", "CharacterZoneParses"])
+    );
+    for (const { query, variables } of lookups) {
+      expect(query).toContain("character(id: $characterId)");
+      expect(query).not.toContain("serverSlug");
+      expect(variables).toMatchObject({ characterId: 40989140 });
+      expect(variables).not.toHaveProperty("name");
+    }
+  });
+
   it("paginates public reports and retains every distinct Mythic kill", async () => {
     // Break caught: collapsing report pages to one kill per encounter hid the
     // complete chronological evidence needed by an applicant dossier.
