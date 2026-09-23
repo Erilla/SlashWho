@@ -78,9 +78,37 @@ it("exposes the exact configured operator origin and dedicated session secret", 
 });
 
 it("does not require Warcraft Logs credentials in the web process", () => {
-  // Break caught: web deployments could retain worker-only credentials after evidence collection moved to the worker.
+  // Break caught: a web deployment without Warcraft Logs credentials would
+  // refuse to start, when only character-ID URL resolution needs them.
   const config = loadWebConfig(validEnv);
   expect(config.dossier.blizzardClientId).toBe("blizzard-client-id");
+  expect(config.dossier.warcraftLogs).toBeUndefined();
+});
+
+it("reads optional Warcraft Logs credentials for character-ID resolution", () => {
+  expect(
+    loadWebConfig({
+      ...validEnv,
+      WARCRAFT_LOGS_CLIENT_ID: " wcl-client-id ",
+      WARCRAFT_LOGS_CLIENT_SECRET: "wcl-client-secret",
+      WARCRAFT_LOGS_BASE_URL: "http://127.0.0.1:4321"
+    }).dossier.warcraftLogs
+  ).toEqual({
+    clientId: "wcl-client-id",
+    clientSecret: "wcl-client-secret",
+    baseUrl: "http://127.0.0.1:4321"
+  });
+});
+
+it.each([
+  { WARCRAFT_LOGS_CLIENT_ID: "wcl-client-id" },
+  { WARCRAFT_LOGS_CLIENT_SECRET: "wcl-client-secret" },
+  { WARCRAFT_LOGS_CLIENT_ID: "wcl-client-id", WARCRAFT_LOGS_CLIENT_SECRET: " " }
+])("rejects half a Warcraft Logs credential pair: %o", (partial) => {
+  // Break caught: a typo in one variable would silently disable ID URLs.
+  expect(() => loadWebConfig({ ...validEnv, ...partial })).toThrow(
+    "incomplete_warcraft_logs_credentials"
+  );
 });
 
 it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is missing", () => {
