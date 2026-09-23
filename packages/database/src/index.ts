@@ -26,6 +26,8 @@ export type {
   AccountCredential,
   AccountCredentialRepository,
   AccountMailRepository,
+  AccountTokenPurpose,
+  AccountTokenRepository,
   AccountSummary,
   CallerClass,
   CharacterEvidenceRun,

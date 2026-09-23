@@ -100,6 +100,32 @@ function policyFixture(
   };
 
   const repositories = {
+    accountTokens: {
+      async admitRequest() {
+        throw new Error("not_used");
+      },
+      async findAccountById() {
+        throw new Error("not_used");
+      },
+      async findAccountByEmail() {
+        throw new Error("not_used");
+      },
+      async findToken() {
+        throw new Error("not_used");
+      },
+      async confirmVerification() {
+        throw new Error("not_used");
+      },
+      async completeReset() {
+        throw new Error("not_used");
+      },
+      async issueEmailChange() {
+        throw new Error("not_used");
+      },
+      async confirmEmailChange() {
+        throw new Error("not_used");
+      }
+    },
     accountMail: {
       async issue() {
         throw new Error("not_used");

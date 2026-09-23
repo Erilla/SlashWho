@@ -91,9 +91,9 @@ export async function hashOperatorCredential(
   };
 }
 
-async function verifyCredential(
+export async function verifyCredential(
   credential: string,
-  stored: OperatorCredential | null
+  stored: (CredentialHash & { active: boolean }) | null
 ): Promise<boolean> {
   const valid =
     stored !== null &&

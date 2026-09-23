@@ -217,6 +217,361 @@ describe("PostgreSQL repositories", () => {
     at
   });
 
+  it("consumes verification once only after matching the registration credential", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("verify@example.com", at)
+    );
+    await repositories.accountMail.issue({
+      accountId: account.accountId!,
+      purpose: "verify",
+      destination: "verify@example.com",
+      encryptedMessage: "encrypted",
+      tokenDigest: "verify-digest",
+      expiresAt: new Date(at.getTime() + 86_400_000),
+      at
+    });
+    expect(
+      await repositories.accountTokens.confirmVerification({
+        digest: "verify-digest",
+        passwordHash: "wrong",
+        at
+      })
+    ).toBe(false);
+    expect(
+      await repositories.accountTokens.confirmVerification({
+        digest: "verify-digest",
+        passwordHash: "derived-password-hash",
+        at
+      })
+    ).toBe(true);
+    expect(
+      await repositories.accountTokens.confirmVerification({
+        digest: "verify-digest",
+        passwordHash: "derived-password-hash",
+        at
+      })
+    ).toBe(false);
+    expect(
+      (await repositories.accountTokens.findAccountById(account.accountId!))
+        ?.verifiedAt
+    ).toEqual(at);
+  });
+
+  it("does not verify an account disabled while confirmation waits", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("disable-race@example.com", at)
+    );
+    await repositories.accountMail.issue({
+      accountId: account.accountId!,
+      purpose: "verify",
+      destination: "disable-race@example.com",
+      encryptedMessage: "encrypted",
+      tokenDigest: "disable-race-token",
+      expiresAt: new Date(at.getTime() + 86_400_000),
+      at
+    });
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("UPDATE accounts SET active = false WHERE id = $1", [
+        account.accountId
+      ]);
+      const confirmation = repositories.accountTokens.confirmVerification({
+        digest: "disable-race-token",
+        passwordHash: "derived-password-hash",
+        at
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await blocker.query("COMMIT");
+      expect(await confirmation).toBe(false);
+      expect(
+        (await repositories.accountTokens.findAccountById(account.accountId!))
+          ?.verifiedAt
+      ).toBeNull();
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it("does not revive a pending account after its seven-day lifetime", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("stale-pending@example.com", at)
+    );
+    await repositories.accountMail.issue({
+      accountId: account.accountId!,
+      purpose: "verify",
+      destination: "stale-pending@example.com",
+      encryptedMessage: "encrypted",
+      tokenDigest: "stale-verify",
+      expiresAt: new Date(at.getTime() + 8 * 86_400_000),
+      at
+    });
+    const afterWeek = new Date(at.getTime() + 7 * 86_400_000);
+    expect(
+      await repositories.accountTokens.confirmVerification({
+        digest: "stale-verify",
+        passwordHash: "derived-password-hash",
+        at: afterWeek
+      })
+    ).toBe(false);
+    expect(
+      await repositories.accountTokens.findToken({
+        digest: "stale-verify",
+        purpose: "verify",
+        at: afterWeek
+      })
+    ).toBeNull();
+  });
+
+  it("recovery verifies a pending account, rotates credentials, and revokes sessions", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("recover@example.com", at)
+    );
+    await repositories.accountMail.issue({
+      accountId: account.accountId!,
+      purpose: "reset",
+      destination: "recover@example.com",
+      encryptedMessage: "encrypted",
+      tokenDigest: "reset-digest",
+      expiresAt: new Date(at.getTime() + 1_800_000),
+      at
+    });
+    await pool.query(
+      "INSERT INTO account_sessions (id, secret_digest, account_id, credential_version, issued_at, last_used_at, idle_expires_at, absolute_expires_at) VALUES (gen_random_uuid(), 'session-digest', $1, 1, $2, $2, $3, $3)",
+      [account.accountId, at, new Date(at.getTime() + 60_000)]
+    );
+    expect(
+      await repositories.accountTokens.completeReset({
+        digest: "reset-digest",
+        passwordHash: "new-hash",
+        passwordSalt: "new-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at
+      })
+    ).toBe(true);
+    expect(
+      await repositories.accountTokens.completeReset({
+        digest: "reset-digest",
+        passwordHash: "new-hash",
+        passwordSalt: "new-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at
+      })
+    ).toBe(false);
+    const row = (
+      await pool.query(
+        "SELECT verified_at, password_hash, credential_version FROM accounts WHERE id = $1",
+        [account.accountId]
+      )
+    ).rows[0];
+    expect(row).toEqual({
+      verified_at: at,
+      password_hash: "new-hash",
+      credential_version: 2
+    });
+    expect(
+      (
+        await pool.query(
+          "SELECT revoked_at FROM account_sessions WHERE account_id = $1",
+          [account.accountId]
+        )
+      ).rows[0].revoked_at
+    ).toEqual(at);
+  });
+
+  it("rejects reset at its expiry and consumes every outstanding reset after success", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("reset-expiry@example.com", at)
+    );
+    for (const tokenDigest of [
+      "expired-reset",
+      "fresh-reset",
+      "second-reset"
+    ]) {
+      await repositories.accountMail.issue({
+        accountId: account.accountId!,
+        purpose: "reset",
+        destination: "reset-expiry@example.com",
+        encryptedMessage: "encrypted",
+        tokenDigest,
+        expiresAt: new Date(at.getTime() + 1_800_000),
+        at
+      });
+    }
+    const reset = (digest: string, time: Date) =>
+      repositories.accountTokens.completeReset({
+        digest,
+        passwordHash: "replacement-hash",
+        passwordSalt: "replacement-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at: time
+      });
+    expect(
+      await reset("expired-reset", new Date(at.getTime() + 1_800_000))
+    ).toBe(false);
+    expect(await reset("fresh-reset", at)).toBe(true);
+    expect(await reset("second-reset", at)).toBe(false);
+  });
+
+  it("throttles verification and reset requests in separate address buckets", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const admit = (purpose: "verify" | "reset") =>
+      repositories.accountTokens.admitRequest({
+        purpose,
+        subjectHash: "same-address-hash",
+        limit: 2,
+        expiresAt: new Date(at.getTime() + 3_600_000),
+        at
+      });
+    expect(await admit("verify")).toBe(true);
+    expect(await admit("verify")).toBe(true);
+    expect(await admit("verify")).toBe(false);
+    expect(await admit("reset")).toBe(true);
+  });
+
+  it("requires both mailbox proofs, in either order, to change an email", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("old@example.com", at)
+    );
+    await pool.query("UPDATE accounts SET verified_at = $2 WHERE id = $1", [
+      account.accountId,
+      at
+    ]);
+    await pool.query(
+      "INSERT INTO account_sessions (id, secret_digest, account_id, credential_version, issued_at, last_used_at, idle_expires_at, absolute_expires_at) VALUES (gen_random_uuid(), 'email-session', $1, 1, $2, $2, $3, $3)",
+      [account.accountId, at, new Date(at.getTime() + 60_000)]
+    );
+    const issue = (suffix: string) =>
+      repositories.accountTokens.issueEmailChange({
+        accountId: account.accountId!,
+        expectedPasswordHash: "derived-password-hash",
+        canonicalEmail: `${suffix}@example.com`,
+        email: `${suffix}@example.com`,
+        current: {
+          digest: `current-${suffix}`,
+          encryptedMessage: "encrypted-current"
+        },
+        next: { digest: `new-${suffix}`, encryptedMessage: "encrypted-new" },
+        expiresAt: new Date(at.getTime() + 86_400_000),
+        at
+      });
+    expect(await issue("first")).toBe(true);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_outbox WHERE encrypted_message <> ''"
+        )
+      ).rows[0].count
+    ).toBe(2);
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "new-first",
+        purpose: "email_change_new",
+        at
+      })
+    ).toBe("pending");
+    expect(
+      (await repositories.accountTokens.findAccountById(account.accountId!))
+        ?.canonicalEmail
+    ).toBe("old@example.com");
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "current-first",
+        purpose: "email_change_current",
+        at
+      })
+    ).toBe("changed");
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "current-first",
+        purpose: "email_change_current",
+        at
+      })
+    ).toBe("invalid");
+    expect(
+      (await repositories.accountTokens.findAccountById(account.accountId!))
+        ?.canonicalEmail
+    ).toBe("first@example.com");
+    expect(
+      (
+        await pool.query(
+          "SELECT revoked_at FROM account_sessions WHERE account_id = $1",
+          [account.accountId]
+        )
+      ).rows[0].revoked_at
+    ).toEqual(at);
+    expect(await issue("second")).toBe(true);
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "current-second",
+        purpose: "email_change_current",
+        at
+      })
+    ).toBe("pending");
+    expect(
+      await repositories.accountTokens.confirmEmailChange({
+        digest: "new-second",
+        purpose: "email_change_new",
+        at
+      })
+    ).toBe("changed");
+    expect(
+      (await repositories.accountTokens.findAccountById(account.accountId!))
+        ?.canonicalEmail
+    ).toBe("second@example.com");
+  });
+
+  it("rolls back both email-change tokens and mail rows when either message fails", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("original@example.com", at)
+    );
+    await pool.query("UPDATE accounts SET verified_at = $2 WHERE id = $1", [
+      account.accountId,
+      at
+    ]);
+    await expect(
+      repositories.accountTokens.issueEmailChange({
+        accountId: account.accountId!,
+        expectedPasswordHash: "derived-password-hash",
+        canonicalEmail: "replacement@example.com",
+        email: "replacement@example.com",
+        current: { digest: "current-rollback", encryptedMessage: "encrypted" },
+        next: {
+          digest: "next-rollback",
+          encryptedMessage: null as unknown as string
+        },
+        expiresAt: new Date(at.getTime() + 86_400_000),
+        at
+      })
+    ).rejects.toThrow();
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_tokens WHERE account_id = $1",
+          [account.accountId]
+        )
+      ).rows[0].count
+    ).toBe(0);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_outbox"
+        )
+      ).rows[0].count
+    ).toBe(0);
+  });
+
   it("bootstraps a verified admin that must replace the temporary password", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const admin = await repositories.accountAuth.provisionAdmin(

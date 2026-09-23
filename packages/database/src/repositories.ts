@@ -1257,6 +1257,52 @@ export interface AccountMailRepository {
   claimDue(at: Date, signal?: AbortSignal): Promise<MailOutboxRow | null>;
   markSent(id: string, at: Date, signal?: AbortSignal): Promise<void>;
 }
+export type AccountTokenPurpose =
+  "verify" | "reset" | "email_change_current" | "email_change_new";
+export interface AccountTokenRepository {
+  admitRequest(input: {
+    purpose: "verify" | "reset";
+    subjectHash: string;
+    limit: number;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<boolean>;
+  findAccountById(id: string): Promise<AccountCredential | null>;
+  findAccountByEmail(canonicalEmail: string): Promise<AccountCredential | null>;
+  findToken(input: {
+    digest: string;
+    purpose: AccountTokenPurpose;
+    at: Date;
+  }): Promise<AccountCredential | null>;
+  confirmVerification(input: {
+    digest: string;
+    passwordHash: string;
+    at: Date;
+  }): Promise<boolean>;
+  completeReset(input: {
+    digest: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<boolean>;
+  issueEmailChange(input: {
+    accountId: string;
+    expectedPasswordHash: string;
+    canonicalEmail: string;
+    email: string;
+    current: { digest: string; encryptedMessage: string };
+    next: { digest: string; encryptedMessage: string };
+    expiresAt: Date;
+    at: Date;
+  }): Promise<boolean>;
+  confirmEmailChange(input: {
+    digest: string;
+    purpose: "email_change_current" | "email_change_new";
+    at: Date;
+  }): Promise<"pending" | "changed" | "invalid">;
+}
 /** Concrete key methods are supplied with the credential implementation. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface AccountCredentialRepository {}
@@ -1365,6 +1411,7 @@ export interface OperatorAuthRepository {
 export interface Repositories {
   accountAuth: AccountAuthRepository;
   accountMail: AccountMailRepository;
+  accountTokens: AccountTokenRepository;
   /** Transitional until the corresponding repository implementation lands. */
   accountCredentials?: AccountCredentialRepository;
   operatorAuth: OperatorAuthRepository;

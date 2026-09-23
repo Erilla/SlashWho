@@ -83,6 +83,22 @@ interface AccountRow {
   updated_at: Date;
 }
 
+type AccountCredentialRow = AccountRow & {
+  password_hash: string;
+  password_salt: string;
+  scrypt_version: number;
+  scrypt_cost: number;
+};
+function mapAccountCredential(row: AccountCredentialRow) {
+  return {
+    ...mapAccount(row),
+    passwordHash: row.password_hash,
+    passwordSalt: row.password_salt,
+    scryptVersion: row.scrypt_version,
+    scryptCost: row.scrypt_cost
+  };
+}
+
 function mapAccount(row: AccountRow): Account {
   return {
     id: row.id,
@@ -1641,6 +1657,319 @@ async function mutateAccountAdmin(
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
+    accountTokens: {
+      async admitRequest(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 2))",
+            [`account-${input.purpose}-${input.subjectHash}`]
+          );
+          const count = await client.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM account_request_attempts
+             WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
+            [`account_${input.purpose}`, input.subjectHash, input.at]
+          );
+          if (Number(count.rows[0]!.count) >= input.limit) {
+            await client.query("COMMIT");
+            return false;
+          }
+          await client.query(
+            "INSERT INTO account_request_attempts (purpose, subject_hash, expires_at) VALUES ($1, $2, $3)",
+            [`account_${input.purpose}`, input.subjectHash, input.expiresAt]
+          );
+          await client.query("COMMIT");
+          return true;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async findAccountById(id) {
+        const result = await pool.query<AccountCredentialRow>(
+          "SELECT * FROM accounts WHERE id = $1",
+          [id]
+        );
+        return result.rows[0] ? mapAccountCredential(result.rows[0]) : null;
+      },
+      async findAccountByEmail(canonicalEmail) {
+        const result = await pool.query<AccountCredentialRow>(
+          "SELECT * FROM accounts WHERE canonical_email = $1",
+          [canonicalEmail]
+        );
+        return result.rows[0] ? mapAccountCredential(result.rows[0]) : null;
+      },
+      async findToken(input) {
+        const result = await pool.query<AccountCredentialRow>(
+          `SELECT a.* FROM account_mail_tokens t JOIN accounts a ON a.id = t.account_id
+           WHERE t.token_digest = $1 AND t.purpose = $2 AND t.expires_at > $3
+             AND t.consumed_at IS NULL AND a.active
+             AND (a.verified_at IS NOT NULL OR a.created_at > $3::timestamptz - interval '7 days')`,
+          [input.digest, input.purpose, input.at]
+        );
+        return result.rows[0] ? mapAccountCredential(result.rows[0]) : null;
+      },
+      async confirmVerification(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const lookup = await client.query<{ account_id: string }>(
+            "SELECT account_id FROM account_mail_tokens WHERE token_digest = $1 AND purpose = 'verify'",
+            [input.digest]
+          );
+          if (!lookup.rows[0]) {
+            await client.query("COMMIT");
+            return false;
+          }
+          const account = await client.query(
+            "SELECT id FROM accounts WHERE id = $1 AND active AND verified_at IS NULL AND password_hash = $2 AND created_at > $3::timestamptz - interval '7 days' FOR UPDATE",
+            [lookup.rows[0].account_id, input.passwordHash, input.at]
+          );
+          if (!account.rows[0]) {
+            await client.query("COMMIT");
+            return false;
+          }
+          const result = await client.query<{ account_id: string }>(
+            `UPDATE account_mail_tokens t SET consumed_at = $3
+             FROM accounts a WHERE t.account_id = a.id AND t.token_digest = $1
+               AND t.purpose = 'verify' AND t.consumed_at IS NULL AND t.expires_at > $3
+               AND a.active AND a.verified_at IS NULL AND a.password_hash = $2
+             RETURNING t.account_id`,
+            [input.digest, input.passwordHash, input.at]
+          );
+          if (!result.rows[0]) {
+            await client.query("COMMIT");
+            return false;
+          }
+          await client.query(
+            "UPDATE accounts SET verified_at = $2, updated_at = $2 WHERE id = $1 AND verified_at IS NULL",
+            [result.rows[0].account_id, input.at]
+          );
+          await client.query(
+            "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose = 'verify' AND consumed_at IS NULL",
+            [result.rows[0].account_id, input.at]
+          );
+          await client.query("COMMIT");
+          return true;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async completeReset(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const lookup = await client.query<{ account_id: string }>(
+            "SELECT account_id FROM account_mail_tokens WHERE token_digest = $1 AND purpose = 'reset'",
+            [input.digest]
+          );
+          if (!lookup.rows[0]) {
+            await client.query("COMMIT");
+            return false;
+          }
+          const account = await client.query(
+            "SELECT id FROM accounts WHERE id = $1 AND active AND (verified_at IS NOT NULL OR created_at > $2::timestamptz - interval '7 days') FOR UPDATE",
+            [lookup.rows[0].account_id, input.at]
+          );
+          if (!account.rows[0]) {
+            await client.query("COMMIT");
+            return false;
+          }
+          const token = await client.query<{ account_id: string }>(
+            `UPDATE account_mail_tokens t SET consumed_at = $2 FROM accounts a
+             WHERE t.account_id = a.id AND t.token_digest = $1 AND t.purpose = 'reset'
+               AND t.consumed_at IS NULL AND t.expires_at > $2 AND a.active
+             RETURNING t.account_id`,
+            [input.digest, input.at]
+          );
+          if (!token.rows[0]) {
+            await client.query("COMMIT");
+            return false;
+          }
+          const id = token.rows[0].account_id;
+          await client.query(
+            `UPDATE accounts SET password_hash = $2, password_salt = $3,
+             scrypt_version = $4, scrypt_cost = $5, verified_at = COALESCE(verified_at, $6),
+             password_change_required = false, credential_version = credential_version + 1,
+             updated_at = $6 WHERE id = $1`,
+            [
+              id,
+              input.passwordHash,
+              input.passwordSalt,
+              input.scryptVersion,
+              input.scryptCost,
+              input.at
+            ]
+          );
+          await client.query(
+            "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose IN ('reset', 'verify') AND consumed_at IS NULL",
+            [id, input.at]
+          );
+          await client.query(
+            "UPDATE account_sessions SET revoked_at = $2 WHERE account_id = $1 AND revoked_at IS NULL",
+            [id, input.at]
+          );
+          await client.query("COMMIT");
+          return true;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async issueEmailChange(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const account = await client.query<{ id: string; email: string }>(
+            `SELECT id, email FROM accounts WHERE id = $1 AND password_hash = $2
+             AND active AND verified_at IS NOT NULL FOR UPDATE`,
+            [input.accountId, input.expectedPasswordHash]
+          );
+          if (!account.rows[0] || input.expiresAt <= input.at) {
+            await client.query("COMMIT");
+            return false;
+          }
+          const occupied = await client.query(
+            "SELECT 1 FROM accounts WHERE canonical_email = $1",
+            [input.canonicalEmail]
+          );
+          if (occupied.rowCount) {
+            await client.query("COMMIT");
+            return false;
+          }
+          await client.query(
+            "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose IN ('email_change_current', 'email_change_new') AND consumed_at IS NULL",
+            [input.accountId, input.at]
+          );
+          const flow = await client.query<{ id: string }>(
+            "SELECT gen_random_uuid() AS id"
+          );
+          for (const [purpose, proof] of [
+            ["email_change_current", input.current],
+            ["email_change_new", input.next]
+          ] as const) {
+            const token = await client.query<{ id: string }>(
+              `INSERT INTO account_mail_tokens (account_id, purpose, token_digest, flow_id, proposed_canonical_email, proposed_email, expires_at, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+              [
+                input.accountId,
+                purpose,
+                proof.digest,
+                flow.rows[0]!.id,
+                input.canonicalEmail,
+                input.email,
+                input.expiresAt,
+                input.at
+              ]
+            );
+            await client.query(
+              `INSERT INTO account_mail_outbox (token_id, encrypted_message, idempotency_key, expires_at, next_attempt_at, created_at)
+               VALUES ($1, $2, gen_random_uuid()::text, $3, $4, $4)`,
+              [
+                token.rows[0]!.id,
+                proof.encryptedMessage,
+                input.expiresAt,
+                input.at
+              ]
+            );
+          }
+          await client.query("COMMIT");
+          return true;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+      async confirmEmailChange(input) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const lookup = await client.query<{ account_id: string }>(
+            "SELECT account_id FROM account_mail_tokens WHERE token_digest = $1 AND purpose = $2",
+            [input.digest, input.purpose]
+          );
+          if (!lookup.rows[0]) {
+            await client.query("COMMIT");
+            return "invalid";
+          }
+          const account = await client.query<{ id: string }>(
+            "SELECT id FROM accounts WHERE id = $1 AND active AND verified_at IS NOT NULL FOR UPDATE",
+            [lookup.rows[0].account_id]
+          );
+          if (!account.rows[0]) {
+            await client.query("COMMIT");
+            return "invalid";
+          }
+          const proof = await client.query<{
+            flow_id: string;
+            proposed_canonical_email: string;
+            proposed_email: string;
+          }>(
+            `UPDATE account_mail_tokens SET consumed_at = $3 WHERE token_digest = $1 AND purpose = $2
+             AND consumed_at IS NULL AND expires_at > $3 RETURNING flow_id, proposed_canonical_email, proposed_email`,
+            [input.digest, input.purpose, input.at]
+          );
+          if (!proof.rows[0]) {
+            await client.query("COMMIT");
+            return "invalid";
+          }
+          const partner = await client.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM account_mail_tokens
+             WHERE flow_id = $1 AND purpose = $2 AND consumed_at IS NOT NULL AND expires_at > $3`,
+            [
+              proof.rows[0].flow_id,
+              input.purpose === "email_change_current"
+                ? "email_change_new"
+                : "email_change_current",
+              input.at
+            ]
+          );
+          if (Number(partner.rows[0]!.count) !== 1) {
+            await client.query("COMMIT");
+            return "pending";
+          }
+          const updated = await client.query(
+            `UPDATE accounts SET canonical_email = $2, email = $3, credential_version = credential_version + 1,
+             updated_at = $4 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM accounts WHERE canonical_email = $2 AND id <> $1)`,
+            [
+              account.rows[0].id,
+              proof.rows[0].proposed_canonical_email,
+              proof.rows[0].proposed_email,
+              input.at
+            ]
+          );
+          if (!updated.rowCount) {
+            await client.query("COMMIT");
+            return "invalid";
+          }
+          await client.query(
+            "UPDATE account_sessions SET revoked_at = $2 WHERE account_id = $1 AND revoked_at IS NULL",
+            [account.rows[0].id, input.at]
+          );
+          await client.query(
+            "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose IN ('email_change_current', 'email_change_new') AND consumed_at IS NULL",
+            [account.rows[0].id, input.at]
+          );
+          await client.query("COMMIT");
+          return "changed";
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+      }
+    },
     accountMail: {
       async issue(input) {
         if (input.expiresAt <= input.at)
