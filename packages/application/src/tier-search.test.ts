@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   tierSearchGuilds,
   tierSearchRequestCaps,
+  tierSearchStates,
   tierSearchWindow,
   tierSearchZoneIds
 } from "./tier-search";
@@ -88,5 +89,39 @@ describe("tier search policy", () => {
       { name: "Guild", realm: "silvermoon", region: "eu" },
       { name: "Other", realm: "silvermoon", region: "eu" }
     ]);
+  });
+
+  it("shows a search in flight, then as searched until it may run again", () => {
+    const now = new Date("2026-09-23T12:00:00.000Z");
+    const hoursAgo = (hours: number) =>
+      new Date(now.getTime() - hours * 60 * 60 * 1_000);
+
+    const states = tierSearchStates(
+      [
+        { raidId: "queued", status: "queued", createdAt: hoursAgo(0) },
+        { raidId: "retrying", status: "retrying", createdAt: hoursAgo(1) },
+        { raidId: "running", status: "running", createdAt: hoursAgo(0) },
+        { raidId: "done", status: "complete", createdAt: hoursAgo(6) },
+        // A failed search was still paid for, so it holds the limit too.
+        { raidId: "failed", status: "failed", createdAt: hoursAgo(6) },
+        { raidId: "expired", status: "partial", createdAt: hoursAgo(25) }
+      ],
+      now
+    );
+
+    expect(
+      Object.fromEntries([...states].map(([id, s]) => [id, s.state]))
+    ).toEqual({
+      queued: "queued",
+      retrying: "queued",
+      running: "running",
+      done: "searched",
+      failed: "searched"
+    });
+    expect(states.get("done")).toEqual({
+      state: "searched",
+      searchedAt: "2026-09-23T06:00:00.000Z",
+      searchableAgainAt: "2026-09-24T06:00:00.000Z"
+    });
   });
 });

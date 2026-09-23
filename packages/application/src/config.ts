@@ -28,6 +28,10 @@ export const applicationConfigSchema = z.object({
   ANONYMOUS_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(10),
   BOT_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(60),
   PUBLIC_READS_PER_MINUTE: z.coerce.number().int().positive().default(300),
+  // Per caller, on top of the once-a-day limit on each character's tier: a
+  // search spends the worker's Warcraft Logs allowance, so one caller cannot
+  // walk every tier of every character in an hour (#435).
+  TIER_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(6),
   FRESHNESS_HOURS: z.coerce.number().positive().default(24),
   FINGERPRINT_SWEEP_CADENCE_HOURS: z.coerce.number().positive().default(168),
   DOSSIER_CHARACTER_CAP: z.coerce.number().int().min(1).max(30).default(12),

@@ -3397,6 +3397,30 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
+      async latestTierSearches(key, since) {
+        if (Number.isNaN(since.valueOf())) {
+          throw new RangeError("character_evidence_tier_search_time_invalid");
+        }
+        const result = await pool.query<{
+          tier_search_raid_id: string;
+          status: CharacterEvidenceRun["status"];
+          created_at: Date;
+        }>(
+          `SELECT DISTINCT ON (tier_search_raid_id)
+                  tier_search_raid_id, status, created_at
+             FROM character_evidence_runs
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND mode = 'tier_search' AND created_at >= $4
+            ORDER BY tier_search_raid_id, created_at DESC, id DESC`,
+          [key.region, key.realm, key.name, since]
+        );
+        return result.rows.map((row) => ({
+          raidId: row.tier_search_raid_id,
+          status: row.status,
+          createdAt: row.created_at
+        }));
+      },
+
       async reserveTierSearch({ key, raidId, at, searchedSince, phasePlan }) {
         if (
           Number.isNaN(at.valueOf()) ||

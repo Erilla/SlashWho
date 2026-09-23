@@ -9,7 +9,7 @@ import {
   within
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 import type { ReactElement } from "react";
 
@@ -441,6 +441,56 @@ it("renders raid artwork as a decorative banner behind the real heading", () => 
     "src",
     "https://render.example/bosses/ansurek.jpg"
   );
+});
+
+it("offers every tier a search, and none where the dossier is read-only", async () => {
+  // #435: a reviewer looking at a thin tier -- including one with no logs at
+  // all -- can ask for a deeper look at that tier alone.
+  const raids = [
+    {
+      raidId: "1273",
+      raidName: "Nerub-ar Palace",
+      imageUrl: null,
+      cuttingEdge: null,
+      bosses: [boss]
+    },
+    {
+      raidId: "1179",
+      raidName: "The Eternal Palace",
+      imageUrl: null,
+      cuttingEdge: null,
+      bosses: [{ ...boss, bossId: "2299", state: "no_logs" as const }],
+      tierSearch: {
+        state: "running" as const,
+        searchedAt: "2026-09-23T06:00:00.000Z",
+        searchableAgainAt: "2026-09-24T06:00:00.000Z"
+      }
+    }
+  ] as ApplicantDossier["raids"];
+  const onSearchTier = vi
+    .fn()
+    .mockResolvedValue({ state: "queued", searchableAgainAt: null });
+  const view = renderWithDossierCharacters(
+    <DossierRaidList onSearchTier={onSearchTier} raids={raids} />
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", {
+      name: "Search guild logs for Nerub-ar Palace"
+    })
+  );
+  expect(onSearchTier).toHaveBeenCalledWith("1273");
+  expect(
+    screen.getByRole("button", {
+      name: "Search guild logs for The Eternal Palace"
+    })
+  ).toHaveTextContent("Searching…");
+
+  view.unmount();
+  renderWithDossierCharacters(<DossierRaidList raids={raids} />);
+  expect(
+    screen.queryByRole("button", { name: /search guild logs/i })
+  ).toBeNull();
 });
 
 it("keeps the raid heading visible when its banner artwork fails to load", () => {

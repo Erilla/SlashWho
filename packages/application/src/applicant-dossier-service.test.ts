@@ -94,6 +94,11 @@ function fixture(
     /** Fresh stored evidence with a refresh collecting over it right now. */
     refreshingCharacter?: CharacterKey | null;
     onCacheEvent?: (source: string, event: string) => void;
+    tierSearches?: readonly {
+      raidId: string;
+      status: "queued" | "running" | "complete" | "partial" | "failed";
+      createdAt: Date;
+    }[];
   } = {}
 ) {
   // One reading of the clock per fixture. The reservation mock runs once per
@@ -152,6 +157,7 @@ function fixture(
     },
     runs: { create: runsCreate },
     evidence: {
+      latestTierSearches: vi.fn().mockResolvedValue(options.tierSearches ?? []),
       recordHistoricRankLookup: vi
         .fn()
         .mockImplementation(
@@ -460,6 +466,33 @@ describe("applicant dossier service", () => {
     if (legacy.kind !== "ready") throw new Error("dossier_not_ready");
     expect(legacy.dossier.raids[0]?.bosses[0]).toMatchObject({
       state: "incomplete"
+    });
+  });
+
+  it("says where the submitted character's search of each tier stands", async () => {
+    // The button's queued, running and done states come from the dossier the
+    // page already polls, not from a request per tier.
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const plain = await fixture().dossiers.read(root);
+    if (plain.kind !== "ready") throw new Error("dossier_not_ready");
+    const raidId = plain.dossier.raids[0]!.raidId;
+    expect(plain.dossier.raids[0]).not.toHaveProperty("tierSearch");
+
+    const searching = await fixture({
+      tierSearches: [{ raidId, status: "running", createdAt }]
+    }).dossiers.read(root);
+    if (searching.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(
+      searching.dossier.raids.find((raid) => raid.raidId === raidId)
+    ).toMatchObject({
+      tierSearch: {
+        state: "running",
+        searchedAt: createdAt.toISOString(),
+        searchableAgainAt: new Date(
+          createdAt.getTime() + 24 * 60 * 60 * 1_000
+        ).toISOString()
+      }
     });
   });
 

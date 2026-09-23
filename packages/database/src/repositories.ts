@@ -283,6 +283,14 @@ export type EvidenceRunMode = "full" | "tier_search";
  * per-character rate limit; `no_evidence` means there is nothing yet to add
  * to, so an ordinary collection has to come first.
  */
+/** The newest tier search of one raid for a character, for the dossier. */
+export type LatestTierSearch = Readonly<{
+  /** The Journal raid id the search was asked for. */
+  raidId: string;
+  status: EvidenceRunStatus;
+  createdAt: Date;
+}>;
+
 export type TierSearchReservationResult =
   | { kind: "reserved"; run: CharacterEvidenceRun }
   | { kind: "active"; run: CharacterEvidenceRun }
@@ -692,6 +700,15 @@ export interface EvidenceRepository {
    * A search of the same tier created at or after `searchedSince` refuses it
    * as `recent`, and an in-flight run of any mode as `active`.
    */
+  /**
+   * Each raid's newest tier search for the character created at or after
+   * `since`, so the dossier can say whether a tier's search is queued,
+   * running or done without a request per tier.
+   */
+  latestTierSearches(
+    key: CharacterKey,
+    since: Date
+  ): Promise<readonly LatestTierSearch[]>;
   reserveTierSearch(input: {
     key: CharacterKey;
     raidId: string;

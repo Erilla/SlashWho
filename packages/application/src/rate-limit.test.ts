@@ -62,6 +62,26 @@ describe("rate limiting policy", () => {
     ]);
   });
 
+  it("limits tier searches per caller in their own hourly bucket", async () => {
+    // A tier search spends the Warcraft Logs allowance, so it must not share
+    // -- or be granted -- the public read allowance.
+    const fake = fakeRepository({ allowed: true, retryAt: null });
+    const limiter = createRateLimiter({
+      repository: fake.repository,
+      config,
+      now: () => now
+    });
+
+    await limiter.reserveTierSearch({
+      callerClass: "anonymous",
+      bucketHash: "private-hmac"
+    });
+
+    expect(fake.calls).toEqual([
+      ["tier-search:private-hmac", 6, new Date("2026-08-04T13:00:00.000Z"), now]
+    ]);
+  });
+
   it("returns a whole-second Retry-After when a bucket is exhausted", async () => {
     // Break caught: clients could retry before the oldest active event expires.
     const fake = fakeRepository({

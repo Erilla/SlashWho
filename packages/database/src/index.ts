@@ -40,6 +40,7 @@ export type {
   EvidenceRunPhase,
   StoredEvidenceGuild,
   TierSearchReservationResult,
+  LatestTierSearch,
   FingerprintAdmission,
   FingerprintAdmissionDispatch,
   FingerprintSweepCursor,

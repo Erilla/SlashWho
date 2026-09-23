@@ -48,6 +48,11 @@ import {
   refreshCharacter,
   type RefreshCharacterResult
 } from "./refresh-character";
+import {
+  searchCharacterTier,
+  type SearchCharacterTierResult
+} from "./search-character-tier";
+import { TIER_SEARCH_SPACING_MS, tierSearchStates } from "./tier-search";
 
 /**
  * How long after a collection a manual refresh does the light path instead.
@@ -145,6 +150,15 @@ export interface ApplicantDossierService {
     key: CharacterKey,
     scope?: MeasurementScope
   ): Promise<RefreshCharacterResult>;
+  /**
+   * Queues one explicit search of the character's tier (#435), keyed by the
+   * Journal raid id the dossier shows it under.
+   */
+  searchTier(
+    key: CharacterKey,
+    raidId: string,
+    scope?: MeasurementScope
+  ): Promise<SearchCharacterTierResult>;
   /** Backend-only progress projection for the dossier and operator monitor. */
   readEvidencePhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
 }
@@ -878,8 +892,27 @@ async function assembleDossier(options: {
   const collectedTimes = evidence.flatMap((item) =>
     item.collectedAt ? [item.collectedAt.getTime()] : []
   );
+  // Only the submitted character is searched from the dossier, so only its
+  // searches are shown. A failure to read them costs the button its state,
+  // never the dossier.
+  const searchedAt = new Date();
+  const tierSearches = tierSearchStates(
+    await Promise.resolve()
+      .then(() =>
+        options.repositories.evidence.latestTierSearches(
+          options.root,
+          new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
+        )
+      )
+      .catch(() => []),
+    searchedAt
+  );
   return applicantDossierSchema.parse({
     ...dossier,
+    raids: dossier.raids.map((raid) => {
+      const tierSearch = tierSearches.get(raid.raidId);
+      return tierSearch ? { ...raid, tierSearch } : raid;
+    }),
     lastCollectedAt:
       collectedTimes.length === 0
         ? null
@@ -1264,6 +1297,17 @@ export function createApplicantDossierService(options: {
         repositories: options.repositories,
         queue: options.queue,
         ...(options.logger ? { logger: options.logger } : {}),
+        ...(scope ? { scope } : {})
+      });
+    },
+
+    async searchTier(key, raidId, scope) {
+      return searchCharacterTier({
+        key,
+        raidId,
+        at: new Date(),
+        repositories: options.repositories,
+        queue: options.queue,
         ...(scope ? { scope } : {})
       });
     },

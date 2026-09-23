@@ -1,10 +1,14 @@
-import type { ApplicantDossier } from "@slashwho/contracts";
+import type {
+  ApplicantDossier,
+  DossierTierSearchResponse
+} from "@slashwho/contracts";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierParseList } from "./dossier-parse-list";
+import { DossierTierSearchControl } from "./dossier-tier-search-control";
 import { UpstreamIcon, UpstreamIconLink } from "./upstream-icon-link";
 import { GuildProfileLinks } from "./profile-links";
 
@@ -25,6 +29,11 @@ type DossierRaidListProps = Readonly<{
   raids: ApplicantDossier["raids"];
   limitations?: ApplicantDossier["limitations"];
   loading?: boolean;
+  /**
+   * Queues a search of one tier's guild logs for the submitted character
+   * (#435). Absent where the dossier is read-only, and then no tier offers it.
+   */
+  onSearchTier?: (raidId: string) => Promise<DossierTierSearchResponse>;
 }>;
 
 function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
@@ -653,8 +662,17 @@ function RaidArtwork({ raid }: { raid: Raid }) {
 export function DossierRaidList({
   raids,
   limitations = [],
-  loading = false
+  loading = false,
+  onSearchTier
 }: DossierRaidListProps) {
+  const tierSearch = (raid: Raid) =>
+    onSearchTier ? (
+      <DossierTierSearchControl
+        onSearch={() => onSearchTier(raid.raidId)}
+        raidName={raid.raidName}
+        tierSearch={raid.tierSearch}
+      />
+    ) : null;
   const unknown = limitations.some(
     (item) => item.code === "current_content_window_unknown"
   );
@@ -699,6 +717,7 @@ export function DossierRaidList({
                     No qualifying public logs found; this does not prove no
                     attempt.
                   </p>
+                  {tierSearch(raid)}
                 </section>
               );
             }
@@ -708,6 +727,7 @@ export function DossierRaidList({
                   <RaidArtwork raid={raid} />
                   <span className="dossier-raid-name">{raid.raidName}</span>
                 </h3>
+                {tierSearch(raid)}
                 <div className="dossier-boss-list">
                   {[...raid.bosses].reverse().map((boss) => (
                     <article

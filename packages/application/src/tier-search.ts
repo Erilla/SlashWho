@@ -1,3 +1,4 @@
+import type { DossierTierSearch } from "@slashwho/contracts";
 import type { StoredEvidenceTiers } from "@slashwho/database";
 import {
   lookupRaidByName,
@@ -84,6 +85,42 @@ export function tierSearchRequestCaps(
   }
   const tier = Math.max(0, Math.min(configured, Math.floor(scanCap / 2)));
   return { history: scanCap - tier, tier };
+}
+
+/**
+ * The dossier's view of each tier's newest search: in flight, or searched
+ * within the rate limit's window. A tier with neither is absent, meaning it
+ * may be searched.
+ */
+export function tierSearchStates(
+  latest: readonly Readonly<{
+    raidId: string;
+    status: string;
+    createdAt: Date;
+  }>[],
+  now: Date
+): ReadonlyMap<string, DossierTierSearch> {
+  const states = new Map<string, DossierTierSearch>();
+  for (const search of latest) {
+    const searchableAgainAt = new Date(
+      search.createdAt.getTime() + TIER_SEARCH_SPACING_MS
+    );
+    const state =
+      search.status === "running"
+        ? "running"
+        : search.status === "queued" || search.status === "retrying"
+          ? "queued"
+          : searchableAgainAt > now
+            ? "searched"
+            : null;
+    if (state === null) continue;
+    states.set(search.raidId, {
+      state,
+      searchedAt: search.createdAt.toISOString(),
+      searchableAgainAt: searchableAgainAt.toISOString()
+    });
+  }
+  return states;
 }
 
 /** Every guild known for the character, each once, in the order first seen. */
