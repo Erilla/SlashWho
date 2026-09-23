@@ -5770,3 +5770,355 @@ describe("Warcraft Logs gateway", () => {
     expect(JSON.stringify(result)).not.toContain("client-secret-marker");
   });
 });
+
+describe("searching one tier's guild attendance", () => {
+  const day = 24 * 60 * 60 * 1_000;
+  const hours = (count: number) => count * 60 * 60 * 1_000;
+  // Newest first: attendance report `i` started `i` days before this, 25 a
+  // page, the way Warcraft Logs pages a long-lived guild.
+  const newest = Date.parse("2026-09-01T19:00:00.000Z");
+  const startOf = (index: number) => newest - index * day;
+  const codeOf = (guild: string, index: number) => `${guild}${index}`;
+  const tierFrom = new Date(startOf(330) - hours(2)).toISOString();
+  const tierTo = new Date(startOf(310) + hours(4)).toISOString();
+
+  const emptyHistory = () =>
+    jsonResponse({
+      data: {
+        characterData: {
+          character: {
+            server: { normalizedName: "Silvermoon" },
+            recentReports: { data: [], has_more_pages: false }
+          }
+        }
+      }
+    });
+  const attendance = (
+    guild: string,
+    page: number,
+    totalReports: number,
+    listed: (index: number) => boolean = () => true
+  ) => {
+    const first = (page - 1) * 25;
+    const indexes = Array.from(
+      { length: 25 },
+      (_, offset) => first + offset
+    ).filter((index) => index < totalReports);
+    return jsonResponse({
+      data: {
+        guildData: {
+          guild: {
+            attendance: {
+              data: indexes.map((index) => ({
+                code: codeOf(guild, index),
+                startTime: startOf(index),
+                players: [{ name: listed(index) ? "Sentinel" : "Someone" }]
+              })),
+              has_more_pages: first + 25 < totalReports
+            }
+          }
+        }
+      }
+    });
+  };
+  // A report holding one Mythic Queen Azshara kill and one Mythic wipe on an
+  // earlier boss, both by the character.
+  const hydrated = (code: string, startTime: number) =>
+    jsonResponse({
+      data: {
+        reportData: {
+          report: {
+            code,
+            startTime,
+            owner: { name: "Uploader" },
+            guild: null,
+            zone: {
+              id: 23,
+              name: "The Eternal Palace",
+              encounters: [
+                { id: 2299, journalID: 0 },
+                { id: 2293, journalID: 0 }
+              ]
+            },
+            masterData: {
+              actors: [
+                {
+                  id: 12,
+                  name: "Sentinel",
+                  server: "Silvermoon",
+                  type: "Player"
+                }
+              ]
+            },
+            fights: [
+              {
+                id: 3,
+                encounterID: 2293,
+                name: "Za'qul, Harbinger of Ny'alotha",
+                startTime: hours(0.2),
+                endTime: hours(0.3),
+                kill: false,
+                difficulty: 5,
+                friendlyPlayers: [12]
+              },
+              {
+                id: 8,
+                encounterID: 2299,
+                name: "Queen Azshara",
+                startTime: hours(0.5),
+                endTime: hours(1),
+                kill: true,
+                difficulty: 5,
+                friendlyPlayers: [12]
+              }
+            ]
+          }
+        }
+      }
+    });
+  const characterGuilds = (guilds: unknown[]) =>
+    jsonResponse({
+      data: { characterData: { character: { guilds } } }
+    });
+
+  type Body = {
+    query: string;
+    variables: { name?: string; page?: number; code?: string };
+  };
+  type Sent = { query: string; guild?: string; page?: number; code?: string };
+  function tierClient(
+    options: Readonly<{
+      guildReports?: Readonly<Record<string, number>>;
+      listedGuilds?: unknown[];
+      listed?: (index: number) => boolean;
+      refuseGuild?: string;
+    }> = {}
+  ) {
+    const requests: Sent[] = [];
+    const guildReports = options.guildReports ?? { Guild: 500 };
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as Body;
+      const query = body.query.match(/query (\w+)/)?.[1] ?? "";
+      requests.push({
+        query,
+        ...(body.variables.name ? { guild: body.variables.name } : {}),
+        ...(body.variables.page ? { page: body.variables.page } : {}),
+        ...(body.variables.code ? { code: body.variables.code } : {})
+      });
+      if (query === "RecentReports") return emptyHistory();
+      if (query === "CharacterGuilds") {
+        return characterGuilds(options.listedGuilds ?? []);
+      }
+      if (query === "GuildAttendance") {
+        const guild = body.variables.name!;
+        if (guild === options.refuseGuild) {
+          return new Response("upstream-body-marker", { status: 503 });
+        }
+        return attendance(
+          guild,
+          body.variables.page!,
+          guildReports[guild] ?? 0,
+          options.listed
+        );
+      }
+      if (query === "ReportByCode") {
+        const code = body.variables.code!;
+        const index = Number(code.replace(/^\D+/, ""));
+        return hydrated(code, startOf(index));
+      }
+      return emptyZoneRankingsResponse();
+    });
+    return { client, requests };
+  }
+  const guild = { name: "Guild", realm: "silvermoon", region: "eu" as const };
+  const windowCodes = (name: string) =>
+    Array.from({ length: 21 }, (_, offset) => codeOf(name, 310 + offset));
+
+  it("gallops to the tier's window instead of reading every newer page", async () => {
+    // Break caught: an old tier sits behind years of a guild's attendance,
+    // and reading every page in between is what cost Ryii 71 pages a run.
+    const { client, requests } = tierClient();
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild],
+        requestCap: 60
+      }
+    });
+
+    const pages = requests
+      .filter((request) => request.query === "GuildAttendance")
+      .map((request) => request.page);
+    // The window's reports sit on pages 13 and 14, of 20.
+    expect(pages).toContain(13);
+    expect(pages).toContain(14);
+    expect(pages.length).toBeLessThan(10);
+    expect(pages).not.toContain(20);
+    const hydratedCodes = requests
+      .filter((request) => request.query === "ReportByCode")
+      .map((request) => request.code);
+    expect(new Set(hydratedCodes)).toEqual(new Set(windowCodes("Guild")));
+    expect(result).toMatchObject({
+      kind: "evidence",
+      tierSearch: {
+        outcome: "complete",
+        guildsSearched: 1,
+        reportsHydrated: 21,
+        recoveredKills: 21,
+        recoveredWipes: 21
+      }
+    });
+    expect(result).not.toHaveProperty("limitation");
+  });
+
+  it("keeps wipes, and hydrates only reports that may list the character", async () => {
+    // A wipe-only night has no kill for Raider.IO to verify, which is why the
+    // tier search exists. A report whose attendance rules the character out,
+    // or whose evidence is already stored, is never read.
+    const { client, requests } = tierClient({
+      listed: (index) => index % 2 === 0
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild],
+        requestCap: 60,
+        skipReportCodes: [codeOf("Guild", 320)]
+      }
+    });
+
+    const hydratedCodes = requests
+      .filter((request) => request.query === "ReportByCode")
+      .map((request) => request.code);
+    expect(hydratedCodes).not.toContain(codeOf("Guild", 311));
+    expect(hydratedCodes).not.toContain(codeOf("Guild", 320));
+    expect(hydratedCodes).toContain(codeOf("Guild", 322));
+    expect(result.kind === "evidence" ? result.wipes.length : 0).toBe(10);
+  });
+
+  it("walks the guilds Warcraft Logs lists for the character as well", async () => {
+    // Break caught: a guildless Raider.IO kill names no guild, so a search of
+    // only the caller's guilds had nowhere to look.
+    const { client, requests } = tierClient({
+      guildReports: { Guild: 500, Other: 400 },
+      listedGuilds: [
+        {
+          name: "Other",
+          server: { slug: "silvermoon", region: { slug: "EU" } }
+        },
+        {
+          name: "guild",
+          server: { slug: "Silvermoon", region: { slug: "EU" } }
+        },
+        {
+          name: "Nowhere",
+          server: { slug: "somewhere", region: { slug: "CN" } }
+        }
+      ]
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild],
+        requestCap: 100
+      }
+    });
+
+    const walked = new Set(
+      requests
+        .filter((request) => request.query === "GuildAttendance")
+        .map((request) => request.guild)
+    );
+    expect(walked).toEqual(new Set(["Guild", "Other"]));
+    expect(result).toMatchObject({ tierSearch: { guildsSearched: 2 } });
+  });
+
+  it("stops at its own cap without limiting the run or touching the scan's", async () => {
+    const { client, requests } = tierClient();
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild],
+        requestCap: 8
+      }
+    });
+
+    const tierRequests = requests.filter((request) =>
+      ["CharacterGuilds", "GuildAttendance", "ReportByCode"].includes(
+        request.query
+      )
+    );
+    expect(tierRequests).toHaveLength(8);
+    expect(
+      requests.filter((request) => request.query === "RecentReports")
+    ).toHaveLength(1);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      tierSearch: { outcome: "request_cap", requests: 8 }
+    });
+    expect(result).not.toHaveProperty("limitation");
+  });
+
+  it("calls a guild it cannot read incomplete, and still walks the rest", async () => {
+    const { client } = tierClient({
+      guildReports: { Guild: 500, Other: 400 },
+      refuseGuild: "Guild"
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild, { ...guild, name: "Other" }],
+        requestCap: 60
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "evidence",
+      tierSearch: { outcome: "incomplete", recoveredKills: 21 }
+    });
+    expect(result).not.toHaveProperty("limitation");
+  });
+
+  it("hydrates nothing from a guild whose attendance is all newer than the tier", async () => {
+    const { client, requests } = tierClient({ guildReports: { Guild: 60 } });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      parseRequestCap: 1,
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild],
+        requestCap: 60
+      }
+    });
+
+    expect(
+      requests.filter((request) => request.query === "ReportByCode")
+    ).toHaveLength(0);
+    expect(result).toMatchObject({
+      tierSearch: { outcome: "complete", recoveredKills: 0 }
+    });
+  });
+});
