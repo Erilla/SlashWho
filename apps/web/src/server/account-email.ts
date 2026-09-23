@@ -28,6 +28,6 @@ export function registrationSubjects(
     createHmac("sha256", hashSecret).update(subject).digest("hex");
   return {
     ipSubjectHash: trustedIp ? digest(`registration-ip\0${trustedIp}`) : null,
-    emailSubjectHash: digest(`registration-email\0${canonicalEmail}`)
+    emailSubjectHash: digest(`account-verify\0${canonicalEmail}`)
   };
 }

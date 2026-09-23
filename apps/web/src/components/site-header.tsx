@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SearchForm } from "./search-form";
 import { Logo } from "./logo";
+import { AccountNavigation } from "./account-navigation";
 
 export const headerIdentitySlotId = "site-header-identity";
 
@@ -17,6 +18,7 @@ export function SiteHeader() {
         <Link href="/settings" className="site-nav-link">
           Settings
         </Link>
+        <AccountNavigation />
       </nav>
       <div className="header-identity" id={headerIdentitySlotId} />
       <div className="header-search">

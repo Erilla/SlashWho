@@ -1664,13 +1664,21 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           await client.query(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1, 2))",
-            [`account-${input.purpose}-${input.subjectHash}`]
+            input.purpose === "verify"
+              ? "SELECT pg_advisory_xact_lock(hashtextextended('account-registration', 1))"
+              : "SELECT pg_advisory_xact_lock(hashtextextended($1, 2))",
+            input.purpose === "verify"
+              ? []
+              : [`account-${input.purpose}-${input.subjectHash}`]
           );
+          const purpose =
+            input.purpose === "verify"
+              ? "registration_email"
+              : `account_${input.purpose}`;
           const count = await client.query<{ count: string }>(
             `SELECT count(*)::text AS count FROM account_request_attempts
              WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
-            [`account_${input.purpose}`, input.subjectHash, input.at]
+            [purpose, input.subjectHash, input.at]
           );
           if (Number(count.rows[0]!.count) >= input.limit) {
             await client.query("COMMIT");
@@ -1678,7 +1686,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           }
           await client.query(
             "INSERT INTO account_request_attempts (purpose, subject_hash, expires_at) VALUES ($1, $2, $3)",
-            [`account_${input.purpose}`, input.subjectHash, input.expiresAt]
+            [purpose, input.subjectHash, input.expiresAt]
           );
           await client.query("COMMIT");
           return true;

@@ -283,6 +283,10 @@ it("clears a rejected startup promise so the next request can recover", async ()
       collectionMonitor: {} as never,
       operatorAuth: {} as never,
       accountAuth: {} as never,
+      accountTokens: null,
+      accountRegistration: {} as never,
+      registrationHashSecret: "test",
+      accountOrigin: "https://slashwho.example",
       characterIds: {} as never,
       async ready() {
         return true;

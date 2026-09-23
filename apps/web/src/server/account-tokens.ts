@@ -49,10 +49,10 @@ export function createAccountTokens(config: {
   ) {
     const path =
       purpose === "verify"
-        ? "/verify-email"
+        ? "/account/verify"
         : purpose === "reset"
-          ? "/recover-password"
-          : "/change-email";
+          ? "/account/reset"
+          : "/account/email";
     const link = new URL(path, config.origin);
     link.searchParams.set("token", token);
     return encryptAccountMail(
@@ -92,7 +92,17 @@ export function createAccountTokens(config: {
     });
   }
   return {
-    async issueVerification(accountId: string, at: Date): Promise<void> {
+    async resendVerification(email: string, at: Date): Promise<void> {
+      const canonical = canonicalizeEmail(email);
+      if (!canonical) return;
+      const account = await repository.findAccountByEmail(canonical);
+      if (account) await this.issueVerification(account.id, at);
+    },
+    async issueVerification(
+      accountId: string,
+      at: Date,
+      alreadyAdmitted = false
+    ): Promise<void> {
       const account = await repository.findAccountById(accountId);
       if (
         !account?.active ||
@@ -100,7 +110,11 @@ export function createAccountTokens(config: {
         account.createdAt.getTime() <= at.getTime() - 7 * day
       )
         return;
-      if (!(await admit("verify", account.canonicalEmail, at))) return;
+      if (
+        !alreadyAdmitted &&
+        !(await admit("verify", account.canonicalEmail, at))
+      )
+        return;
       await issue(accountId, account.email, "verify", at);
     },
     async confirmVerification(

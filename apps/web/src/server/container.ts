@@ -19,6 +19,7 @@ import {
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
+import { createAccountTokens } from "./account-tokens";
 
 import { loadWebConfig, type WebConfig } from "./config";
 import {
@@ -48,6 +49,13 @@ export type WebContainer = Readonly<{
   collectionMonitor: CollectionMonitorService;
   operatorAuth: OperatorAuth;
   accountAuth: AccountAuth;
+  accountTokens: ReturnType<typeof createAccountTokens> | null;
+  accountRegistration: Pick<
+    Repositories["accountAuth"],
+    "registerPending" | "admitRegistration"
+  >;
+  registrationHashSecret: string;
+  accountOrigin: string;
   characterIds: CharacterIdResolver;
   ready(): Promise<boolean>;
   close(): Promise<void>;
@@ -131,6 +139,15 @@ export async function createWebContainer(
       config: config.application,
       ...config.operatorAuth
     });
+    const accountTokens = config.accountMail
+      ? createAccountTokens({
+          repositories,
+          tokenHashSecret: config.application.RATE_LIMIT_HASH_SECRET,
+          encryptionKey: config.accountMail.encryptionKey,
+          origin: config.operatorAuth.origin,
+          from: config.accountMail.from
+        })
+      : null;
     const collectionMonitor = createCollectionMonitorService({
       evidence: repositories.evidence
     });
@@ -198,6 +215,10 @@ export async function createWebContainer(
       collectionMonitor,
       operatorAuth,
       accountAuth,
+      accountTokens,
+      accountRegistration: repositories.accountAuth,
+      registrationHashSecret: config.application.RATE_LIMIT_HASH_SECRET,
+      accountOrigin: config.operatorAuth.origin,
       characterIds,
       async ready() {
         try {

@@ -8,6 +8,10 @@ export type WebConfig = Readonly<{
   databaseUrl: string;
   application: ApplicationConfig;
   operatorAuth: Readonly<{ origin: string; sessionHashSecret: string }>;
+  accountMail?: Readonly<{
+    from: string;
+    encryptionKey: Buffer;
+  }>;
   dossier: Readonly<{
     raiderIoBaseUrl: string;
     raiderIoTimeoutMs: number;
@@ -128,6 +132,17 @@ export function loadWebConfig(
         environment.OPERATOR_SESSION_HASH_SECRET
       )
     },
+    accountMail:
+      environment.RESEND_API_KEY?.trim() &&
+      environment.ACCOUNT_EMAIL_FROM?.trim() &&
+      environment.ACCOUNT_CREDENTIAL_ENCRYPTION_KEY?.trim()
+        ? {
+            from: environment.ACCOUNT_EMAIL_FROM.trim(),
+            encryptionKey: parseEncryptionKey(
+              environment.ACCOUNT_CREDENTIAL_ENCRYPTION_KEY.trim()
+            )
+          }
+        : undefined,
     dossier: {
       raiderIoBaseUrl:
         environment.RAIDER_IO_BASE_URL?.trim() || "https://raider.io",
