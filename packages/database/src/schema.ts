@@ -1018,12 +1018,7 @@ export const warcraftLogsCharacterIds = pgTable(
       name: "warcraft_logs_character_ids_pkey",
       columns: [table.region, table.realmSlug, table.normalizedName]
     }),
-    index("warcraft_logs_character_ids_character_id_idx").on(
-      table.characterId
-    ),
-    check(
-      "warcraft_logs_character_ids_positive",
-      sql`${table.characterId} > 0`
-    )
+    index("warcraft_logs_character_ids_character_id_idx").on(table.characterId),
+    check("warcraft_logs_character_ids_positive", sql`${table.characterId} > 0`)
   ]
 );
