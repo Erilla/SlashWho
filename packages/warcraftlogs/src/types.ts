@@ -66,6 +66,12 @@ export type WarcraftLogsIdentity = Readonly<{
   kind: "identity";
   key: CharacterKey;
   displayName: string;
+  /**
+   * Warcraft Logs' stable character ID. It survives renames and realm
+   * transfers, so it names the character where `key` names only its current
+   * name and realm. It is the ranking `characters[].id`, not a report actor ID.
+   */
+  characterId: number;
 }>;
 
 export type WarcraftLogsIdentityResult =
@@ -244,6 +250,15 @@ export type WarcraftLogsReportResult =
 export interface WarcraftLogsGateway {
   resolveCharacter(
     key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<WarcraftLogsIdentityResult>;
+  /**
+   * Resolves a stable character ID to the character's current name, realm and
+   * region. Throws `invalid_character_id` for an ID that is not a positive
+   * safe integer, without issuing a request.
+   */
+  resolveCharacterById(
+    characterId: number,
     signal?: AbortSignal
   ): Promise<WarcraftLogsIdentityResult>;
   getRateLimit(signal?: AbortSignal): Promise<WarcraftLogsRateLimitResult>;

@@ -34,6 +34,22 @@ const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
     characterData {
       character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        id
+        name
+        server {
+          slug
+          region { slug }
+        }
+      }
+    }
+  }
+`;
+
+const resolveCharacterByIdQuery = `
+  query ResolveCharacterById($id: Int!) {
+    characterData {
+      character(id: $id) {
+        id
         name
         server {
           slug
@@ -381,10 +397,11 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   const entry = record(character);
   const server = entry && record(entry.server);
   const region = server && record(server.region);
+  const characterId = entry && positiveInteger(entry.id);
   const displayName = entry && nonEmptyString(entry.name);
   const realm = server && nonEmptyString(server.slug);
   const regionSlug = region && nonEmptyString(region.slug);
-  if (!displayName || !realm || !regionSlug) {
+  if (!characterId || !displayName || !realm || !regionSlug) {
     return { kind: "limitation", code: "schema_drift" };
   }
 
@@ -398,7 +415,7 @@ function canonicalIdentity(value: unknown): WarcraftLogsIdentityResult {
   } catch {
     return { kind: "limitation", code: "schema_drift" };
   }
-  return { kind: "identity", key, displayName };
+  return { kind: "identity", key, displayName, characterId };
 }
 
 function characterGuilds(value: unknown): readonly CharacterGuild[] {
@@ -1650,6 +1667,27 @@ export function createWarcraftLogsClient(
     return result.kind === "success" ? canonicalIdentity(result.value) : result;
   }
 
+  async function resolveCharacterById(
+    characterId: number,
+    signal?: AbortSignal
+  ): Promise<WarcraftLogsIdentityResult> {
+    if (positiveInteger(characterId) === null) {
+      throw new Error("invalid_character_id");
+    }
+    const result = await graphql(
+      resolveCharacterByIdQuery,
+      { id: characterId },
+      signal
+    );
+    if (result.kind !== "success") return result;
+    const identity = canonicalIdentity(result.value);
+    // The payload must answer for the ID asked about, or a pasted ID would
+    // be attached to some other character's name and realm.
+    return identity.kind === "identity" && identity.characterId !== characterId
+      ? { kind: "limitation", code: "schema_drift" }
+      : identity;
+  }
+
   async function getFirstKillReports(
     requestedKey: CharacterKey,
     options: Readonly<{
@@ -2538,5 +2576,10 @@ export function createWarcraftLogsClient(
           });
   }
 
-  return { getRateLimit, resolveCharacter, getFirstKillReports };
+  return {
+    getRateLimit,
+    resolveCharacter,
+    resolveCharacterById,
+    getFirstKillReports
+  };
 }

@@ -3965,7 +3965,12 @@ describe("applicant evidence job handler", () => {
                   code: "not_found" as const
                 };
               }
-              return { kind: "identity" as const, key, displayName: "Rinn" };
+              return {
+                kind: "identity" as const,
+                key,
+                displayName: "Rinn",
+                characterId: 40989140
+              };
             },
             async getFirstKillReports(_key, options) {
               collectionAttempts += 1;
@@ -4188,7 +4193,8 @@ describe("applicant evidence job handler", () => {
       const resolveCharacter = vi.fn(async () => ({
         kind: "identity" as const,
         key,
-        displayName: "Rinn-Silvermoon"
+        displayName: "Rinn-Silvermoon",
+        characterId: 40989140
       }));
       const handler = handlerFor(
         evidence,
