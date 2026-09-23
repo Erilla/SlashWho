@@ -1803,6 +1803,9 @@ export function createWarcraftLogsClient(
         lastDecodedHistoryPage = historyScanStartPage - 1;
       }
     }
+    // A validated cursor survived the probe, so this run reads only the pages
+    // below it.
+    const resumedFromCursor = historyScanStartPage > 1;
     // Set only when the history itself ran out or reached the floor, which is
     // what separates a finished scan from one whose budget ran out after the
     // last page it proved.
@@ -2499,25 +2502,39 @@ export function createWarcraftLogsClient(
         : {}),
       ...(parseLimitations.length > 0 ? { parseLimitations } : {})
     });
+    // A resumed scan read only the pages below its cursor, so reaching the end
+    // of them is not a finished history. The pages above were read by earlier
+    // runs, and a complete publish keeps only what this run found outside
+    // terminal raids -- then marks raids terminal from that fraction, which
+    // freezes the loss in. On 2026-09-23 that took Ryii from 751 kills to 269
+    // and eight other characters with it. It stays partial, which carries
+    // every stored kill forward, and the next run reads the whole history from
+    // page one, where finishing does mean finished.
+    const restartFromFirstPage = resumedFromCursor && !scanLimitation;
+    if (restartFromFirstPage) {
+      scanLimitation = { kind: "limitation", code: "request_cap" };
+    }
     const resume: Readonly<{
       historyScanResumePage?: number;
       historyScanResumeBoundaryReportCode?: string;
-    }> = !scanLimitation
-      ? {}
-      : lastDecodedHistoryPage !== undefined
-        ? {
-            historyScanResumePage: lastDecodedHistoryPage + 1,
-            ...(historyScanResumeBoundaryReportCode
-              ? { historyScanResumeBoundaryReportCode }
-              : {})
-          }
-        : invalidatedStoredBoundary
-          ? // A one-request budget may be spent entirely proving that the old
-            // offset moved. Clear its anchor so the next run starts at page
-            // one instead of validating the stale page forever. The probe's
-            // own evidence does not change that, so this holds with kills too.
-            { historyScanResumePage: 1 }
-          : {};
+    }> = restartFromFirstPage
+      ? { historyScanResumePage: 1 }
+      : !scanLimitation
+        ? {}
+        : lastDecodedHistoryPage !== undefined
+          ? {
+              historyScanResumePage: lastDecodedHistoryPage + 1,
+              ...(historyScanResumeBoundaryReportCode
+                ? { historyScanResumeBoundaryReportCode }
+                : {})
+            }
+          : invalidatedStoredBoundary
+            ? // A one-request budget may be spent entirely proving that the old
+              // offset moved. Clear its anchor so the next run starts at page
+              // one instead of validating the stale page forever. The probe's
+              // own evidence does not change that, so this holds with kills too.
+              { historyScanResumePage: 1 }
+            : {};
     return sortedKills.length || sortedWipes.length
       ? evidenceResult({
           kills: sortedKills,
