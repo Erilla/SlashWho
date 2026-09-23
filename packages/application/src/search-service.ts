@@ -92,6 +92,13 @@ export interface SearchService {
   authorizePublicRead(
     headers: Pick<Headers, "get">
   ): Promise<PublicReadAuthorizationResult>;
+  /**
+   * The per-caller limit on "search this tier" presses, identified the same
+   * way a public read is: a hashed bucket, never the raw address.
+   */
+  authorizeTierSearch(
+    headers: Pick<Headers, "get">
+  ): Promise<PublicReadAuthorizationResult>;
   getRun(jobId: string): Promise<JobStatusResponse | null>;
   getCurrent(key: CharacterKey): Promise<CharacterResource | null>;
   getHistory(key: CharacterKey, cursor?: string): Promise<HistoryPage | null>;
@@ -408,6 +415,25 @@ export function createSearchService(options: {
         throw error;
       }
       const decision = await rateLimiter.reservePublicRead(caller);
+      return decision.allowed
+        ? { allowed: true }
+        : {
+            allowed: false,
+            retryAfterSeconds: decision.retryAfterSeconds ?? 1
+          };
+    },
+
+    async authorizeTierSearch(headers) {
+      let caller: CallerIdentity;
+      try {
+        caller = classifyCaller(headers, options.config);
+      } catch (error) {
+        if (error instanceof AuthenticationError) {
+          return { allowed: false, code: error.code };
+        }
+        throw error;
+      }
+      const decision = await rateLimiter.reserveTierSearch(caller);
       return decision.allowed
         ? { allowed: true }
         : {

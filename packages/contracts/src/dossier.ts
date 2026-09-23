@@ -142,13 +142,28 @@ export const dossierBossSchema = z.discriminatedUnion("state", [
   z.object({ ...dossierBossMetadata, state: z.literal("incomplete") }).strict()
 ]);
 
+/**
+ * Where the submitted character's explicit search of this tier stands (#435).
+ * `queued` and `running` are the search in flight; `searched` is one made in
+ * the last day, which is the rate limit's window, so the tier cannot be
+ * searched again until `searchableAgainAt`. Absent means it may be searched.
+ */
+export const dossierTierSearchSchema = z
+  .object({
+    state: z.enum(["queued", "running", "searched"]),
+    searchedAt: z.iso.datetime(),
+    searchableAgainAt: z.iso.datetime()
+  })
+  .strict();
+
 export const dossierRaidSchema = z
   .object({
     raidId: z.string().min(1),
     raidName: z.string().min(1),
     imageUrl: z.url().nullable(),
     cuttingEdge: z.literal(true).nullable(),
-    bosses: z.array(dossierBossSchema)
+    bosses: z.array(dossierBossSchema),
+    tierSearch: dossierTierSearchSchema.optional()
   })
   .strict();
 
@@ -285,5 +300,22 @@ export const dossierRefreshResponseSchema = z
 export type DossierRefreshResponse = z.infer<
   typeof dossierRefreshResponseSchema
 >;
+
+/**
+ * What a "search this tier" press did. `queued` reserved a search. `busy`
+ * means another collection is in flight, so nothing was reserved. `searched`
+ * means the tier was searched too recently. `no_evidence` means the character
+ * has nothing collected yet to add to.
+ */
+export const dossierTierSearchResponseSchema = z
+  .object({
+    state: z.enum(["queued", "running", "searched", "busy", "no_evidence"]),
+    searchableAgainAt: z.iso.datetime().nullable()
+  })
+  .strict();
+export type DossierTierSearchResponse = z.infer<
+  typeof dossierTierSearchResponseSchema
+>;
+export type DossierTierSearch = z.infer<typeof dossierTierSearchSchema>;
 export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;
