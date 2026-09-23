@@ -11,6 +11,7 @@ import type {
   CharacterEvidenceRun,
   EvidenceRunMode,
   StoredEvidenceGuild,
+  StoredRankedBackfillCursor,
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicKillInput,
@@ -4224,6 +4225,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                    WHEN $10 THEN $12::text
                    ELSE kill_scan_resume_boundary_report_code
                  END,
+                 ranked_backfill_cursor = CASE
+                   WHEN $13 THEN $14::jsonb
+                   ELSE ranked_backfill_cursor
+                 END,
+                 ranked_backfill_attempted = $13,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -4243,7 +4249,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.scanSkipped ?? false,
               Object.hasOwn(input, "historyScanResumePage"),
               input.historyScanResumePage ?? null,
-              input.historyScanResumeBoundaryReportCode ?? null
+              input.historyScanResumeBoundaryReportCode ?? null,
+              Object.hasOwn(input, "rankedBackfillCursor"),
+              input.rankedBackfillCursor === undefined
+                ? null
+                : JSON.stringify(input.rankedBackfillCursor)
             ]
           );
           if (publication.rowCount !== 1) {
@@ -4410,7 +4420,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           .sort((a, b) => a[0].localeCompare(b[0]));
       },
 
-      async storedEvidenceTiers(key) {
+      async storedEvidenceTiers(key, tierSearchRaidId) {
         // Read through the same loader a dossier does, so the scan can never
         // stop above evidence the dossier still shows.
         const completed = await loadCompletedEvidence(pool, key);
@@ -4437,6 +4447,21 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             LIMIT 1`,
           [key.region, key.realm, key.name]
         );
+        const ranked = tierSearchRaidId
+          ? await pool.query<{
+              ranked_backfill_cursor: StoredRankedBackfillCursor | null;
+            }>(
+              `SELECT ranked_backfill_cursor
+                 FROM character_evidence_runs
+                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                  AND tier_search_raid_id = $4
+                  AND status IN ('complete', 'partial')
+                  AND ranked_backfill_attempted = true
+                ORDER BY completed_at DESC, id DESC
+                LIMIT 1`,
+              [key.region, key.realm, key.name, tierSearchRaidId]
+            )
+          : null;
         return {
           kills: (completed?.kills ?? []).map((kill) => ({
             raidId: kill.raidId,
@@ -4471,6 +4496,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 historyScanResumeBoundaryReportCode:
                   resume.rows[0].kill_scan_resume_boundary_report_code
               }
+            : {}),
+          ...(ranked?.rows[0]?.ranked_backfill_cursor
+            ? { rankedBackfillCursor: ranked.rows[0].ranked_backfill_cursor }
             : {})
         };
       },

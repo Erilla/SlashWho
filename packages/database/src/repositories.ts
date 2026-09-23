@@ -546,6 +546,7 @@ export type StoredEvidenceTiers = Readonly<{
   historyScanResumePage?: number;
   /** The final report code on the stored boundary page, used to validate its offset. */
   historyScanResumeBoundaryReportCode?: string;
+  rankedBackfillCursor?: StoredRankedBackfillCursor;
   /**
    * Whether the newest completed run established that its only unfinished
    * collection work was parses. Absent is conservative: it does not license
@@ -553,6 +554,20 @@ export type StoredEvidenceTiers = Readonly<{
    */
   parseWorkOutstanding?: boolean;
   parseOnlyKills?: readonly CharacterMythicKillInput[];
+}>;
+
+/** JSON cursor for an explicit tier's ranked report walk. */
+export type StoredRankedBackfillCursor = Readonly<{
+  journalRaidId: string;
+  characterId?: number;
+  zoneIds: readonly number[];
+  zonesLoaded: boolean;
+  zoneIndex: number;
+  encounterIds: readonly number[];
+  encountersLoaded: boolean;
+  encounterIndex: number;
+  metricIndex: number;
+  reportIndex: number;
 }>;
 
 /** One raid a character is finished collecting one domain of evidence for. */
@@ -578,6 +593,7 @@ export interface StagedEvidenceCollection {
    */
   historyScanResumePage?: number | null;
   historyScanResumeBoundaryReportCode?: string | null;
+  rankedBackfillCursor?: StoredRankedBackfillCursor | null;
   limitationCode: string | null;
   parseLimitationCode: string | null;
   /**
@@ -753,6 +769,7 @@ export interface EvidenceRepository {
       scanSkipped?: boolean;
       historyScanResumePage?: number | null;
       historyScanResumeBoundaryReportCode?: string | null;
+      rankedBackfillCursor?: StoredRankedBackfillCursor | null;
       state: "complete" | "partial";
       limitationCode: string | null;
       /** The parse limitation the run is judged by: retry, and the dossier. */
@@ -870,7 +887,10 @@ export interface EvidenceRepository {
    *
    * Scoped like `hydratedFightUrls`, to the evidence `getCompleted` returns.
    */
-  storedEvidenceTiers(key: CharacterKey): Promise<StoredEvidenceTiers>;
+  storedEvidenceTiers(
+    key: CharacterKey,
+    tierSearchRaidId?: string
+  ): Promise<StoredEvidenceTiers>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   /**
    * Records tiers as terminal, stamping each with its domain's current

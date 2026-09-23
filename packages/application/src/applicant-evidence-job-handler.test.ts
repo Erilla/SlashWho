@@ -4770,9 +4770,9 @@ describe("searching one tier from the dossier", () => {
     const options = (
       getFirstKillReports.mock.calls[0] as unknown[]
     )[1] as Record<string, unknown>;
-    // 18,000 points at half the allowance is 300 requests; the search takes
-    // 60 of them rather than adding its own on top.
-    expect(options.requestCap).toBe(240);
+    // 18,000 points at half the allowance is 300 requests: 210 history,
+    // 60 attendance, and 30 ranked discovery.
+    expect(options.requestCap).toBe(210);
     expect(options.tierSearch).toMatchObject({
       requestCap: 60,
       guilds: [
@@ -4781,6 +4781,10 @@ describe("searching one tier from the dossier", () => {
       ],
       // The stored kill's report is already decoded.
       skipReportCodes: ["zCFtRjmLgvHxynh7"]
+    });
+    expect(options.rankedBackfill).toEqual({
+      journalRaidId: eternalPalace.raidId,
+      requestCap: 30
     });
     const window = options.tierSearch as { from: string; to: string };
     expect(window.from.startsWith("2019-")).toBe(true);
@@ -4823,6 +4827,45 @@ describe("searching one tier from the dossier", () => {
     });
   });
 
+  it("passes a saved ranked cursor into the tier search and publishes its successor", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const cursor = {
+      journalRaidId: eternalPalace.raidId,
+      characterId: 40989140,
+      zoneIds: [23],
+      zonesLoaded: true,
+      zoneIndex: 0,
+      encounterIds: [2299],
+      encountersLoaded: true,
+      encounterIndex: 0,
+      metricIndex: 0,
+      reportIndex: 1
+    };
+    const stored = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await stored(characterKey)),
+      rankedBackfillCursor: cursor
+    });
+    const successor = { ...cursor, reportIndex: 2 };
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      rankedBackfillCursor: successor,
+      limitation: { kind: "limitation" as const, code: "request_cap" as const }
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        rankedBackfill: expect.objectContaining({ cursor })
+      })
+    );
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      rankedBackfillCursor: successor
+    });
+  });
+
   it("searches nothing on an ordinary run", async () => {
     const evidence = withStoredTier(store());
     const getFirstKillReports = vi.fn(evidenceFound);
@@ -4860,7 +4903,7 @@ describe("searching one tier from the dossier", () => {
     expect(getFirstKillReports).toHaveBeenCalledWith(
       key,
       expect.objectContaining({
-        requestCap: 240,
+        requestCap: 210,
         tierSearch: expect.anything()
       })
     );

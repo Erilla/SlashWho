@@ -251,7 +251,10 @@ export type ApplicantEvidenceStore = {
    * Where and when this character's stored kills and wipes happened, which is
    * what turns a terminal raid id into a date the report scan can stop at.
    */
-  storedEvidenceTiers(key: CharacterKey): Promise<StoredEvidenceTiers>;
+  storedEvidenceTiers(
+    key: CharacterKey,
+    tierSearchRaidId?: string
+  ): Promise<StoredEvidenceTiers>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   markTerminalTiers(
     key: CharacterKey,
@@ -1127,7 +1130,8 @@ export function createApplicantEvidenceJobHandler(
         // How far back the report scan still has to page. Pages below this can
         // only re-find evidence already stored, so the scan stops there.
         const storedEvidence = await options.evidence.storedEvidenceTiers(
-          run.key
+          run.key,
+          tierSearchRaidId
         );
         const killScanFloor = killScanFloorFrom(
           storedTerminal,
@@ -1182,8 +1186,20 @@ export function createApplicantEvidenceJobHandler(
               options.tierSearchRequestCap ?? DEFAULT_TIER_SEARCH_REQUEST_CAP
             )
           : null;
+        // Preserve the existing attendance allowance. Ranked discovery draws
+        // a bounded share from history, and all three still fit the scan cap.
+        const rankedCap = tierCaps
+          ? Math.min(
+              tierCaps.history,
+              Math.max(1, Math.floor(tierCaps.tier / 2))
+            )
+          : 0;
         const requestCap =
-          job.mode === "light" ? 1 : tierCaps ? tierCaps.history : scanCap;
+          job.mode === "light"
+            ? 1
+            : tierCaps
+              ? tierCaps.history - rankedCap
+              : scanCap;
         const tierSearchAsked =
           tierWindow !== null && tierCaps !== null && tierCaps.tier > 0;
         // Asked for, with a tier to search, and no budget to search it with.
@@ -1473,6 +1489,17 @@ export function createApplicantEvidenceJobHandler(
                       [...storedEvidence.kills, ...storedEvidence.wipes],
                       new Set()
                     )
+                  }
+                }
+              : {}),
+            ...(tierSearchAsked && tierSearchRaidId && rankedCap > 0
+              ? {
+                  rankedBackfill: {
+                    journalRaidId: tierSearchRaidId,
+                    requestCap: rankedCap,
+                    ...(storedEvidence.rankedBackfillCursor
+                      ? { cursor: storedEvidence.rankedBackfillCursor }
+                      : {})
                   }
                 }
               : {}),
@@ -1787,6 +1814,9 @@ export function createApplicantEvidenceJobHandler(
           {
             state: incomplete ? "partial" : "complete",
             ...(response.scanSkipped ? { scanSkipped: true } : {}),
+            ...(response.rankedBackfillCursor !== undefined
+              ? { rankedBackfillCursor: response.rankedBackfillCursor }
+              : {}),
             ...(response.scanSkipped
               ? {}
               : response.historyScanResumePage !== undefined
