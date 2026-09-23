@@ -334,3 +334,22 @@ it("does not admit against points already reserved by queued evidence", async ()
   });
   expect(result).toEqual({ admitted: 0, suppressed: 0, deferred: 0 });
 });
+
+it("admits every distinct supported link in a bounded multi-link cell", async () => {
+  const links = Array.from(
+    { length: 17 },
+    (_, index) =>
+      `https://raider.io/characters/eu/example/added${String.fromCharCode(97 + index)}`
+  );
+  const result = await pollApplicantSheet({
+    pool,
+    readColumn: async () => [a, b, b, links.join(" ")],
+    backlogLimit: 100,
+    isSuppressed: async () => false
+  });
+  expect(result).toMatchObject({ created: 17, truncated: 0 });
+  const saved = await pool.query<{ count: string }>(
+    "SELECT count(*)::text AS count FROM applicant_source_intents WHERE identity LIKE 'character:%added%'"
+  );
+  expect(Number(saved.rows[0]?.count)).toBe(17);
+});
