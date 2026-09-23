@@ -44,7 +44,11 @@ beforeEach(() => {
 it("deletes only the current provider version", async () => {
   const request = () =>
     operatorMutation(
-      { provider: "warcraftlogs", expectedVersion: 1 },
+      {
+        provider: "warcraftlogs",
+        expectedVersion: 1,
+        expectedAccountEmail: "a@example.test"
+      },
       {},
       "DELETE"
     );
@@ -68,7 +72,8 @@ it("fails clearly without encryption configuration", async () => {
             provider: "raiderio",
             values: { accessKey: "key" },
             replace: false,
-            expectedVersion: 0
+            expectedVersion: 0,
+            expectedAccountEmail: "a@example.test"
           },
           {},
           "PUT"
@@ -92,7 +97,8 @@ it("requires explicit replacement and matching version", async () => {
     provider: "warcraftlogs",
     values: { clientId: "id", clientSecret: "secret-a" },
     replace: false,
-    expectedVersion: 1
+    expectedVersion: 1,
+    expectedAccountEmail: "a@example.test"
   };
   expect((await PUT(operatorMutation(body, {}, "PUT"))).status).toBe(409);
   expect(state.replace).not.toHaveBeenCalled();
@@ -107,6 +113,33 @@ it("requires explicit replacement and matching version", async () => {
   );
 });
 
+it("rejects an old account form even when the new account has a matching key version", async () => {
+  state.authenticate.mockResolvedValue({
+    principal: {
+      kind: "account",
+      accountId: "bob",
+      email: "b@example.test",
+      role: "user",
+      passwordChangeRequired: false
+    }
+  });
+  const response = await PUT(
+    operatorMutation(
+      {
+        provider: "warcraftlogs",
+        values: { clientId: "a-id", clientSecret: "a-secret" },
+        replace: true,
+        expectedVersion: 1,
+        expectedAccountEmail: "a@example.test"
+      },
+      {},
+      "PUT"
+    )
+  );
+  expect(response.status).toBe(409);
+  expect(state.replace).not.toHaveBeenCalled();
+});
+
 it("rejects forced-change sessions and invalid provider pairs", async () => {
   expect(
     (
@@ -116,7 +149,8 @@ it("rejects forced-change sessions and invalid provider pairs", async () => {
             provider: "blizzard",
             values: { clientId: "id" },
             replace: false,
-            expectedVersion: 0
+            expectedVersion: 0,
+            expectedAccountEmail: "a@example.test"
           },
           {},
           "PUT"

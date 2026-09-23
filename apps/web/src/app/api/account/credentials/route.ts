@@ -20,6 +20,7 @@ async function principalFor(request: Request) {
       authorizes(principal, "account") && principal?.kind === "account"
         ? principal.accountId
         : null,
+    accountEmail: principal?.kind === "account" ? principal.email : null,
     cookie: authentication.cookie
   };
 }
@@ -41,7 +42,7 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function PUT(request: Request): Promise<Response> {
   return withHttpRequest("account_credentials_put", async () => {
-    const { container, accountId } = await principalFor(request);
+    const { container, accountId, accountEmail } = await principalFor(request);
     if (!accountId) return accountFailure("Sign in required.", 401);
     const body = await accountMutation(request, container.accountOrigin, "PUT");
     if (
@@ -49,10 +50,13 @@ export async function PUT(request: Request): Promise<Response> {
       !validProvider(body.provider) ||
       !validValues(body.provider, body.values) ||
       typeof body.replace !== "boolean" ||
+      typeof body.expectedAccountEmail !== "string" ||
       !Number.isSafeInteger(body.expectedVersion) ||
       (body.expectedVersion as number) < 0
     )
       return accountFailure("Invalid credentials request.");
+    if (body.expectedAccountEmail !== accountEmail)
+      return accountFailure("Account changed. Refresh and try again.", 409);
     if (!container.accountCredentials)
       return accountFailure("Account credentials are unavailable.", 503);
     const summary = await container.accountCredentials.summary(accountId);
@@ -78,7 +82,7 @@ export async function PUT(request: Request): Promise<Response> {
 
 export async function DELETE(request: Request): Promise<Response> {
   return withHttpRequest("account_credentials_delete", async () => {
-    const { container, accountId } = await principalFor(request);
+    const { container, accountId, accountEmail } = await principalFor(request);
     if (!accountId) return accountFailure("Sign in required.", 401);
     const body = await accountMutation(
       request,
@@ -88,10 +92,13 @@ export async function DELETE(request: Request): Promise<Response> {
     if (
       !body ||
       !validProvider(body.provider) ||
+      typeof body.expectedAccountEmail !== "string" ||
       !Number.isSafeInteger(body.expectedVersion) ||
       (body.expectedVersion as number) < 1
     )
       return accountFailure("Invalid credentials request.");
+    if (body.expectedAccountEmail !== accountEmail)
+      return accountFailure("Account changed. Refresh and try again.", 409);
     if (!container.accountCredentials)
       return accountFailure("Account credentials are unavailable.", 503);
     const removed = await container.accountCredentials.remove(
