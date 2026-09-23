@@ -38,12 +38,17 @@ export type WarcraftLogsLimitation = Readonly<{
 
 /**
  * The classes of upstream request one `getFirstKillReports` issues. A single
- * gateway call spans all four, so run cost can only be attributed -- to the
- * history scan or to rankings -- by counting them apart.
+ * gateway call spans all of them, so run cost can only be attributed -- to the
+ * history scan, to attendance recovery or to rankings -- by counting them
+ * apart. All three history classes draw on the same scan request cap.
  */
 export type WarcraftLogsQueryType =
-  /** `RecentReports`, one per page of the history scan. */
+  /** `RecentReports`, one per page of the history scan, boundary probe included. */
   | "history_scan"
+  /** `GuildAttendance`, one per attendance page searched for a verified kill. */
+  | "guild_attendance"
+  /** `ReportByCode`, one per attendance report hydrated. */
+  | "report_hydration"
   /** `CharacterZoneParses`, one per raid zone read for tier bests. */
   | "zone_rankings"
   /** `ReportFightParses`, one per report group hydrated. */
@@ -248,6 +253,12 @@ export type WarcraftLogsReportResult =
        * `parseLimitation`.
        */
       parseLimitations?: readonly WarcraftLogsLimitation[];
+      /**
+       * Kills attendance recovery added that the history scan had not already
+       * found. Present only when attendance was searched: absent means no
+       * search ran, which is not the same as a search that found nothing.
+       */
+      attendanceRecoveredKills?: number;
     }>
   | WarcraftLogsLimitation;
 

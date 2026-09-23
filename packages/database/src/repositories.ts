@@ -580,9 +580,24 @@ export type EvidenceRunCost = Readonly<{
   /** Upstream requests by class, as the log line counts them. */
   requests: Readonly<{
     historyScan: number;
+    guildAttendance: number;
+    reportHydration: number;
     zoneRankings: number;
     fightParses: number;
     rankingIdentities: number;
+  }>;
+  /**
+   * What attendance recovery was asked to do and what it yielded, so its cost
+   * can be weighed against its return. Each is null when that step did not
+   * run, which is not a zero: a Raider.IO lookup not made is not one that
+   * found nothing to search.
+   */
+  recovery: Readonly<{
+    /** `evidence`, or the limitation Raider.IO answered with. */
+    raiderIoOutcome: string | null;
+    raiderIoMs: number | null;
+    verifiedKillsSearched: number | null;
+    recoveredKills: number | null;
   }>;
 }>;
 

@@ -3373,7 +3373,9 @@ describe("Warcraft Logs gateway", () => {
           bossName: "Za'qul",
           fightUrl: "https://www.warcraftlogs.com/reports/omittedReport#fight=7"
         }
-      ]
+      ],
+      // What recovery yielded, so its cost can be weighed against it later.
+      attendanceRecoveredKills: 1
     });
     expect(attendancePages).toEqual([1, 2]);
   });
@@ -3581,6 +3583,50 @@ describe("Warcraft Logs gateway", () => {
       expect(queries).not.toContain("GuildAttendance");
     });
 
+    it("treats a report as covering a kill Raider.IO dates an hour before it", async () => {
+      // Break caught: Raider.IO put Ryun's Queen Azshara at 19:34Z; the log
+      // that holds it records the kill at 20:34Z. A whole-hour clock error on
+      // Raider.IO's side must not send the run into attendance for a night
+      // the history scan already read.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) {
+          return history([
+            {
+              code: "raidNight",
+              startTime: night + hours(0.5),
+              zone: { id: 23, name: "The Eternal Palace" },
+              masterData: { actors: [] },
+              fights: [
+                {
+                  id: 1,
+                  encounterID: 0,
+                  name: "Trash",
+                  startTime: 0,
+                  endTime: hours(1),
+                  kill: null,
+                  difficulty: null,
+                  friendlyPlayers: []
+                }
+              ]
+            }
+          ]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(queries).not.toContain("GuildAttendance");
+    });
+
     it("searches only the kill's guild, on its night, and stops paging once past it", async () => {
       // Break caught: the walk read every page of every guild and hydrated
       // every report on them. Only the named guild's reports from the night
@@ -3600,6 +3646,9 @@ describe("Warcraft Logs gateway", () => {
             ? attendancePage(
                 [
                   { code: "weekLater", startTime: night + hours(24 * 7) },
+                  // Opened after Raider.IO's time: its clock can run an
+                  // hour early, as it does for Ryun's Queen Azshara.
+                  { code: "openedLater", startTime: night + hours(1) },
                   { code: "killNight", startTime: night - hours(1) },
                   { code: "nightBefore", startTime: night - hours(20) }
                 ],
@@ -3619,16 +3668,31 @@ describe("Warcraft Logs gateway", () => {
         return emptyZoneRankingsResponse();
       });
 
-      await client.getFirstKillReports(key, {
+      const requests: string[] = [];
+      const result = await client.getFirstKillReports(key, {
         requestCap: 20,
         parseRequestCap: 1,
-        verifiedKills: verified
+        verifiedKills: verified,
+        onRequest: (event) => requests.push(event.query)
       });
 
-      expect(hydrated).toEqual(["killNight"]);
+      expect(hydrated).toEqual(["openedLater", "killNight"]);
       // Page two is wholly older than the night by more than the overlap
       // pages can have at a boundary, so page three is never asked for.
       expect(walked).toEqual(["Guild:1", "Guild:2"]);
+      // Recovery is counted apart from the history scan, so what it costs
+      // can be read without subtracting it back out of history pages.
+      expect(requests.filter((query) => query === "history_scan")).toHaveLength(
+        1
+      );
+      expect(
+        requests.filter((query) => query === "guild_attendance")
+      ).toHaveLength(2);
+      expect(
+        requests.filter((query) => query === "report_hydration")
+      ).toHaveLength(2);
+      // Searched and found nothing: a measured zero, not an absent value.
+      expect(result).toMatchObject({ attendanceRecoveredKills: 0 });
     });
   });
 

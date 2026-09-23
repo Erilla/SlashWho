@@ -8,10 +8,13 @@ import type { WarcraftLogsVerifiedKill } from "@slashwho/warcraftlogs";
 
 /**
  * How far a stored Warcraft Logs kill may sit from Raider.IO's first-defeated
- * time and still be the same kill. Raider.IO records the minute; the stored
- * kill is the fight's end.
+ * time and still account for it. Wider than the minutes the two usually
+ * differ by, because Raider.IO can be a whole hour off: it dates Ryun's Queen
+ * Azshara 19:34Z against the log's 20:34Z (1 of 36 matched pairs, measured
+ * 2026-09-23). Still inside one raid night, where the stored kill means that
+ * night's log was already found.
  */
-const STORED_KILL_MATCH_MS = 15 * 60 * 1_000;
+const STORED_KILL_MATCH_MS = 2 * 60 * 60 * 1_000;
 
 export type VerifiedKillsResult = Readonly<{
   kills: readonly WarcraftLogsVerifiedKill[];

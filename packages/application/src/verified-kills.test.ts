@@ -31,6 +31,18 @@ describe("searchableKills", () => {
     ).toEqual([]);
   });
 
+  it("recognises a held kill whose Raider.IO time is an hour off", () => {
+    // Break caught: Ryun's Queen Azshara is stored at 20:34:49Z from
+    // zCFtRjmLgvHxynh7, and Raider.IO puts the same kill at 19:34:00Z -- a
+    // whole-hour clock error (1 of 36 matched pairs measured 2026-09-23). A
+    // 15-minute match called it unheld, so it would be searched every run.
+    expect(
+      searchableKills([azshara], {
+        storedKills: [{ killedAt: "2020-01-21T20:34:49.222Z" }]
+      })
+    ).toEqual([]);
+  });
+
   it("keeps a kill whose only stored neighbour is another night", () => {
     expect(
       searchableKills([azshara], {

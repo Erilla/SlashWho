@@ -412,8 +412,13 @@ const ATTENDANCE_REPORT_LEAD_MS = 16 * 60 * 60 * 1_000;
  * holds nothing newer.
  */
 const ATTENDANCE_PAGE_OVERLAP_MS = 2 * 24 * 60 * 60 * 1_000;
-/** How long after a report's last fight it still accounts for a kill. */
-const REPORT_COVER_SLACK_MS = 15 * 60 * 1_000;
+/**
+ * How far outside a report's span a verified kill's time may fall and still be
+ * accounted for by it, on either side. The other provider's clock can be a
+ * whole hour off: Raider.IO dates Ryun's Queen Azshara 19:34Z against the
+ * log's 20:34Z (measured 2026-09-23).
+ */
+const REPORT_COVER_SLACK_MS = 2 * 60 * 60 * 1_000;
 
 type ReportSpan = Readonly<{ start: number; end: number }>;
 
@@ -1936,7 +1941,9 @@ export function createWarcraftLogsClient(
       const at = Date.parse(verified.at);
       if (Number.isNaN(at)) continue;
       const covered = scannedSpans.some(
-        (span) => span.start <= at && at <= span.end + REPORT_COVER_SLACK_MS
+        (span) =>
+          span.start - REPORT_COVER_SLACK_MS <= at &&
+          at <= span.end + REPORT_COVER_SLACK_MS
       );
       if (covered) continue;
       const guildKey = `${verified.guild.region}\0${verified.guild.realm}\0${verified.guild.name}`;
@@ -1947,6 +1954,9 @@ export function createWarcraftLogsClient(
       target.times.push(at);
       recoveryTargets.set(guildKey, target);
     }
+    // Counted only when a search runs, so a run that searched nothing reads
+    // absent rather than a zero it never measured.
+    let attendanceRecoveredKills = 0;
     for (const { guild, times } of recoveryTargets.values()) {
       if (historyScanRequests >= options.requestCap) {
         scanLimitation ??= { kind: "limitation", code: "request_cap" };
@@ -1957,11 +1967,14 @@ export function createWarcraftLogsClient(
         ATTENDANCE_REPORT_LEAD_MS -
         ATTENDANCE_PAGE_OVERLAP_MS;
       // A report with no start time cannot be placed, so it is read rather
-      // than assumed to be from another night.
+      // than assumed to be from another night. A report may start after the
+      // verified time by the same clock slack a span is allowed.
       const wanted = (startTime: number | null) =>
         startTime === null ||
         times.some(
-          (at) => startTime <= at && startTime >= at - ATTENDANCE_REPORT_LEAD_MS
+          (at) =>
+            startTime <= at + REPORT_COVER_SLACK_MS &&
+            startTime >= at - ATTENDANCE_REPORT_LEAD_MS
         );
       for (let page = 1; ; page++) {
         if (historyScanRequests >= options.requestCap) {
@@ -1969,7 +1982,7 @@ export function createWarcraftLogsClient(
           break;
         }
         const attendance = counted(
-          "history_scan",
+          "guild_attendance",
           await graphql(
             guildAttendanceQuery,
             {
@@ -2003,7 +2016,7 @@ export function createWarcraftLogsClient(
             break;
           }
           const report = counted(
-            "history_scan",
+            "report_hydration",
             await graphql(reportByCodeQuery, { code }, options.signal)
           );
           historyScanRequests += 1;
@@ -2016,7 +2029,10 @@ export function createWarcraftLogsClient(
             scanLimitation ??= decoded;
             continue;
           }
-          for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
+          for (const kill of decoded.kills) {
+            if (!kills.has(kill.fightUrl)) attendanceRecoveredKills += 1;
+            kills.set(kill.fightUrl, kill);
+          }
           for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
           if (decoded.limitation) scanLimitation ??= decoded.limitation;
         }
@@ -2557,7 +2573,8 @@ export function createWarcraftLogsClient(
       ...(reportedParseLimitation
         ? { parseLimitation: reportedParseLimitation }
         : {}),
-      ...(parseLimitations.length > 0 ? { parseLimitations } : {})
+      ...(parseLimitations.length > 0 ? { parseLimitations } : {}),
+      ...(recoveryTargets.size > 0 ? { attendanceRecoveredKills } : {})
     });
     // A resumed scan read only the pages below its cursor, so reaching the end
     // of them is not a finished history. The pages above were read by earlier

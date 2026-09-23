@@ -2550,9 +2550,18 @@ describe("applicant evidence job handler", () => {
             parseRequestCapUsed: 8,
             requests: {
               historyScan: 2,
+              guildAttendance: 0,
+              reportHydration: 0,
               zoneRankings: 1,
               fightParses: 1,
               rankingIdentities: 1
+            },
+            // No Raider.IO client, so recovery never ran: null, not zero.
+            recovery: {
+              raiderIoOutcome: null,
+              raiderIoMs: null,
+              verifiedKillsSearched: null,
+              recoveredKills: null
             }
           }
         ]);
@@ -4258,7 +4267,10 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
 
   it("hands the scan the verified kills stored evidence does not hold", async () => {
     const evidence = store();
-    const getFirstKillReports = vi.fn(emptyEvidence);
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await emptyEvidence()),
+      attendanceRecoveredKills: 1
+    }));
     const handler = handlerWith(
       evidence,
       getFirstKillReports,
@@ -4282,6 +4294,14 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
         ]
       })
     );
+    // What recovery was asked for and what it returned reach the durable
+    // cost row, so its yield can be weighed against its cost later.
+    expect(evidence.costs.at(-1)?.recovery).toEqual({
+      raiderIoOutcome: "evidence",
+      raiderIoMs: expect.any(Number),
+      verifiedKillsSearched: 1,
+      recoveredKills: 1
+    });
   });
 
   it("skips recovery and stays complete when Raider.IO cannot answer", async () => {
@@ -4304,6 +4324,13 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
     expect(evidence.published.at(-1)?.result).toMatchObject({
       state: "complete"
     });
+    // Asked and refused, and nothing searched: a measured zero, with no
+    // recovery count because no search ran.
+    expect(evidence.costs.at(-1)?.recovery).toMatchObject({
+      raiderIoOutcome: "private",
+      verifiedKillsSearched: 0,
+      recoveredKills: null
+    });
   });
 
   it("does not ask Raider.IO on a light run, which cannot search attendance", async () => {
@@ -4321,5 +4348,12 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
     );
 
     expect(getHistoricMythicKills).not.toHaveBeenCalled();
+    // Not asked is recorded as null throughout, never as a zero.
+    expect(evidence.costs.at(-1)?.recovery).toEqual({
+      raiderIoOutcome: null,
+      raiderIoMs: null,
+      verifiedKillsSearched: null,
+      recoveredKills: null
+    });
   });
 });
