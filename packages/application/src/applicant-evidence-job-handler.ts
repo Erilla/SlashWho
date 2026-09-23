@@ -12,10 +12,7 @@ import type {
 } from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
-import {
-  isAccountWideCuttingEdgeAchievement,
-  lookupRaiderIoBoss
-} from "@slashwho/domain";
+import { isAccountWideCuttingEdgeAchievement } from "@slashwho/domain";
 import type {
   MythicBossRanking,
   MythicBossRankingsOptions,
@@ -55,6 +52,11 @@ import {
   fullEvidencePhasePlan,
   type EvidencePhase
 } from "./evidence-phase-ledger";
+import {
+  historicWorldRankForKill,
+  raiderIoRankingRequest,
+  rankingRequestKey
+} from "./historic-world-rank";
 
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
@@ -298,62 +300,6 @@ function toCharacterMythicKillInput(
     ...(kill.uploader === undefined ? {} : { uploader: kill.uploader }),
     performance: kill.performance
   };
-}
-
-function normalizedProviderIdentity(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/[^\p{L}\p{N}]+/gu, "")
-    .toLocaleLowerCase("en-US");
-}
-
-function normalizedProviderRealm(value: string): string {
-  return normalizedProviderIdentity(value).replace(/^connected/, "");
-}
-
-function historicWorldRankForKill(
-  kill: CharacterMythicKillInput,
-  region: CharacterKey["region"],
-  rankings: readonly MythicBossRanking[]
-): number | null {
-  if (!kill.guild) return null;
-  const killedAt = Date.parse(kill.killedAt);
-  if (!Number.isFinite(killedAt)) return null;
-  const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
-  const matches = rankings.filter(
-    (ranking) =>
-      (!ranking.bossSlug || ranking.bossSlug === boss?.bossSlug) &&
-      normalizedProviderIdentity(ranking.guildName) ===
-        normalizedProviderIdentity(kill.guild!.name) &&
-      normalizedProviderRealm(ranking.guildRealm) ===
-        normalizedProviderRealm(kill.guild!.realm) &&
-      normalizedProviderIdentity(ranking.guildRegion) ===
-        normalizedProviderIdentity(region) &&
-      Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <= 120_000
-  );
-  return matches.length === 1 ? matches[0]!.rank : null;
-}
-
-function raiderIoRankingRequest(
-  kill: CharacterMythicKillInput,
-  region: CharacterKey["region"]
-): MythicBossRankingsOptions | null {
-  if (!kill.guild) return null;
-  const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
-  return boss ? { ...boss, guild: { ...kill.guild, region } } : null;
-}
-
-function rankingRequestKey(request: MythicBossRankingsOptions): string {
-  return JSON.stringify(
-    request.guild
-      ? [
-          request.raidSlug,
-          request.guild.region,
-          request.guild.realm,
-          request.guild.name
-        ]
-      : [request.raidSlug, request.bossSlug]
-  );
 }
 
 const MAX_RAIDER_IO_RANKING_REQUESTS_PER_RUN = 50;
@@ -713,6 +659,29 @@ export function parseOnlyRequestCap(
  * Collects one character's complete public Warcraft Logs history outside the
  * web request deadline. Only normalized gateway facts are handed to storage.
  */
+type PhaseLedger = ReturnType<typeof createEvidencePhaseLedger>;
+
+/** Progress is observational; its storage failure cannot change collection. */
+function bestEffortPhaseLedger(ledger: PhaseLedger): PhaseLedger {
+  const attempt = async (work: () => Promise<void>): Promise<void> => {
+    try {
+      await work();
+    } catch {
+      // The evidence publication remains the source of truth for the run.
+    }
+  };
+  return {
+    seed: () => attempt(() => ledger.seed()),
+    transition: (...args) => attempt(() => ledger.transition(...args)),
+    unknownStop: () => attempt(() => ledger.unknownStop()),
+    cancelActive: () => attempt(() => ledger.cancelActive()),
+    failActive: (...args) => attempt(() => ledger.failActive(...args)),
+    skipPending: () => attempt(() => ledger.skipPending()),
+    skipPendingBefore: (...args) =>
+      attempt(() => ledger.skipPendingBefore(...args))
+  };
+}
+
 export function createApplicantEvidenceJobHandler(
   options: ApplicantEvidenceJobHandlerOptions
 ) {
@@ -807,6 +776,7 @@ export function createApplicantEvidenceJobHandler(
       let usesVisitorCredentials = false;
       let sampleSpend: (() => Promise<void>) | undefined;
       let phaseLedger: ReturnType<typeof createEvidencePhaseLedger> | undefined;
+      let phaseWrites = Promise.resolve();
 
       try {
         const run = await evidence.claim(job.runId, activeContext.attempt);
@@ -1075,37 +1045,46 @@ export function createApplicantEvidenceJobHandler(
         // This must match reservation exactly. Rebuilding only the WCL subset
         // makes real provider ids unknown to the ledger that owns them.
         const phasePlan = fullEvidencePhasePlan();
-        const reservedPhases = await evidence.listPhases?.(run.id);
+        const reservedPhases = await evidence
+          .listPhases?.(run.id)
+          .catch(() => undefined);
         const reservedPhaseIds = new Set(
           reservedPhases?.map((phase) => phase.id) ?? []
         );
         const hasReservedPhasePlan = phasePlan.every((id) =>
           reservedPhaseIds.has(id)
         );
-        phaseLedger =
-          hasReservedPhasePlan && evidence.recordPhaseTransitions
-            ? createEvidencePhaseLedger({
-                plan: phasePlan,
-                initialPhases: reservedPhases,
-                now,
-                persist: async (phases) => {
-                  const changed = phases.filter(
-                    (item) => item.state !== "pending"
-                  );
-                  if (changed.length)
-                    await evidence.recordPhaseTransitions!(
-                      run.id,
-                      changed.map((item) => ({
-                        id: item.id,
-                        state: item.state,
-                        startedAt: item.startedAt ?? null,
-                        completedAt: item.completedAt ?? null,
-                        limitationCode: item.limitationCode ?? null
-                      }))
-                    );
-                }
-              })
-            : undefined;
+        try {
+          phaseLedger =
+            hasReservedPhasePlan && evidence.recordPhaseTransitions
+              ? bestEffortPhaseLedger(
+                  createEvidencePhaseLedger({
+                    plan: phasePlan,
+                    initialPhases: reservedPhases,
+                    now,
+                    persist: async (phases) => {
+                      const changed = phases.filter(
+                        (item) => item.state !== "pending"
+                      );
+                      if (changed.length)
+                        await evidence.recordPhaseTransitions!(
+                          run.id,
+                          changed.map((item) => ({
+                            id: item.id,
+                            state: item.state,
+                            startedAt: item.startedAt ?? null,
+                            completedAt: item.completedAt ?? null,
+                            limitationCode: item.limitationCode ?? null
+                          }))
+                        );
+                    }
+                  })
+                )
+              : undefined;
+        } catch {
+          // A corrupt progress projection must not discard collected evidence.
+          phaseLedger = undefined;
+        }
         if (gateway.resolveCharacter) {
           await phaseLedger?.transition(
             "warcraft_logs_identity_resolution",
@@ -1143,20 +1122,32 @@ export function createApplicantEvidenceJobHandler(
           await phaseLedger?.transition("warcraft_logs_tier_bests", "skipped");
         }
         let activePhase: EvidencePhase["id"] | undefined;
-        let phaseWrites = Promise.resolve();
+        let observedPhase: EvidencePhase["id"] | undefined;
+        const phaseLimitations = new Map<EvidencePhase["id"], string>();
+        const phaseForQuery = (
+          query: WarcraftLogsQueryType
+        ): EvidencePhase["id"] =>
+          query === "history_scan"
+            ? "warcraft_logs_history"
+            : query === "zone_rankings"
+              ? "warcraft_logs_tier_bests"
+              : query === "fight_parses"
+                ? "warcraft_logs_fight_parses"
+                : "warcraft_logs_ranking_identities";
         const observePhase = (query: WarcraftLogsQueryType) => {
           const ledger = phaseLedger;
-          const next: EvidencePhase["id"] =
-            query === "history_scan"
-              ? "warcraft_logs_history"
-              : query === "zone_rankings"
-                ? "warcraft_logs_tier_bests"
-                : query === "fight_parses"
-                  ? "warcraft_logs_fight_parses"
-                  : "warcraft_logs_ranking_identities";
-          if (!ledger || activePhase === next) return;
+          const next = phaseForQuery(query);
+          if (!ledger || observedPhase === next) return;
+          observedPhase = next;
           phaseWrites = phaseWrites.then(async () => {
-            if (activePhase) await ledger.transition(activePhase, "completed");
+            if (activePhase) {
+              const code = phaseLimitations.get(activePhase);
+              await ledger.transition(
+                activePhase,
+                code ? "limited" : "completed",
+                code
+              );
+            }
             await ledger.transition(next, "active");
             activePhase = next;
           });
@@ -1177,6 +1168,7 @@ export function createApplicantEvidenceJobHandler(
         if (!parseOnlyResume) {
           await phaseLedger?.transition("warcraft_logs_history", "active");
           activePhase = phaseLedger ? "warcraft_logs_history" : undefined;
+          observedPhase = activePhase;
         }
         const response = await scope.time("warcraftLogs", () =>
           gateway.getFirstKillReports(run.key, {
@@ -1219,9 +1211,11 @@ export function createApplicantEvidenceJobHandler(
               observePhase(query);
               const ledger = phaseLedger;
               if (ledger) {
+                const limitedPhase = phaseForQuery(query);
+                phaseLimitations.set(limitedPhase, code);
+                observedPhase = undefined;
                 phaseWrites = phaseWrites.then(async () => {
-                  if (!activePhase) return;
-                  await ledger.transition(activePhase, "limited", code);
+                  await ledger.transition(limitedPhase, "limited", code);
                   activePhase = undefined;
                 });
               }
@@ -1306,11 +1300,15 @@ export function createApplicantEvidenceJobHandler(
           capRetryMs: options.capRetryMs
         });
         if (activePhase) {
-          const limitation = response.limitation ?? drivingParse;
+          const limitationCode =
+            phaseLimitations.get(activePhase) ??
+            (activePhase === "warcraft_logs_history"
+              ? response.limitation?.code
+              : undefined);
           await phaseLedger?.transition(
             activePhase,
-            limitation ? "limited" : "completed",
-            limitation?.code
+            limitationCode ? "limited" : "completed",
+            limitationCode
           );
         }
         // The remaining providers are part of this run, not dossier-read
@@ -1503,6 +1501,9 @@ export function createApplicantEvidenceJobHandler(
           await evidence.markTerminalTiers(run.key, marks, now());
         }
       } catch (error) {
+        // The gateway can reject after it has emitted progress callbacks.
+        // Drain their chain before settling the run so no late write escapes.
+        await phaseWrites.catch(() => undefined);
         const aborted = activeContext.signal.aborted;
         if (aborted) await phaseLedger?.cancelActive();
         record.outcome = aborted

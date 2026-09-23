@@ -397,6 +397,8 @@ export interface CompletedCharacterEvidence {
   wipes: readonly StoredCharacterMythicWipe[];
   tierBests: readonly StoredCharacterTierBestParse[];
   cuttingEdges: readonly CharacterCuttingEdgeInput[];
+  /** True only when this run completed its Blizzard achievement phase. */
+  cuttingEdgesCollected?: boolean;
   wipeCapable: boolean;
 }
 

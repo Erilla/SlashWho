@@ -4672,6 +4672,7 @@ describe("Warcraft Logs gateway", () => {
     // Break caught: counting only issued requests hides which class of query is
     // the one being refused, which is the class an optimisation must target.
     const requests: Array<{ query: string; limited: boolean }> = [];
+    const limitations: Array<{ query: string; code: string }> = [];
     // Built directly rather than through `clientFor`: that harness reshapes any
     // zone response it cannot parse, which would swallow the 503 under test.
     const client = createWarcraftLogsClient({
@@ -4692,7 +4693,8 @@ describe("Warcraft Logs gateway", () => {
     await client.getFirstKillReports(key, {
       requestCap: 1,
       parseRequestCap: 8,
-      onRequest: (event) => requests.push(event)
+      onRequest: (event) => requests.push(event),
+      onLimitation: (query, code) => limitations.push({ query, code })
     });
 
     expect(requests).toContainEqual({
@@ -4703,6 +4705,10 @@ describe("Warcraft Logs gateway", () => {
     expect(
       requests.filter((event) => event.query === "zone_rankings")
     ).toHaveLength(1);
+    expect(limitations).toContainEqual({
+      query: "zone_rankings",
+      code: "parse_unavailable"
+    });
   });
 
   it("counts the history scan even when the run returns a bare limitation", async () => {

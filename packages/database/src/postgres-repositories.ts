@@ -777,6 +777,11 @@ async function loadCompletedEvidence(
       ORDER BY achievement_id`,
     [run.id]
   );
+  const blizzardPhase = await client.query<{ state: string }>(
+    `SELECT state FROM character_evidence_run_phases
+      WHERE run_id = $1 AND phase_id = 'blizzard_achievements'`,
+    [run.id]
+  );
   return {
     run: mapEvidenceRun(run),
     evidenceVersion: run.evidence_version,
@@ -787,6 +792,7 @@ async function loadCompletedEvidence(
       achievementId: row.achievement_id,
       completedAt: row.completed_at.toISOString()
     })),
+    cuttingEdgesCollected: blizzardPhase.rows[0]?.state === "completed",
     wipeCapable: run.evidence_version >= 2
   };
 }
@@ -3829,12 +3835,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           // ever say its final phase is still pending after a crash.
           await client.query(
             `UPDATE character_evidence_run_phases
-                SET state = 'completed',
+                SET state = CASE WHEN $3 = 'collection_failed' THEN 'failed' ELSE 'completed' END,
                     started_at = COALESCE(started_at, $2),
                     completed_at = $2,
-                    limitation_code = NULL
+                    limitation_code = CASE WHEN $3 = 'collection_failed' THEN $3 ELSE NULL END
               WHERE run_id = $1 AND phase_id = 'publication'`,
-            [runId, input.completedAt]
+            [runId, input.completedAt, input.limitationCode]
           );
           const publication = await client.query(
             `UPDATE character_evidence_runs
@@ -3934,15 +3940,34 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async fail(id, code) {
         if (code.length === 0)
           throw new RangeError("character_evidence_error_invalid");
-        const result = await pool.query(
-          `UPDATE character_evidence_runs
-           SET status = 'failed', error_code = $2, completed_at = now(),
-               wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
-           WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
-          [id, code]
-        );
-        if (result.rowCount !== 1) {
-          throw new Error("character_evidence_run_not_active");
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const result = await client.query<{ completed_at: Date }>(
+            `UPDATE character_evidence_runs
+             SET status = 'failed', error_code = $2, completed_at = now(),
+                 wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
+             WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
+             RETURNING completed_at`,
+            [id, code]
+          );
+          if (result.rowCount !== 1)
+            throw new Error("character_evidence_run_not_active");
+          await client.query(
+            `UPDATE character_evidence_run_phases
+                SET state = 'failed',
+                    started_at = COALESCE(started_at, $2),
+                    completed_at = $2,
+                    limitation_code = $3
+              WHERE run_id = $1 AND phase_id = 'publication'`,
+            [id, result.rows[0]!.completed_at, code]
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
         }
       },
 

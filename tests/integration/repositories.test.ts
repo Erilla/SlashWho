@@ -403,6 +403,62 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("records a stopped collection as failed publication in the same transaction", async () => {
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: ["publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "partial",
+      limitationCode: "collection_failed",
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-22T11:05:00.000Z")
+    });
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "publication",
+        state: "failed",
+        limitationCode: "collection_failed"
+      })
+    ]);
+  });
+
+  it("settles publication when a run fails before it can publish", async () => {
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: ["publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.fail(reservation.run.id, "collection_failed");
+    await expect(
+      repositories.evidence.find(reservation.run.id)
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "collection_failed"
+    });
+    await expect(
+      repositories.evidence.listPhases?.(reservation.run.id)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "publication",
+        state: "failed",
+        limitationCode: "collection_failed"
+      })
+    ]);
+  });
+
   it("reopens a limited evidence phase on retry and records its recovered result", async () => {
     const reservation = await repositories.evidence.reserve({
       key: rootKey,
@@ -462,10 +518,30 @@ describe("PostgreSQL repositories", () => {
     const reservation = await repositories.evidence.reserve({
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
-      at: new Date("2026-09-22T11:00:00.000Z")
+      at: new Date("2026-09-22T11:00:00.000Z"),
+      phasePlan: ["blizzard_achievements", "publication"]
     });
     if (reservation.kind !== "reserved")
       throw new Error("evidence_not_reserved");
+
+    await repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+      {
+        id: "blizzard_achievements",
+        state: "active",
+        startedAt: new Date("2026-09-22T11:01:00.000Z"),
+        completedAt: null,
+        limitationCode: null
+      }
+    ]);
+    await repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+      {
+        id: "blizzard_achievements",
+        state: "completed",
+        startedAt: new Date("2026-09-22T11:01:00.000Z"),
+        completedAt: new Date("2026-09-22T11:04:00.000Z"),
+        limitationCode: null
+      }
+    ]);
 
     await repositories.evidence.publish(reservation.run.id, {
       state: "complete",
@@ -480,11 +556,12 @@ describe("PostgreSQL repositories", () => {
       completedAt: new Date("2026-09-22T11:05:00.000Z")
     } as never);
 
-    expect(
-      (await repositories.evidence.getCompleted(rootKey))?.cuttingEdges
-    ).toEqual([
-      { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
-    ]);
+    expect(await repositories.evidence.getCompleted(rootKey)).toMatchObject({
+      cuttingEdgesCollected: true,
+      cuttingEdges: [
+        { achievementId: "40254", completedAt: "2025-01-14T20:30:00.000Z" }
+      ]
+    });
   });
 
   it("keeps enriched parses when a later complete run did not re-fetch them", async () => {
@@ -1676,6 +1753,7 @@ describe("PostgreSQL repositories", () => {
       wipes: [expect.objectContaining({ bossId: "1233", bossOrder: 6 })],
       tierBests: [],
       cuttingEdges: [],
+      cuttingEdgesCollected: false,
       wipeCapable: true
     });
   });

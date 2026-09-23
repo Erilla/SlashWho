@@ -6,6 +6,35 @@ import {
 } from "./evidence-phase-ledger";
 
 describe("evidence phase ledger", () => {
+  it("skips unrequested earlier phases when a later request starts", async () => {
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const ledger = createEvidencePhaseLedger({
+      plan: evidencePhasePlans.warcraftLogs({
+        scan: true,
+        tierBests: true,
+        fightParses: true
+      }),
+      now: () => new Date("2026-09-22T10:00:00.000Z"),
+      persist
+    });
+    await ledger.seed();
+    await ledger.transition("warcraft_logs_identity_resolution", "skipped");
+    await ledger.transition("warcraft_logs_history", "active");
+    await ledger.transition("warcraft_logs_history", "completed");
+    await ledger.transition("warcraft_logs_fight_parses", "active");
+    await ledger.transition("warcraft_logs_fight_parses", "completed");
+
+    expect(persist).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: "warcraft_logs_tier_bests",
+        state: "skipped"
+      }),
+      expect.objectContaining({
+        id: "warcraft_logs_fight_parses",
+        state: "active"
+      })
+    ]);
+  });
   it("seeds only an applicable plan and coalesces repeated active notices", async () => {
     // Break caught: an impossible provider phase could remain pending forever,
     // or a history scan could write once per page instead of once per state.

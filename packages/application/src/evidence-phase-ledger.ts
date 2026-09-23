@@ -190,6 +190,22 @@ export function createEvidencePhaseLedger(options: {
       // A retry re-runs completed collection stages; completion is a durable
       // fact from this run, not a checkpoint or a transition to reverse.
       if (current.state === "completed" && state === "active") return;
+      const preceding: EvidencePhase[] = [];
+      if (state === "active") {
+        for (const phaseId of options.plan) {
+          if (phaseId === id) break;
+          const earlier = phases.get(phaseId)!;
+          if (earlier.state === "pending") {
+            preceding.push({
+              ...earlier,
+              state: "skipped",
+              completedAt: options.now()
+            });
+          } else if (!terminalStates.has(earlier.state)) {
+            throw new Error("evidence_phase_transition_invalid");
+          }
+        }
+      }
       if (
         state !== "skipped" &&
         state !== "active" &&
@@ -216,8 +232,9 @@ export function createEvidencePhaseLedger(options: {
         ...(terminalStates.has(state) ? { completedAt: at } : {}),
         ...(limitationCode ? { limitationCode } : {})
       };
+      await options.persist([...preceding, next]);
+      for (const earlier of preceding) phases.set(earlier.id, earlier);
       phases.set(id, next);
-      await options.persist([next]);
     },
 
     /** An unexpected process loss has no durable fact beyond the active row. */

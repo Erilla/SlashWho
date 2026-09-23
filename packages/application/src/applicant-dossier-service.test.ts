@@ -82,6 +82,11 @@ function fixture(
     evidenceCompletedAt?: Date;
     storedEvidence?: boolean;
     historicWorldRank?: number | null;
+    storedCuttingEdges?: readonly {
+      achievementId: string;
+      completedAt: string;
+    }[];
+    cuttingEdgesCollected?: boolean;
     gatheringCharacter?: CharacterKey | null;
     /** A limitation recorded on the run that is collecting right now. */
     activeLimitationCode?: string | null;
@@ -207,6 +212,8 @@ function fixture(
           ],
           wipes: options.wipes ?? [],
           tierBests: options.tierBests ?? [],
+          cuttingEdges: options.storedCuttingEdges ?? [],
+          cuttingEdgesCollected: options.cuttingEdgesCollected ?? false,
           wipeCapable: options.wipeCapable ?? true
         }
       })),
@@ -239,6 +246,8 @@ function fixture(
               ],
               wipes: options.wipes ?? [],
               tierBests: options.tierBests ?? [],
+              cuttingEdges: options.storedCuttingEdges ?? [],
+              cuttingEdgesCollected: options.cuttingEdgesCollected ?? false,
               wipeCapable: options.wipeCapable ?? true
             }
       ),
@@ -1349,6 +1358,59 @@ describe("applicant dossier service", () => {
         code: "points_budget_low"
       })
     );
+  });
+
+  it("reads collected Cutting Edge rows without calling Blizzard again", async () => {
+    const { dossiers, blizzard } = fixture({
+      cuttingEdgesCollected: true,
+      storedCuttingEdges: [
+        { achievementId: "41297", completedAt: "2025-03-01T20:30:00.000Z" }
+      ]
+    });
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      dossier: { cuttingEdges: [{ achievementId: "41297" }] }
+    });
+    expect(blizzard.getCompletedAchievements).not.toHaveBeenCalled();
+  });
+
+  it("treats an empty completed Blizzard phase as a collected answer", async () => {
+    const { dossiers, blizzard } = fixture({
+      cuttingEdgesCollected: true,
+      storedCuttingEdges: []
+    });
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      dossier: { cuttingEdges: [] }
+    });
+    expect(blizzard.getCompletedAchievements).not.toHaveBeenCalled();
+  });
+
+  it("restores historic ranks for evidence published before ranks were stored", async () => {
+    const { dossiers, raiderio } = fixture({ historicWorldRank: null });
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      dossier: {
+        raids: expect.arrayContaining([raidWithKill({ historicWorldRank: 2 })])
+      }
+    });
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps legacy kills visible when the rank fallback is unavailable", async () => {
+    const { dossiers, raiderio } = fixture({ historicWorldRank: null });
+    vi.mocked(raiderio.getMythicBossRankings).mockRejectedValueOnce(
+      new Error("ranking unavailable")
+    );
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      dossier: {
+        raids: expect.arrayContaining([
+          raidWithKill({ historicWorldRank: null })
+        ]),
+        limitations: expect.arrayContaining([
+          expect.objectContaining({ source: "raiderio", code: "unavailable" })
+        ])
+      }
+    });
   });
 
   it("retains Warcraft Logs evidence when Blizzard achievement data is unavailable", async () => {
