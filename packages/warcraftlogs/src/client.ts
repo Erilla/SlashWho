@@ -82,7 +82,7 @@ const guildAttendanceQuery = `
     guildData {
       guild(name: $name, serverSlug: $realm, serverRegion: $region) {
         attendance(limit: 25, page: $page) {
-          data { code }
+          data { code players { name } }
           has_more_pages
         }
       }
@@ -433,21 +433,44 @@ function characterGuilds(value: unknown): readonly CharacterGuild[] {
   return [...found.values()];
 }
 
-function guildAttendancePage(
-  value: unknown
-): Readonly<{ codes: readonly string[]; hasMorePages: boolean }> | null {
+type GuildAttendanceReport = Readonly<{
+  code: string;
+  /**
+   * Lower-cased names attendance lists for the report, or null when it lists
+   * none or any entry is unreadable. Null means "unknown", never "absent":
+   * only a complete list may rule a report out.
+   */
+  playerNames: ReadonlySet<string> | null;
+}>;
+
+function guildAttendancePage(value: unknown): Readonly<{
+  reports: readonly GuildAttendanceReport[];
+  hasMorePages: boolean;
+}> | null {
   const guild = record(record(record(value)?.data)?.guildData)?.guild;
   const attendance = record(record(guild)?.attendance);
-  const reports = attendance?.data;
+  const data = attendance?.data;
   const hasMorePages = attendance?.has_more_pages;
-  if (!Array.isArray(reports) || typeof hasMorePages !== "boolean") return null;
-  const codes: string[] = [];
-  for (const value of reports) {
-    const code = nonEmptyString(record(value)?.code);
+  if (!Array.isArray(data) || typeof hasMorePages !== "boolean") return null;
+  const reports: GuildAttendanceReport[] = [];
+  for (const value of data) {
+    const entry = record(value);
+    const code = nonEmptyString(entry?.code);
     if (!code) return null;
-    codes.push(code);
+    reports.push({ code, playerNames: attendancePlayerNames(entry?.players) });
   }
-  return { codes, hasMorePages };
+  return { reports, hasMorePages };
+}
+
+function attendancePlayerNames(value: unknown): ReadonlySet<string> | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const names = new Set<string>();
+  for (const player of value) {
+    const name = nonEmptyString(record(player)?.name);
+    if (!name) return null;
+    names.add(name.toLocaleLowerCase("en-US"));
+  }
+  return names;
 }
 
 function decodedHydratedReport(
@@ -1469,6 +1492,20 @@ function lastReportCode(value: unknown): string | null {
   return nonEmptyString(record(reports.at(-1))?.code);
 }
 
+function reportCodes(value: unknown): readonly string[] {
+  const envelope = record(value);
+  const data = envelope && record(envelope.data);
+  const characterData = data && record(data.characterData);
+  const character = characterData && record(characterData.character);
+  const recentReports = character && record(character.recentReports);
+  const reports = recentReports && recentReports.data;
+  if (!Array.isArray(reports)) return [];
+  return reports.flatMap((report) => {
+    const code = nonEmptyString(record(report)?.code);
+    return code ? [code] : [];
+  });
+}
+
 export function createWarcraftLogsClient(
   options: CreateWarcraftLogsClientOptions
 ): WarcraftLogsGateway {
@@ -1744,8 +1781,19 @@ export function createWarcraftLogsClient(
         historyScanStartPage = 1;
         historyScanResumeBoundaryReportCode = undefined;
         invalidatedStoredBoundary = true;
+      } else {
+        // The probe proved this page, so it is where a run that reads nothing
+        // new below it must resume -- not a reason to discard the cursor.
+        lastDecodedHistoryPage = historyScanStartPage - 1;
       }
     }
+    // Set only when the history itself ran out or reached the floor, which is
+    // what separates a finished scan from one whose budget ran out after the
+    // last page it proved.
+    let historyScanFinished = false;
+    // Reports this run has already decoded from the character's own history.
+    // Hydrating one again through attendance would re-read the same fights.
+    const scannedReportCodes = new Set<string>();
     for (
       let page = historyScanStartPage;
       historyScanRequests < options.requestCap;
@@ -1780,6 +1828,9 @@ export function createWarcraftLogsClient(
       for (const wipe of normalized.wipes) {
         wipes.set(wipe.fightUrl, wipe);
       }
+      for (const code of reportCodes(result.value)) {
+        scannedReportCodes.add(code);
+      }
       for (const guild of characterGuilds(result.value)) {
         discoveredGuilds.set(
           `${guild.region}\0${guild.realm}\0${guild.name}`,
@@ -1800,7 +1851,10 @@ export function createWarcraftLogsClient(
         const reached = reportPageReach(result.value);
         // A page with nothing dated says nothing about how far back the scan
         // has reached, so it must not end it.
-        if (reached.length > 0 && reached.every((at) => at < floor)) break;
+        if (reached.length > 0 && reached.every((at) => at < floor)) {
+          historyScanFinished = true;
+          break;
+        }
       }
 
       const hasMorePages = hasMoreReportPages(result.value);
@@ -1809,13 +1863,21 @@ export function createWarcraftLogsClient(
         scanLimitation = { kind: "limitation", code: "schema_drift" };
         break;
       }
-      historyScanResumeBoundaryReportCode =
-        lastReportCode(result.value) ?? undefined;
       // A resume boundary is a fact about a fully decoded page, never about a
       // response that was unavailable or structurally suspect. It is safe to
-      // carry this forward even if a later page is limited.
-      lastDecodedHistoryPage = page;
-      if (!hasMorePages) break;
+      // carry this forward even if a later page is limited. An empty page has
+      // no report to anchor on, so it leaves the cursor on the page before it:
+      // advancing past it would save a page with no boundary, which the next
+      // run cannot validate and so restarts from page one.
+      const boundary = lastReportCode(result.value);
+      if (boundary !== null) {
+        historyScanResumeBoundaryReportCode = boundary;
+        lastDecodedHistoryPage = page;
+      }
+      if (!hasMorePages) {
+        historyScanFinished = true;
+        break;
+      }
       if (historyScanRequests === options.requestCap) {
         scanLimitation = { kind: "limitation", code: "request_cap" };
       }
@@ -1823,14 +1885,17 @@ export function createWarcraftLogsClient(
     if (
       scanLimitation === undefined &&
       historyScanRequests === options.requestCap &&
-      lastDecodedHistoryPage === undefined
+      !historyScanFinished
     ) {
       scanLimitation = { kind: "limitation", code: "request_cap" };
     }
 
     // Character histories can omit reports that are still listed in a known
-    // guild's attendance history. Attendance is discovery only: every code is
-    // hydrated and run through the same actor/fight attribution decoder above.
+    // guild's attendance history. Attendance is discovery only: a report is
+    // hydrated and run through the same actor/fight attribution decoder above,
+    // and its player list only ever rules a report out, never in. A guild's
+    // attendance is every report it has logged, so reading each one cost
+    // Ryii 1,811 requests a run against a 300 cap.
     for (const guild of discoveredGuilds.values()) {
       if (historyScanRequests >= options.requestCap) {
         scanLimitation ??= { kind: "limitation", code: "request_cap" };
@@ -1864,7 +1929,9 @@ export function createWarcraftLogsClient(
           scanLimitation ??= { kind: "limitation", code: "schema_drift" };
           break;
         }
-        for (const code of attendancePage.codes) {
+        for (const { code, playerNames } of attendancePage.reports) {
+          if (scannedReportCodes.has(code)) continue;
+          if (playerNames && !playerNames.has(key.name)) continue;
           if (historyScanRequests >= options.requestCap) {
             scanLimitation ??= { kind: "limitation", code: "request_cap" };
             break;
