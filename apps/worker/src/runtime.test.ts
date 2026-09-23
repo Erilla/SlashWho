@@ -1,3 +1,4 @@
+import { encryptAccountMail } from "@slashwho/application";
 import type {
   ApplicantEvidenceJobHandler,
   ApplicantEvidenceJobHandlerOptions,
@@ -1892,3 +1893,62 @@ it("starts and drains configured account mail delivery alongside evidence work",
   await runtime.stop();
   expect(stopMail).toHaveBeenCalledOnce();
 });
+
+it.each(["claim", "ack"] as const)(
+  "bounds shutdown with a stalled mail %s and starts evidence shutdown promptly",
+  async (stage) => {
+    vi.useFakeTimers();
+    const fake = runtimeFakes();
+    const blocked = new Promise<never>(() => undefined);
+    fake.repositories.accountMail = {
+      issue: vi.fn(),
+      claimDue: vi.fn(async () =>
+        stage === "claim"
+          ? blocked
+          : {
+              id: "mail",
+              idempotencyKey: "mail",
+              encryptedMessage: encryptAccountMail("{}", Buffer.alloc(32, 7)),
+              attempt: 1,
+              expiresAt: new Date(Date.now() + 60000)
+            }
+      ),
+      markSent: vi.fn(() => blocked)
+    };
+    vi.stubGlobal("fetch", async () => new Response("", { status: 200 }));
+    const queueStop = vi.spyOn(fake.queue, "stop");
+    const runtime = await createWorkerRuntime(
+      {
+        ...config,
+        workerDrainTimeoutMs: 100,
+        accountMail: {
+          resendApiKey: "key",
+          accountEmailFrom: "a@example.com",
+          accountCredentialEncryptionKey: Buffer.alloc(32, 7)
+        }
+      },
+      fake.dependencies
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(
+        stage === "claim"
+          ? fake.repositories.accountMail.claimDue
+          : fake.repositories.accountMail.markSent
+      ).toHaveBeenCalled();
+      let result: unknown;
+      const stopping = runtime.stop().catch((error) => {
+        result = error;
+      });
+      expect(queueStop).toHaveBeenCalledOnce();
+      expect(fake.ended).toBe(false);
+      await vi.advanceTimersByTimeAsync(101);
+      await stopping;
+      expect(result).toMatchObject({ message: "account_mail_stop_timed_out" });
+      expect(fake.ended).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  }
+);

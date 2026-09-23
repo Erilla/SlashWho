@@ -1227,8 +1227,8 @@ export interface AccountMailRepository {
     at: Date;
   }): Promise<void>;
   /** Persists a lease/backoff before returning; crashes retry the same row. */
-  claimDue(at: Date): Promise<MailOutboxRow | null>;
-  markSent(id: string, at: Date): Promise<void>;
+  claimDue(at: Date, signal?: AbortSignal): Promise<MailOutboxRow | null>;
+  markSent(id: string, at: Date, signal?: AbortSignal): Promise<void>;
 }
 /** Concrete key methods are supplied with the credential implementation. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type

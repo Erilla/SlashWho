@@ -290,6 +290,47 @@ describe("PostgreSQL repositories", () => {
       ).rows[0].count
     ).toBe(0);
   });
+  it("cancels blocked outbox SQL without consuming its retry lease", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const account = await repositories.accountAuth.registerPending(
+      registration("cancel@example.com", at)
+    );
+    await repositories.accountMail.issue({
+      accountId: account.accountId!,
+      purpose: "verify",
+      destination: "cancel@example.com",
+      encryptedMessage: "encrypted",
+      tokenDigest: "cancel-digest",
+      expiresAt: new Date(at.getTime() + 3600000),
+      at
+    });
+    const blocker = await pool.connect();
+    const controller = new AbortController();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("LOCK account_mail_outbox IN ACCESS EXCLUSIVE MODE");
+      const pending = repositories.accountMail.claimDue(at, controller.signal);
+      const assertion = expect(pending).rejects.toThrow(
+        "account_mail_database_cancelled"
+      );
+      await eventually(
+        async () =>
+          (
+            await pool.query(
+              "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%DELETE FROM account_mail_outbox%'"
+            )
+          ).rowCount! > 0
+      );
+      controller.abort();
+      await assertion;
+      await blocker.query("ROLLBACK");
+      const row = await repositories.accountMail.claimDue(at);
+      expect(row).toMatchObject({ encryptedMessage: "encrypted", attempt: 1 });
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+  });
   it("rejects empty local-part dot segments at the database boundary", async () => {
     for (const canonicalEmail of [
       "a..b@example.com",

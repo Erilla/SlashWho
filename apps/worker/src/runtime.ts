@@ -44,7 +44,10 @@ import {
   wasSuppressedAt
 } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
-import { startAccountMailWorker } from "./account-mail";
+import {
+  AccountMailStopTimeoutError,
+  startAccountMailWorker
+} from "./account-mail";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
 
 // Ciphertext for an abandoned evidence run's WCL credentials should not
@@ -427,7 +430,8 @@ export function createRaiderIoGateway(
 }
 
 const defaultDependencies: WorkerRuntimeDependencies = {
-  createPool: (connectionString) => new Pool({ connectionString }),
+  createPool: (connectionString) =>
+    new Pool({ connectionString, connectionTimeoutMillis: 10_000 }),
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
@@ -952,18 +956,31 @@ export async function createWorkerRuntime(
         ready = false;
         stopping ??= (async () => {
           try {
-            await mailWorker?.stop();
-            await initializedQueue.stop({
-              graceful: true,
-              timeoutMs: config.workerDrainTimeoutMs,
-              // Waiting out the whole budget was the bug: an evidence run
-              // cannot finish inside it, so the wait only ever expired. The
-              // grace covers a job that is nearly done; past it the run is
-              // aborted, and the handler releases it with the remainder.
-              abortGraceMs: config.workerAbortGraceMs
-            });
+            // Start both drains before awaiting either. Storage stays available
+            // until both settle; a mail timeout must not delay evidence aborts.
+            const drained = await Promise.allSettled([
+              mailWorker?.stop(config.workerDrainTimeoutMs),
+              initializedQueue.stop({
+                graceful: true,
+                timeoutMs: config.workerDrainTimeoutMs,
+                // Waiting out the whole budget was the bug: an evidence run
+                // cannot finish inside it, so the wait only ever expired. The
+                // grace covers a job that is nearly done; past it the run is
+                // aborted, and the handler releases it with the remainder.
+                abortGraceMs: config.workerAbortGraceMs
+              })
+            ]);
+            const failed = drained.find(
+              (result) => result.status === "rejected"
+            );
+            if (failed?.status === "rejected") throw failed.reason;
           } catch (error) {
-            if (error instanceof DiscoveryQueueStopTimeoutError) {
+            if (
+              error instanceof DiscoveryQueueStopTimeoutError ||
+              error instanceof AccountMailStopTimeoutError
+            ) {
+              // Pool.end drains checked-out clients; initiating it must not
+              // turn the already-expired shutdown budget into another wait.
               void pool.end().catch(() => undefined);
               throw error;
             }

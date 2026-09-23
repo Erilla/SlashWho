@@ -6,6 +6,7 @@ import {
   type CharacterKey
 } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
+import { withAccountMailClient } from "./account-mail-query";
 import type {
   CallerClass,
   CharacterEvidenceRun,
@@ -1525,20 +1526,22 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           client.release();
         }
       },
-      async claimDue(at) {
-        // Also purge sent metadata after expiry; token records contain digests only.
-        await pool.query(
-          "DELETE FROM account_mail_outbox WHERE expires_at <= $1",
-          [at]
-        );
-        const result = await pool.query<{
-          id: string;
-          encrypted_message: string;
-          idempotency_key: string;
-          expires_at: Date;
-          attempt: number;
-        }>(
-          `WITH due AS (
+      async claimDue(at, signal) {
+        return withAccountMailClient(pool, signal, async (client, signal) => {
+          // Also purge sent metadata after expiry; token records contain digests only.
+          await client.query(
+            "DELETE FROM account_mail_outbox WHERE expires_at <= $1",
+            [at]
+          );
+          signal.throwIfAborted();
+          const result = await client.query<{
+            id: string;
+            encrypted_message: string;
+            idempotency_key: string;
+            expires_at: Date;
+            attempt: number;
+          }>(
+            `WITH due AS (
              SELECT id FROM account_mail_outbox
              WHERE sent_at IS NULL AND expires_at > $1 AND next_attempt_at <= $1
              ORDER BY next_attempt_at, id FOR UPDATE SKIP LOCKED LIMIT 1
@@ -1549,24 +1552,27 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                  LEAST(3600, 60 * power(2, LEAST(mail.attempt, 6)))::int)
            FROM due WHERE mail.id = due.id
            RETURNING mail.id, encrypted_message, idempotency_key, expires_at, attempt`,
-          [at]
-        );
-        const row = result.rows[0];
-        return row
-          ? {
-              id: row.id,
-              encryptedMessage: row.encrypted_message,
-              idempotencyKey: row.idempotency_key,
-              expiresAt: row.expires_at,
-              attempt: row.attempt
-            }
-          : null;
+            [at]
+          );
+          const row = result.rows[0];
+          return row
+            ? {
+                id: row.id,
+                encryptedMessage: row.encrypted_message,
+                idempotencyKey: row.idempotency_key,
+                expiresAt: row.expires_at,
+                attempt: row.attempt
+              }
+            : null;
+        });
       },
-      async markSent(id, at) {
-        await pool.query(
-          `UPDATE account_mail_outbox SET sent_at = $2, encrypted_message = '' WHERE id = $1`,
-          [id, at]
-        );
+      async markSent(id, at, signal) {
+        await withAccountMailClient(pool, signal, async (client) => {
+          await client.query(
+            `UPDATE account_mail_outbox SET sent_at = $2, encrypted_message = '' WHERE id = $1`,
+            [id, at]
+          );
+        });
       }
     },
     accountAuth: {
