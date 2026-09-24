@@ -7,7 +7,12 @@ export function dossierRaidTargetId(raidId: string) {
   return `dossier-raid-${raidId}`;
 }
 
-type Section = Readonly<{ id: string; label: string; raid?: boolean }>;
+type Section = Readonly<{
+  id: string;
+  label: string;
+  raidName?: string;
+  raid?: boolean;
+}>;
 
 export function DossierSectionNavigation({
   raids,
@@ -27,6 +32,7 @@ export function DossierSectionNavigation({
       ...raids.map((raid) => ({
         id: dossierRaidTargetId(raid.raidId),
         label: `Raid: ${raid.raidName}`,
+        raidName: raid.raidName,
         raid: true
       })),
       ...(hasLimitations
@@ -95,6 +101,7 @@ export function DossierSectionNavigation({
               className={
                 section.raid ? "dossier-section-navigation-raid" : undefined
               }
+              aria-label={section.label}
               href={`#${section.id}`}
               onClick={(event) => {
                 if (
@@ -109,7 +116,12 @@ export function DossierSectionNavigation({
                 navigateTo(section.id);
               }}
             >
-              {section.label}
+              <span
+                className="dossier-section-navigation-label"
+                data-raid-name={section.raidName}
+              >
+                {section.label}
+              </span>
             </a>
           </li>
         ))}
