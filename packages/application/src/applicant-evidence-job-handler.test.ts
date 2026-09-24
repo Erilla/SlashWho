@@ -1287,6 +1287,70 @@ describe("applicant evidence job handler", () => {
     expect(perRunGateway.getFirstKillReports).toHaveBeenCalled();
   });
 
+  it.each([
+    { resolvedVersion: 4, useAccount: true },
+    { resolvedVersion: 5, useAccount: false },
+    { resolvedVersion: null, useAccount: false }
+  ])(
+    "uses the reserved account key only at its current version: %j",
+    async ({ resolvedVersion, useAccount }) => {
+      const accountRun = {
+        ...run,
+        accountCredentialOwnerId: "alice",
+        accountCredentialVersion: 4
+      };
+      const evidence = store(accountRun);
+      const shared = vi.fn().mockResolvedValue({
+        kind: "evidence",
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        limitation: null,
+        parseLimitation: null
+      });
+      const personal = vi.fn().mockResolvedValue({
+        kind: "evidence",
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        limitation: null,
+        parseLimitation: null
+      });
+      const createWarcraftLogsGateway = vi
+        .fn()
+        .mockReturnValue({ ...openGate, getFirstKillReports: personal });
+      const resolveAccountWarcraftLogs = vi.fn().mockResolvedValue(
+        resolvedVersion === null
+          ? null
+          : {
+              values: { clientId: "alice-id", clientSecret: "alice-key" },
+              version: resolvedVersion
+            }
+      );
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: { ...openGate, getFirstKillReports: shared },
+        createWarcraftLogsGateway,
+        resolveAccountWarcraftLogs,
+        requestCap: 80,
+        parseRequestCap: 8,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 1_500,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000
+      });
+      await handler.execute(run.id);
+      expect(resolveAccountWarcraftLogs).toHaveBeenCalledWith("alice", 4);
+      expect(createWarcraftLogsGateway).toHaveBeenCalledTimes(
+        useAccount ? 1 : 0
+      );
+      expect(personal).toHaveBeenCalledTimes(useAccount ? 1 : 0);
+      expect(shared).toHaveBeenCalledTimes(useAccount ? 0 : 1);
+    }
+  );
+
   it("tells the gateway which fights are already hydrated", async () => {
     // Break caught: without this the parse budget redid the same reports every
     // run, so coverage never advanced past whatever the first run reached.

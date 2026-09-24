@@ -1,3 +1,4 @@
+import { hkdfSync } from "node:crypto";
 import {
   createApplicantEvidenceJobHandler,
   cleanupExpired,
@@ -6,6 +7,7 @@ import {
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
+  decryptCredential,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -44,6 +46,10 @@ import {
   wasSuppressedAt
 } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
+import {
+  AccountMailStopTimeoutError,
+  startAccountMailWorker
+} from "./account-mail";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
 
 // Ciphertext for an abandoned evidence run's WCL credentials should not
@@ -112,6 +118,7 @@ type RuntimePool = {
 };
 
 export type WorkerRuntimeDependencies = {
+  startAccountMailWorker?: typeof startAccountMailWorker;
   createPool: (connectionString: string) => RuntimePool;
   runMigrations: (pool: RuntimePool) => Promise<void>;
   createRepositories: (pool: RuntimePool) => Repositories;
@@ -424,8 +431,49 @@ export function createRaiderIoGateway(
   });
 }
 
+export function createAccountWarcraftLogsResolver(
+  repository:
+    | {
+        get(
+          accountId: string,
+          provider: "warcraftlogs"
+        ): Promise<{ encryptedPayload: string | null; version: number } | null>;
+      }
+    | undefined,
+  masterKey: Buffer | undefined
+) {
+  return async (accountId: string, credentialVersion: number) => {
+    if (!masterKey) return null;
+    // The repository get joins the active, verified account. A disabled owner
+    // therefore has no usable record, even while the run remains queued.
+    const row = await repository?.get(accountId, "warcraftlogs");
+    if (!row?.encryptedPayload || row.version !== credentialVersion)
+      return null;
+    const key = Buffer.from(
+      hkdfSync("sha256", masterKey, "", "account-provider-credentials-v1", 32)
+    );
+    const values: unknown = JSON.parse(
+      decryptCredential(row.encryptedPayload, key)
+    );
+    if (
+      !values ||
+      typeof values !== "object" ||
+      !("clientId" in values) ||
+      !("clientSecret" in values) ||
+      typeof values.clientId !== "string" ||
+      typeof values.clientSecret !== "string"
+    )
+      return null;
+    return {
+      values: { clientId: values.clientId, clientSecret: values.clientSecret },
+      version: row.version
+    };
+  };
+}
+
 const defaultDependencies: WorkerRuntimeDependencies = {
-  createPool: (connectionString) => new Pool({ connectionString }),
+  createPool: (connectionString) =>
+    new Pool({ connectionString, connectionTimeoutMillis: 10_000 }),
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
@@ -474,6 +522,7 @@ export async function createWorkerRuntime(
   let queue: DiscoveryQueue | undefined;
   let ready = false;
   let stopping: Promise<void> | undefined;
+  let mailWorker: ReturnType<typeof startAccountMailWorker> | undefined;
 
   try {
     for (let attempt = 1; ; attempt += 1) {
@@ -572,6 +621,10 @@ export async function createWorkerRuntime(
       isSuppressed: (key) =>
         repositories.suppressions.isActive(key, new Date()),
       warcraftLogs: evidenceGateway,
+      resolveAccountWarcraftLogs: createAccountWarcraftLogsResolver(
+        repositories.accountCredentials,
+        config.accountCredentialEncryptionKey
+      ),
       // These are collection dependencies too: the dossier reader only reads
       // the facts this worker publishes, so progress and publication share
       // one durable run.
@@ -903,6 +956,11 @@ export async function createWorkerRuntime(
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
       await evidenceHandler.execute(payload, context);
     });
+    if (config.accountMail) {
+      mailWorker = (
+        dependencies.startAccountMailWorker ?? startAccountMailWorker
+      )(repositories.accountMail, config.accountMail, logger);
+    }
     ready = true;
 
     return {
@@ -944,17 +1002,31 @@ export async function createWorkerRuntime(
         ready = false;
         stopping ??= (async () => {
           try {
-            await initializedQueue.stop({
-              graceful: true,
-              timeoutMs: config.workerDrainTimeoutMs,
-              // Waiting out the whole budget was the bug: an evidence run
-              // cannot finish inside it, so the wait only ever expired. The
-              // grace covers a job that is nearly done; past it the run is
-              // aborted, and the handler releases it with the remainder.
-              abortGraceMs: config.workerAbortGraceMs
-            });
+            // Start both drains before awaiting either. Storage stays available
+            // until both settle; a mail timeout must not delay evidence aborts.
+            const drained = await Promise.allSettled([
+              mailWorker?.stop(config.workerDrainTimeoutMs),
+              initializedQueue.stop({
+                graceful: true,
+                timeoutMs: config.workerDrainTimeoutMs,
+                // Waiting out the whole budget was the bug: an evidence run
+                // cannot finish inside it, so the wait only ever expired. The
+                // grace covers a job that is nearly done; past it the run is
+                // aborted, and the handler releases it with the remainder.
+                abortGraceMs: config.workerAbortGraceMs
+              })
+            ]);
+            const failed = drained.find(
+              (result) => result.status === "rejected"
+            );
+            if (failed?.status === "rejected") throw failed.reason;
           } catch (error) {
-            if (error instanceof DiscoveryQueueStopTimeoutError) {
+            if (
+              error instanceof DiscoveryQueueStopTimeoutError ||
+              error instanceof AccountMailStopTimeoutError
+            ) {
+              // Pool.end drains checked-out clients; initiating it must not
+              // turn the already-expired shutdown budget into another wait.
               void pool.end().catch(() => undefined);
               throw error;
             }
@@ -967,6 +1039,7 @@ export async function createWorkerRuntime(
       }
     };
   } catch (error) {
+    await mailWorker?.stop();
     await Promise.allSettled([
       ...(queue
         ? [

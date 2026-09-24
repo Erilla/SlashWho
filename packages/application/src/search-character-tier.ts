@@ -49,6 +49,7 @@ export async function searchCharacterTier(options: {
   at: Date;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  credentials?: { accountId: string; credentialVersion: number };
   scope?: MeasurementScope;
 }): Promise<SearchCharacterTierResult> {
   if (tierSearchWindow(options.raidId, options.at) === null) {
@@ -65,7 +66,8 @@ export async function searchCharacterTier(options: {
     raidId: options.raidId,
     at: options.at,
     searchedSince: new Date(options.at.getTime() - TIER_SEARCH_SPACING_MS),
-    phasePlan: fullEvidencePhasePlan()
+    phasePlan: fullEvidencePhasePlan(),
+    credentials: options.credentials
   });
   switch (reservation.kind) {
     case "reserved": {

@@ -1,7 +1,25 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  hkdfSync,
+  randomBytes
+} from "node:crypto";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
+
+function accountMailKey(key: Buffer): Buffer {
+  if (key.length !== 32) throw new Error("invalid_credential_encryption_key");
+  return Buffer.from(hkdfSync("sha256", key, "", "account-mail-outbox-v1", 32));
+}
+
+export function encryptAccountMail(message: string, key: Buffer): string {
+  return encryptCredential(message, accountMailKey(key));
+}
+
+export function decryptAccountMail(ciphertext: string, key: Buffer): string {
+  return decryptCredential(ciphertext, accountMailKey(key));
+}
 
 export function parseEncryptionKey(hex: string): Buffer {
   if (!/^[0-9a-f]{64}$/i.test(hex)) {

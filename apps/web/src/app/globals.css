@@ -2240,26 +2240,9 @@ a {
   }
 }
 
-@media (max-width: 34rem) {
-  .dossier-parse-list--with-character-name li {
-    grid-template-columns: 7rem minmax(0, 1fr);
-  }
-
-  .dossier-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .dossier-heading > .profile-links {
-    align-self: flex-start;
-  }
+@media (min-width: 34.001rem) and (max-width: 60rem) {
   :root {
-    --header-height: 6.75rem;
-  }
-
-  .home-shell {
-    align-items: start;
-    padding-top: 19vh;
+    --header-height: 7rem;
   }
 
   .site-header {
@@ -2267,8 +2250,8 @@ a {
     grid-template-areas:
       "brand identity nav"
       "search search search";
-    row-gap: 0.55rem;
-    padding: 0.55rem 1.25rem;
+    row-gap: 0.45rem;
+    padding-block: 0.5rem;
   }
 
   .header-logo {
@@ -2288,9 +2271,71 @@ a {
     grid-area: search;
     width: 100%;
   }
+}
+
+@media (max-width: 34rem) {
+  .dossier-parse-list--with-character-name li {
+    grid-template-columns: 7rem minmax(0, 1fr);
+  }
+
+  .dossier-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dossier-heading > .profile-links {
+    align-self: flex-start;
+  }
+  :root {
+    --header-height: 7rem;
+  }
+
+  .home-shell {
+    align-items: start;
+    padding-top: 19vh;
+  }
+
+  .site-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand identity nav"
+      "search search search";
+    column-gap: 0.5rem;
+    row-gap: 0.45rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .header-logo {
+    grid-area: brand;
+  }
+
+  .header-identity {
+    grid-area: identity;
+  }
+
+  .site-nav {
+    grid-area: nav;
+    justify-self: end;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+
+  .site-nav-link {
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .header-search {
+    grid-area: search;
+    width: 100%;
+  }
 
   .header-search .search-control {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .header-search .search-button {
+    width: auto;
   }
 
   .dossier-header-identity {

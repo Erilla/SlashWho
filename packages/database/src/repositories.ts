@@ -271,6 +271,8 @@ export interface CharacterEvidenceRun {
   completedAt: Date | null;
   wclClientIdEncrypted: string | null;
   wclClientSecretEncrypted: string | null;
+  accountCredentialOwnerId?: string | null;
+  accountCredentialVersion?: number | null;
   /** The character's class, carried so evidence collection can resolve shared specialisation names. */
   className: string | null;
   /** What the run was reserved to do; see `EvidenceRunMode`. */
@@ -741,10 +743,20 @@ export interface EvidenceRepository {
     at: Date;
     /** The ordered collection plan fixed when a new run is reserved. */
     phasePlan?: readonly string[];
-    credentials?: {
-      wclClientIdEncrypted: string;
-      wclClientSecretEncrypted: string;
-    } | null;
+    credentials?:
+      | {
+          wclClientIdEncrypted: string;
+          wclClientSecretEncrypted: string;
+          accountId?: never;
+          credentialVersion?: never;
+        }
+      | {
+          accountId: string;
+          credentialVersion: number;
+          wclClientIdEncrypted?: never;
+          wclClientSecretEncrypted?: never;
+        }
+      | null;
   }): Promise<EvidenceReservationResult>;
   /**
    * Reserves a tier search, under the same per-character lock as `reserve`.
@@ -767,6 +779,7 @@ export interface EvidenceRepository {
     at: Date;
     searchedSince: Date;
     phasePlan?: readonly string[];
+    credentials?: { accountId: string; credentialVersion: number };
   }): Promise<TierSearchReservationResult>;
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
@@ -1151,6 +1164,245 @@ export type Operator = Readonly<{
   updatedAt: Date;
 }>;
 
+/** Safe account projection; credential material is confined to a separate type. */
+export type Account = Readonly<{
+  id: string;
+  canonicalEmail: string;
+  email: string;
+  role: "user" | "admin";
+  active: boolean;
+  verifiedAt: Date | null;
+  passwordChangeRequired: boolean;
+  credentialVersion: number;
+  createdAt: Date;
+  updatedAt: Date;
+}>;
+
+export type AccountSummary = Pick<
+  Account,
+  "id" | "email" | "role" | "active" | "verifiedAt" | "createdAt"
+>;
+
+export type AccountCredential = Account &
+  Readonly<{
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+  }>;
+
+export type MailOutboxRow = Readonly<{
+  id: string;
+  encryptedMessage: string;
+  idempotencyKey: string;
+  expiresAt: Date;
+  attempt: number;
+}>;
+
+export type Provider = "blizzard" | "raiderio" | "warcraftlogs";
+export type ProviderPresence = Readonly<{
+  provider: Provider;
+  present: boolean;
+  version: number;
+  updatedAt: Date | null;
+}>;
+export type ProviderCredentials =
+  | { provider: "blizzard"; clientId: string; clientSecret: string }
+  | { provider: "raiderio"; accessKey: string }
+  | { provider: "warcraftlogs"; clientId: string; clientSecret: string };
+
+export interface AccountAuthRepository {
+  findCredential(canonicalEmail: string): Promise<AccountCredential | null>;
+  admitLoginAttempt(input: {
+    subjectHash: string;
+    limit: number;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<OperatorLoginAdmission>;
+  appendEvent(input: {
+    accountId: string | null;
+    action: "sign_in" | "sign_out" | "session_revoke" | "password_change";
+    outcome: "success" | "failure";
+    at: Date;
+  }): Promise<void>;
+  issueSession(input: {
+    sessionId: string;
+    secretDigest: string;
+    accountId: string;
+    credentialVersion: number;
+    issuedAt: Date;
+    lastUsedAt: Date;
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+  }): Promise<AccountSession | null>;
+  useSession(input: {
+    sessionId: string;
+    secretDigest: string;
+    at: Date;
+    idleExpiresAt: Date;
+  }): Promise<{ account: Account; session: AccountSession } | null>;
+  revokeSession(sessionId: string, at: Date): Promise<void>;
+  changePassword(input: {
+    accountId: string;
+    sessionId: string;
+    expectedCredentialVersion: number;
+    expectedPasswordHash: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<boolean>;
+  provisionAdmin(input: {
+    canonicalEmail: string;
+    email: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<Account>;
+  setRole(input: {
+    actorId: string;
+    targetId: string;
+    role: Account["role"];
+    at: Date;
+  }): Promise<"updated" | "last_admin" | "forbidden" | "missing">;
+  setActive(input: {
+    actorId: string;
+    targetId: string;
+    active: boolean;
+    at: Date;
+  }): Promise<"updated" | "last_admin" | "forbidden" | "missing">;
+  requirePasswordChange(input: {
+    actorId: string;
+    targetId: string;
+    at: Date;
+  }): Promise<boolean>;
+  listAccounts(actorId: string): Promise<readonly AccountSummary[]>;
+  registerPending(input: {
+    canonicalEmail: string;
+    email: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<{ kind: "created" | "existing"; accountId?: string }>;
+  /** Inputs are HMAC digests; null means no trusted X-Real-IP was available. */
+  admitRegistration(input: {
+    ipSubjectHash: string | null;
+    emailSubjectHash: string;
+    at: Date;
+  }): Promise<"admitted" | "throttled">;
+}
+export type AccountSession = Readonly<{
+  id: string;
+  accountId: string;
+  credentialVersion: number;
+  issuedAt: Date;
+  lastUsedAt: Date;
+  idleExpiresAt: Date;
+  absoluteExpiresAt: Date;
+  revokedAt: Date | null;
+}>;
+export interface AccountMailRepository {
+  issue(input: {
+    accountId: string;
+    purpose: "verify" | "reset" | "email_change_current" | "email_change_new";
+    /** Kept only inside encryptedMessage, never duplicated as plaintext. */
+    destination: string;
+    /** Required for reset: guards a mailbox snapshot under the account row lock. */
+    expectedCanonicalEmail?: string;
+    encryptedMessage: string;
+    tokenDigest: string;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<void>;
+  /** Persists a lease/backoff before returning; crashes retry the same row. */
+  claimDue(at: Date, signal?: AbortSignal): Promise<MailOutboxRow | null>;
+  markSent(id: string, at: Date, signal?: AbortSignal): Promise<void>;
+}
+export type AccountTokenPurpose =
+  "verify" | "reset" | "email_change_current" | "email_change_new";
+export interface AccountTokenRepository {
+  admitRequest(input: {
+    purpose: "verify" | "reset";
+    subjectHash: string;
+    limit: number;
+    expiresAt: Date;
+    at: Date;
+  }): Promise<boolean>;
+  findAccountById(id: string): Promise<AccountCredential | null>;
+  findAccountByEmail(canonicalEmail: string): Promise<AccountCredential | null>;
+  findToken(input: {
+    digest: string;
+    purpose: AccountTokenPurpose;
+    at: Date;
+  }): Promise<AccountCredential | null>;
+  confirmVerification(input: {
+    digest: string;
+    passwordHash: string;
+    at: Date;
+  }): Promise<boolean>;
+  completeReset(input: {
+    digest: string;
+    passwordHash: string;
+    passwordSalt: string;
+    scryptVersion: number;
+    scryptCost: number;
+    at: Date;
+  }): Promise<boolean>;
+  /** Atomically admits bounded mail requests and issues both mailbox proofs. */
+  issueEmailChange(input: {
+    accountId: string;
+    destinationSubjectHash: string;
+    expectedPasswordHash: string;
+    expectedCurrentCanonicalEmail: string;
+    expectedCredentialVersion: number;
+    canonicalEmail: string;
+    email: string;
+    current: { digest: string; encryptedMessage: string };
+    next: { digest: string; encryptedMessage: string };
+    expiresAt: Date;
+    at: Date;
+  }): Promise<boolean>;
+  confirmEmailChange(input: {
+    digest: string;
+    purpose: "email_change_current" | "email_change_new";
+    at: Date;
+  }): Promise<"pending" | "changed" | "invalid">;
+}
+export type AccountCredentialProvider =
+  "blizzard" | "raiderio" | "warcraftlogs";
+export type AccountCredentialRecord = Readonly<{
+  provider: AccountCredentialProvider;
+  encryptedPayload: string | null;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+}>;
+export interface AccountCredentialRepository {
+  list(accountId: string): Promise<readonly AccountCredentialRecord[]>;
+  get(
+    accountId: string,
+    provider: AccountCredentialProvider
+  ): Promise<AccountCredentialRecord | null>;
+  replace(input: {
+    accountId: string;
+    provider: AccountCredentialProvider;
+    encryptedPayload: string;
+    expectedVersion: number;
+    at: Date;
+  }): Promise<"saved" | "conflict">;
+  remove(
+    accountId: string,
+    provider: AccountCredentialProvider,
+    at: Date,
+    expectedVersion?: number
+  ): Promise<boolean>;
+}
+
 /**
  * The derived material needed only to verify an operator credential. This is
  * intentionally distinct from `Operator`, so ordinary callers never receive
@@ -1253,6 +1505,10 @@ export interface OperatorAuthRepository {
 }
 
 export interface Repositories {
+  accountAuth: AccountAuthRepository;
+  accountMail: AccountMailRepository;
+  accountTokens: AccountTokenRepository;
+  accountCredentials?: AccountCredentialRepository;
   operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;
   runs: {

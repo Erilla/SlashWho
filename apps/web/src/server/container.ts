@@ -19,6 +19,8 @@ import {
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
+import { createAccountTokens } from "./account-tokens";
+import { createAccountCredentials } from "./account-credentials";
 
 import { loadWebConfig, type WebConfig } from "./config";
 import {
@@ -30,7 +32,7 @@ import {
   createCharacterIdResolver,
   type CharacterIdResolver
 } from "./warcraft-logs-characters";
-import { createOperatorAuth, type OperatorAuth } from "./operator-auth";
+import { createAccountAuth, type AccountAuth } from "./operator-auth";
 
 type WebPool = {
   query(text: string): Promise<unknown>;
@@ -41,7 +43,19 @@ export type WebContainer = Readonly<{
   searches: SearchService;
   dossiers: ApplicantDossierService;
   collectionMonitor: CollectionMonitorService;
-  operatorAuth: OperatorAuth;
+  accountAuth: AccountAuth;
+  accountAdmin: Pick<
+    Repositories["accountAuth"],
+    "listAccounts" | "setRole" | "setActive" | "requirePasswordChange"
+  >;
+  accountTokens: ReturnType<typeof createAccountTokens> | null;
+  accountCredentials?: ReturnType<typeof createAccountCredentials> | null;
+  accountRegistration: Pick<
+    Repositories["accountAuth"],
+    "registerPending" | "admitRegistration"
+  >;
+  registrationHashSecret: string;
+  accountOrigin: string;
   characterIds: CharacterIdResolver;
   ready(): Promise<boolean>;
   close(): Promise<void>;
@@ -115,11 +129,27 @@ export async function createWebContainer(
   try {
     await dependencies.runMigrations(pool);
     const repositories = dependencies.createRepositories(pool);
-    const operatorAuth = createOperatorAuth({
-      repository: repositories.operatorAuth,
+    const accountAuth = createAccountAuth({
+      repository: repositories.accountAuth,
       config: config.application,
       ...config.operatorAuth
     });
+    const accountTokens = config.accountMail
+      ? createAccountTokens({
+          repositories,
+          tokenHashSecret: config.application.RATE_LIMIT_HASH_SECRET,
+          encryptionKey: config.accountMail.encryptionKey,
+          origin: config.operatorAuth.origin,
+          from: config.accountMail.from
+        })
+      : null;
+    const accountCredentials =
+      config.accountCredentialEncryptionKey && repositories.accountCredentials
+        ? createAccountCredentials(
+            repositories.accountCredentials,
+            config.accountCredentialEncryptionKey
+          )
+        : null;
     const collectionMonitor = createCollectionMonitorService({
       evidence: repositories.evidence
     });
@@ -185,7 +215,13 @@ export async function createWebContainer(
       searches,
       dossiers,
       collectionMonitor,
-      operatorAuth,
+      accountAuth,
+      accountAdmin: repositories.accountAuth,
+      accountTokens,
+      accountCredentials,
+      accountRegistration: repositories.accountAuth,
+      registrationHashSecret: config.application.RATE_LIMIT_HASH_SECRET,
+      accountOrigin: config.operatorAuth.origin,
       characterIds,
       async ready() {
         try {

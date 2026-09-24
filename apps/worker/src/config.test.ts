@@ -326,3 +326,22 @@ it("reserves part of the drain budget for aborting work that cannot finish", () 
     loadWorkerConfig({ ...environment, WORKER_ABORT_GRACE_MS: "-1" })
   ).toThrow("invalid_worker_abort_grace");
 });
+
+it("enables account mail only with complete private configuration", () => {
+  expect(loadWorkerConfig(environment).accountMail).toBeUndefined();
+  expect(() =>
+    loadWorkerConfig({ ...environment, RESEND_API_KEY: "secret" })
+  ).toThrow("account_mail_configuration_incomplete");
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      RESEND_API_KEY: "secret",
+      ACCOUNT_EMAIL_FROM: "Accounts <accounts@example.com>",
+      ACCOUNT_CREDENTIAL_ENCRYPTION_KEY: "b".repeat(64)
+    }).accountMail
+  ).toMatchObject({
+    resendApiKey: "secret",
+    accountEmailFrom: "Accounts <accounts@example.com>",
+    accountCredentialEncryptionKey: Buffer.alloc(32, 187)
+  });
+});

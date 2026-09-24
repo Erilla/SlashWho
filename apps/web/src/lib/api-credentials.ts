@@ -50,6 +50,42 @@ export function clearStoredCredentials(): void {
   }
 }
 
+export type BrowserCredentialProvider =
+  "blizzard" | "raiderio" | "warcraftlogs";
+
+export function browserProviderValues(
+  credentials: StoredApiCredentials,
+  provider: BrowserCredentialProvider
+): Record<string, string> | null {
+  if (provider === "raiderio")
+    return credentials.raiderIoAccessKey
+      ? { accessKey: credentials.raiderIoAccessKey }
+      : null;
+  const clientId =
+    provider === "blizzard"
+      ? credentials.blizzardClientId
+      : credentials.wclClientId;
+  const clientSecret =
+    provider === "blizzard"
+      ? credentials.blizzardClientSecret
+      : credentials.wclClientSecret;
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+export function clearStoredProvider(provider: BrowserCredentialProvider): void {
+  const current = readStoredCredentials();
+  if (provider === "blizzard") {
+    current.blizzardClientId = "";
+    current.blizzardClientSecret = "";
+  }
+  if (provider === "raiderio") current.raiderIoAccessKey = "";
+  if (provider === "warcraftlogs") {
+    current.wclClientId = "";
+    current.wclClientSecret = "";
+  }
+  writeStoredCredentials(current);
+}
+
 export function credentialHeaders(
   credentials: StoredApiCredentials
 ): HeadersInit {
@@ -64,6 +100,22 @@ export function credentialHeaders(
   if (credentials.wclClientId && credentials.wclClientSecret) {
     headers["x-wcl-client-id"] = credentials.wclClientId;
     headers["x-wcl-client-secret"] = credentials.wclClientSecret;
+  }
+  return headers;
+}
+
+/** Resolve the current session before attaching browser-only credentials. */
+export async function credentialHeadersForRequest(): Promise<HeadersInit> {
+  const headers = credentialHeaders(readStoredCredentials());
+  if (Object.keys(headers).length === 0) return headers;
+  try {
+    const response = await fetch("/api/account/session", { cache: "no-store" });
+    if (!response.ok) return {};
+    const body: unknown = await response.json();
+    if (body && typeof body === "object" && "account" in body && body.account)
+      return {};
+  } catch {
+    return {};
   }
   return headers;
 }

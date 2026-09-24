@@ -2,7 +2,7 @@ import { warcraftLogsCharacterResolutionSchema } from "@slashwho/contracts";
 
 import { loadWebConfig } from "../../../../../server/config";
 import { getContainer } from "../../../../../server/container";
-import { readCredentialOverrides } from "../../../../../server/credential-headers";
+import { resolveCredentialOverrides } from "../../../../../server/credential-headers";
 import {
   apiError,
   publicReadAuthorizationResponse,
@@ -29,13 +29,19 @@ export async function GET(
   return withHttpRequest("warcraft_logs_character", async () => {
     const characterId = parseCharacterId((await context.params).characterId);
     if (characterId === undefined) return apiError("invalid_character_url");
-    const { characterIds, searches } = await getContainer();
+    const { characterIds, searches, accountAuth, accountCredentials } =
+      await getContainer();
     const denied = publicReadAuthorizationResponse(
       await searches.authorizePublicRead(request.headers)
     );
     if (denied) return denied;
-    const { wclCredentials } = readCredentialOverrides(
-      request.headers,
+    const { principal } = accountAuth
+      ? await accountAuth.authenticate(request)
+      : { principal: null };
+    const { wclCredentials } = await resolveCredentialOverrides(
+      request,
+      principal,
+      accountCredentials,
       loadWebConfig()
     );
     const result = await characterIds.resolve(

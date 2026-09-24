@@ -1,3 +1,5 @@
+import { encryptAccountMail, encryptCredential } from "@slashwho/application";
+import { hkdfSync } from "node:crypto";
 import type {
   ApplicantEvidenceJobHandler,
   ApplicantEvidenceJobHandlerOptions,
@@ -25,8 +27,34 @@ import {
   createFingerprintAlertNotifier,
   createFingerprintIntegration,
   createRaiderIoGateway,
-  createWorkerRuntime
+  createWorkerRuntime,
+  createAccountWarcraftLogsResolver
 } from "./runtime";
+
+it("resolves the worker account key only while active and at the reserved version", async () => {
+  const masterKey = Buffer.alloc(32, 7);
+  const key = Buffer.from(
+    hkdfSync("sha256", masterKey, "", "account-provider-credentials-v1", 32)
+  );
+  let row: { encryptedPayload: string; version: number } | null = {
+    encryptedPayload: encryptCredential(
+      JSON.stringify({ clientId: "alice-id", clientSecret: "alice-key" }),
+      key
+    ),
+    version: 1
+  };
+  const get = vi.fn(async () => row);
+  const resolve = createAccountWarcraftLogsResolver({ get }, masterKey);
+  expect(await resolve("alice", 1)).toEqual({
+    values: { clientId: "alice-id", clientSecret: "alice-key" },
+    version: 1
+  });
+  row = { ...row, version: 2 };
+  expect(await resolve("alice", 1)).toBeNull();
+  row = null;
+  expect(await resolve("alice", 1)).toBeNull();
+  expect(get).toHaveBeenCalledWith("alice", "warcraftlogs");
+});
 
 const config: WorkerConfig = {
   applicantWatcher: {
@@ -1867,3 +1895,87 @@ describe("createRaiderIoGateway", () => {
     }
   });
 });
+
+it("starts and drains configured account mail delivery alongside evidence work", async () => {
+  const fake = runtimeFakes();
+  const stopMail = vi.fn(async () => {
+    expect(fake.ended).toBe(false);
+  });
+  const startAccountMailWorker = vi.fn(() => ({ stop: stopMail }));
+  const accountMail = {
+    resendApiKey: "secret",
+    accountEmailFrom: "accounts@example.com",
+    accountCredentialEncryptionKey: Buffer.alloc(32, 7)
+  };
+  const runtime = await createWorkerRuntime(
+    { ...config, accountMail },
+    { ...fake.dependencies, startAccountMailWorker }
+  );
+  expect(startAccountMailWorker).toHaveBeenCalledWith(
+    fake.repositories.accountMail,
+    accountMail,
+    undefined
+  );
+  expect(await runtime.health()).toEqual({ live: true, ready: true });
+  await runtime.stop();
+  expect(stopMail).toHaveBeenCalledOnce();
+});
+
+it.each(["claim", "ack"] as const)(
+  "bounds shutdown with a stalled mail %s and starts evidence shutdown promptly",
+  async (stage) => {
+    vi.useFakeTimers();
+    const fake = runtimeFakes();
+    const blocked = new Promise<never>(() => undefined);
+    fake.repositories.accountMail = {
+      issue: vi.fn(),
+      claimDue: vi.fn(async () =>
+        stage === "claim"
+          ? blocked
+          : {
+              id: "mail",
+              idempotencyKey: "mail",
+              encryptedMessage: encryptAccountMail("{}", Buffer.alloc(32, 7)),
+              attempt: 1,
+              expiresAt: new Date(Date.now() + 60000)
+            }
+      ),
+      markSent: vi.fn(() => blocked)
+    };
+    vi.stubGlobal("fetch", async () => new Response("", { status: 200 }));
+    const queueStop = vi.spyOn(fake.queue, "stop");
+    const runtime = await createWorkerRuntime(
+      {
+        ...config,
+        workerDrainTimeoutMs: 100,
+        accountMail: {
+          resendApiKey: "key",
+          accountEmailFrom: "a@example.com",
+          accountCredentialEncryptionKey: Buffer.alloc(32, 7)
+        }
+      },
+      fake.dependencies
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(
+        stage === "claim"
+          ? fake.repositories.accountMail.claimDue
+          : fake.repositories.accountMail.markSent
+      ).toHaveBeenCalled();
+      let result: unknown;
+      const stopping = runtime.stop().catch((error) => {
+        result = error;
+      });
+      expect(queueStop).toHaveBeenCalledOnce();
+      expect(fake.ended).toBe(false);
+      await vi.advanceTimersByTimeAsync(101);
+      await stopping;
+      expect(result).toMatchObject({ message: "account_mail_stop_timed_out" });
+      expect(fake.ended).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  }
+);

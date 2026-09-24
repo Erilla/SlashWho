@@ -13,10 +13,7 @@ import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import {
-  credentialHeaders,
-  readStoredCredentials
-} from "../../../../../lib/api-credentials";
+import { credentialHeadersForRequest } from "../../../../../lib/api-credentials";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
   type PollReadResult,
@@ -184,7 +181,7 @@ function DossierPageState({
     const sequence = ++requestSequence.current;
     const response = await fetch(dossierPath, {
       cache: "no-store",
-      headers: credentialHeaders(readStoredCredentials())
+      headers: await credentialHeadersForRequest()
     });
     if (!response.ok) return;
     const body: unknown = await response.json().catch(() => null);
@@ -211,7 +208,7 @@ function DossierPageState({
       const response = await fetch(`${dossierPath}?scope=initial`, {
         cache: "no-store",
         signal: controller.signal,
-        headers: credentialHeaders(readStoredCredentials())
+        headers: await credentialHeadersForRequest()
       });
       const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
@@ -253,7 +250,7 @@ function DossierPageState({
       const response = await fetch(dossierPath, {
         cache: "no-store",
         signal: controller.signal,
-        headers: credentialHeaders(readStoredCredentials())
+        headers: await credentialHeadersForRequest()
       });
       const body = await readJson(response);
       if (controller.signal.aborted || sequence < appliedSequence.current)
@@ -402,7 +399,7 @@ function DossierPageState({
       const response = await fetch(dossierPath, {
         cache: "no-store",
         signal: controller.signal,
-        headers: credentialHeaders(readStoredCredentials())
+        headers: await credentialHeadersForRequest()
       });
       const body = await readJson(response);
       if (controller.signal.aborted || sequence < appliedSequence.current)
@@ -493,7 +490,7 @@ function DossierPageState({
         response = await fetch(dossierPath, {
           cache: "no-store",
           signal,
-          headers: credentialHeaders(readStoredCredentials())
+          headers: await credentialHeadersForRequest()
         });
       } catch (caught) {
         if (!signal.aborted && sequence >= appliedSequence.current)

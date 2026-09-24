@@ -6,10 +6,20 @@ import type {
 } from "@slashwho/database";
 import { describe, expect, it, vi } from "vitest";
 import {
+  authorizes,
+  createAccountAuth,
   canonicalizeOperatorLogin,
   createOperatorAuth,
   hashOperatorCredential
 } from "./operator-auth";
+import {
+  accountAuthFixture,
+  operatorOrigin
+} from "./operator-auth-test-fixture";
+import type {
+  AccountCredential,
+  OperatorLoginAdmission
+} from "@slashwho/database";
 
 const origin = "https://operators.example.test";
 const credential = "a-unique-high-entropy-credential";
@@ -19,6 +29,255 @@ const config = applicationConfigSchema.parse({
 });
 const initialTime = new Date("2026-09-21T12:00:00.000Z");
 const operatorId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+it.each([
+  "disabled",
+  "unverified",
+  "credential-version",
+  "idle-expired",
+  "absolute-expired"
+] as const)(
+  "denies an existing account session when %s without relying on revocation",
+  async (reason) => {
+    const fixture = await accountAuthFixture();
+    const cookie = await fixture.cookie();
+    const issuedAt = vi.mocked(fixture.repository.issueSession).mock
+      .calls[0]![0].issuedAt;
+    if (reason === "disabled") fixture.setAccount({ active: false });
+    if (reason === "unverified") fixture.setAccount({ verifiedAt: null });
+    if (reason === "credential-version")
+      fixture.setAccount({ credentialVersion: 2 });
+    if (reason === "idle-expired")
+      fixture.setTime(new Date(issuedAt.getTime() + 30 * 60_000));
+    if (reason === "absolute-expired") {
+      for (let minutes = 20; minutes <= 460; minutes += 20) {
+        fixture.setTime(new Date(issuedAt.getTime() + minutes * 60_000));
+        expect(
+          (
+            await fixture.auth.authenticate(
+              new Request(operatorOrigin, { headers: { cookie } })
+            )
+          ).principal?.kind
+        ).toBe("account");
+      }
+      fixture.setTime(new Date(issuedAt.getTime() + 8 * 60 * 60_000));
+    }
+    expect(
+      await fixture.auth.authenticate(
+        new Request(operatorOrigin, { headers: { cookie } })
+      )
+    ).toMatchObject({
+      principal: null,
+      cookie: { maxAge: 0 }
+    });
+    expect(fixture.repository.revokeSession).not.toHaveBeenCalled();
+  }
+);
+
+it("authenticates verified accounts and reads current role and required-change state", async () => {
+  let account: AccountCredential = {
+    id: operatorId,
+    canonicalEmail: "ryan@example.test",
+    email: "Ryan@example.test",
+    role: "user",
+    active: true,
+    verifiedAt: initialTime,
+    passwordChangeRequired: false,
+    credentialVersion: 1,
+    createdAt: initialTime,
+    updatedAt: initialTime,
+    ...(await hashOperatorCredential(credential))
+  };
+  let session: {
+    id: string;
+    secretDigest: string;
+    credentialVersion: number;
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+    revokedAt: Date | null;
+  } | null = null;
+  const repository = {
+    findCredential: vi.fn(async (email: string) =>
+      email === account.canonicalEmail ? account : null
+    ),
+    admitLoginAttempt: vi.fn(
+      async (
+        _input: Parameters<Repositories["accountAuth"]["admitLoginAttempt"]>[0]
+      ): Promise<OperatorLoginAdmission> => {
+        void _input;
+        return { kind: "admitted" };
+      }
+    ),
+    appendEvent: vi.fn(async () => {}),
+    issueSession: vi.fn(
+      async (
+        input: Parameters<Repositories["accountAuth"]["issueSession"]>[0]
+      ) => {
+        session = { ...input, id: input.sessionId, revokedAt: null };
+        return {
+          ...session,
+          accountId: account.id,
+          issuedAt: initialTime,
+          lastUsedAt: initialTime
+        };
+      }
+    ),
+    useSession: vi.fn(
+      async (input: {
+        sessionId: string;
+        secretDigest: string;
+        at: Date;
+        idleExpiresAt: Date;
+      }) => {
+        if (
+          !session ||
+          session.id !== input.sessionId ||
+          session.secretDigest !== input.secretDigest ||
+          session.revokedAt ||
+          !account.active ||
+          !account.verifiedAt ||
+          session.credentialVersion !== account.credentialVersion ||
+          session.idleExpiresAt <= input.at ||
+          session.absoluteExpiresAt <= input.at
+        )
+          return null;
+        session = { ...session, idleExpiresAt: input.idleExpiresAt };
+        return {
+          account,
+          session: {
+            ...session,
+            accountId: account.id,
+            issuedAt: initialTime,
+            lastUsedAt: input.at
+          }
+        };
+      }
+    ),
+    revokeSession: vi.fn(async () => {}),
+    changePassword: vi.fn(
+      async (input: {
+        accountId: string;
+        sessionId: string;
+        expectedCredentialVersion: number;
+        passwordHash: string;
+        passwordSalt: string;
+        scryptVersion: number;
+        scryptCost: number;
+      }) => {
+        if (
+          input.accountId !== account.id ||
+          !session ||
+          input.sessionId !== session.id ||
+          input.expectedCredentialVersion !== account.credentialVersion
+        )
+          return false;
+        account = {
+          ...account,
+          ...input,
+          passwordChangeRequired: false,
+          credentialVersion: account.credentialVersion + 1
+        };
+        session = { ...session, revokedAt: initialTime };
+        return true;
+      }
+    )
+  };
+  const auth = createAccountAuth({
+    repository,
+    config,
+    origin,
+    sessionHashSecret: "s".repeat(32),
+    now: () => initialTime
+  });
+  const signIn = (headers: Record<string, string> = {}) =>
+    mutation({ email: " RYAN@EXAMPLE.TEST ", password: credential }, headers);
+  const signedIn = await auth.signIn(signIn());
+  expect(signedIn.principal).toMatchObject({
+    kind: "account",
+    role: "user",
+    accountId: operatorId
+  });
+  const cookie = signedIn.cookie!.header.split(";")[0]!;
+  account = { ...account, role: "admin", passwordChangeRequired: true };
+  const live = await auth.authenticate(
+    new Request(origin, { headers: { cookie } })
+  );
+  expect(live.principal).toMatchObject({
+    role: "admin",
+    passwordChangeRequired: true
+  });
+  expect(authorizes(live.principal, "admin")).toBe(false);
+  expect(
+    (
+      await auth.authenticate(
+        new Request(origin, {
+          headers: { cookie, authorization: "Bearer invalid" }
+        })
+      )
+    ).principal
+  ).toBeNull();
+  account = { ...account, verifiedAt: null };
+  expect((await auth.signIn(signIn())).principal).toBeNull();
+  account = { ...account, verifiedAt: initialTime, active: false };
+  expect((await auth.signIn(signIn())).principal).toBeNull();
+  vi.mocked(repository.admitLoginAttempt).mockResolvedValueOnce({
+    kind: "throttled",
+    retryAt: initialTime
+  });
+  expect((await auth.signIn(signIn())).principal).toBeNull();
+  expect(
+    vi.mocked(repository.admitLoginAttempt).mock.calls.at(-1)?.[0]
+  ).toMatchObject({
+    limit: 5,
+    expiresAt: new Date("2026-09-21T12:15:00Z")
+  });
+  account = { ...account, active: true, passwordChangeRequired: true };
+  expect(
+    (
+      await auth.changePassword(
+        mutation(
+          {
+            currentPassword: credential,
+            newPassword: "another-long-secret-password"
+          },
+          { cookie, origin: "https://evil.test" }
+        )
+      )
+    ).accepted
+  ).toBe(false);
+  expect(
+    (
+      await auth.changePassword(
+        mutation(
+          {
+            currentPassword: "incorrect-but-long-password",
+            newPassword: "another-long-secret-password"
+          },
+          { cookie }
+        )
+      )
+    ).accepted
+  ).toBe(false);
+  expect(
+    (
+      await auth.changePassword(
+        mutation(
+          {
+            currentPassword: credential,
+            newPassword: "another-long-secret-password"
+          },
+          { cookie }
+        )
+      )
+    ).accepted
+  ).toBe(true);
+  expect(account.passwordChangeRequired).toBe(false);
+  expect(account.credentialVersion).toBe(2);
+  expect(
+    (await auth.authenticate(new Request(origin, { headers: { cookie } })))
+      .principal
+  ).toBeNull();
+});
 
 function mutation(
   body: unknown = { login: "RYAN", credential },

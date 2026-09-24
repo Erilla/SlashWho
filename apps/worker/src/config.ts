@@ -2,6 +2,7 @@ import {
   parseEncryptionKey,
   parseNegativeCacheTtlMs
 } from "@slashwho/application";
+import type { AccountMailConfig } from "./account-mail";
 
 export type WorkerConfig = {
   applicantWatcher: {
@@ -18,6 +19,8 @@ export type WorkerConfig = {
     queueDepth: number;
     minimumPoints: number;
   };
+  accountMail?: AccountMailConfig;
+  accountCredentialEncryptionKey?: Buffer;
   databaseUrl: string;
   healthHost: "127.0.0.1" | "0.0.0.0";
   port: number;
@@ -137,6 +140,23 @@ function optionalHttpUrl(
 export function loadWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): WorkerConfig {
+  const resendApiKey = optionalSecret(environment.RESEND_API_KEY);
+  const accountEmailFrom = optionalSecret(environment.ACCOUNT_EMAIL_FROM);
+  const accountKey = optionalSecret(
+    environment.ACCOUNT_CREDENTIAL_ENCRYPTION_KEY
+  );
+  // Saved account keys may be enabled without delivery on this process.
+  let accountMail: AccountMailConfig | undefined;
+  if (resendApiKey || accountEmailFrom) {
+    if (!resendApiKey || !accountEmailFrom || !accountKey) {
+      throw new Error("account_mail_configuration_incomplete");
+    }
+    accountMail = {
+      resendApiKey,
+      accountEmailFrom,
+      accountCredentialEncryptionKey: parseEncryptionKey(accountKey)
+    };
+  }
   if (!environment.DATABASE_URL) throw new Error("database_url_required");
   const applicantEnabled = environment.APPLICANT_WATCHER_ENABLED === "true";
   if (
@@ -261,6 +281,10 @@ export function loadWorkerConfig(
 
   return {
     applicantWatcher,
+    ...(accountMail ? { accountMail } : {}),
+    ...(accountKey
+      ? { accountCredentialEncryptionKey: parseEncryptionKey(accountKey) }
+      : {}),
     databaseUrl: environment.DATABASE_URL,
     healthHost,
     port: positiveInteger(environment.PORT, 3001, "invalid_port"),

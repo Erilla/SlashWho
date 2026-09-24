@@ -171,6 +171,87 @@ function createMemoryRepositories(): Repositories {
   let snapshotSequence = 0;
 
   return {
+    accountTokens: {
+      async admitRequest() {
+        throw new Error("not_used");
+      },
+      async findAccountById() {
+        throw new Error("not_used");
+      },
+      async findAccountByEmail() {
+        throw new Error("not_used");
+      },
+      async findToken() {
+        throw new Error("not_used");
+      },
+      async confirmVerification() {
+        throw new Error("not_used");
+      },
+      async completeReset() {
+        throw new Error("not_used");
+      },
+      async issueEmailChange() {
+        throw new Error("not_used");
+      },
+      async confirmEmailChange() {
+        throw new Error("not_used");
+      }
+    },
+    accountMail: {
+      async issue() {
+        throw new Error("not_used");
+      },
+      async claimDue() {
+        throw new Error("not_used");
+      },
+      async markSent() {
+        throw new Error("not_used");
+      }
+    },
+    accountAuth: {
+      async findCredential() {
+        throw new Error("not_used");
+      },
+      async admitLoginAttempt() {
+        throw new Error("not_used");
+      },
+      async appendEvent() {
+        throw new Error("not_used");
+      },
+      async issueSession() {
+        throw new Error("not_used");
+      },
+      async useSession() {
+        throw new Error("not_used");
+      },
+      async revokeSession() {
+        throw new Error("not_used");
+      },
+      async changePassword() {
+        throw new Error("not_used");
+      },
+      async provisionAdmin() {
+        throw new Error("not_used");
+      },
+      async setRole() {
+        throw new Error("not_used");
+      },
+      async setActive() {
+        throw new Error("not_used");
+      },
+      async requirePasswordChange() {
+        throw new Error("not_used");
+      },
+      async listAccounts() {
+        throw new Error("not_used");
+      },
+      async registerPending() {
+        throw new Error("not_used");
+      },
+      async admitRegistration() {
+        throw new Error("not_used");
+      }
+    },
     operatorAuth: {
       async findCredential() {
         return null;

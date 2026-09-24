@@ -1,6 +1,9 @@
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
-export { operatorCanonicalLoginMaxLength } from "./schema";
+export {
+  accountCanonicalEmailMaxLength,
+  operatorCanonicalLoginMaxLength
+} from "./schema";
 export {
   createDiscoveryQueue,
   collectCharacterEvidenceQueueName,
@@ -18,6 +21,17 @@ export type {
   JobTelemetry
 } from "./queue";
 export type {
+  Account,
+  AccountSession,
+  AccountAuthRepository,
+  AccountCredential,
+  AccountCredentialRepository,
+  AccountCredentialProvider,
+  AccountCredentialRecord,
+  AccountMailRepository,
+  AccountTokenPurpose,
+  AccountTokenRepository,
+  AccountSummary,
   CallerClass,
   CharacterEvidenceRun,
   CharacterCuttingEdgeInput,
@@ -47,6 +61,7 @@ export type {
   FingerprintSweepRepository,
   NegativeCacheEntry,
   NegativeCacheRepository,
+  MailOutboxRow,
   Operator,
   OperatorAuthRepository,
   OperatorAuthEventAction,
@@ -54,6 +69,9 @@ export type {
   OperatorCredential,
   OperatorLoginAdmission,
   OperatorSession,
+  Provider,
+  ProviderCredentials,
+  ProviderPresence,
   RateLimitRepository,
   Repositories,
   SearchReservationRepository,

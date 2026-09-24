@@ -2022,6 +2022,8 @@ describe("applicant dossier service", () => {
       .mock.calls.map(([input]) => input.credentials!);
     expect(credentials).toHaveLength(2);
     for (const pair of credentials) {
+      if (!pair?.wclClientIdEncrypted || !pair.wclClientSecretEncrypted)
+        throw new Error("expected encrypted visitor credentials");
       expect(pair.wclClientIdEncrypted).not.toBe("user-client-id");
       expect(pair.wclClientSecretEncrypted).not.toBe("user-secret");
       expect(decryptCredential(pair.wclClientIdEncrypted, encryptionKey)).toBe(

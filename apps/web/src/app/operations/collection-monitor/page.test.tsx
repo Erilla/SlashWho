@@ -7,9 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionMonitorResponse } from "@slashwho/contracts";
 import {
   automationKey,
-  operatorAuthFixture
+  accountAuthFixture
 } from "../../../server/operator-auth-test-fixture";
-let fixture: Awaited<ReturnType<typeof operatorAuthFixture>>;
+let fixture: Awaited<ReturnType<typeof accountAuthFixture>>;
 
 const mocks = vi.hoisted(() => ({
   headers: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("../../../server/container", () => ({
   getContainer: async () => ({
     collectionMonitor: { list: mocks.list },
-    operatorAuth: fixture.auth
+    accountAuth: fixture.auth
   })
 }));
 vi.mock("./collection-monitor-client", () => ({
@@ -82,7 +82,7 @@ const monitor: CollectionMonitorResponse = {
 afterEach(cleanup);
 
 beforeEach(async () => {
-  fixture = await operatorAuthFixture();
+  fixture = await accountAuthFixture();
   mocks.headers.mockReset();
   mocks.redirect.mockReset();
   mocks.list.mockReset();
@@ -106,21 +106,21 @@ describe("CollectionMonitorPage", () => {
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
-  it("passes the active monitor snapshot to the client for the configured operator Bearer credential", async () => {
+  it("denies bearer automation from the page", async () => {
     mocks.headers.mockResolvedValue(
       new Headers({
         authorization: `Bearer ${automationKey}`
       })
     );
 
-    render(await CollectionMonitorPage());
-
-    expect(screen.getByTestId("monitor-liveness")).toHaveTextContent("active");
-    expect(mocks.list).toHaveBeenCalledOnce();
-    expect(mocks.redirect).not.toHaveBeenCalled();
+    await expect(CollectionMonitorPage()).rejects.toThrow(
+      "operator_login_redirect"
+    );
+    expect(mocks.list).not.toHaveBeenCalled();
   });
 
   it("loads the monitor for a valid browser session cookie", async () => {
+    fixture.setAccount({ role: "admin" });
     mocks.headers.mockResolvedValue(
       new Headers({ cookie: await fixture.cookie() })
     );
@@ -130,5 +130,15 @@ describe("CollectionMonitorPage", () => {
     expect(screen.getByTestId("monitor-liveness")).toHaveTextContent("active");
     expect(mocks.list).toHaveBeenCalledOnce();
     expect(mocks.redirect).not.toHaveBeenCalled();
+  });
+
+  it("denies ordinary account before reading monitor data", async () => {
+    mocks.headers.mockResolvedValue(
+      new Headers({ cookie: await fixture.cookie() })
+    );
+    await expect(CollectionMonitorPage()).rejects.toThrow(
+      "operator_login_redirect"
+    );
+    expect(mocks.list).not.toHaveBeenCalled();
   });
 });

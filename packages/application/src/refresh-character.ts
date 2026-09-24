@@ -96,6 +96,7 @@ export async function refreshCharacter(options: {
   cooldownMs: number;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  credentials?: { accountId: string; credentialVersion: number };
   /**
    * Refresh is the one path a reader can trigger collection from, so its
    * database work is measured like every other endpoint's rather than leaving
@@ -154,7 +155,8 @@ export async function refreshCharacter(options: {
     key: options.key,
     freshnessCutoff: options.at,
     at: options.at,
-    phasePlan: fullEvidencePhasePlan()
+    phasePlan: fullEvidencePhasePlan(),
+    credentials: options.credentials
   });
   if (reservation.kind === "reserved") {
     const queueJobId = await options.queue.enqueueCharacterEvidence(

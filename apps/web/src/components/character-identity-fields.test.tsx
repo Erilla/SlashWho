@@ -161,11 +161,12 @@ const idUrl = "https://www.warcraftlogs.com/character/id/40989140";
 
 function deferredFetch() {
   let respond!: (response: Response) => void;
-  const fetch = vi.fn<typeof globalThis.fetch>(
-    () =>
-      new Promise<Response>((resolve) => {
-        respond = resolve;
-      })
+  const fetch = vi.fn<typeof globalThis.fetch>((input) =>
+    String(input) === "/api/account/session"
+      ? Promise.resolve(Response.json({ account: null }))
+      : new Promise<Response>((resolve) => {
+          respond = resolve;
+        })
   );
   vi.stubGlobal("fetch", fetch);
   return { fetch, respond: (response: Response) => respond(response) };
@@ -233,7 +234,16 @@ it("sends the visitor's own Warcraft Logs key with the lookup", async () => {
   await user.click(screen.getByRole("textbox", { name: "Character/URL" }));
   await user.paste(idUrl);
 
-  const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers);
+  await vi.waitFor(() =>
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/warcraft-logs/characters/40989140",
+      expect.anything()
+    )
+  );
+  const lookup = fetch.mock.calls.find(([url]) =>
+    String(url).startsWith("/api/warcraft-logs/characters/")
+  );
+  const headers = new Headers(lookup?.[1]?.headers);
   expect(headers.get("x-wcl-client-id")).toBe("visitor-id");
   window.localStorage.clear();
 });

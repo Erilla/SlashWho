@@ -8,6 +8,62 @@ import {
 } from "./operators.mts";
 
 describe("operator lifecycle command", () => {
+  it("parses only an email for admin bootstrap and rejects password arguments", () => {
+    expect(
+      parseOperatorOperation(["--", "provision-admin", " Owner@Example.COM "])
+    ).toEqual({
+      command: "provision-admin",
+      email: " Owner@Example.COM "
+    });
+    expect(() =>
+      parseOperatorOperation(["provision-admin", "owner@example.com", "secret"])
+    ).toThrow("operator_arguments_invalid");
+    expect(() =>
+      parseOperatorOperation([
+        "provision-admin",
+        "owner@example.com",
+        "--credential",
+        "secret"
+      ])
+    ).toThrow("operator_credential_cli_forbidden");
+  });
+
+  it("bootstraps with a hidden temporary password and canonical email", async () => {
+    const provisionAdmin = vi.fn().mockResolvedValue({ id: "account-id" });
+    const readCredential = vi.fn().mockResolvedValue("x".repeat(20));
+    const result = await runOperatorOperation(
+      { command: "provision-admin", email: " Owner@Example.COM " },
+      {
+        repository: {
+          provision: vi.fn(),
+          rotateCredential: vi.fn(),
+          disable: vi.fn(),
+          list: vi.fn()
+        },
+        accountRepository: { provisionAdmin },
+        readCredential,
+        hashCredential: async () => ({
+          passwordHash: "hash",
+          passwordSalt: "salt",
+          scryptVersion: 1,
+          scryptCost: 16_384
+        }),
+        now: () => new Date("2026-09-23T12:00:00Z")
+      }
+    );
+    expect(result).toEqual({
+      action: "provision-admin",
+      accountId: "account-id"
+    });
+    expect(readCredential).toHaveBeenCalledOnce();
+    expect(provisionAdmin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canonicalEmail: "owner@example.com",
+        email: "Owner@Example.COM",
+        passwordHash: "hash"
+      })
+    );
+  });
   it("reads a credential without echo and restores terminal mode", async () => {
     const input = Object.assign(new EventEmitter(), {
       isTTY: true,
