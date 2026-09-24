@@ -10,6 +10,7 @@ export function dossierRaidTargetId(raidId: string) {
 type Section = Readonly<{
   id: string;
   label: string;
+  shortLabel?: string;
   raidName?: string;
   raid?: boolean;
 }>;
@@ -23,11 +24,20 @@ export function DossierSectionNavigation({
 }>) {
   const sections = useMemo<Section[]>(
     () => [
-      { id: "dossier-characters-heading", label: "Connected characters" },
-      { id: "historic-cutting-edge-heading", label: "Historic Cutting Edge" },
+      {
+        id: "dossier-characters-heading",
+        label: "Connected characters",
+        shortLabel: "Characters"
+      },
+      {
+        id: "historic-cutting-edge-heading",
+        label: "Historic Cutting Edge",
+        shortLabel: "Cutting Edge"
+      },
       {
         id: "historic-mythic-evidence-heading",
-        label: "Historic Mythic boss evidence"
+        label: "Historic Mythic boss evidence",
+        shortLabel: "Mythic evidence"
       },
       ...raids.map((raid) => ({
         id: dossierRaidTargetId(raid.raidId),
@@ -36,7 +46,13 @@ export function DossierSectionNavigation({
         raid: true
       })),
       ...(hasLimitations
-        ? [{ id: "limitations-heading", label: "Data limitations" }]
+        ? [
+            {
+              id: "limitations-heading",
+              label: "Data limitations",
+              shortLabel: "Limitations"
+            }
+          ]
         : [])
     ],
     [raids, hasLimitations]
@@ -119,6 +135,7 @@ export function DossierSectionNavigation({
               <span
                 className="dossier-section-navigation-label"
                 data-raid-name={section.raidName}
+                data-short-label={section.shortLabel}
               >
                 {section.label}
               </span>

@@ -28,6 +28,15 @@ test("spreads the desktop timeline to the bottom of a tall viewport", async ({
   const sectionMark = await restingMarkWidth("Historic Cutting Edge");
   const raidMark = await restingMarkWidth("Raid: The Venomous Abyss");
   expect(sectionMark).toBeGreaterThan(raidMark);
+
+  const majorLabels = navigation.locator(
+    "a:not(.dossier-section-navigation-raid) .dossier-section-navigation-label"
+  );
+  for (const label of await majorLabels.all()) {
+    const box = await label.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeLessThan(120);
+  }
 });
 
 test("navigates a long dossier without hiding targets behind the header", async ({
