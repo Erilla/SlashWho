@@ -820,6 +820,15 @@ a {
     pointer-events: none;
   }
 
+  .dossier-section-navigation-label[data-short-label] {
+    font-size: 0;
+  }
+
+  .dossier-section-navigation-label[data-short-label]::after {
+    content: attr(data-short-label);
+    font-size: 0.75rem;
+  }
+
   .dossier-section-navigation a:hover .dossier-section-navigation-label,
   .dossier-section-navigation
     a:focus-visible
