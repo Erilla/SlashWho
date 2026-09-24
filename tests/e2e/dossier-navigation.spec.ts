@@ -181,6 +181,12 @@ test("scrubs through dossier sections while dragging the desktop timeline", asyn
   await expect(destination).toHaveAttribute("aria-current", "location");
   expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
 
+  const newPagePromise = page.context().waitForEvent("page", { timeout: 3000 });
+  await first.click({ modifiers: ["Control"] });
+  const newPage = await newPagePromise;
+  await expect(newPage).toHaveURL(/#dossier-characters-heading$/);
+  await newPage.close();
+
   await first.click();
   await expect(page).toHaveURL(/#dossier-characters-heading$/);
   await expect

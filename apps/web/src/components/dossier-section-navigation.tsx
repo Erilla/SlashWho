@@ -211,7 +211,15 @@ export function DossierSectionNavigation({
               draggable={false}
               href={`#${section.id}`}
               onClick={(event) => {
-                if (suppressClickRef.current && event.detail > 0) {
+                if (
+                  suppressClickRef.current &&
+                  event.detail > 0 &&
+                  event.button === 0 &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  !event.shiftKey &&
+                  !event.altKey
+                ) {
                   suppressClickRef.current = false;
                   event.preventDefault();
                   return;
