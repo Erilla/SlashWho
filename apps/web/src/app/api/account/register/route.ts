@@ -27,11 +27,11 @@ export async function POST(request: Request): Promise<Response> {
     if (
       !email ||
       typeof password !== "string" ||
-      password.length < 20 ||
+      password.length < 6 ||
       password.length > 1024
     )
       return accountFailure(
-        "Enter a valid email and a password of at least 20 characters."
+        "Enter a valid email and a password of at least 6 characters."
       );
     const at = new Date();
     const admitted = await container.accountRegistration.admitRegistration({

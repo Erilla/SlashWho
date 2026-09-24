@@ -96,7 +96,7 @@ export async function runOperatorOperation(
   if (operation.command === "provision-admin" && !canonicalEmail)
     throw new Error("invalid_account_email");
   const credential = await dependencies.readCredential();
-  if (credential.length < 20 || credential.length > 1024)
+  if (credential.length < 6 || credential.length > 1024)
     throw new Error("invalid_operator_credential");
   const hash = await dependencies.hashCredential(credential);
   if (operation.command === "provision-admin") {

@@ -134,9 +134,10 @@ describe("account tokens", () => {
         at
       )
     ).toBe("invalid");
-    expect(await f.service.confirmVerification(token, password, at)).toBe(
-      "verified"
-    );
+    expect(await f.service.confirmVerification(token, password, at)).toEqual({
+      accountId: f.credential.id,
+      canonicalEmail: f.credential.canonicalEmail
+    });
   });
 
   it("returns the same response for unknown and disabled reset addresses", async () => {

@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState } from "react";
 import {
   accountSessionChangedEvent,
   notifyAccountSessionChanged
@@ -13,13 +12,29 @@ type Account = {
   passwordChangeRequired: boolean;
 };
 
-export function AccountNavigation({ signInSlotId }: { signInSlotId?: string }) {
+export function AccountNavigation() {
   const [account, setAccount] = useState<Account | null>(null);
   const [signOutError, setSignOutError] = useState("");
-  const [signInSlot, setSignInSlot] = useState<HTMLElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (signInSlotId) setSignInSlot(document.getElementById(signInSlotId));
-  }, [signInSlotId]);
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
   useEffect(() => {
     let current = true;
     let generation = 0;
@@ -61,66 +76,85 @@ export function AccountNavigation({ signInSlotId }: { signInSlotId?: string }) {
     notifyAccountSessionChanged();
     window.location.assign("/");
   }
-  if (!account)
-    return (
-      <>
-        {signInSlotId ? (
-          signInSlot &&
-          createPortal(
-            <Link
-              href="/operations/login"
-              className="header-sign-in-shortcut"
-              aria-label="Sign in"
-              title="Sign in"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="20"
-                height="20"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="8" r="3.5" />
-                <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
-              </svg>
-            </Link>,
-            signInSlot
-          )
-        ) : (
-          <Link href="/operations/login" className="site-nav-link">
-            Sign in
-          </Link>
-        )}
-        <Link href="/account/create" className="site-nav-link">
-          Create account
-        </Link>
-      </>
-    );
   return (
-    <div className="account-navigation">
-      <span>{account.email}</span>
-      <Link href="/account">Account</Link>
-      {!account.passwordChangeRequired && (
-        <Link href="/settings">Key settings</Link>
-      )}
-      <Link href="/account/change-password">Change password</Link>
-      {!account.passwordChangeRequired && (
-        <Link href="/account/email">Change email</Link>
-      )}
-      {account.role === "admin" && !account.passwordChangeRequired && (
-        <>
-          <Link href="/admin/settings">Admin settings</Link>
-          <Link href="/operations/collection-monitor">Collection monitor</Link>
-        </>
-      )}
-      <button type="button" onClick={signOut}>
-        Sign out
+    <div className="header-menu" ref={menuRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="header-menu-trigger"
+        aria-label="Open menu"
+        aria-expanded={open}
+        aria-controls="header-menu-panel"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        >
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
       </button>
-      {signOutError && <p role="alert">{signOutError}</p>}
+      {open && (
+        <nav id="header-menu-panel" aria-label="Primary" className="site-nav">
+          {account ? (
+            <>
+              <span className="header-menu-email">{account.email}</span>
+              <Link href="/account" onClick={() => setOpen(false)}>
+                Account
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link href="/operations/login" onClick={() => setOpen(false)}>
+                <svg
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M14 3h6v18h-6M3 12h13m-5-5 5 5-5 5" />
+                </svg>
+                Sign in
+              </Link>
+              <Link href="/account/create" onClick={() => setOpen(false)}>
+                Create account
+              </Link>
+            </>
+          )}
+          <Link href="/changelog" onClick={() => setOpen(false)}>
+            Changelog
+          </Link>
+          <Link href="/settings" onClick={() => setOpen(false)}>
+            Settings
+          </Link>
+          {account?.role === "admin" && !account.passwordChangeRequired && (
+            <>
+              <Link href="/admin/settings" onClick={() => setOpen(false)}>
+                Admin settings
+              </Link>
+              <Link
+                href="/operations/collection-monitor"
+                onClick={() => setOpen(false)}
+              >
+                Collection monitor
+              </Link>
+            </>
+          )}
+          {account && (
+            <button type="button" onClick={signOut}>
+              Sign out
+            </button>
+          )}
+          {signOutError && <p role="alert">{signOutError}</p>}
+        </nav>
+      )}
     </div>
   );
 }

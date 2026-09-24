@@ -30,7 +30,7 @@ describe("operator lifecycle command", () => {
 
   it("bootstraps with a hidden temporary password and canonical email", async () => {
     const provisionAdmin = vi.fn().mockResolvedValue({ id: "account-id" });
-    const readCredential = vi.fn().mockResolvedValue("x".repeat(20));
+    const readCredential = vi.fn().mockResolvedValue("x".repeat(6));
     const result = await runOperatorOperation(
       { command: "provision-admin", email: " Owner@Example.COM " },
       {

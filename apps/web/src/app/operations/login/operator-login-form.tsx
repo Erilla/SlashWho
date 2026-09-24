@@ -65,7 +65,7 @@ export function OperatorLoginForm() {
         name="password"
         type="password"
         autoComplete="current-password"
-        minLength={20}
+        minLength={6}
         value={credential}
         onChange={(event) => setCredential(event.target.value)}
         required

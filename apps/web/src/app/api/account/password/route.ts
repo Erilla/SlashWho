@@ -14,10 +14,10 @@ export async function POST(request: Request): Promise<Response> {
     if (typeof body.token === "string") {
       if (
         typeof body.newPassword !== "string" ||
-        body.newPassword.length < 20 ||
+        body.newPassword.length < 6 ||
         body.newPassword.length > 1024
       )
-        return accountFailure("Use a password of at least 20 characters.");
+        return accountFailure("Use a password of at least 6 characters.");
       if (!accountTokens)
         return accountFailure("Account email is not configured.", 503);
       const result = await accountTokens.completeReset(

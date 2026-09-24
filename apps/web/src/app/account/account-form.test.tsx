@@ -4,9 +4,13 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
+const router = vi.hoisted(() => ({ refresh: vi.fn(), replace: vi.fn() }));
+const query = vi.hoisted(() => ({ token: "" }));
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn() }),
-  useSearchParams: () => new URLSearchParams()
+  useRouter: () => router,
+  useSearchParams: () =>
+    new URLSearchParams(query.token ? { token: query.token } : {})
 }));
 vi.mock("next/link", () => ({
   default: ({ children, href }: React.PropsWithChildren<{ href: string }>) => (
@@ -18,6 +22,31 @@ import { AccountForm } from "./account-form";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  router.refresh.mockClear();
+  router.replace.mockClear();
+  query.token = "";
+});
+
+it("takes the newly verified account directly to its page", async () => {
+  query.token = "verification-token";
+  const changed = vi.fn();
+  window.addEventListener("slashwho:account-session-changed", changed, {
+    once: true
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ message: "Email verified. You are signed in." })
+      )
+  );
+  const user = userEvent.setup();
+  render(<AccountForm flow="verify" />);
+  await user.type(screen.getByLabelText("Password"), "abcdef");
+  await user.click(screen.getByRole("button", { name: "Verify email" }));
+  await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/account"));
+  expect(changed).toHaveBeenCalledOnce();
 });
 
 it("submits registration by keyboard, clears its password, and focuses feedback", async () => {
@@ -33,7 +62,8 @@ it("submits registration by keyboard, clears its password, and focuses feedback"
   render(<AccountForm flow="create" />);
   await user.type(screen.getByLabelText("Email address"), "ryan@example.test");
   const password = screen.getByLabelText("Password");
-  await user.type(password, "password-at-least-20-characters{Enter}");
+  expect(password).toHaveAttribute("minlength", "6");
+  await user.type(password, "abcdef{Enter}");
   expect(password).toHaveValue("");
   await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
   expect(screen.getByRole("status")).toHaveTextContent("Check your email.");
