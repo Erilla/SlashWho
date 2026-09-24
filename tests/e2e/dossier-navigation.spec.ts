@@ -24,6 +24,19 @@ test("centers a compact desktop timeline on a tall viewport", async ({
   expect(last!.y + last!.height - first!.y).toBeGreaterThanOrEqual(340);
   expect(Math.abs(topSpace - bottomSpace)).toBeLessThanOrEqual(20);
 
+  const links = await navigation.locator("ol > li > a").all();
+  expect(links.length).toBeGreaterThan(20);
+  const hitAreas = await Promise.all(links.map((link) => link.boundingBox()));
+  for (let index = 1; index < hitAreas.length; index += 1) {
+    const previous = hitAreas[index - 1];
+    const current = hitAreas[index];
+    expect(previous).not.toBeNull();
+    expect(current).not.toBeNull();
+    expect(current!.y - (previous!.y + previous!.height)).toBeLessThanOrEqual(
+      0.5
+    );
+  }
+
   const restingMarkWidth = (name: string) =>
     navigation
       .getByRole("link", { name })
@@ -69,7 +82,8 @@ test("navigates a long dossier without hiding targets behind the header", async 
   await expect(raidLabel).toBeVisible();
   const raidMark = await firstRaid.boundingBox();
   expect(raidMark).not.toBeNull();
-  expect(raidMark!.height).toBeLessThanOrEqual(10);
+  expect(raidMark!.height).toBeGreaterThanOrEqual(10);
+  expect(raidMark!.height).toBeLessThanOrEqual(14);
   const hoveredRaid = raids.nth(5);
   const hoveredItem = hoveredRaid.locator("..");
   const preceding = hoveredItem.locator("xpath=preceding-sibling::li[1]/a");
