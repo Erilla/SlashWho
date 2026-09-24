@@ -6,7 +6,8 @@ import {
   cleanup,
   fireEvent,
   render,
-  screen
+  screen,
+  within
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -771,6 +772,71 @@ describe("DossierPageClient live evidence", () => {
 });
 
 describe("DossierPageClient staged research", () => {
+  it("does not offer section links before a dossier has loaded", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {}))
+    );
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    expect(
+      screen.queryByRole("navigation", { name: "Dossier sections" })
+    ).toBeNull();
+  });
+
+  it("links to rendered dossier sections and each raid without linking absent limitations", () => {
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={{
+          ...expanded,
+          raids: [
+            ...expanded.raids,
+            {
+              ...expanded.raids[0]!,
+              raidId: "second-tier",
+              raidName: "Second tier"
+            }
+          ]
+        }}
+        jobId={null}
+      />
+    );
+
+    const navigation = screen.getByRole("navigation", {
+      name: "Dossier sections"
+    });
+    expect(
+      within(navigation).getByRole("link", { name: "Connected characters" })
+    ).toBeVisible();
+    expect(
+      within(navigation).getByRole("link", { name: "Historic Cutting Edge" })
+    ).toBeVisible();
+    expect(
+      within(navigation).getByRole("link", {
+        name: "Historic Mythic boss evidence"
+      })
+    ).toBeVisible();
+    expect(
+      within(navigation).getByRole("link", { name: "Raid: Expanded evidence" })
+    ).toBeVisible();
+    expect(
+      within(navigation).getByRole("link", { name: "Raid: Second tier" })
+    ).toBeVisible();
+    expect(
+      within(navigation).queryByRole("link", { name: "Data limitations" })
+    ).toBeNull();
+    expect(
+      within(navigation).getByRole("link", { name: "Raid: Second tier" })
+    ).toHaveAttribute("href", "#dossier-raid-second-tier");
+    expect(document.getElementById("dossier-raid-second-tier")).toBeVisible();
+  });
+
   it("shows a provider reset countdown at the top of the dossier", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
@@ -1283,6 +1349,12 @@ describe("DossierPageClient staged research", () => {
         ?.querySelector('svg[aria-hidden="true"]')
     ).toBeInTheDocument();
     expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
+    const navigation = screen.getByRole("navigation", {
+      name: "Dossier sections"
+    });
+    expect(
+      within(navigation).getByRole("link", { name: "Raid: Initial evidence" })
+    ).toHaveAttribute("href", "#dossier-raid-initial-evidence");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
@@ -1294,6 +1366,12 @@ describe("DossierPageClient staged research", () => {
     });
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
+    expect(
+      within(navigation).queryByRole("link", { name: "Raid: Initial evidence" })
+    ).toBeNull();
+    expect(
+      within(navigation).getByRole("link", { name: "Raid: Expanded evidence" })
+    ).toHaveAttribute("href", "#dossier-raid-expanded-evidence");
   });
 
   it("keeps polling evidence after a transient read failure", async () => {

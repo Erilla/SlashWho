@@ -31,6 +31,7 @@ import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierRateLimitCountdown } from "../../../../../components/dossier-rate-limit-countdown";
 import { DossierRefreshControl } from "../../../../../components/dossier-refresh-control";
 import { DossierResearchState } from "../../../../../components/dossier-research-state";
+import { DossierSectionNavigation } from "../../../../../components/dossier-section-navigation";
 import { CharacterProfileLinks } from "../../../../../components/profile-links";
 import { headerIdentitySlotId } from "../../../../../components/site-header";
 
@@ -728,67 +729,73 @@ function DossierPageState({
         ) : null}
 
         {dossier ? (
-          <div className="dossier-layout">
-            <DossierCharacterList
-              canAddCharacters={canAddCharacters}
-              characters={dossier.characters}
-              onCharacterAdded={(added) => {
-                const name = formatCharacterDisplayName(added.key.name);
-                setNotice(
-                  added.queued
-                    ? `${name} has been added and is being researched.`
-                    : `${name} has been added to this dossier.`
-                );
-                void refreshDossier();
-              }}
-              onCharactersChanged={(change) => {
-                const name = formatCharacterDisplayName(change.displayName);
-                setNotice(
-                  change.kind === "removed"
-                    ? `${name} has been removed from this dossier.`
-                    : change.kind === "excluded"
-                      ? `${name} is excluded from this dossier.`
-                      : change.kind === "alias_added"
-                        ? `Historic alias linked to ${name}. Evidence is being re-collected.`
-                        : change.kind === "alias_removed"
-                          ? `Historic alias removed from ${name}. Evidence is being re-collected.`
-                          : `${name} is included in this dossier again.`
-                );
-                void refreshDossier();
-              }}
-              root={dossier.root}
-            />
-            <DossierCuttingEdgeList
-              cuttingEdges={dossier.cuttingEdges}
-              limitations={dossier.limitations}
-            />
-            <DossierRaidList
+          <div className="dossier-navigation-layout">
+            <DossierSectionNavigation
               raids={dossier.raids}
-              loading={hasLiveEvidence(dossier)}
-              limitations={dossier.limitations}
-              {...(canAddCharacters
-                ? {
-                    onSearchTier: async (raidId: string) => {
-                      const response = await fetch(
-                        `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
-                        { method: "POST" }
-                      );
-                      // 409 is an answer -- busy, or nothing to search from --
-                      // not a failure; anything else unexpected is.
-                      if (!response.ok && response.status !== 409) {
-                        throw new Error("tier_search_failed");
-                      }
-                      const result =
-                        (await response.json()) as DossierTierSearchResponse;
-                      // Re-read so the tier shows the search in flight and the
-                      // page's polling follows it.
-                      if (result.state === "queued") await refreshDossier();
-                      return result;
-                    }
-                  }
-                : {})}
+              hasLimitations={dossier.limitations.length > 0}
             />
-            <DossierLimitations limitations={dossier.limitations} />
+            <div className="dossier-layout">
+              <DossierCharacterList
+                canAddCharacters={canAddCharacters}
+                characters={dossier.characters}
+                onCharacterAdded={(added) => {
+                  const name = formatCharacterDisplayName(added.key.name);
+                  setNotice(
+                    added.queued
+                      ? `${name} has been added and is being researched.`
+                      : `${name} has been added to this dossier.`
+                  );
+                  void refreshDossier();
+                }}
+                onCharactersChanged={(change) => {
+                  const name = formatCharacterDisplayName(change.displayName);
+                  setNotice(
+                    change.kind === "removed"
+                      ? `${name} has been removed from this dossier.`
+                      : change.kind === "excluded"
+                        ? `${name} is excluded from this dossier.`
+                        : change.kind === "alias_added"
+                          ? `Historic alias linked to ${name}. Evidence is being re-collected.`
+                          : change.kind === "alias_removed"
+                            ? `Historic alias removed from ${name}. Evidence is being re-collected.`
+                            : `${name} is included in this dossier again.`
+                  );
+                  void refreshDossier();
+                }}
+                root={dossier.root}
+              />
+              <DossierCuttingEdgeList
+                cuttingEdges={dossier.cuttingEdges}
+                limitations={dossier.limitations}
+              />
+              <DossierRaidList
+                raids={dossier.raids}
+                loading={hasLiveEvidence(dossier)}
+                limitations={dossier.limitations}
+                {...(canAddCharacters
+                  ? {
+                      onSearchTier: async (raidId: string) => {
+                        const response = await fetch(
+                          `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
+                          { method: "POST" }
+                        );
+                        // 409 is an answer -- busy, or nothing to search from --
+                        // not a failure; anything else unexpected is.
+                        if (!response.ok && response.status !== 409) {
+                          throw new Error("tier_search_failed");
+                        }
+                        const result =
+                          (await response.json()) as DossierTierSearchResponse;
+                        // Re-read so the tier shows the search in flight and the
+                        // page's polling follows it.
+                        if (result.state === "queued") await refreshDossier();
+                        return result;
+                      }
+                    }
+                  : {})}
+              />
+              <DossierLimitations limitations={dossier.limitations} />
+            </div>
           </div>
         ) : null}
       </main>
