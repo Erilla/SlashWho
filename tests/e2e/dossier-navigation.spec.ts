@@ -8,13 +8,54 @@ test("navigates a long dossier without hiding targets behind the header", async 
 
   const navigation = page.getByRole("navigation", { name: "Dossier sections" });
   const raids = navigation.getByRole("link", { name: /^Raid:/ });
-  expect(await raids.count()).toBeGreaterThan(1);
-  await expect(navigation).toHaveCSS("position", "sticky");
+  expect(await raids.count()).toBeGreaterThan(20);
+  await expect(navigation).toHaveCSS("position", "fixed");
+  const rail = await navigation.boundingBox();
+  const content = await page.locator(".dossier-layout").boundingBox();
+  expect(rail).not.toBeNull();
+  expect(content).not.toBeNull();
+  expect(rail!.width).toBeLessThanOrEqual(48);
+  expect(rail!.x).toBeGreaterThan(content!.x + content!.width);
+  expect(rail!.x + rail!.width).toBeGreaterThan(1160);
+
+  const firstRaid = raids.first();
+  const raidLabel = firstRaid.locator(".dossier-section-navigation-label");
+  await expect(raidLabel).toBeHidden();
+  await firstRaid.hover();
+  await expect(raidLabel).toBeVisible();
+  const raidMark = await firstRaid.boundingBox();
+  expect(raidMark).not.toBeNull();
+  expect(raidMark!.height).toBeLessThanOrEqual(18);
+  const longRaid = navigation.getByRole("link", {
+    name: "Raid: Aberrus, the Shadowed Crucible"
+  });
+  await longRaid.hover();
+  const longLabel = await longRaid
+    .locator(".dossier-section-navigation-label")
+    .boundingBox();
+  expect(longLabel).not.toBeNull();
+  expect(longLabel!.x).toBeGreaterThan(content!.x + content!.width);
+
+  const mainSection = navigation.getByRole("link", {
+    name: "Connected characters"
+  });
+  const mainLabel = mainSection.locator(".dossier-section-navigation-label");
+  await expect(mainLabel).toBeVisible();
+  const mutedColor = await mainLabel.evaluate(
+    (label) => getComputedStyle(label).color
+  );
+  await mainSection.hover();
+  await expect(mainLabel).toHaveCSS("color", "rgb(244, 244, 245)");
+  expect(mutedColor).not.toBe("rgb(244, 244, 245)");
 
   const targetLink = raids.last();
   const targetId = (await targetLink.getAttribute("href"))!.slice(1);
   await targetLink.click();
   await expect(targetLink).toHaveAttribute("aria-current", "location");
+  await targetLink.focus();
+  await expect(
+    targetLink.locator(".dossier-section-navigation-label")
+  ).toBeVisible();
   const geometry = await page.locator(`#${targetId}`).evaluate((target) => ({
     targetTop: target.getBoundingClientRect().top,
     headerBottom: document
