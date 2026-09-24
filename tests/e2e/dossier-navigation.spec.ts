@@ -1,5 +1,35 @@
 import { expect, test } from "playwright/test";
 
+test("spreads the desktop timeline to the bottom of a tall viewport", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  const first = await navigation
+    .getByRole("link", { name: "Connected characters" })
+    .boundingBox();
+  const last = await navigation
+    .getByRole("link", { name: "Data limitations" })
+    .boundingBox();
+  expect(first).not.toBeNull();
+  expect(last).not.toBeNull();
+  expect(first!.y).toBeLessThan(110);
+  expect(last!.y + last!.height).toBeGreaterThan(1160);
+  expect(last!.y + last!.height).toBeLessThanOrEqual(1200);
+
+  const restingMarkWidth = (name: string) =>
+    navigation
+      .getByRole("link", { name })
+      .evaluate((link) =>
+        Number.parseFloat(getComputedStyle(link, "::after").width)
+      );
+  const sectionMark = await restingMarkWidth("Historic Cutting Edge");
+  const raidMark = await restingMarkWidth("Raid: The Venomous Abyss");
+  expect(sectionMark).toBeGreaterThan(raidMark);
+});
+
 test("navigates a long dossier without hiding targets behind the header", async ({
   page
 }) => {
