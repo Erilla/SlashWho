@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   accountSessionChangedEvent,
   notifyAccountSessionChanged
@@ -12,9 +13,13 @@ type Account = {
   passwordChangeRequired: boolean;
 };
 
-export function AccountNavigation() {
+export function AccountNavigation({ signInSlotId }: { signInSlotId?: string }) {
   const [account, setAccount] = useState<Account | null>(null);
   const [signOutError, setSignOutError] = useState("");
+  const [signInSlot, setSignInSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (signInSlotId) setSignInSlot(document.getElementById(signInSlotId));
+  }, [signInSlotId]);
   useEffect(() => {
     let current = true;
     let generation = 0;
@@ -59,9 +64,37 @@ export function AccountNavigation() {
   if (!account)
     return (
       <>
-        <Link href="/operations/login" className="site-nav-link">
-          Sign in
-        </Link>
+        {signInSlotId ? (
+          signInSlot &&
+          createPortal(
+            <Link
+              href="/operations/login"
+              className="header-sign-in-shortcut"
+              aria-label="Sign in"
+              title="Sign in"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="8" r="3.5" />
+                <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
+              </svg>
+            </Link>,
+            signInSlot
+          )
+        ) : (
+          <Link href="/operations/login" className="site-nav-link">
+            Sign in
+          </Link>
+        )}
         <Link href="/account/create" className="site-nav-link">
           Create account
         </Link>
