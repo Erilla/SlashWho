@@ -1014,9 +1014,6 @@ function firstKillReports(
       const id = fight && positiveInteger(fight.id);
       const encounterId = fight && nonNegativeInteger(fight.encounterID);
       const bossName = fight && nonEmptyString(fight.name);
-      const fightStartTime =
-        fight && validTimestampMilliseconds(fight.startTime);
-      const fightEndTime = fight && validTimestampMilliseconds(fight.endTime);
       const killed = fight && fight.kill;
       const difficulty = fight && fight.difficulty;
       const friendlyPlayers = fight && fight.friendlyPlayers;
@@ -1035,13 +1032,6 @@ function firstKillReports(
       // drift or dossier evidence.
       if (encounterId === 0) continue;
       if (
-        fightStartTime === null ||
-        fightEndTime === null ||
-        fightEndTime < fightStartTime
-      ) {
-        return schemaDrift();
-      }
-      if (
         typeof killed !== "boolean" ||
         !Number.isSafeInteger(difficulty) ||
         !Array.isArray(friendlyPlayers) ||
@@ -1054,6 +1044,15 @@ function firstKillReports(
         !friendlyPlayers.some((player) => participantIds.has(player))
       ) {
         continue;
+      }
+      const fightStartTime = validTimestampMilliseconds(fight.startTime);
+      const fightEndTime = validTimestampMilliseconds(fight.endTime);
+      if (
+        fightStartTime === null ||
+        fightEndTime === null ||
+        fightEndTime < fightStartTime
+      ) {
+        return schemaDrift();
       }
       // A Mythic dungeon boss carries the same difficulty as a Mythic raid
       // boss, so difficulty alone cannot say which fights are raid evidence.
