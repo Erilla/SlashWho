@@ -129,6 +129,10 @@ test("navigates a long dossier without hiding targets behind the header", async 
   const targetId = (await targetLink.getAttribute("href"))!.slice(1);
   await targetLink.click();
   await expect(targetLink).toHaveAttribute("aria-current", "location");
+  await page.mouse.move(20, 200);
+  await expect(
+    targetLink.locator(".dossier-section-navigation-label")
+  ).toBeVisible();
   await targetLink.focus();
   await expect(
     targetLink.locator(".dossier-section-navigation-label")
@@ -179,6 +183,10 @@ test("scrubs through dossier sections while dragging the desktop timeline", asyn
   await page.mouse.up();
   await expect(page).toHaveURL(new RegExp(`#${destinationId}$`));
   await expect(destination).toHaveAttribute("aria-current", "location");
+  await page.mouse.move(20, 200);
+  await expect(
+    destination.locator(".dossier-section-navigation-label")
+  ).toBeVisible();
   expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
 
   const newPagePromise = page.context().waitForEvent("page", { timeout: 3000 });
