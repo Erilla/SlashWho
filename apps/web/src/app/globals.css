@@ -882,6 +882,8 @@ a {
 
   .dossier-section-navigation-raid:hover .dossier-section-navigation-label,
   .dossier-section-navigation-raid:focus-visible
+    .dossier-section-navigation-label,
+  .dossier-section-navigation-raid[aria-current="location"]
     .dossier-section-navigation-label {
     visibility: visible;
   }
