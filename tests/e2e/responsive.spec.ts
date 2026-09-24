@@ -562,7 +562,7 @@ test("keeps the scrolled header identity clear of the header search", async ({
   for (const width of [390, 544, 560, 700, 768, 820, 900, 1280]) {
     await page.setViewportSize({ width, height: 600 });
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await expect(identity).toBeVisible();
+    await expect(identity, `header identity at ${width}px`).toBeVisible();
 
     const geometry = await page.evaluate(() => {
       const bounds = (selector: string) =>

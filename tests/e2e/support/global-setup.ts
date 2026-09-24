@@ -174,7 +174,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       WARCRAFT_LOGS_CLIENT_ID: "e2e-warcraft-logs-client-id",
       WARCRAFT_LOGS_CLIENT_SECRET: "e2e-warcraft-logs-client-secret",
       WARCRAFT_LOGS_BASE_URL: warcraftLogs.baseUrl,
-      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64)
+      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64),
+      ACCOUNT_CREDENTIAL_ENCRYPTION_KEY: "b".repeat(64),
+      ACCOUNT_EMAIL_FROM: "SlashWho <accounts@example.test>",
+      RESEND_API_KEY: "e2e-inert-mail-key"
     };
 
     // Browser-test seeds access PostgreSQL directly. Establish the schema
@@ -188,6 +191,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
       ...environment,
+      RESEND_API_KEY: undefined,
+      ACCOUNT_EMAIL_FROM: undefined,
       PORT: `${workerPort}`
     });
     const web = startPnpm(

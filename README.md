@@ -1,6 +1,6 @@
 # SlashWho
 
-SlashWho is an unlisted, unauthenticated guild tool for researching a World of Warcraft applicant from a Raider.IO or Warcraft Logs character URL.
+SlashWho is an unlisted guild tool for researching a World of Warcraft applicant from a Raider.IO or Warcraft Logs character URL. Search and dossiers remain available without an account; optional accounts save personal API keys and give maintainers admin controls.
 
 ```text
 https://raider.io/characters/eu/silvermoon/Ryii
@@ -35,6 +35,8 @@ corepack pnpm dev
 ```
 
 Generate new values of at least 32 random characters for `BOT_API_KEY` and `RATE_LIMIT_HASH_SECRET`; do not use the example values outside local development. The web app defaults to port 3000 and the worker health server to port 3001.
+
+Account registration and recovery require a Resend verified sending domain and the account variables in [the account rollout guide](docs/operations/accounts.md). Public search, dossiers, and evidence collection remain available if account mail is unconfigured.
 
 ## Development commands
 
@@ -92,6 +94,8 @@ always carry the metric meaning as well as colour.
 This is not a public API, searchable directory, or historical character archive. Dossiers are assembled for the current browser request and may contain incomplete source evidence. The assembled response is always `Cache-Control: no-store`; reusable per-character evidence is separately cached in normalized form only. Maintainers retain the internal snapshot and suppression process in [`docs/operations/removals.md`](docs/operations/removals.md).
 
 Railway setup, variables, health checks, backups, and validation are documented in [`docs/deployment/railway.md`](docs/deployment/railway.md). `main` deploys to the `test` environment. Production is promoted only by fast-forwarding the staging-validated commit to `prod`.
+
+Account migration removes legacy operator identities and sessions. Follow [the account rollout and first-admin bootstrap](docs/operations/accounts.md) before promoting this release.
 
 ## Repository guidance
 

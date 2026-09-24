@@ -6,6 +6,8 @@ import type { StoredSnapshot } from "@slashwho/database";
 import { createPostgresRepositories } from "../../../packages/database/src/postgres-repositories";
 import { toRaiderIoUrl, type CharacterKey } from "@slashwho/domain";
 import { Pool } from "pg";
+import { decryptAccountMail } from "@slashwho/application";
+import { hashOperatorCredential } from "../../../apps/web/src/server/operator-auth";
 
 type SeedCharacter = Readonly<{
   key: CharacterKey;
@@ -32,6 +34,59 @@ function databaseUrl(): string {
   const value = process.env.E2E_DATABASE_URL;
   if (!value) throw new Error("e2e_database_url_unavailable");
   return value;
+}
+
+/** Creates a verified account without mail so browser authorization tests can sign in. */
+export async function seedVerifiedAccount(
+  email: string,
+  password: string,
+  role: "user" | "admin" = "user"
+): Promise<void> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    const hash = await hashOperatorCredential(password);
+    await pool.query(
+      `INSERT INTO accounts (canonical_email, email, role, verified_at,
+        password_hash, password_salt, scrypt_version, scrypt_cost, created_at, updated_at)
+       VALUES ($1, $1, $2, now(), $3, $4, $5, $6, now(), now())`,
+      [
+        email,
+        role,
+        hash.passwordHash,
+        hash.passwordSalt,
+        hash.scryptVersion,
+        hash.scryptCost
+      ]
+    );
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Reads the local outbox link; no browser test sends mail to Resend. */
+export async function accountMailLink(email: string): Promise<string> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    const result = await pool.query<{ encrypted_message: string }>(
+      `SELECT o.encrypted_message FROM account_mail_outbox o
+       JOIN account_mail_tokens t ON t.id = o.token_id
+       JOIN accounts a ON a.id = t.account_id
+       WHERE a.canonical_email = $1 ORDER BY o.created_at DESC LIMIT 1`,
+      [email]
+    );
+    if (!result.rows[0]) throw new Error("e2e_mail_unavailable");
+    const message = JSON.parse(
+      decryptAccountMail(
+        result.rows[0].encrypted_message,
+        Buffer.from("b".repeat(64), "hex")
+      )
+    ) as { text: string };
+    const match = message.text.match(/https?:\/\/\S+/);
+    if (!match) throw new Error("e2e_mail_link_unavailable");
+    return match[0];
+  } finally {
+    await pool.end();
+  }
 }
 
 const seedSpec = {
