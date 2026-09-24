@@ -7,12 +7,17 @@ import {
 } from "./support/seed";
 
 const password = "e2e-account-password-long-enough";
+const replacementPassword = "e2e-replacement-password-long-enough";
 
-async function signIn(page: Page, email: string) {
+async function submitSignIn(page: Page, email: string, credential = password) {
   await page.goto("/operations/login");
   await page.getByLabel("Email address").fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByLabel("Password", { exact: true }).fill(credential);
   await page.getByRole("button", { name: "Sign in" }).click();
+}
+
+async function signIn(page: Page, email: string, credential = password) {
+  await submitSignIn(page, email, credential);
   await expect(page).toHaveURL(/\/account$/);
 }
 
@@ -59,6 +64,50 @@ test("registration needs mailbox verification before sign-in", async ({
   await page.getByRole("button", { name: "Verify email" }).click();
   await expect(page.getByRole("status")).toContainText(/verif/i);
   await signIn(page, email);
+});
+
+test("recovery replaces a verified account password through its mailed link", async ({
+  page
+}) => {
+  const email = "browser-recovery@example.test";
+  await seedVerifiedAccount(email, password);
+  await page.goto("/account/recover");
+  await page.getByLabel("Email address").fill(email);
+  await page.getByRole("button", { name: "Send recovery link" }).click();
+  await expect(page.getByRole("status")).toContainText("check your email");
+
+  await page.goto(await accountMailLink(email));
+  await expect(
+    page.getByRole("heading", { name: "Reset password" })
+  ).toBeVisible();
+  await page.getByLabel("New password").fill(replacementPassword);
+  await page.getByRole("button", { name: "Reset password" }).click();
+  await expect(page.getByRole("status")).toContainText("Password changed");
+
+  await submitSignIn(page, email, password);
+  await expect(
+    page.getByText("Sign in failed. Check your email and password.")
+  ).toBeVisible();
+  await signIn(page, email, replacementPassword);
+});
+
+test("recovery reclaims an unverified registration", async ({ page }) => {
+  const email = "browser-pending-recovery@example.test";
+  await page.goto("/account/create");
+  await page.getByLabel("Email address").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("status")).toContainText("check your email");
+
+  await page.goto("/account/recover");
+  await page.getByLabel("Email address").fill(email);
+  await page.getByRole("button", { name: "Send recovery link" }).click();
+  await expect(page.getByRole("status")).toContainText("check your email");
+  await page.goto(await accountMailLink(email));
+  await page.getByLabel("New password").fill(replacementPassword);
+  await page.getByRole("button", { name: "Reset password" }).click();
+  await expect(page.getByRole("status")).toContainText("Password changed");
+  await signIn(page, email, replacementPassword);
 });
 
 test("ordinary account is denied admin settings and collection monitor", async ({
@@ -114,4 +163,33 @@ test("keyboard navigation and validation feedback keep visible focus", async ({
   await expect(
     page.getByText("Sign in failed. Check your email and password.")
   ).toBeFocused();
+});
+
+test("account forms move focus to feedback after keyboard submission", async ({
+  page
+}) => {
+  await page.goto("/account/create");
+  await page
+    .getByLabel("Email address")
+    .fill("browser-focus-create@example.test");
+  await page.getByLabel("Email address").press("Tab");
+  await expect(page.getByLabel("Password", { exact: true })).toBeFocused();
+  await page.keyboard.insertText(password);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("status")).toContainText("check your email");
+  await expect(page.getByRole("status")).toBeFocused();
+
+  await page.goto("/account/verify?token=invalid-browser-token");
+  await page.getByLabel("Password", { exact: true }).focus();
+  await page.keyboard.insertText(password);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("status")).toContainText(/invalid|expired/i);
+  await expect(page.getByRole("status")).toBeFocused();
+
+  await page.goto("/account/recover");
+  await page.getByLabel("Email address").focus();
+  await page.keyboard.insertText("unknown-browser-focus@example.test");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("status")).toContainText("check your email");
+  await expect(page.getByRole("status")).toBeFocused();
 });
