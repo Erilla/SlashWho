@@ -773,6 +773,12 @@ a {
     background: transparent;
     padding: 0 0.3rem;
     color: #42424d;
+    cursor: grab;
+    user-select: none;
+  }
+
+  .dossier-section-navigation[data-dragging] a {
+    cursor: grabbing;
   }
 
   .dossier-section-navigation a::after {

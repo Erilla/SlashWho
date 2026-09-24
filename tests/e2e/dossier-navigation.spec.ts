@@ -148,6 +148,65 @@ test("navigates a long dossier without hiding targets behind the header", async 
   ).toHaveAttribute("aria-current", "location");
 });
 
+test("scrubs through dossier sections while dragging the desktop timeline", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  const first = navigation.getByRole("link", { name: "Connected characters" });
+  const destination = navigation.getByRole("link", { name: /^Raid:/ }).nth(14);
+  const destinationId = (await destination.getAttribute("href"))!.slice(1);
+  const start = await first.boundingBox();
+  const end = await destination.boundingBox();
+  expect(start).not.toBeNull();
+  expect(end).not.toBeNull();
+  const historyLength = await page.evaluate(() => window.history.length);
+
+  await page.mouse.move(
+    start!.x + start!.width / 2,
+    start!.y + start!.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(end!.x + end!.width / 2, end!.y + end!.height / 2, {
+    steps: 12
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(200);
+  const draggedScrollY = await page.evaluate(() => window.scrollY);
+  await page.mouse.up();
+  await expect(page).toHaveURL(new RegExp(`#${destinationId}$`));
+  await expect(destination).toHaveAttribute("aria-current", "location");
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+
+  const newPagePromise = page.context().waitForEvent("page", { timeout: 3000 });
+  await first.click({ modifiers: ["Control"] });
+  const newPage = await newPagePromise;
+  await expect(newPage).toHaveURL(/#dossier-characters-heading$/);
+  await newPage.close();
+
+  await first.click();
+  await expect(page).toHaveURL(/#dossier-characters-heading$/);
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeLessThan(draggedScrollY);
+
+  const rail = await navigation.boundingBox();
+  expect(rail).not.toBeNull();
+  await page.mouse.move(
+    start!.x + start!.width / 2,
+    start!.y + start!.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(end!.x + end!.width / 2, rail!.y + rail!.height + 30, {
+    steps: 12
+  });
+  await page.mouse.up();
+  await expect(page).toHaveURL(/#limitations-heading$/);
+});
+
 test("keeps section navigation usable by keyboard on a narrow viewport", async ({
   page
 }) => {
