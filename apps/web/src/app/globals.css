@@ -639,7 +639,119 @@ a {
   grid-template-columns: minmax(0, 1.05fr) minmax(16rem, 0.95fr);
   gap: 2rem;
   align-items: start;
+  padding-top: 0;
+}
+
+.dossier-navigation-layout {
+  min-width: 0;
   padding-top: 2rem;
+}
+
+/* The root scroll padding already clears the fixed header. Avoid adding the
+   global target margin a second time for this navigation's destinations. */
+.dossier-navigation-layout [id] {
+  scroll-margin-top: 0;
+}
+
+.dossier-section-navigation {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  padding: 0.65rem;
+}
+
+.dossier-section-navigation-title {
+  margin: 0 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dossier-section-navigation ol {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0.25rem;
+}
+
+.dossier-section-navigation li {
+  flex: 0 0 auto;
+}
+
+.dossier-section-navigation a {
+  display: block;
+  border-left: 3px solid transparent;
+  border-radius: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.dossier-section-navigation a:hover {
+  background: var(--surface-raised);
+}
+
+.dossier-section-navigation a[aria-current="location"] {
+  border-left-color: var(--accent);
+  background: var(--surface-raised);
+  font-weight: 700;
+}
+
+.dossier-section-navigation a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dossier-navigation-layout .dossier-layout {
+  margin-top: 1rem;
+}
+
+@media (min-width: 75rem) {
+  .page-shell.dossier-page {
+    width: min(100% - 4rem, 84rem);
+  }
+
+  .dossier-navigation-layout {
+    display: grid;
+    grid-template-columns: 10rem minmax(0, 1fr);
+    align-items: start;
+    gap: 1.5rem;
+  }
+
+  .dossier-section-navigation {
+    position: sticky;
+    top: calc(var(--header-height) + 1rem);
+    max-height: calc(100vh - var(--header-height) - 2rem);
+    overflow-y: auto;
+  }
+
+  .dossier-section-navigation ol {
+    display: grid;
+    overflow: visible;
+  }
+
+  .dossier-section-navigation li {
+    min-width: 0;
+  }
+
+  .dossier-section-navigation a {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .dossier-section-navigation-raid {
+    margin-left: 0.65rem;
+  }
+
+  .dossier-navigation-layout .dossier-layout {
+    margin-top: 0;
+  }
 }
 
 .dossier-panel {

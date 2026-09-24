@@ -11,6 +11,7 @@ import { DossierParseList } from "./dossier-parse-list";
 import { DossierTierSearchControl } from "./dossier-tier-search-control";
 import { UpstreamIcon, UpstreamIconLink } from "./upstream-icon-link";
 import { GuildProfileLinks } from "./profile-links";
+import { dossierRaidTargetId } from "./dossier-section-navigation";
 
 type Raid = ApplicantDossier["raids"][number];
 type Boss = Raid["bosses"][number];
@@ -708,6 +709,7 @@ export function DossierRaidList({
                 <section
                   aria-label={`${raid.raidName} evidence`}
                   className="dossier-raid dossier-raid-no-logs"
+                  id={dossierRaidTargetId(raid.raidId)}
                   key={raid.raidId}
                   role="group"
                 >
@@ -722,7 +724,11 @@ export function DossierRaidList({
               );
             }
             return (
-              <section className="dossier-raid" key={raid.raidId}>
+              <section
+                className="dossier-raid"
+                id={dossierRaidTargetId(raid.raidId)}
+                key={raid.raidId}
+              >
                 <h3 className="dossier-raid-heading">
                   <RaidArtwork raid={raid} />
                   <span className="dossier-raid-name">{raid.raidName}</span>
