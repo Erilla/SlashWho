@@ -15,6 +15,13 @@ test("spreads the desktop timeline to the bottom of a tall viewport", async ({
     .boundingBox();
   expect(first).not.toBeNull();
   expect(last).not.toBeNull();
+  const headerBottom = await page
+    .locator(".site-header")
+    .evaluate((header) => header.getBoundingClientRect().bottom);
+  expect(first!.y - headerBottom).toBeGreaterThanOrEqual(24);
+  expect(first!.y - headerBottom).toBeLessThanOrEqual(40);
+  expect(1200 - (last!.y + last!.height)).toBeGreaterThanOrEqual(24);
+  expect(1200 - (last!.y + last!.height)).toBeLessThanOrEqual(40);
   expect(first!.y).toBeLessThan(110);
   expect(last!.y + last!.height).toBeGreaterThan(1160);
   expect(last!.y + last!.height).toBeLessThanOrEqual(1200);
