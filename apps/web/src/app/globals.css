@@ -725,16 +725,17 @@ a {
 
   .dossier-section-navigation {
     position: fixed;
-    top: calc(var(--header-height) + 2rem);
+    top: calc((100dvh + var(--header-height)) / 2);
     right: 0.5rem;
     z-index: 5;
     width: 2.25rem;
-    height: calc(100dvh - var(--header-height) - 4rem);
+    height: min(24rem, calc(100dvh - var(--header-height) - 4rem));
     border: 0;
     border-radius: 0;
     background: transparent;
     padding: 0;
     overflow: visible;
+    transform: translateY(-50%);
   }
 
   .dossier-section-navigation-title {
@@ -761,7 +762,7 @@ a {
     align-items: center;
     justify-content: flex-end;
     width: 100%;
-    height: 1.3rem;
+    height: 0.875rem;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -791,6 +792,27 @@ a {
   .dossier-section-navigation a:hover::after,
   .dossier-section-navigation a:focus-visible::after {
     width: 1.25rem;
+  }
+
+  .dossier-section-navigation
+    li:has(+ li + li > a:is(:hover, :focus-visible))
+    > a.dossier-section-navigation-raid::after,
+  .dossier-section-navigation
+    li:has(> a:is(:hover, :focus-visible))
+    + li
+    + li
+    > a.dossier-section-navigation-raid::after {
+    width: 0.875rem;
+  }
+
+  .dossier-section-navigation
+    li:has(+ li > a:is(:hover, :focus-visible))
+    > a.dossier-section-navigation-raid::after,
+  .dossier-section-navigation
+    li:has(> a:is(:hover, :focus-visible))
+    + li
+    > a.dossier-section-navigation-raid::after {
+    width: 1.125rem;
   }
 
   .dossier-section-navigation a[aria-current="location"] {
@@ -837,7 +859,7 @@ a {
   }
 
   .dossier-section-navigation a.dossier-section-navigation-raid {
-    height: 0.75rem;
+    height: 0.5rem;
   }
 
   .dossier-section-navigation-raid .dossier-section-navigation-label {

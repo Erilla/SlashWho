@@ -1,6 +1,6 @@
 import { expect, test } from "playwright/test";
 
-test("spreads the desktop timeline to the bottom of a tall viewport", async ({
+test("centers a compact desktop timeline on a tall viewport", async ({
   page
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 });
@@ -18,13 +18,11 @@ test("spreads the desktop timeline to the bottom of a tall viewport", async ({
   const headerBottom = await page
     .locator(".site-header")
     .evaluate((header) => header.getBoundingClientRect().bottom);
-  expect(first!.y - headerBottom).toBeGreaterThanOrEqual(24);
-  expect(first!.y - headerBottom).toBeLessThanOrEqual(40);
-  expect(1200 - (last!.y + last!.height)).toBeGreaterThanOrEqual(24);
-  expect(1200 - (last!.y + last!.height)).toBeLessThanOrEqual(40);
-  expect(first!.y).toBeLessThan(110);
-  expect(last!.y + last!.height).toBeGreaterThan(1160);
-  expect(last!.y + last!.height).toBeLessThanOrEqual(1200);
+  const topSpace = first!.y - headerBottom;
+  const bottomSpace = 1200 - (last!.y + last!.height);
+  expect(last!.y + last!.height - first!.y).toBeLessThanOrEqual(400);
+  expect(last!.y + last!.height - first!.y).toBeGreaterThanOrEqual(340);
+  expect(Math.abs(topSpace - bottomSpace)).toBeLessThanOrEqual(20);
 
   const restingMarkWidth = (name: string) =>
     navigation
@@ -71,7 +69,26 @@ test("navigates a long dossier without hiding targets behind the header", async 
   await expect(raidLabel).toBeVisible();
   const raidMark = await firstRaid.boundingBox();
   expect(raidMark).not.toBeNull();
-  expect(raidMark!.height).toBeLessThanOrEqual(18);
+  expect(raidMark!.height).toBeLessThanOrEqual(10);
+  const hoveredRaid = raids.nth(5);
+  const hoveredItem = hoveredRaid.locator("..");
+  const preceding = hoveredItem.locator("xpath=preceding-sibling::li[1]/a");
+  const following = hoveredItem.locator("xpath=following-sibling::li[1]/a");
+  const secondFollowing = hoveredItem.locator(
+    "xpath=following-sibling::li[2]/a"
+  );
+  const markWidth = (link: typeof hoveredRaid) =>
+    link.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element, "::after").width)
+    );
+  const restingWidth = await markWidth(following);
+  await hoveredRaid.hover();
+  expect(await markWidth(preceding)).toBeGreaterThan(restingWidth);
+  expect(await markWidth(following)).toBeGreaterThan(restingWidth);
+  expect(await markWidth(secondFollowing)).toBeGreaterThan(restingWidth);
+  expect(await markWidth(following)).toBeGreaterThan(
+    await markWidth(secondFollowing)
+  );
   const longRaid = navigation.getByRole("link", {
     name: "Raid: Aberrus, the Shadowed Crucible"
   });
