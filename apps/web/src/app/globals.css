@@ -116,12 +116,37 @@ a {
 
 .header-search {
   grid-column: 4 / 5;
-  width: min(100%, 31rem);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: min(100%, 34rem);
   justify-self: end;
 }
 
 .header-search .search-form {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+}
+
+.header-search #header-sign-in:empty {
+  display: none;
+}
+
+.header-sign-in-shortcut {
+  display: grid;
+  width: 2.8rem;
+  height: 2.8rem;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.4rem;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.header-sign-in-shortcut:hover,
+.header-sign-in-shortcut:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .header-search .form-error {
@@ -2139,6 +2164,33 @@ a {
   border-radius: 0.4rem;
   background: var(--page);
   color: var(--text);
+}
+
+.account-form-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.account-form-field input {
+  width: 100%;
+}
+
+.account-form-fields {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.account-form-status:empty {
+  display: none;
+}
+
+.account-form-links {
+  margin-top: 0.55rem;
+  color: var(--muted);
+}
+
+.account-form-links a {
+  color: inherit;
 }
 
 .operator-login-form [role="alert"],

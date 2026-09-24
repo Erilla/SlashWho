@@ -142,74 +142,88 @@ export function AccountForm({ flow }: { flow: Flow }) {
     <main className="page-shell operator-login-page">
       <div>
         <h1>{config.title}</h1>
+        {flow === "create" && (
+          <p>Enter your email address and choose a password to get started.</p>
+        )}
         {flow === "change-password" && (
           <p>After changing your password, sign in again.</p>
         )}
       </div>
-      {!token &&
-      (actualFlow === "verify" ||
-        actualFlow === "reset" ||
-        actualFlow === "confirm-email") ? (
-        <p role="alert">This link is missing a token.</p>
-      ) : (
-        <form className="operator-login-form" onSubmit={submit}>
-          {config.fields.map((field) => (
-            <div key={field}>
-              <label htmlFor={`account-${field}`}>{labels[field]}</label>
-              <input
-                id={`account-${field}`}
-                ref={
-                  field === "newPassword" && flow === "change-password"
-                    ? passwordRef
-                    : undefined
-                }
-                name={field}
-                type={
-                  field === "email" || field === "newEmail"
-                    ? "email"
-                    : "password"
-                }
-                autoComplete={
-                  field === "email"
-                    ? "email"
-                    : field === "newEmail"
+      <div className="operator-login-form">
+        {!token &&
+        (actualFlow === "verify" ||
+          actualFlow === "reset" ||
+          actualFlow === "confirm-email") ? (
+          <p role="alert">This link is missing a token.</p>
+        ) : (
+          <form className="account-form-fields" onSubmit={submit}>
+            {config.fields.map((field) => (
+              <div key={field} className="account-form-field">
+                <label htmlFor={`account-${field}`}>{labels[field]}</label>
+                <input
+                  id={`account-${field}`}
+                  ref={
+                    field === "newPassword" && flow === "change-password"
+                      ? passwordRef
+                      : undefined
+                  }
+                  name={field}
+                  type={
+                    field === "email" || field === "newEmail"
                       ? "email"
-                      : field === "currentPassword"
-                        ? "current-password"
-                        : field === "newPassword"
-                          ? "new-password"
-                          : flow === "create"
+                      : "password"
+                  }
+                  autoComplete={
+                    field === "email"
+                      ? "email"
+                      : field === "newEmail"
+                        ? "email"
+                        : field === "currentPassword"
+                          ? "current-password"
+                          : field === "newPassword"
                             ? "new-password"
-                            : "current-password"
-                }
-                required
-                minLength={
-                  field.toLowerCase().includes("password") ? 20 : undefined
-                }
-                value={values[field] ?? ""}
-                onChange={(event) =>
-                  setValues((previous) => ({
-                    ...previous,
-                    [field]: event.target.value
-                  }))
-                }
-              />
-            </div>
-          ))}
-          <button className="search-button" type="submit" disabled={pending}>
-            {pending ? "Please wait…" : config.button}
-          </button>
-        </form>
-      )}
-      <p role="status" tabIndex={-1} ref={statusRef}>
-        {feedback}
-      </p>
-      <nav aria-label="Account links">
-        <Link href="/operations/login">Sign in</Link> ·{" "}
-        <Link href="/account/create">Create account</Link> ·{" "}
-        <Link href="/account/recover">Forgot password?</Link> ·{" "}
-        <Link href="/account/verify">Resend verification</Link>
-      </nav>
+                            : flow === "create"
+                              ? "new-password"
+                              : "current-password"
+                  }
+                  required
+                  minLength={
+                    field.toLowerCase().includes("password") ? 20 : undefined
+                  }
+                  value={values[field] ?? ""}
+                  onChange={(event) =>
+                    setValues((previous) => ({
+                      ...previous,
+                      [field]: event.target.value
+                    }))
+                  }
+                />
+              </div>
+            ))}
+            <button className="search-button" type="submit" disabled={pending}>
+              {pending ? "Please wait…" : config.button}
+            </button>
+          </form>
+        )}
+        <p
+          className="account-form-status"
+          role="status"
+          tabIndex={-1}
+          ref={statusRef}
+        >
+          {feedback}
+        </p>
+        <nav className="account-form-links" aria-label="Account links">
+          <Link href="/operations/login">Sign in</Link> ·{" "}
+          {flow !== "create" && (
+            <>
+              <Link href="/account/create">Create account</Link> ·{" "}
+            </>
+          )}
+          <Link href="/account/recover">Forgot password?</Link> ·{" "}
+          <Link href="/account/verify">Resend verification</Link>
+        </nav>
+      </div>
     </main>
   );
 }

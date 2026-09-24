@@ -18,11 +18,12 @@ export function SiteHeader() {
         <Link href="/settings" className="site-nav-link">
           Settings
         </Link>
-        <AccountNavigation />
+        <AccountNavigation signInSlotId="header-sign-in" />
       </nav>
       <div className="header-identity" id={headerIdentitySlotId} />
       <div className="header-search">
         <SearchForm />
+        <div id="header-sign-in" />
       </div>
     </header>
   );
