@@ -5849,7 +5849,102 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("skips unrelated negative-time boss fights and continues to later history pages", async () => {
+    // A shared report can contain fights before its report start. They cannot
+    // describe this character when its actor ID is absent from friendlyPlayers.
+    const pages = structuredClone(
+      (fixture("character-report-valid") as { pages: unknown[] }).pages
+    ) as Array<{
+      data: {
+        characterData: {
+          character: {
+            recentReports: {
+              data: Array<{
+                masterData: { actors: Array<Record<string, unknown>> };
+                fights: Array<Record<string, unknown>>;
+              }>;
+            };
+          };
+        };
+      };
+    }>;
+    pages[0]!.data.characterData.character.recentReports.data[0]!.masterData.actors.push(
+      {
+        id: 8,
+        name: "Other",
+        server: "Silvermoon",
+        type: "Player"
+      }
+    );
+    pages[0]!.data.characterData.character.recentReports.data[0]!.fights.push(
+      {
+        id: 80,
+        encounterID: 1234,
+        name: "Queen Ansurek",
+        startTime: -20_000,
+        endTime: -10_000,
+        kill: true,
+        difficulty: 5,
+        friendlyPlayers: [8]
+      },
+      {
+        id: 81,
+        encounterID: 1234,
+        name: "Queen Ansurek",
+        startTime: -20_000,
+        endTime: -10_000,
+        kill: false,
+        difficulty: 5,
+        friendlyPlayers: [8]
+      }
+    );
+    const historyPages: number[] = [];
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page?: number };
+      };
+      if (body.query.includes("RecentReports")) {
+        const page = body.variables.page!;
+        historyPages.push(page);
+        return jsonResponse(pages[page - 1]);
+      }
+      return emptyZoneRankingsResponse();
+    });
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 2,
+      parseRequestCap: 10
+    });
+
+    expect(historyPages).toEqual([1, 2]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      kills: expect.arrayContaining([
+        expect.objectContaining({
+          fightUrl: expect.stringContaining("lateReport#fight=1")
+        }),
+        expect.objectContaining({
+          fightUrl: expect.stringContaining("earlyReport#fight=7")
+        })
+      ]),
+      wipes: [
+        expect.objectContaining({
+          fightUrl: expect.stringContaining("lateReport#fight=9")
+        })
+      ]
+    });
+    expect(result).not.toHaveProperty("limitation");
+    if (result.kind === "evidence") {
+      expect(result.kills).toHaveLength(3);
+      expect(result.wipes).toHaveLength(1);
+    }
+  });
+
   it.each([
+    ["negative start", -20_000, 3_600_000],
+    ["negative end", 0, -10_000],
     ["missing start", undefined, 3_600_000],
     ["reversed interval", 3_600_001, 3_600_000]
   ])("rejects a fight with a %s", async (_label, startTime, endTime) => {
