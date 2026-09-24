@@ -11,20 +11,11 @@ export function SiteHeader() {
       <Link href="/" className="header-logo" aria-label="SlashWho home">
         <Logo className="header-logo-mark" />
       </Link>
-      <nav aria-label="Primary" className="site-nav">
-        <Link href="/changelog" className="site-nav-link">
-          Changelog
-        </Link>
-        <Link href="/settings" className="site-nav-link">
-          Settings
-        </Link>
-        <AccountNavigation signInSlotId="header-sign-in" />
-      </nav>
-      <div className="header-identity" id={headerIdentitySlotId} />
       <div className="header-search">
         <SearchForm />
-        <div id="header-sign-in" />
       </div>
+      <div className="header-identity" id={headerIdentitySlotId} />
+      <AccountNavigation />
     </header>
   );
 }

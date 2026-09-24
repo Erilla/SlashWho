@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, it, vi } from "vitest";
 vi.mock("next/link", () => ({
   default: ({
     children,
@@ -13,20 +20,68 @@ vi.mock("next/link", () => ({
     </a>
   )
 }));
-vi.mock("./search-form", () => ({ SearchForm: () => <form /> }));
+vi.mock("./search-form", () => ({
+  SearchForm: () => <form aria-label="Character search" />
+}));
 import { SiteHeader } from "./site-header";
 
-it("exposes account entry points to signed-out visitors", () => {
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+it("opens a menu with signed-out destinations", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(Response.json({ account: null }))
+  );
+  const user = userEvent.setup();
   const { container } = render(<SiteHeader />);
-  const search = container.querySelector(".header-search");
-  const navigation = screen.getByRole("navigation", { name: "Primary" });
-  expect(search).not.toBeNull();
+  expect(container.querySelector(".header-search")).toContainElement(
+    screen.getByRole("form", { name: "Character search" })
+  );
+  const trigger = screen.getByRole("button", { name: "Open menu" });
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await user.click(trigger);
+  const menu = screen.getByRole("navigation", { name: "Primary" });
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  expect(within(menu).getByRole("link", { name: "Sign in" })).toHaveAttribute(
+    "href",
+    "/operations/login"
+  );
   expect(
-    within(search as HTMLElement).getByRole("link", { name: "Sign in" })
-  ).toHaveAttribute("href", "/operations/login");
-  expect(
-    within(navigation).queryByRole("link", { name: "Sign in" })
-  ).toBeNull();
-  expect(screen.getByRole("link", { name: "Create account" })).toBeVisible();
-  expect(screen.queryByRole("link", { name: "Admin settings" })).toBeNull();
+    within(menu).getByRole("link", { name: "Create account" })
+  ).toHaveAttribute("href", "/account/create");
+  expect(within(menu).getByRole("link", { name: "Changelog" })).toHaveAttribute(
+    "href",
+    "/changelog"
+  );
+  expect(within(menu).getByRole("link", { name: "Settings" })).toHaveAttribute(
+    "href",
+    "/settings"
+  );
+});
+
+it("closes the menu with Escape and outside clicks", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(Response.json({ account: null }))
+  );
+  const user = userEvent.setup();
+  render(
+    <>
+      <SiteHeader />
+      <main>Outside</main>
+    </>
+  );
+  const trigger = screen.getByRole("button", { name: "Open menu" });
+  await user.click(trigger);
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
+  await user.click(trigger);
+  await user.click(screen.getByText("Outside"));
+  expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
+  await waitFor(() =>
+    expect(trigger).toHaveAttribute("aria-expanded", "false")
+  );
 });

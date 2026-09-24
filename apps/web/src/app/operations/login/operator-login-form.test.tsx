@@ -23,7 +23,7 @@ it("submits email and password, clears the password, and navigates", async () =>
   window.addEventListener("slashwho:account-session-changed", changed, {
     once: true
   });
-  const password = "password-at-least-20-characters";
+  const password = "abcdef";
   const fetchMock = vi
     .fn()
     .mockResolvedValue(new Response(null, { status: 204 }));
@@ -32,6 +32,7 @@ it("submits email and password, clears the password, and navigates", async () =>
   render(<OperatorLoginForm />);
   await user.type(screen.getByLabelText("Email address"), "ryan@example.test");
   const input = screen.getByLabelText("Password");
+  expect(input).toHaveAttribute("minlength", "6");
   await user.type(input, password);
   await user.click(screen.getByRole("button", { name: "Sign in" }));
   expect(fetchMock).toHaveBeenCalledWith("/api/operations/session", {

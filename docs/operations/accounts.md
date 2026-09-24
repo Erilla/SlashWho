@@ -15,7 +15,7 @@ Deploy the migration and new web/worker code together. There is no admin until t
 corepack pnpm ops:operators -- provision-admin owner@example.com
 ```
 
-The CLI requires an interactive TTY and prompts for a **hidden temporary password** of at least 20 characters. Do not place it on the command line, in environment variables, or in logs. The admin is already email verified and must sign in with the temporary password, change it on the required password-change page, then sign in again. Confirm `/admin/settings` and the collection monitor load for that account. Web registration creates ordinary users only.
+The CLI requires an interactive TTY and prompts for a **hidden temporary password** of at least 6 characters. Do not place it on the command line, in environment variables, or in logs. The admin is already email verified and must sign in with the temporary password, change it on the required password-change page, then sign in again. Confirm `/admin/settings` and the collection monitor load for that account. Web registration creates ordinary users only.
 
 ## Validate after rollout
 

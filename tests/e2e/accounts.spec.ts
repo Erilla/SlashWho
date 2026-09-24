@@ -28,6 +28,7 @@ test("anonymous visitor can search and open a dossier", async ({ page }) => {
     refreshedAt: new Date()
   });
   await page.goto("/");
+  await page.getByRole("button", { name: "Open menu" }).click();
   await expect(
     page.getByRole("link", { name: "Create account" })
   ).toBeVisible();
@@ -62,8 +63,8 @@ test("registration needs mailbox verification before sign-in", async ({
   await page.goto(await accountMailLink(email));
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Verify email" }).click();
-  await expect(page.getByRole("status")).toContainText(/verif/i);
-  await signIn(page, email);
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
 });
 
 test("recovery replaces a verified account password through its mailed link", async ({

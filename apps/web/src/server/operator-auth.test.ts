@@ -14,6 +14,7 @@ import {
 } from "./operator-auth";
 import {
   accountAuthFixture,
+  operatorMutation,
   operatorOrigin
 } from "./operator-auth-test-fixture";
 import type {
@@ -29,6 +30,53 @@ const config = applicationConfigSchema.parse({
 });
 const initialTime = new Date("2026-09-21T12:00:00.000Z");
 const operatorId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+it("signs in with a six-character account password", async () => {
+  const fixture = await accountAuthFixture();
+  fixture.setAccount(await hashOperatorCredential("abcdef"));
+  expect(
+    (
+      await fixture.auth.signIn(
+        operatorMutation({ email: "ryan@example.test", password: "abcdef" })
+      )
+    ).principal
+  ).toMatchObject({ kind: "account", accountId: operatorId });
+  expect(
+    (
+      await fixture.auth.signIn(
+        operatorMutation({ email: "ryan@example.test", password: "abcde" })
+      )
+    ).principal
+  ).toBeNull();
+});
+
+it("issues a session for a freshly verified account without consuming a login attempt", async () => {
+  const fixture = await accountAuthFixture();
+  const verified = {
+    accountId: operatorId,
+    canonicalEmail: "ryan@example.test"
+  };
+  const signedIn = await fixture.auth.signInVerifiedAccount(
+    new Request(operatorOrigin),
+    verified
+  );
+  expect(signedIn.principal).toMatchObject({
+    kind: "account",
+    accountId: operatorId
+  });
+  expect(signedIn.cookie?.header).toContain("HttpOnly");
+  expect(fixture.repository.admitLoginAttempt).not.toHaveBeenCalled();
+  await expect(
+    fixture.auth.signInVerifiedAccount(new Request(operatorOrigin), {
+      ...verified,
+      accountId: "someone-else"
+    })
+  ).resolves.toEqual({ principal: null });
+  fixture.setAccount({ verifiedAt: null });
+  await expect(
+    fixture.auth.signInVerifiedAccount(new Request(operatorOrigin), verified)
+  ).resolves.toEqual({ principal: null });
+});
 
 it.each([
   "disabled",
@@ -238,7 +286,7 @@ it("authenticates verified accounts and reads current role and required-change s
         mutation(
           {
             currentPassword: credential,
-            newPassword: "another-long-secret-password"
+            newPassword: "abcdef"
           },
           { cookie, origin: "https://evil.test" }
         )
@@ -264,7 +312,7 @@ it("authenticates verified accounts and reads current role and required-change s
         mutation(
           {
             currentPassword: credential,
-            newPassword: "another-long-secret-password"
+            newPassword: "abcdef"
           },
           { cookie }
         )
@@ -411,9 +459,25 @@ describe("operator identity and credentials", () => {
       "invalid_operator_credential"
     );
   });
+  it("hashes six-character passwords and rejects five-character passwords", async () => {
+    await expect(hashOperatorCredential("abcde")).rejects.toThrow(
+      "invalid_operator_credential"
+    );
+    await expect(hashOperatorCredential("abcdef")).resolves.toMatchObject({
+      scryptVersion: 1
+    });
+  });
 });
 
 describe("operator authentication", () => {
+  it("signs in with a six-character operator credential", async () => {
+    const f = await fixture();
+    f.changeOperator(await hashOperatorCredential("abcdef"));
+    expect(
+      (await f.auth.signIn(mutation({ login: "Ryan", credential: "abcdef" })))
+        .principal
+    ).toMatchObject({ kind: "operator" });
+  });
   it("verifies existing scrypt records using their stored cost", async () => {
     const f = await fixture();
     // Independent Node scrypt vector: N=32768, r=8, p=1, 64 bytes, salt=16 bytes of 0x07.

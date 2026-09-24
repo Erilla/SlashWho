@@ -582,7 +582,7 @@ test("keeps the scrolled header identity clear of the header search", async ({
         width: Math.round(identityBounds.width),
         searchInput: overlapWith(".header-search .search-input"),
         searchButton: overlapWith(".header-search .search-button"),
-        nav: overlapWith(".site-nav"),
+        nav: overlapWith(".header-menu-trigger"),
         logo: overlapWith(".header-logo")
       };
     });

@@ -121,15 +121,18 @@ export function AccountForm({ flow }: { flow: Flow }) {
       });
       const result = (await response.json()) as { message?: string };
       setFeedback(result.message ?? "The request could not be completed.");
+      if (response.ok && actualFlow === "verify") {
+        notifyAccountSessionChanged();
+        router.replace("/account");
+        router.refresh();
+        return;
+      }
       if (
         response.ok &&
         ["reset", "change-password", "confirm-email"].includes(actualFlow)
       )
         notifyAccountSessionChanged();
-      if (
-        response.ok &&
-        (flow === "verify" || flow === "reset" || flow === "change-password")
-      )
+      if (response.ok && (flow === "reset" || flow === "change-password"))
         router.refresh();
     } catch {
       setFeedback("The request could not be completed. Try again.");
@@ -188,7 +191,7 @@ export function AccountForm({ flow }: { flow: Flow }) {
                   }
                   required
                   minLength={
-                    field.toLowerCase().includes("password") ? 20 : undefined
+                    field.toLowerCase().includes("password") ? 6 : undefined
                   }
                   value={values[field] ?? ""}
                   onChange={(event) =>

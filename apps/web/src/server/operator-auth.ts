@@ -102,7 +102,7 @@ export async function hashOperatorCredential(
   credential: string,
   random: RandomSource = randomBytes
 ): Promise<CredentialHash> {
-  if (credential.length < 20 || credential.length > 1024)
+  if (credential.length < 6 || credential.length > 1024)
     throw new Error("invalid_operator_credential");
   const passwordSalt = Buffer.from(random(16)).toString("hex");
   return {
@@ -346,7 +346,7 @@ export function createOperatorAuth(options: {
     if (
       !login ||
       typeof body?.credential !== "string" ||
-      body.credential.length < 20 ||
+      body.credential.length < 6 ||
       body.credential.length > 1024
     ) {
       await audit(null, "sign_in", "failure", at);
@@ -516,7 +516,7 @@ export function createAccountAuth(options: {
     if (
       !email ||
       typeof password !== "string" ||
-      password.length < 20 ||
+      password.length < 6 ||
       password.length > 1024
     ) {
       await repository.appendEvent({
@@ -561,6 +561,27 @@ export function createAccountAuth(options: {
       });
       return { principal: null };
     }
+    return issueAccountSession(request, account, at);
+  }
+  async function signInVerifiedAccount(
+    request: Request,
+    verified: { accountId: string; canonicalEmail: string }
+  ): Promise<{ principal: AccountPrincipal | null; cookie?: CookieDirective }> {
+    const account = await repository.findCredential(verified.canonicalEmail);
+    if (
+      request.headers.has("authorization") ||
+      !account?.active ||
+      !account.verifiedAt ||
+      account.id !== verified.accountId
+    )
+      return { principal: null };
+    return issueAccountSession(request, account, now());
+  }
+  async function issueAccountSession(
+    request: Request,
+    account: Account,
+    at: Date
+  ): Promise<{ principal: AccountPrincipal | null; cookie?: CookieDirective }> {
     const prior = await useCookie(request, at);
     if (prior.used) {
       await repository.revokeSession(prior.used.session.id, at);
@@ -638,7 +659,7 @@ export function createAccountAuth(options: {
       typeof body.currentPassword !== "string" ||
       typeof body.newPassword !== "string" ||
       body.currentPassword.length > 1024 ||
-      body.newPassword.length < 20 ||
+      body.newPassword.length < 6 ||
       body.newPassword.length > 1024
     )
       return { accepted: false, principal: null };
@@ -672,6 +693,12 @@ export function createAccountAuth(options: {
       ? { accepted: true, ...denied() }
       : { accepted: false, principal: null };
   }
-  return { authenticate, signIn, signOut, changePassword };
+  return {
+    authenticate,
+    signIn,
+    signInVerifiedAccount,
+    signOut,
+    changePassword
+  };
 }
 export type AccountAuth = ReturnType<typeof createAccountAuth>;

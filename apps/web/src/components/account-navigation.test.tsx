@@ -30,12 +30,19 @@ it("refreshes the projection after sign-in and password change", async () => {
     )
     .mockResolvedValueOnce(Response.json({ account: null }));
   vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup();
   render(<AccountNavigation />);
+  await user.click(screen.getByRole("button", { name: "Open menu" }));
   expect(await screen.findByRole("link", { name: "Sign in" })).toBeVisible();
   window.dispatchEvent(new Event("slashwho:account-session-changed"));
   expect(
     await screen.findByRole("link", { name: "Admin settings" })
   ).toBeVisible();
+  expect(screen.getByText("admin@example.test")).toBeVisible();
+  expect(screen.getByText("admin@example.test").closest("a")).toBeNull();
+  expect(screen.getByRole("link", { name: "Account" })).toBeVisible();
+  expect(screen.queryByRole("link", { name: "Sign in" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Create account" })).toBeNull();
   window.dispatchEvent(new Event("slashwho:account-session-changed"));
   await waitFor(() =>
     expect(screen.queryByRole("link", { name: "Admin settings" })).toBeNull()
@@ -61,6 +68,7 @@ it("shows retry feedback and keeps account controls when sign-out fails", async 
   );
   const user = userEvent.setup();
   render(<AccountNavigation />);
+  await user.click(screen.getByRole("button", { name: "Open menu" }));
   await user.click(await screen.findByRole("button", { name: "Sign out" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("try again");
   expect(screen.getByRole("button", { name: "Sign out" })).toBeVisible();

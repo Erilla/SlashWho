@@ -125,7 +125,7 @@ export function createAccountTokens(config: {
       token: string,
       password: string,
       at: Date
-    ): Promise<"verified" | "invalid"> {
+    ): Promise<{ accountId: string; canonicalEmail: string } | "invalid"> {
       if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return "invalid";
       const tokenDigest = digest("verify", token);
       const account = await repository.findToken({
@@ -144,7 +144,7 @@ export function createAccountTokens(config: {
         passwordHash: account.passwordHash,
         at
       }))
-        ? "verified"
+        ? { accountId: account.id, canonicalEmail: account.canonicalEmail }
         : "invalid";
     },
     async requestReset(email: string, at: Date): Promise<void> {
