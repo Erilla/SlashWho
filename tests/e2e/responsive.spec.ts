@@ -235,7 +235,9 @@ test("keeps landing search fields compact and usable at desktop and mobile width
   ).resolves.toBe(true);
 });
 
-test("centers landing search controls within the header", async ({ page }) => {
+test("keeps landing search controls centered vertically and close to the logo", async ({
+  page
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
 
@@ -245,6 +247,9 @@ test("centers landing search controls within the header", async ({ page }) => {
     const headerBounds = header.getBoundingClientRect();
     const controlBounds = control.getBoundingClientRect();
     const buttonBounds = button.getBoundingClientRect();
+    const logoBounds = header
+      .querySelector(".header-logo-mark")!
+      .getBoundingClientRect();
     const buttonStyle = getComputedStyle(button);
     return {
       headerCenter: headerBounds.top + headerBounds.height / 2,
@@ -252,7 +257,9 @@ test("centers landing search controls within the header", async ({ page }) => {
       buttonCenter: buttonBounds.top + buttonBounds.height / 2,
       buttonDisplay: buttonStyle.display,
       buttonAlignItems: buttonStyle.alignItems,
-      buttonJustifyContent: buttonStyle.justifyContent
+      buttonJustifyContent: buttonStyle.justifyContent,
+      logoRight: logoBounds.right,
+      controlLeft: controlBounds.left
     };
   });
 
@@ -265,6 +272,8 @@ test("centers landing search controls within the header", async ({ page }) => {
   expect(geometry.buttonDisplay).toBe("flex");
   expect(geometry.buttonAlignItems).toBe("center");
   expect(geometry.buttonJustifyContent).toBe("center");
+  expect(geometry.controlLeft - geometry.logoRight).toBeGreaterThan(0);
+  expect(geometry.controlLeft - geometry.logoRight).toBeLessThanOrEqual(24);
 });
 
 test("matches dossier summary panels and confines character scrolling to desktop", async ({
