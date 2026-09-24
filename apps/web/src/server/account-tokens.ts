@@ -15,7 +15,10 @@ export function createAccountTokens(config: {
   from: string;
 }) {
   const { accountTokens: repository, accountMail } = config.repositories;
-  function addressSubject(purpose: "verify" | "reset", canonicalEmail: string) {
+  function addressSubject(
+    purpose: "verify" | "reset" | "email-change",
+    canonicalEmail: string
+  ) {
     return createHmac("sha256", config.tokenHashSecret)
       .update(`account-${purpose}\0${canonicalEmail}`)
       .digest("hex");
@@ -207,6 +210,7 @@ export function createAccountTokens(config: {
       const nextToken = randomBytes(32).toString("base64url");
       await repository.issueEmailChange({
         accountId,
+        destinationSubjectHash: addressSubject("email-change", canonical),
         expectedPasswordHash: account.passwordHash,
         expectedCurrentCanonicalEmail: account.canonicalEmail,
         expectedCredentialVersion: account.credentialVersion,

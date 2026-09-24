@@ -25,3 +25,14 @@ The CLI requires an interactive TTY and prompts for a **hidden temporary passwor
 - Check worker mail-delivery logs for failures without exposing tokens or addresses. Account mail uses durable encrypted outbox messages and stable idempotency keys for retries.
 
 Without Resend configuration or while mail delivery is unavailable, new registration verification, recovery, and email-change delivery cannot complete. This affects account flows only; existing public features and bearer automation remain available. Restore mail configuration and retry the account action after delivery recovers.
+
+## Email-change admission
+
+Each accepted email-change request queues two approval messages. Issuance is
+limited to five requests per requesting account per hour, three per canonical
+destination per day, and 100 requests globally per hour (at most 200 queued
+messages). PostgreSQL admits all three buckets atomically with both token and
+outbox pairs. The destination bucket stores a purpose-specific HMAC, never the
+address. Limits expire exactly one hour or day after each admitted request.
+Rejected requests leave existing approvals intact, queue no mail, and return
+the same generic acknowledgement as other validly shaped requests.

@@ -1353,8 +1353,10 @@ export interface AccountTokenRepository {
     scryptCost: number;
     at: Date;
   }): Promise<boolean>;
+  /** Atomically admits bounded mail requests and issues both mailbox proofs. */
   issueEmailChange(input: {
     accountId: string;
+    destinationSubjectHash: string;
     expectedPasswordHash: string;
     expectedCurrentCanonicalEmail: string;
     expectedCredentialVersion: number;

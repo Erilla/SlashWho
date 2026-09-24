@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { decryptAccountMail } from "@slashwho/application";
 import type { AccountCredential, Repositories } from "@slashwho/database";
@@ -30,6 +31,7 @@ async function fixture() {
     expiresAt: Date;
     expectedCanonicalEmail?: string;
   }> = [];
+  const changes: Array<Record<string, unknown>> = [];
   const admissions: Array<{ purpose: string; subjectHash: string }> = [];
   const repository = {
     admitRequest: async (input: { purpose: string; subjectHash: string }) => {
@@ -74,7 +76,10 @@ async function fixture() {
       passwordHash === credential.passwordHash,
     completeReset: async ({ digest }: { digest: string }) =>
       mail.some((item) => item.tokenDigest === digest),
-    issueEmailChange: async () => true,
+    issueEmailChange: async (input: Record<string, unknown>) => {
+      changes.push(input);
+      return true;
+    },
     confirmEmailChange: async () => "invalid" as const
   };
   const accountMail = {
@@ -103,6 +108,7 @@ async function fixture() {
     credential,
     mail,
     admissions,
+    changes,
     setAccount(change: Partial<AccountCredential>) {
       credential = { ...credential, ...change };
     }
@@ -181,5 +187,33 @@ describe("account tokens", () => {
         f.admissions.filter((entry) => entry.subjectHash === subject)
       ).toHaveLength(3);
     }
+  );
+});
+
+it("uses a stable secret-derived subject for canonical email-change destinations", async () => {
+  const f = await fixture();
+  f.setAccount({ verifiedAt: at });
+  await f.service.requestEmailChange(
+    f.credential.id,
+    password,
+    " TARGET@EXAMPLE.COM ",
+    at
+  );
+  await f.service.requestEmailChange(
+    f.credential.id,
+    password,
+    "target@example.com",
+    at
+  );
+  expect(f.changes).toHaveLength(2);
+  expect(f.changes[0]!.destinationSubjectHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(f.changes[0]!.destinationSubjectHash).toBe(
+    f.changes[1]!.destinationSubjectHash
+  );
+  expect(f.changes[0]!.canonicalEmail).toBe("target@example.com");
+  expect(f.changes[0]!.destinationSubjectHash).toBe(
+    createHmac("sha256", "h".repeat(32))
+      .update("account-email-change\0target@example.com")
+      .digest("hex")
   );
 });

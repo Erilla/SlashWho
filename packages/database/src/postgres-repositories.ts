@@ -1841,6 +1841,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         const client = await pool.connect();
         try {
           await client.query("BEGIN");
+          // One lock covers all three buckets and their inserts, including
+          // requests from different accounts targeting the same destination.
+          await client.query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('account-email-change', 1))"
+          );
           const account = await client.query<{ id: string; email: string }>(
             `SELECT id, email FROM accounts WHERE id = $1 AND password_hash = $2
              AND canonical_email = $3 AND credential_version = $4
@@ -1856,6 +1861,37 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await client.query("COMMIT");
             return false;
           }
+          const buckets = [
+            {
+              purpose: "email_change_account",
+              subject: input.accountId,
+              limit: 5,
+              duration: 3_600_000
+            },
+            {
+              purpose: "email_change_destination",
+              subject: input.destinationSubjectHash,
+              limit: 3,
+              duration: 86_400_000
+            },
+            {
+              purpose: "email_change_global",
+              subject: "global",
+              limit: 100,
+              duration: 3_600_000
+            }
+          ];
+          for (const bucket of buckets) {
+            const usage = await client.query<{ count: string }>(
+              `SELECT count(*)::text AS count FROM account_request_attempts
+               WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
+              [bucket.purpose, bucket.subject, input.at]
+            );
+            if (Number(usage.rows[0]!.count) >= bucket.limit) {
+              await client.query("COMMIT");
+              return false;
+            }
+          }
           const occupied = await client.query(
             "SELECT 1 FROM accounts WHERE canonical_email = $1",
             [input.canonicalEmail]
@@ -1863,6 +1899,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           if (occupied.rowCount) {
             await client.query("COMMIT");
             return false;
+          }
+          // Admission and both outbox rows commit together: a rejected request
+          // consumes no capacity and cannot invalidate the existing proofs.
+          for (const bucket of buckets) {
+            await client.query(
+              `INSERT INTO account_request_attempts (purpose, subject_hash, expires_at)
+               VALUES ($1, $2, $3)`,
+              [
+                bucket.purpose,
+                bucket.subject,
+                new Date(input.at.getTime() + bucket.duration)
+              ]
+            );
           }
           await client.query(
             "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose IN ('email_change_current', 'email_change_new') AND consumed_at IS NULL",

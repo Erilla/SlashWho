@@ -96,3 +96,23 @@ it("reports committed mutation when list refresh fails", async () => {
     screen.queryByRole("button", { name: "Make user" })
   ).not.toBeInTheDocument();
 });
+
+it.each(["Make user", "Disable"])(
+  "explains loss of admin rights after %s",
+  async (button) => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 403 }));
+    render(<AdminAccountClient initialAccounts={[account]} />);
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Admin access ended")
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Another admin may restore your access"
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent(
+      "Sign in again to continue"
+    );
+  }
+);

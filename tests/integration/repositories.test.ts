@@ -569,6 +569,141 @@ describe("PostgreSQL repositories", () => {
     expect(await admit("reset")).toBe(true);
   });
 
+  async function emailChangeRequest(
+    owner: string,
+    destination: string,
+    at: Date
+  ) {
+    const existing = await repositories.accountTokens.findAccountByEmail(owner);
+    const accountId =
+      existing?.id ??
+      (await repositories.accountAuth.registerPending(registration(owner, at)))
+        .accountId!;
+    await pool.query("UPDATE accounts SET verified_at = $2 WHERE id = $1", [
+      accountId,
+      at
+    ]);
+    const input = {
+      accountId,
+      destinationSubjectHash: `hashed-${destination}`,
+      expectedPasswordHash: "derived-password-hash",
+      expectedCurrentCanonicalEmail: owner,
+      expectedCredentialVersion: 1,
+      canonicalEmail: destination,
+      email: destination,
+      expiresAt: new Date(at.getTime() + 86_400_000),
+      at
+    };
+    let sequence = 0;
+    return () =>
+      repositories.accountTokens.issueEmailChange({
+        ...input,
+        current: {
+          digest: `${owner}-${destination}-current-${sequence}`,
+          encryptedMessage: "current"
+        },
+        next: {
+          digest: `${owner}-${destination}-next-${sequence++}`,
+          encryptedMessage: "next"
+        }
+      });
+  }
+
+  it("bounds repeated email changes by requesting account and destination without issuing rejected mail", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    for (let n = 0; n < 6; n++) {
+      const issue = await emailChangeRequest(
+        "owner@example.com",
+        `next-${n}@example.com`,
+        at
+      );
+      expect(await issue()).toBe(n < 5);
+    }
+    for (let n = 0; n < 4; n++) {
+      const issue = await emailChangeRequest(
+        `other-${n}@example.com`,
+        "target@example.com",
+        at
+      );
+      expect(await issue()).toBe(n < 3);
+    }
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_outbox"
+        )
+      ).rows[0].count
+    ).toBe(16);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_tokens"
+        )
+      ).rows[0].count
+    ).toBe(16);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_mail_tokens WHERE consumed_at IS NULL"
+        )
+      ).rows[0].count
+    ).toBe(8);
+  });
+
+  it.each(["account", "destination", "global"] as const)(
+    "serializes concurrent email-change requests for the final %s slot",
+    async (bucket) => {
+      const at = new Date("2026-09-23T12:00:00Z");
+      const requests = [];
+      for (let n = 0; n < 8; n++)
+        requests.push(
+          await emailChangeRequest(
+            bucket === "account"
+              ? "owner@example.com"
+              : `owner-${n}@example.com`,
+            bucket === "destination"
+              ? "target@example.com"
+              : `next-${n}@example.com`,
+            at
+          )
+        );
+      const owner =
+        await repositories.accountTokens.findAccountByEmail(
+          "owner@example.com"
+        );
+      await pool.query(
+        `INSERT INTO account_request_attempts (purpose, subject_hash, expires_at)
+      SELECT $1, $2, $3 FROM generate_series(1, $4::int)`,
+        [
+          `email_change_${bucket}`,
+          bucket === "account"
+            ? owner!.id
+            : bucket === "destination"
+              ? "hashed-target@example.com"
+              : "global",
+          new Date(at.getTime() + 3_600_000),
+          bucket === "account" ? 4 : bucket === "destination" ? 2 : 99
+        ]
+      );
+      const outcomes = await Promise.all(requests.map((issue) => issue()));
+      expect(outcomes.filter(Boolean)).toHaveLength(1);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS count FROM account_mail_outbox"
+          )
+        ).rows[0].count
+      ).toBe(2);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS count FROM account_mail_tokens"
+          )
+        ).rows[0].count
+      ).toBe(2);
+    }
+  );
+
   it("requires both mailbox proofs, in either order, to change an email", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const account = await repositories.accountAuth.registerPending(
@@ -585,6 +720,7 @@ describe("PostgreSQL repositories", () => {
     const issue = (suffix: string) =>
       repositories.accountTokens.issueEmailChange({
         accountId: account.accountId!,
+        destinationSubjectHash: "email-change-subject",
         expectedPasswordHash: "derived-password-hash",
         expectedCurrentCanonicalEmail:
           suffix === "first" ? "old@example.com" : "first@example.com",
@@ -677,6 +813,7 @@ describe("PostgreSQL repositories", () => {
     expect(
       await repositories.accountTokens.issueEmailChange({
         accountId: account.accountId!,
+        destinationSubjectHash: "email-change-subject",
         expectedPasswordHash: "derived-password-hash",
         expectedCurrentCanonicalEmail: "former@example.com",
         expectedCredentialVersion: 1,
@@ -724,6 +861,7 @@ describe("PostgreSQL repositories", () => {
     });
     await repositories.accountTokens.issueEmailChange({
       accountId: account.accountId!,
+      destinationSubjectHash: "email-change-subject",
       expectedPasswordHash: "derived-password-hash",
       expectedCurrentCanonicalEmail: "reset-old@example.com",
       expectedCredentialVersion: 1,
@@ -827,6 +965,7 @@ describe("PostgreSQL repositories", () => {
         const suffix = index.toString();
         await repositories.accountTokens.issueEmailChange({
           accountId: account.accountId!,
+          destinationSubjectHash: "email-change-subject",
           expectedPasswordHash: "derived-password-hash",
           expectedCurrentCanonicalEmail: `collision-${index === 0 ? "a" : "b"}@example.com`,
           expectedCredentialVersion: 1,
@@ -886,6 +1025,7 @@ describe("PostgreSQL repositories", () => {
     await expect(
       repositories.accountTokens.issueEmailChange({
         accountId: account.accountId!,
+        destinationSubjectHash: "email-change-subject",
         expectedPasswordHash: "derived-password-hash",
         expectedCurrentCanonicalEmail: "original@example.com",
         expectedCredentialVersion: 1,
@@ -912,6 +1052,13 @@ describe("PostgreSQL repositories", () => {
       (
         await pool.query(
           "SELECT count(*)::int AS count FROM account_mail_outbox"
+        )
+      ).rows[0].count
+    ).toBe(0);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM account_request_attempts WHERE purpose LIKE 'email_change_%'"
         )
       ).rows[0].count
     ).toBe(0);
@@ -1486,7 +1633,7 @@ describe("PostgreSQL repositories", () => {
       )
     );
     await pool.query(
-      `UPDATE accounts SET verified_at = $1 WHERE canonical_email = 'current@example.com'`,
+      `UPDATE accounts SET verified_at = $1, created_at = $1::timestamptz - interval '8 days' WHERE canonical_email = 'current@example.com'`,
       [at]
     );
     await repositories.accountAuth.registerPending(
@@ -1499,6 +1646,28 @@ describe("PostgreSQL repositories", () => {
       "current@example.com",
       "new@example.com"
     ]);
+  });
+
+  it("deletes at most 100 stale pending accounts during opportunistic cleanup", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    await pool.query(
+      `INSERT INTO accounts
+      (canonical_email, email, password_hash, password_salt, scrypt_version, scrypt_cost, created_at, updated_at)
+      SELECT 'stale-' || n || '@example.com', 'stale-' || n || '@example.com',
+        'hash', 'salt', 1, 16384, $1::timestamptz - interval '8 days', $1
+      FROM generate_series(1, 105) n`,
+      [at]
+    );
+    await repositories.accountAuth.registerPending(
+      registration("fresh@example.com", at)
+    );
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM accounts WHERE canonical_email LIKE 'stale-%'"
+        )
+      ).rows[0].count
+    ).toBe(5);
   });
 
   it("re-registers an expired address even when older cleanup exceeds one batch", async () => {
@@ -1530,6 +1699,13 @@ describe("PostgreSQL repositories", () => {
       `SELECT created_at FROM accounts WHERE canonical_email = 'target@example.com'`
     );
     expect(row.rows[0]?.created_at).toEqual(at);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::int AS count FROM accounts WHERE canonical_email LIKE 'stale-%'"
+        )
+      ).rows[0].count
+    ).toBe(1);
   });
 
   it("enforces per IP, global, missing IP, and address admission limits", async () => {
@@ -1560,6 +1736,73 @@ describe("PostgreSQL repositories", () => {
       await admit("ip-a", "mail-0", new Date(at.getTime() + 86_400_001))
     ).toBe("admitted");
   });
+
+  it.each(["ip", "email", "global", "missing_ip"] as const)(
+    "admits only one concurrent registration into the final %s slot",
+    async (bucket) => {
+      const at = new Date("2026-09-23T12:00:00Z");
+      await pool.query(
+        `INSERT INTO account_request_attempts (purpose, subject_hash, expires_at)
+      SELECT $1, $2, $3 FROM generate_series(1, $4::int)`,
+        [
+          `registration_${bucket}`,
+          bucket === "global"
+            ? "global"
+            : bucket === "missing_ip"
+              ? "fallback"
+              : "shared",
+          new Date(at.getTime() + 3_600_000),
+          { ip: 4, email: 2, global: 99, missing_ip: 9 }[bucket]
+        ]
+      );
+      const results = await Promise.all(
+        Array.from({ length: 8 }, (_, n) =>
+          repositories.accountAuth.admitRegistration({
+            ipSubjectHash:
+              bucket === "missing_ip"
+                ? null
+                : bucket === "ip"
+                  ? "shared"
+                  : `ip-${n}`,
+            emailSubjectHash: bucket === "email" ? "shared" : `mail-${n}`,
+            at
+          })
+        )
+      );
+      expect(results.filter((result) => result === "admitted")).toHaveLength(1);
+    }
+  );
+
+  it.each(["ip", "email", "global", "missing_ip"] as const)(
+    "expires registration %s admission exactly at its hour/day boundary",
+    async (bucket) => {
+      const at = new Date("2026-09-23T12:00:00Z");
+      const duration = bucket === "email" ? 86_400_000 : 3_600_000;
+      const boundary = new Date(at.getTime() + duration);
+      await pool.query(
+        `INSERT INTO account_request_attempts (purpose, subject_hash, expires_at)
+      SELECT $1, $2, $3 FROM generate_series(1, $4::int)`,
+        [
+          `registration_${bucket}`,
+          bucket === "global"
+            ? "global"
+            : bucket === "missing_ip"
+              ? "fallback"
+              : "shared",
+          boundary,
+          { ip: 5, email: 3, global: 100, missing_ip: 10 }[bucket]
+        ]
+      );
+      const admit = (date: Date) =>
+        repositories.accountAuth.admitRegistration({
+          ipSubjectHash: bucket === "missing_ip" ? null : "shared",
+          emailSubjectHash: "shared",
+          at: date
+        });
+      expect(await admit(new Date(boundary.getTime() - 1))).toBe("throttled");
+      expect(await admit(boundary)).toBe("admitted");
+    }
+  );
 
   it("shares the daily address cap between resend and registration", async () => {
     const at = new Date("2026-09-23T12:00:00.000Z");

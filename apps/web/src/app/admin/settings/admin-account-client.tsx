@@ -51,7 +51,7 @@ export function AdminAccountClient({
           if (listed.status === 401 || listed.status === 403) {
             setListUnavailable("revoked");
             setMessage(
-              `${account.email} updated. Admin access ended. Sign in again to continue.`
+              `${account.email} updated. Admin access ended. ${action.action === "require_password_change" ? "Sign in again to change your password." : "Another admin may restore your access."}`
             );
           } else if (!listed.ok) {
             setListUnavailable("refresh_failed");
