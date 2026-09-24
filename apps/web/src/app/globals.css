@@ -725,11 +725,11 @@ a {
 
   .dossier-section-navigation {
     position: fixed;
-    top: calc(var(--header-height) + 1rem);
+    top: calc(var(--header-height) + 2rem);
     right: 0.5rem;
     z-index: 5;
     width: 2.25rem;
-    height: calc(100dvh - var(--header-height) - 2rem);
+    height: calc(100dvh - var(--header-height) - 4rem);
     border: 0;
     border-radius: 0;
     background: transparent;
