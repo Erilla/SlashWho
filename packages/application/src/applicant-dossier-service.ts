@@ -57,6 +57,7 @@ import {
   searchCharacterTier,
   type SearchCharacterTierResult
 } from "./search-character-tier";
+import { groupBySharedWarcraftLogsId } from "./shared-warcraft-logs-identity";
 import { TIER_SEARCH_SPACING_MS, tierSearchStates } from "./tier-search";
 
 /**
@@ -191,6 +192,12 @@ type DossierSubject = Readonly<{
   guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
+  /**
+   * Other dossier keys that resolved to this character's Warcraft Logs ID, so
+   * are the same character under another name (#423). Each keeps its own
+   * collection; the evidence is shown under this subject.
+   */
+  warcraftLogsAliases?: readonly CharacterKey[];
 }>;
 type DossierEvidenceState = "waiting" | "scanning" | "complete" | "partial";
 type StoredRankKillEvidence = DossierKillEvidence &
@@ -440,6 +447,8 @@ async function gatherCharacterEvidence(
     wclCredentials?: WclCredentials | null;
     wclCredentialRef?: { accountId: string; credentialVersion: number };
     encryptionKey: Buffer;
+    /** The subject the evidence is shown under, when not `character` itself. */
+    attributeTo?: CharacterKey;
   }
 ): Promise<
   EvidenceResult & {
@@ -447,6 +456,7 @@ async function gatherCharacterEvidence(
     collectionProgress: readonly CollectionPhase[];
   }
 > {
+  const attributed = options.attributeTo ?? character.key;
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
     freshnessCutoff: options.freshnessCutoff,
@@ -486,7 +496,7 @@ async function gatherCharacterEvidence(
     limitations.push(
       limitation(
         "warcraft_logs",
-        character.key,
+        attributed,
         completed.run.limitationCode,
         completed.run.completedAt ?? new Date(),
         completed.run.retryAfterAt
@@ -497,7 +507,7 @@ async function gatherCharacterEvidence(
     limitations.push(
       limitation(
         "warcraft_logs",
-        character.key,
+        attributed,
         "invalid_fight_timestamp",
         completed.run.completedAt ?? new Date()
       )
@@ -512,7 +522,7 @@ async function gatherCharacterEvidence(
     limitations.push(
       limitation(
         "warcraft_logs",
-        character.key,
+        attributed,
         active.limitationCode,
         active.startedAt ?? active.createdAt,
         active.retryAfterAt
@@ -523,7 +533,7 @@ async function gatherCharacterEvidence(
     limitations.push(
       limitation(
         "warcraft_logs",
-        character.key,
+        attributed,
         completed.run.parseLimitationCode,
         completed.run.completedAt ?? new Date(),
         completed.run.retryAfterAt
@@ -533,13 +543,11 @@ async function gatherCharacterEvidence(
   return {
     limitations,
     collectedAt: completed?.run.completedAt ?? null,
-    kills:
-      completed?.kills.map((kill) => cachedKill(kill, character.key)) ?? [],
-    wipes:
-      completed?.wipes.map((wipe) => cachedWipe(wipe, character.key)) ?? [],
+    kills: completed?.kills.map((kill) => cachedKill(kill, attributed)) ?? [],
+    wipes: completed?.wipes.map((wipe) => cachedWipe(wipe, attributed)) ?? [],
     tierBests:
       completed?.tierBests.map((tierBest) =>
-        cachedTierBest(tierBest, character.key)
+        cachedTierBest(tierBest, attributed)
       ) ?? [],
     cuttingEdges: completed?.cuttingEdgesCollected
       ? completed.cuttingEdges
@@ -574,6 +582,76 @@ async function gatherCharacterEvidence(
         : reservation.run.status === "running"
           ? "scanning"
           : "waiting"
+  };
+}
+
+const EVIDENCE_STATE_SEVERITY: Readonly<Record<DossierEvidenceState, number>> =
+  { complete: 0, partial: 1, scanning: 2, waiting: 3 };
+
+function uniqueBy<T>(items: readonly T[], keyOf: (item: T) => string | null) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = keyOf(item);
+    if (key === null) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * One subject's evidence from the collections of every key it is known by
+ * (#423), already attributed to the subject. The first result is the
+ * subject's own. A fight both names were read from counts once, a shortfall
+ * on any collection holds the subject back from negative conclusions, and the
+ * least settled state is the one shown.
+ */
+type IdentityEvidence = EvidenceResult & {
+  gathering: boolean;
+  collectionProgress: readonly CollectionPhase[];
+};
+
+function mergeIdentityEvidence(
+  results: readonly IdentityEvidence[]
+): IdentityEvidence {
+  const [own, ...others] = results;
+  if (!own) throw new Error("identity_evidence_missing");
+  if (others.length === 0) return own;
+  const collected = results.flatMap((item) =>
+    item.collectedAt ? [item.collectedAt.getTime()] : []
+  );
+  return {
+    kills: uniqueBy(
+      results.flatMap((item) => item.kills),
+      (kill) =>
+        kill.reportUrl === null ? null : `${kill.bossId}\0${kill.reportUrl}`
+    ),
+    wipes: uniqueBy(
+      results.flatMap((item) => item.wipes),
+      (wipe) => `${wipe.bossId}\0${wipe.reportUrl}`
+    ),
+    tierBests: results.flatMap((item) => item.tierBests),
+    cuttingEdges: own.cuttingEdges,
+    warcraftLogsComplete: results.every((item) => item.warcraftLogsComplete),
+    limitations: uniqueBy(
+      results.flatMap((item) => item.limitations),
+      (item) => `${item.source}\0${item.code}`
+    ),
+    evidenceState: results.reduce(
+      (state, item) =>
+        EVIDENCE_STATE_SEVERITY[item.evidenceState] >
+        EVIDENCE_STATE_SEVERITY[state]
+          ? item.evidenceState
+          : state,
+      own.evidenceState
+    ),
+    collectedAt:
+      collected.length === 0 ? null : new Date(Math.min(...collected)),
+    gathering: results.some((item) => item.gathering),
+    // One row shows one collection's steps: the subject's own while it runs,
+    // otherwise whichever other name is still collecting.
+    collectionProgress:
+      results.find((item) => item.gathering)?.collectionProgress ?? []
   };
 }
 
@@ -828,6 +906,9 @@ function serializeDossierSubject(
     guild: character.guild,
     raiderIoUrl: character.raiderIoUrl,
     ...(historicAliases.length > 0 ? { historicAliases } : {}),
+    ...(character.warcraftLogsAliases?.length
+      ? { warcraftLogsAliases: character.warcraftLogsAliases }
+      : {}),
     source:
       character.source === "submitted"
         ? ("submitted" as const)
@@ -882,16 +963,26 @@ async function assembleDossier(options: {
   encryptionKey: Buffer;
 }): Promise<ContractApplicantDossier> {
   const evidence = await Promise.all(
-    options.subjects.map((character) =>
-      gatherCharacterEvidence(character, {
-        repositories: options.repositories,
-        queue: options.queue,
-        freshnessCutoff: options.freshnessCutoff,
-        signal: options.signal,
-        wclCredentials: options.wclCredentials,
-        wclCredentialRef: options.wclCredentialRef,
-        encryptionKey: options.encryptionKey
-      })
+    options.subjects.map(async (character) =>
+      mergeIdentityEvidence(
+        await Promise.all(
+          [character.key, ...(character.warcraftLogsAliases ?? [])].map((key) =>
+            gatherCharacterEvidence(
+              { ...character, key },
+              {
+                repositories: options.repositories,
+                queue: options.queue,
+                freshnessCutoff: options.freshnessCutoff,
+                signal: options.signal,
+                wclCredentials: options.wclCredentials,
+                wclCredentialRef: options.wclCredentialRef,
+                encryptionKey: options.encryptionKey,
+                attributeTo: character.key
+              }
+            )
+          )
+        )
+      )
     )
   );
   const aliases = await Promise.all(
@@ -1178,6 +1269,49 @@ export function createApplicantDossierService(options: {
     }
     return false;
   }
+  /**
+   * The other keys of this dossier that share the target's recorded Warcraft
+   * Logs ID, so are shown on the target's row (#423). The root is left out: a
+   * dossier cannot exclude the character it is about. Empty when the target
+   * has no recorded ID or the store cannot read IDs.
+   */
+  async function sharedIdentityKeys(
+    repositories: typeof options.repositories,
+    root: CharacterKey,
+    target: CharacterKey
+  ): Promise<readonly CharacterKey[]> {
+    if (!repositories.evidence.warcraftLogsCharacterIds) return [];
+    const snapshot = await repositories.snapshots.getCurrent(root);
+    const keys = [...(snapshot?.characters.map((item) => item.key) ?? [])];
+    for (const connection of await repositories.manualConnections.list(root)) {
+      keys.push(connection.key);
+      if (connection.pending) continue;
+      const discovered = await repositories.snapshots.getCurrent(
+        connection.key
+      );
+      keys.push(...(discovered?.characters.map((item) => item.key) ?? []));
+    }
+    const recorded = await repositories.evidence.warcraftLogsCharacterIds([
+      target,
+      ...keys
+    ]);
+    const idOf = (key: CharacterKey) =>
+      recorded.find(
+        (entry) => canonicalCharacterId(entry.key) === canonicalCharacterId(key)
+      )?.characterId;
+    const targetId = idOf(target);
+    if (targetId === undefined) return [];
+    const excludedIds = new Set([
+      canonicalCharacterId(root),
+      canonicalCharacterId(target)
+    ]);
+    return keys.filter((key) => {
+      const id = canonicalCharacterId(key);
+      if (excludedIds.has(id) || idOf(key) !== targetId) return false;
+      excludedIds.add(id);
+      return true;
+    });
+  }
   async function queueHistoricAliasRecollection(
     character: CharacterKey,
     scope?: MeasurementScope
@@ -1410,23 +1544,31 @@ export function createApplicantDossierService(options: {
         return { kind: "invalid", code: "invalid_character_url" };
       }
       const repositories = scopedRepositories(scope);
-      const result = await repositories.manualConnections.setExcluded(
-        root,
-        target,
-        input.excluded
-      );
-      if (result === "updated") return { kind: "updated" };
-      if (!(await isConnectedToDossier(repositories, root, target)))
-        return { kind: "missing" };
-      const discovered =
-        await repositories.manualConnections.setDiscoveredExcluded?.(
+      const exclude = async (key: CharacterKey) => {
+        const result = await repositories.manualConnections.setExcluded(
           root,
-          target,
+          key,
           input.excluded
         );
-      return discovered === "updated"
-        ? { kind: "updated" }
-        : { kind: "missing" };
+        if (result === "updated") return true;
+        if (!(await isConnectedToDossier(repositories, root, key)))
+          return false;
+        const discovered =
+          await repositories.manualConnections.setDiscoveredExcluded?.(
+            root,
+            key,
+            input.excluded
+          );
+        return discovered === "updated";
+      };
+      if (!(await exclude(target))) return { kind: "missing" };
+      // A merged row is hidden while any of its names is excluded, so the
+      // row's action applies to every name, or Include would clear one of two
+      // exclusions and leave the row as it was, with no row for the other.
+      for (const key of await sharedIdentityKeys(repositories, root, target)) {
+        await exclude(key);
+      }
+      return { kind: "updated" };
     },
 
     async removeConnectedCharacter(root, input, scope) {
@@ -1615,6 +1757,10 @@ export function createApplicantDossierService(options: {
         ).map(canonicalCharacterId)
       );
       for (const id of manualExcludedIds) discoveredExclusions.add(id);
+      const isExcluded = (character: RankedSubject) =>
+        discoveredExclusions.has(canonicalCharacterId(character.key));
+      const isRoot = (character: RankedSubject) =>
+        canonicalCharacterId(character.key) === rootId;
       const ordered = [...snapshot.characters, ...manual].sort(
         (left, right) => {
           const rootOrder =
@@ -1629,12 +1775,45 @@ export function createApplicantDossierService(options: {
           );
         }
       );
-      const includedOrdered = ordered.filter((character) => {
-        if (!discoveredExclusions.has(canonicalCharacterId(character.key)))
-          return true;
-        excluded.push(character);
-        return false;
-      });
+      // Keys that resolved to one Warcraft Logs ID are one character under
+      // several names (#423), so they share one row and one cap slot. A failed
+      // read costs only the merge: every key is then listed on its own, as it
+      // was before the IDs were known.
+      const candidates = [...ordered, ...excluded];
+      const recordedIds = await Promise.resolve()
+        .then(
+          () =>
+            repositories.evidence.warcraftLogsCharacterIds?.(
+              candidates.map((character) => character.key)
+            ) ?? []
+        )
+        .catch(() => []);
+      const identities = groupBySharedWarcraftLogsId(
+        candidates,
+        recordedIds,
+        // The searched character is never renamed out from under its own
+        // dossier. Otherwise an excluded key leads an excluded identity, so
+        // the row's Include reverses the exclusion that hides it.
+        (members) =>
+          members.find(isRoot) ?? members.find(isExcluded) ?? members[0]!
+      ).map(({ primary, aliases }) => ({
+        subject:
+          aliases.length === 0
+            ? primary
+            : {
+                ...primary,
+                warcraftLogsAliases: aliases.map((alias) => alias.key)
+              },
+        // An exclusion on any of the names hides the character they share,
+        // except the searched character, which a dossier cannot exclude.
+        excluded: !isRoot(primary) && [primary, ...aliases].some(isExcluded)
+      }));
+      const includedOrdered = identities.flatMap((identity) =>
+        identity.excluded ? [] : [identity.subject]
+      );
+      const excludedIdentities = identities.flatMap((identity) =>
+        identity.excluded ? [identity.subject] : []
+      );
       const selected = includedOrdered.slice(
         0,
         options.config.DOSSIER_CHARACTER_CAP
@@ -1642,7 +1821,7 @@ export function createApplicantDossierService(options: {
       const skipped = includedOrdered.slice(selected.length);
       // Excluded characters are ranked among themselves only, so one of them
       // never costs a researchable character its place under the cap.
-      const excludedOrdered = [...excluded].sort(
+      const excludedOrdered = [...excludedIdentities].sort(
         (left, right) =>
           right.level - left.level ||
           left.key.region.localeCompare(right.key.region, "en") ||

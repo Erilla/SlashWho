@@ -2789,3 +2789,215 @@ describe("manually connected characters", () => {
     ).toMatchObject({ excluded: true, source: "fingerprint_derived" });
   });
 });
+
+describe("applicant dossier Warcraft Logs identity", () => {
+  const thirdCharacter: StoredSnapshot["characters"][number] = {
+    characterId: "10000000-0000-4000-8000-000000000003",
+    key: third,
+    displayName: "Third",
+    className: "Rogue",
+    level: 70,
+    guild: null,
+    raiderIoUrl: "https://raider.io/characters/eu/silvermoon/third",
+    source: "fingerprint",
+    displayOrder: 2
+  };
+
+  function withRecordedIds(
+    repositories: Repositories,
+    recorded: readonly { key: CharacterKey; characterId: number }[]
+  ) {
+    const warcraftLogsCharacterIds = vi.fn(
+      async (keys: readonly CharacterKey[]) =>
+        recorded.filter((entry) =>
+          keys.some(
+            (key) =>
+              key.region === entry.key.region &&
+              key.realm === entry.key.realm &&
+              key.name === entry.key.name
+          )
+        )
+    );
+    Object.assign(repositories.evidence, { warcraftLogsCharacterIds });
+    return warcraftLogsCharacterIds;
+  }
+
+  it("shows two keys that resolved to one Warcraft Logs ID as one character", async () => {
+    // Break caught: a former and a current name for the same Warcraft Logs
+    // character were two dossier rows, each with half of its history (#423).
+    const { dossiers, repositories } = fixture();
+    withRecordedIds(repositories, [
+      { key: root, characterId: 40989140 },
+      { key: alt, characterId: 40989140 }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    expect(result.dossier.characters).toHaveLength(1);
+    expect(result.dossier.characters[0]).toMatchObject({
+      key: root,
+      warcraftLogsAliases: [alt]
+    });
+    // The alias keeps its own collection; its evidence is shown under the
+    // one identity rather than under a row that no longer exists.
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: alt })
+    );
+    expect(JSON.stringify(result.dossier.raids)).not.toContain("ryalts");
+    expect(JSON.stringify(result.dossier.limitations)).not.toContain("ryalts");
+  });
+
+  it("attributes a limitation on the alias's collection to the one identity, once", async () => {
+    const { dossiers, repositories } = fixture({
+      evidenceLimitationCode: "request_cap"
+    });
+    withRecordedIds(repositories, [
+      { key: root, characterId: 40989140 },
+      { key: alt, characterId: 40989140 }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    const capped = result.dossier.limitations.filter(
+      (item) => item.source === "warcraft_logs" && item.code === "request_cap"
+    );
+    expect(capped).toHaveLength(1);
+    expect(capped[0]?.character).toEqual(root);
+  });
+
+  it("spends one character-cap slot on a merged identity", async () => {
+    const { dossiers, repositories } = fixture({
+      characterCap: 2,
+      snapshot: storedSnapshot([...storedSnapshot().characters, thirdCharacter])
+    });
+    withRecordedIds(repositories, [
+      { key: root, characterId: 40989140 },
+      { key: alt, characterId: 40989140 }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    expect(result.dossier.characters.map((item) => item.key.name)).toEqual([
+      "ryii",
+      "third"
+    ]);
+    expect(
+      result.dossier.limitations.some(
+        (item) =>
+          item.code === "request_cap" && item.character?.name === "third"
+      )
+    ).toBe(false);
+  });
+
+  it("hides a merged identity when any of its keys is excluded", async () => {
+    const { dossiers, repositories } = fixture({
+      snapshot: storedSnapshot([...storedSnapshot().characters, thirdCharacter])
+    });
+    (
+      repositories.manualConnections.listDiscoveredExclusions as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue([third]);
+    withRecordedIds(repositories, [
+      { key: alt, characterId: 51234567 },
+      { key: third, characterId: 51234567 }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    // The excluded key leads the row, so its Include reverses that exclusion.
+    expect(result.dossier.characters).toEqual([
+      expect.objectContaining({ key: root }),
+      expect.objectContaining({
+        key: third,
+        excluded: true,
+        warcraftLogsAliases: [alt]
+      })
+    ]);
+    expect(repositories.evidence.reserve).not.toHaveBeenCalledWith(
+      expect.objectContaining({ key: alt })
+    );
+  });
+
+  it("includes a merged identity again when more than one of its keys was excluded", async () => {
+    // Break caught: Include cleared the exclusion on the row's key alone, so an
+    // identity whose other name was excluded as a separate row before the IDs
+    // were known stayed hidden, with no row left to include it from.
+    const { dossiers, repositories } = fixture({
+      snapshot: storedSnapshot([...storedSnapshot().characters, thirdCharacter])
+    });
+    const exclusions = new Map<string, CharacterKey>([
+      ["ryalts", alt],
+      ["third", third]
+    ]);
+    (
+      repositories.manualConnections.setExcluded as ReturnType<typeof vi.fn>
+    ).mockResolvedValue("missing");
+    (
+      repositories.manualConnections.listDiscoveredExclusions as ReturnType<
+        typeof vi.fn
+      >
+    ).mockImplementation(async () => [...exclusions.values()]);
+    (
+      repositories.manualConnections.setDiscoveredExcluded as ReturnType<
+        typeof vi.fn
+      >
+    ).mockImplementation(
+      async (_root: CharacterKey, key: CharacterKey, excluded: boolean) => {
+        if (excluded) exclusions.set(key.name, key);
+        else exclusions.delete(key.name);
+        return "updated";
+      }
+    );
+    withRecordedIds(repositories, [
+      { key: alt, characterId: 51234567 },
+      { key: third, characterId: 51234567 }
+    ]);
+
+    await expect(
+      dossiers.setConnectedCharacterExclusion(root, {
+        characterUrl: "https://raider.io/characters/eu/silvermoon/third",
+        excluded: false
+      })
+    ).resolves.toEqual({ kind: "updated" });
+    const included = await dossiers.read(root);
+    if (included.kind !== "ready") throw new Error("expected_ready");
+    expect(included.dossier.characters).toEqual([
+      expect.objectContaining({ key: root }),
+      expect.not.objectContaining({ excluded: true })
+    ]);
+
+    // Exclude acts on the whole identity too, so the two stay in step.
+    await dossiers.setConnectedCharacterExclusion(root, {
+      characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+      excluded: true
+    });
+    expect([...exclusions.keys()].sort()).toEqual(["ryalts", "third"]);
+    expect(
+      repositories.manualConnections.setDiscoveredExcluded
+    ).not.toHaveBeenCalledWith(root, root, expect.anything());
+  });
+
+  it("lists every key when no Warcraft Logs ID links them", async () => {
+    const { dossiers, repositories } = fixture();
+    const lookup = withRecordedIds(repositories, [
+      { key: root, characterId: 40989140 }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(result.dossier.characters.map((item) => item.key.name)).toEqual([
+      "ryii",
+      "ryalts"
+    ]);
+    expect(result.dossier.characters[0]).not.toHaveProperty(
+      "warcraftLogsAliases"
+    );
+  });
+});

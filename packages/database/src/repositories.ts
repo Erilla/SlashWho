@@ -966,6 +966,14 @@ export interface EvidenceRepository {
   /** The Warcraft Logs character ID a key last resolved to, if any. */
   warcraftLogsCharacterId(key: CharacterKey): Promise<number | null>;
   /**
+   * The recorded Warcraft Logs character IDs for many keys in one read. Keys
+   * with no recorded ID are simply absent. Optional so a store without it
+   * still assembles a dossier, one row per key.
+   */
+  warcraftLogsCharacterIds?(
+    keys: readonly CharacterKey[]
+  ): Promise<readonly Readonly<{ key: CharacterKey; characterId: number }>[]>;
+  /**
    * Verified kills whose night an attendance search covered to the end and
    * found empty, searched at or after `searchedSince` and at the current kill
    * collection version (#434).
