@@ -79,6 +79,7 @@ function fixture(
     wipeCapable?: boolean;
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
+    omittedInvalidTimestamp?: boolean;
     evidenceCompletedAt?: Date;
     storedEvidence?: boolean;
     historicWorldRank?: number | null;
@@ -225,6 +226,7 @@ function fixture(
                   ? "request_cap"
                   : null,
             parseLimitationCode: options.evidenceParseLimitationCode ?? null,
+            omittedInvalidTimestamp: options.omittedInvalidTimestamp ?? false,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -1282,6 +1284,30 @@ describe("applicant dossier service", () => {
           { key: root, evidenceState: "complete", researchState: "complete" },
           { key: alt, evidenceState: "complete", researchState: "gathering" }
         ]
+      }
+    });
+  });
+
+  it("discloses skipped fight times without making finished evidence partial", async () => {
+    const result = await fixture({
+      omittedInvalidTimestamp: true
+    }).dossiers.read(root);
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: {
+        characters: [
+          { key: root, evidenceState: "complete" },
+          { key: alt, evidenceState: "complete" }
+        ],
+        limitations: expect.arrayContaining([
+          expect.objectContaining({
+            source: "warcraft_logs",
+            character: root,
+            code: "invalid_fight_timestamp",
+            message: expect.stringMatching(/timestamp.*omitted/i)
+          })
+        ])
       }
     });
   });

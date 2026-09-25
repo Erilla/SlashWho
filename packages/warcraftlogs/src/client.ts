@@ -2449,7 +2449,6 @@ export function createWarcraftLogsClient(
       }
       if (decodedProbe.omittedInvalidTimestamp) {
         omittedInvalidTimestamp = true;
-        options.onLimitation?.("history_scan", "schema_drift");
       }
       // A cleanly decoded page, whatever it proves about the offset. Keeping
       // its evidence is what lets attendance skip its reports.
@@ -2517,10 +2516,10 @@ export function createWarcraftLogsClient(
         wipes.set(wipe.fightUrl, wipe);
       }
       if (normalized.limitation) {
-        options.onLimitation?.("history_scan", normalized.limitation.code);
         if (normalized.omittedInvalidTimestamp) {
           omittedInvalidTimestamp = true;
         } else {
+          options.onLimitation?.("history_scan", normalized.limitation.code);
           scanLimitation = normalized.limitation;
           break;
         }
@@ -3513,6 +3512,9 @@ export function createWarcraftLogsClient(
     ) => ({
       kind: "evidence" as const,
       scanSkipped,
+      ...(omittedInvalidTimestamp
+        ? { omittedInvalidTimestamp: true as const }
+        : {}),
       kills: result.kills,
       wipes: result.wipes,
       tierBests,
@@ -3549,20 +3551,11 @@ export function createWarcraftLogsClient(
     // and eight other characters with it. It stays partial, which carries
     // every stored kill forward, and the next run reads the whole history from
     // page one, where finishing does mean finished.
-    const restartFromFirstPage =
-      (resumedFromCursor && !scanLimitation) ||
-      (omittedInvalidTimestamp && historyScanFinished && !scanLimitation);
+    // Impossible fight times are permanent omissions, reported separately;
+    // once page one reaches the end, they leave no history work to retry.
+    const restartFromFirstPage = resumedFromCursor && !scanLimitation;
     if (restartFromFirstPage) {
-      scanLimitation = {
-        kind: "limitation",
-        code: omittedInvalidTimestamp ? "schema_drift" : "request_cap"
-      };
-    }
-    if (
-      omittedInvalidTimestamp &&
-      (!scanLimitation || scanLimitation.code === "request_cap")
-    ) {
-      scanLimitation = { kind: "limitation", code: "schema_drift" };
+      scanLimitation = { kind: "limitation", code: "request_cap" };
     }
     const resume: Readonly<{
       historyScanResumePage?: number;

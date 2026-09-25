@@ -819,6 +819,9 @@ export const characterEvidenceRuns = pgTable(
     // a run that raised none; a pre-#349 row is null and means "not recorded",
     // which is not the same thing.
     parseLimitationCodesSeen: text("parse_limitation_codes_seen").array(),
+    omittedInvalidTimestamp: boolean("omitted_invalid_timestamp")
+      .default(false)
+      .notNull(),
     // Whether this run deliberately skipped the history scan and collected
     // parses only. It is a third way to be partial, alongside the two
     // limitation codes, and the completion check below reads it as one.

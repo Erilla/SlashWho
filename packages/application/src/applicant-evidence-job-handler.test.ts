@@ -337,6 +337,9 @@ describe("applicant evidence job handler", () => {
     evidence.historicAliases = vi.fn().mockResolvedValue([alias]);
     const getFirstKillReports = vi.fn(async (requested: CharacterKey) => ({
       kind: "evidence" as const,
+      ...(requested.name === "former"
+        ? { omittedInvalidTimestamp: true as const }
+        : {}),
       kills:
         requested.name === "former"
           ? [
@@ -393,6 +396,10 @@ describe("applicant evidence job handler", () => {
     expect(evidence.published[0]?.result.kills).toEqual([
       expect.objectContaining({ bossName: "Old Boss" })
     ]);
+    expect(evidence.published[0]?.result).toMatchObject({
+      state: "complete",
+      omittedInvalidTimestamp: true
+    });
   });
 
   it("does not admit more identity scans or parses than the light-run budget", async () => {
@@ -3870,6 +3877,31 @@ describe("applicant evidence job handler", () => {
       expect(evidence.published[0]?.result).toMatchObject({
         state: "complete",
         historyScanResumePage: null
+      });
+    });
+
+    it("publishes timestamp omissions as completed history metadata", async () => {
+      const evidence = store();
+      const handler = handlerFor(evidence, {
+        kind: "evidence" as const,
+        omittedInvalidTimestamp: true,
+        parsedFightUrls: [],
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      });
+
+      await handler.execute(run.id);
+
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "complete",
+        limitationCode: null,
+        omittedInvalidTimestamp: true
+      });
+      expect(evidence.staged.get(run.id)).toMatchObject({
+        state: "complete",
+        omittedInvalidTimestamp: true
       });
     });
 
