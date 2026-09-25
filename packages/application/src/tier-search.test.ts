@@ -119,37 +119,227 @@ describe("tier search policy", () => {
     ]);
   });
 
-  it("shows a search in flight, then as searched until it may run again", () => {
+  describe("a dossier tier's searches, across its characters", () => {
     const now = new Date("2026-09-23T12:00:00.000Z");
     const hoursAgo = (hours: number) =>
       new Date(now.getTime() - hours * 60 * 60 * 1_000);
+    const ryii = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
+    const alt = { region: "eu", realm: "silvermoon", name: "alt" } as const;
+    const other = { region: "eu", realm: "draenor", name: "other" } as const;
+    const renamed = {
+      region: "eu",
+      realm: "draenor",
+      name: "renamed"
+    } as const;
+    const subjects = [
+      { key: ryii, displayName: "Ryii" },
+      { key: alt, displayName: "Alt" },
+      { key: other, displayName: "Other", aliases: [renamed] }
+    ];
 
-    const states = tierSearchStates(
-      [
-        { raidId: "queued", status: "queued", createdAt: hoursAgo(0) },
-        { raidId: "retrying", status: "retrying", createdAt: hoursAgo(1) },
-        { raidId: "running", status: "running", createdAt: hoursAgo(0) },
-        { raidId: "done", status: "complete", createdAt: hoursAgo(6) },
-        // A failed search was still paid for, so it holds the limit too.
-        { raidId: "failed", status: "failed", createdAt: hoursAgo(6) },
-        { raidId: "expired", status: "partial", createdAt: hoursAgo(25) }
-      ],
-      now
-    );
+    it("shows each character's search in flight, then as it ended", () => {
+      const states = tierSearchStates(
+        [
+          { key: ryii, displayName: "Ryii" },
+          { key: alt, displayName: "Alt" }
+        ],
+        [
+          {
+            key: ryii,
+            raidId: "queued",
+            status: "queued",
+            createdAt: hoursAgo(0)
+          },
+          {
+            key: ryii,
+            raidId: "retrying",
+            status: "retrying",
+            createdAt: hoursAgo(1)
+          },
+          {
+            key: ryii,
+            raidId: "running",
+            status: "running",
+            createdAt: hoursAgo(0)
+          },
+          {
+            key: ryii,
+            raidId: "done",
+            status: "complete",
+            createdAt: hoursAgo(6)
+          },
+          {
+            key: alt,
+            raidId: "done",
+            status: "partial",
+            createdAt: hoursAgo(5)
+          },
+          // A failed search was still paid for, so it holds the limit too.
+          {
+            key: ryii,
+            raidId: "failed",
+            status: "failed",
+            createdAt: hoursAgo(6)
+          },
+          {
+            key: alt,
+            raidId: "failed",
+            status: "complete",
+            createdAt: hoursAgo(6)
+          },
+          {
+            key: ryii,
+            raidId: "expired",
+            status: "partial",
+            createdAt: hoursAgo(25)
+          }
+        ],
+        now
+      );
 
-    expect(
-      Object.fromEntries([...states].map(([id, s]) => [id, s.state]))
-    ).toEqual({
-      queued: "queued",
-      retrying: "queued",
-      running: "running",
-      done: "searched",
-      failed: "searched"
+      expect(
+        Object.fromEntries(
+          [...states].map(([id, search]) => [
+            id,
+            search.characters.map((character) => character.state)
+          ])
+        )
+      ).toEqual({
+        queued: ["queued", "not_searched"],
+        retrying: ["queued", "not_searched"],
+        running: ["running", "not_searched"],
+        done: ["completed", "partial"],
+        failed: ["failed", "completed"]
+      });
+      expect(states.get("done")).toEqual({
+        state: "searched",
+        searchedAt: "2026-09-23T07:00:00.000Z",
+        searchableAgainAt: "2026-09-24T06:00:00.000Z",
+        characters: [
+          {
+            key: ryii,
+            displayName: "Ryii",
+            state: "completed",
+            searchedAt: "2026-09-23T06:00:00.000Z",
+            searchableAgainAt: "2026-09-24T06:00:00.000Z"
+          },
+          {
+            key: alt,
+            displayName: "Alt",
+            state: "partial",
+            searchedAt: "2026-09-23T07:00:00.000Z",
+            searchableAgainAt: "2026-09-24T07:00:00.000Z"
+          }
+        ]
+      });
     });
-    expect(states.get("done")).toEqual({
-      state: "searched",
-      searchedAt: "2026-09-23T06:00:00.000Z",
-      searchableAgainAt: "2026-09-24T06:00:00.000Z"
+
+    it("never calls a tier searched while any character is still to search", () => {
+      // Break caught (#449): the tier read "Searched" after one character's
+      // search, though the others' gaps were never looked at.
+      const states = tierSearchStates(
+        subjects,
+        [
+          {
+            key: ryii,
+            raidId: "1180",
+            status: "complete",
+            createdAt: hoursAgo(2)
+          }
+        ],
+        now
+      );
+
+      expect(states.get("1180")).toMatchObject({
+        state: "partly_searched",
+        characters: [
+          { key: ryii, state: "completed" },
+          { key: alt, state: "not_searched" },
+          { key: other, state: "not_searched" }
+        ]
+      });
+    });
+
+    it("says the tier is searching while any character's search is in flight", () => {
+      const states = tierSearchStates(
+        subjects,
+        [
+          {
+            key: ryii,
+            raidId: "1180",
+            status: "failed",
+            createdAt: hoursAgo(2)
+          },
+          {
+            key: alt,
+            raidId: "1180",
+            status: "queued",
+            createdAt: hoursAgo(0)
+          },
+          {
+            key: other,
+            raidId: "1180",
+            status: "running",
+            createdAt: hoursAgo(0)
+          },
+          { key: alt, raidId: "1190", status: "queued", createdAt: hoursAgo(0) }
+        ],
+        now
+      );
+
+      expect(states.get("1180")?.state).toBe("running");
+      expect(states.get("1190")?.state).toBe("queued");
+    });
+
+    it("reads a merged character's search under whichever of its names ran it", () => {
+      // Characters sharing a Warcraft Logs ID are one dossier row (#490), so a
+      // search under either name is that row's search, newest first.
+      const states = tierSearchStates(
+        subjects,
+        [
+          {
+            key: other,
+            raidId: "1180",
+            status: "failed",
+            createdAt: hoursAgo(9)
+          },
+          {
+            key: renamed,
+            raidId: "1180",
+            status: "complete",
+            createdAt: hoursAgo(3)
+          }
+        ],
+        now
+      );
+
+      expect(states.get("1180")?.characters).toEqual([
+        expect.objectContaining({ key: ryii, state: "not_searched" }),
+        expect.objectContaining({ key: alt, state: "not_searched" }),
+        expect.objectContaining({
+          key: other,
+          displayName: "Other",
+          state: "completed",
+          searchedAt: hoursAgo(3).toISOString()
+        })
+      ]);
+    });
+
+    it("ignores searches for characters the dossier does not include", () => {
+      const states = tierSearchStates(
+        [{ key: ryii, displayName: "Ryii" }],
+        [
+          {
+            key: alt,
+            raidId: "1180",
+            status: "complete",
+            createdAt: hoursAgo(1)
+          }
+        ],
+        now
+      );
+
+      expect(states.size).toBe(0);
     });
   });
 });

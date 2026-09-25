@@ -204,16 +204,44 @@ export const dossierBossSchema = z.discriminatedUnion("state", [
 ]);
 
 /**
- * Where the submitted character's explicit search of this tier stands (#435).
- * `queued` and `running` are the search in flight; `searched` is one made in
- * the last day, which is the rate limit's window, so the tier cannot be
- * searched again until `searchableAgainAt`. Absent means it may be searched.
+ * Where one dossier character's search of a tier stands. `completed`,
+ * `partial` and `failed` are how a search in the rate limit's window ended;
+ * `partial` stopped at its request cap. `not_searched` means no search of the
+ * tier is in flight or in that window for the character.
+ */
+export const dossierTierSearchCharacterSchema = z
+  .object({
+    key: characterKeySchema,
+    displayName: z.string().min(1),
+    state: z.enum([
+      "queued",
+      "running",
+      "completed",
+      "partial",
+      "failed",
+      "not_searched"
+    ]),
+    searchedAt: z.iso.datetime().optional(),
+    searchableAgainAt: z.iso.datetime().optional()
+  })
+  .strict();
+
+/**
+ * Where the dossier's explicit search of this tier stands, across every
+ * included character (#435, #449). `queued` and `running` mean some
+ * character's search is in flight. `searched` means every character has a
+ * search in the rate limit's window, so nothing can be searched until
+ * `searchableAgainAt`, the earliest any of them may run again.
+ * `partly_searched` means some characters have been searched and others have
+ * not, so the tier may be searched again for those. `searchedAt` is the
+ * newest search. Absent means no character has searched it.
  */
 export const dossierTierSearchSchema = z
   .object({
-    state: z.enum(["queued", "running", "searched"]),
+    state: z.enum(["queued", "running", "searched", "partly_searched"]),
     searchedAt: z.iso.datetime(),
-    searchableAgainAt: z.iso.datetime()
+    searchableAgainAt: z.iso.datetime(),
+    characters: z.array(dossierTierSearchCharacterSchema).min(1)
   })
   .strict();
 
@@ -347,20 +375,56 @@ export type DossierRefreshResponse = z.infer<
 >;
 
 /**
- * What a "search this tier" press did. `queued` reserved a search. `busy`
- * means another collection is in flight, so nothing was reserved. `searched`
- * means the tier was searched too recently. `no_evidence` means the character
- * has nothing collected yet to add to.
+ * What a "search this tier" press did for one dossier character (#449).
+ * `queued` reserved a search now; `already_queued` and `running` are this
+ * tier's search already in flight. `searched` means the tier was searched too
+ * recently, so it may run again at `searchableAgainAt`. `busy` means another
+ * collection is in flight for the character, so nothing was reserved.
+ * `no_evidence` means the character has nothing collected yet to add to.
+ * `over_limit` means the character was beyond the most one press may queue.
+ * `failed` means the search could not be queued.
+ */
+export const dossierTierSearchOutcomeSchema = z
+  .object({
+    key: characterKeySchema,
+    displayName: z.string().min(1),
+    outcome: z.enum([
+      "queued",
+      "already_queued",
+      "running",
+      "searched",
+      "busy",
+      "no_evidence",
+      "over_limit",
+      "failed"
+    ]),
+    searchableAgainAt: z.iso.datetime().nullable()
+  })
+  .strict();
+
+/**
+ * What a "search this tier" press did across the dossier's characters.
+ * `state` summarises them: `queued` when any search was reserved, then
+ * `running` or `queued` when one was already in flight, then `searched`, with
+ * the earliest `searchableAgainAt`, then `busy`, then `no_evidence`.
+ * `characters` says what happened to each one.
  */
 export const dossierTierSearchResponseSchema = z
   .object({
     state: z.enum(["queued", "running", "searched", "busy", "no_evidence"]),
-    searchableAgainAt: z.iso.datetime().nullable()
+    searchableAgainAt: z.iso.datetime().nullable(),
+    characters: z.array(dossierTierSearchOutcomeSchema)
   })
   .strict();
 export type DossierTierSearchResponse = z.infer<
   typeof dossierTierSearchResponseSchema
 >;
 export type DossierTierSearch = z.infer<typeof dossierTierSearchSchema>;
+export type DossierTierSearchCharacter = z.infer<
+  typeof dossierTierSearchCharacterSchema
+>;
+export type DossierTierSearchOutcome = z.infer<
+  typeof dossierTierSearchOutcomeSchema
+>;
 export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;

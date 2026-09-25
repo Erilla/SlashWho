@@ -1,3 +1,4 @@
+import { dossierTierSearchResponse } from "@slashwho/application";
 import {
   dossierTierSearchResponseSchema,
   type DossierTierSearchResponse
@@ -28,10 +29,10 @@ function respond(body: DossierTierSearchResponse, status = 200): Response {
 }
 
 /**
- * Queues one explicit search of the character's tier (#435). Open to any
- * visitor, like refresh, and limited twice: per caller here, and per tier and
- * character where the search is reserved. It never searches more than the
- * one tier it names.
+ * Queues one explicit search of a tier (#435) for every included character of
+ * the dossier (#449). Open to any visitor, like refresh, and limited twice:
+ * per caller here, and per tier and character where each search is reserved.
+ * It never searches more than the one tier it names.
  */
 export async function POST(
   request: Request,
@@ -79,27 +80,18 @@ export async function POST(
       scope,
       overrides
     );
-    switch (result.kind) {
-      case "unknown_tier":
-        return apiError("tier_not_found");
-      case "queued":
-        return respond({ state: "queued", searchableAgainAt: null }, 202);
-      case "busy":
-        // This very search, in flight: say where it is. Anything else in
-        // flight means nothing was reserved.
-        return result.searchingThisTier
-          ? respond({
-              state: result.status === "running" ? "running" : "queued",
-              searchableAgainAt: null
-            })
-          : respond({ state: "busy", searchableAgainAt: null }, 409);
-      case "recent":
-        return respond({
-          state: "searched",
-          searchableAgainAt: result.searchableAgainAt.toISOString()
-        });
-      case "no_evidence":
-        return respond({ state: "no_evidence", searchableAgainAt: null }, 409);
-    }
+    if (result.kind === "unknown_tier") return apiError("tier_not_found");
+    // Accepted when any character's search was queued now. A press that
+    // queued none is refused only when nothing is in flight or searched to
+    // show for it: every character busy, or with nothing to add to.
+    const { reserved, body } = dossierTierSearchResponse(result.characters);
+    return respond(
+      body,
+      reserved
+        ? 202
+        : body.state === "busy" || body.state === "no_evidence"
+          ? 409
+          : 200
+    );
   });
 }

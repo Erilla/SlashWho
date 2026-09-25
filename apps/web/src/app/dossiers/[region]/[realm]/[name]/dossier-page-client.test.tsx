@@ -371,6 +371,48 @@ describe("DossierPageClient live evidence", () => {
     }
   );
 
+  it("follows a tier search in flight for a character the list does not show", async () => {
+    // Break caught (#449): polling followed only the listed characters, so a
+    // search queued for one beyond the display cap was never seen to finish.
+    vi.useFakeTimers();
+    const settled = withEvidenceState(expanded, "complete");
+    const searching = {
+      ...settled,
+      raids: settled.raids.map((raid) => ({
+        ...raid,
+        tierSearch: {
+          state: "queued" as const,
+          searchedAt: "2026-09-23T06:00:00.000Z",
+          searchableAgainAt: "2026-09-24T06:00:00.000Z",
+          characters: [
+            {
+              key: { region: "eu" as const, realm: "silvermoon", name: "far" },
+              displayName: "Far",
+              state: "queued" as const,
+              searchedAt: "2026-09-23T06:00:00.000Z",
+              searchableAgainAt: "2026-09-24T06:00:00.000Z"
+            }
+          ]
+        }
+      }))
+    };
+    const fetchMock = vi.fn(async () => Response.json(settled));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={searching}
+        jobId={null}
+      />
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The read showed no search in flight, so polling stops there.
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps credential headers and no-store on a live dossier read", async () => {
     vi.useFakeTimers();
     writeStoredCredentials({

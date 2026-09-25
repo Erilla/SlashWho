@@ -4841,24 +4841,46 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }
       },
 
-      async latestTierSearches(key, since) {
+      async latestTierSearches(keys, since) {
         if (Number.isNaN(since.valueOf())) {
           throw new RangeError("character_evidence_tier_search_time_invalid");
         }
+        if (keys.length === 0) return [];
         const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
           tier_search_raid_id: string;
           status: CharacterEvidenceRun["status"];
           created_at: Date;
         }>(
-          `SELECT DISTINCT ON (tier_search_raid_id)
-                  tier_search_raid_id, status, created_at
-             FROM character_evidence_runs
-            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-              AND mode = 'tier_search' AND created_at >= $4
-            ORDER BY tier_search_raid_id, created_at DESC, id DESC`,
-          [key.region, key.realm, key.name, since]
+          `SELECT DISTINCT ON (runs.region, runs.realm_slug,
+                              runs.normalized_name, runs.tier_search_raid_id)
+                  runs.region, runs.realm_slug, runs.normalized_name,
+                  runs.tier_search_raid_id, runs.status, runs.created_at
+             FROM character_evidence_runs runs
+             JOIN unnest($1::text[], $2::text[], $3::text[])
+                    AS keys(region, realm_slug, normalized_name)
+               ON runs.region = keys.region
+              AND runs.realm_slug = keys.realm_slug
+              AND runs.normalized_name = keys.normalized_name
+            WHERE runs.mode = 'tier_search' AND runs.created_at >= $4
+            ORDER BY runs.region, runs.realm_slug, runs.normalized_name,
+                     runs.tier_search_raid_id, runs.created_at DESC,
+                     runs.id DESC`,
+          [
+            keys.map((key) => key.region),
+            keys.map((key) => key.realm),
+            keys.map((key) => key.name),
+            since
+          ]
         );
         return result.rows.map((row) => ({
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
           raidId: row.tier_search_raid_id,
           status: row.status,
           createdAt: row.created_at

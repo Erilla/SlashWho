@@ -313,6 +313,17 @@ as that run left them. A published search has `publication_scope = 'tier'` on
 `character_evidence_runs`, and readers take those facts from the newest
 `'full'` publication instead.
 
+One press of **Search this tier** queues a search of that tier for every
+included dossier character: the submitted character and each connected one,
+including any beyond the dossier's display cap, but never an excluded one
+(#449). Characters sharing a Warcraft Logs ID are one character and are searched
+once. Each character's search is a run of its own, with its own reservation,
+cap, cooldown and cost row, so a character that is cooling down or already
+collecting never stops the others being queued. One press queues at most 30
+characters (`DOSSIER_TIER_SEARCH_CHARACTER_LIMIT`); any beyond that are reported
+as not queued, never dropped. A press can therefore spend up to that many runs'
+tier-search caps, spread across the worker's hourly allowance.
+
 It is reserved only by that explicit request, never by a read, a resume or a
 retry, and at most once per tier per character a day. The one exception is a
 capped ranked walk, which continues automatically after its retry time. It has
