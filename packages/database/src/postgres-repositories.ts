@@ -1,6 +1,7 @@
 import type { PublicErrorCode } from "@slashwho/contracts";
 import {
   isNonRaidZone,
+  lookupRaidByName,
   toRaiderIoUrl,
   type CharacterGuild,
   type CharacterKey
@@ -1134,6 +1135,46 @@ async function loadPositiveEvidenceForPartial(
       .map(mapCharacterMythicWipe)
       .filter((wipe) => !isNonRaidZone(wipe.raidName))
   };
+}
+
+/**
+ * A tier search can confirm an old exact report that `recentReports` will
+ * never return to an ordinary scan. Keep the newest published search's kills
+ * for its selected raid across complete ordinary runs. A new complete search
+ * of the same raid can still retract a nonterminal kill it no longer verifies.
+ */
+async function loadLatestTierSearchKills(
+  client: Queryable,
+  key: CharacterKey,
+  replacingRaidId: string | null
+): Promise<readonly StoredCharacterMythicKill[]> {
+  const result = await client.query<
+    CharacterMythicKillRow & { tier_search_raid_id: string }
+  >(
+    `WITH latest AS (
+       SELECT DISTINCT ON (tier_search_raid_id)
+              id, tier_search_raid_id
+         FROM character_evidence_runs
+        WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+          AND mode = 'tier_search' AND status IN ('complete', 'partial')
+        ORDER BY tier_search_raid_id, completed_at DESC, id DESC
+     )
+     SELECT kill.*, latest.tier_search_raid_id
+       FROM latest
+       JOIN character_mythic_kills kill ON kill.evidence_run_id = latest.id`,
+    [key.region, key.realm, key.name]
+  );
+  return result.rows
+    .map((row) => ({
+      kill: mapCharacterMythicKill(row),
+      journalRaidId: row.tier_search_raid_id
+    }))
+    .filter(
+      ({ kill, journalRaidId }) =>
+        journalRaidId !== replacingRaidId &&
+        lookupRaidByName(kill.raidName)?.raidId === journalRaidId
+    )
+    .map(({ kill }) => kill);
 }
 
 function encodeCursor(item: SnapshotHistoryItem): string {
@@ -5080,8 +5121,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             region: CharacterKey["region"];
             realm_slug: string;
             normalized_name: string;
+            mode: EvidenceRunMode;
+            tier_search_raid_id: string | null;
           }>(
-            `SELECT id, region, realm_slug, normalized_name
+            `SELECT id, region, realm_slug, normalized_name, mode,
+                    tier_search_raid_id
              FROM character_evidence_runs
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
              FOR UPDATE`,
@@ -5120,17 +5164,36 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             client,
             activeKey
           );
+          const tierSearchKills =
+            input.state === "complete"
+              ? await loadLatestTierSearchKills(
+                  client,
+                  activeKey,
+                  activeRun.mode === "tier_search"
+                    ? activeRun.tier_search_raid_id
+                    : null
+                )
+              : [];
           // A partial publish carries everything forward, as it always has. A
-          // complete one carries forward the terminal raids only: every other
-          // raid keeps the existing contract, where a kill a complete run
+          // complete one carries forward terminal raids and kills confirmed
+          // by the latest explicit search of each tier. An ordinary history
+          // scan cannot re-find those old exact reports through recentReports.
+          // Every other raid keeps the contract where a kill a complete run
           // stopped finding stops being claimed.
           const previous =
             input.state === "partial"
               ? stored
               : {
-                  kills: stored.kills.filter((kill) =>
-                    terminalKillRaidIds.has(kill.raidId)
-                  ),
+                  kills: [
+                    ...new Map(
+                      [
+                        ...tierSearchKills,
+                        ...stored.kills.filter((kill) =>
+                          terminalKillRaidIds.has(kill.raidId)
+                        )
+                      ].map((kill) => [kill.fightUrl, kill] as const)
+                    ).values()
+                  ],
                   wipes: stored.wipes.filter((wipe) =>
                     terminalKillRaidIds.has(wipe.raidId)
                   )
