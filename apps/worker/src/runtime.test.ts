@@ -46,6 +46,39 @@ it("announces newly recorded applicant intents without alerting on baseline or u
   });
 });
 
+it("announces applicant details with both the character and dossier links", async () => {
+  const notify = vi.fn(async () => undefined);
+  await announceNewApplicantIntents(
+    {
+      baseline: false,
+      created: 1,
+      newApplicants: [
+        {
+          battletag: "Aria#123",
+          discordId: "123456789012345678",
+          characterName: "Aria",
+          characterUrl: "https://raider.io/characters/eu/example/aria",
+          dossierPath: "/dossiers/eu/example/aria"
+        }
+      ]
+    },
+    { notify },
+    undefined,
+    "https://web-test.example.test"
+  );
+  expect(notify).toHaveBeenCalledExactlyOnceWith({
+    event: "applicant_new_intents",
+    details: { count: 1 },
+    applicant: {
+      battletag: "Aria#123",
+      discordId: "123456789012345678",
+      characterName: "Aria",
+      characterUrl: "https://raider.io/characters/eu/example/aria",
+      dossierUrl: "https://web-test.example.test/dossiers/eu/example/aria"
+    }
+  });
+});
+
 it("does not let an applicant alert failure interrupt intake", async () => {
   const notify = vi.fn(async () => {
     throw new Error("webhook unavailable");
@@ -55,6 +88,39 @@ it("does not let an applicant alert failure interrupt intake", async () => {
     announceNewApplicantIntents({ baseline: false, created: 1 }, { notify })
   ).resolves.toBeUndefined();
   expect(notify).toHaveBeenCalledOnce();
+});
+
+it("continues notifying later applicants when one delivery throws", async () => {
+  const received: string[] = [];
+  const notify = vi.fn(
+    async (alert: { applicant?: { battletag?: string } }) => {
+      received.push(alert.applicant?.battletag ?? "");
+      if (received.length === 1) throw new Error("webhook unavailable");
+    }
+  );
+  const logger = { info: vi.fn() };
+  await announceNewApplicantIntents(
+    {
+      baseline: false,
+      created: 2,
+      newApplicants: [
+        {
+          battletag: "First#111",
+          characterUrl: "https://raider.io/characters/eu/example/first"
+        },
+        {
+          battletag: "Second#222",
+          characterUrl: "https://raider.io/characters/eu/example/second"
+        }
+      ]
+    },
+    { notify },
+    logger
+  );
+  expect(received).toEqual(["First#111", "Second#222"]);
+  expect(logger.info).toHaveBeenCalledWith({
+    event: "applicant_announcement_failed"
+  });
 });
 
 it("resolves the worker account key only while active and at the reserved version", async () => {
@@ -829,6 +895,49 @@ describe("worker runtime", () => {
       content: "📨 applicant_new_intents — count: 2",
       allowed_mentions: { parse: [] }
     });
+  });
+
+  it("renders applicant details without Discord mentions or markdown injection", async () => {
+    const fetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) => {
+        void _url;
+        void _init;
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+    await notifier.notify({
+      event: "applicant_new_intents",
+      details: { count: 1 },
+      applicant: {
+        battletag: "@everyone *Aria*\nDossier: https://evil.example",
+        discordId: "<@123456789012345678>",
+        characterName: "[Aria](https://evil.example)",
+        characterUrl: "https://raider.io/characters/eu/example/aria",
+        dossierUrl: "https://web-test.example.test/dossiers/eu/example/aria"
+      }
+    });
+    const body = JSON.parse(
+      (fetch.mock.calls[0]![1] as RequestInit).body as string
+    ) as { content: string; allowed_mentions: unknown };
+    expect(body.content).toContain("Battletag: @ everyone \\*Aria\\*");
+    expect(body.content).not.toContain("\nDossier: https://evil.example");
+    expect(body.content).toContain("Discord ID: < @ 123456789012345678\\>");
+    expect(body.content).toContain("Character: \\[Aria\\]");
+    expect(body.content).toContain(
+      "Character link: https://raider.io/characters/eu/example/aria"
+    );
+    expect(body.content).toContain(
+      "Dossier: https://web-test.example.test/dossiers/eu/example/aria"
+    );
+    expect(body.allowed_mentions).toEqual({ parse: [] });
   });
 
   it("swallows and logs a non-successful maintainer webhook response", async () => {

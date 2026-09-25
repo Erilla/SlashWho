@@ -8,9 +8,24 @@ import {
   characterIdentity,
   decodeApplicantIdentity
 } from "./applicant-identity";
+import type { ApplicantSheetRow } from "./applicant-sheet";
 import type { WorkerConfig } from "./config";
 
 const source = "applicant_sheet";
+
+export type NewApplicant = {
+  battletag?: string;
+  discordId?: string;
+  characterName?: string;
+  characterUrl: string;
+  dossierPath?: string;
+};
+
+function displayField(value: unknown): string | undefined {
+  return typeof value === "string"
+    ? value.trim().slice(0, 200) || undefined
+    : undefined;
+}
 
 /** Expired suppressions may have been deleted before a deferred ID resolves. */
 export async function wasSuppressedAt(
@@ -31,8 +46,9 @@ export async function wasSuppressedAt(
 type CountRow = {
   identity: string;
   occurrence_count: number;
-  deferred_observed_ats: string[];
+  deferred_observed_ats: (string | { at: string; index: number })[];
 };
+type DeferredObservation = { at: Date; index: number };
 type IntentRow = {
   sequence: string;
   identity: string;
@@ -50,7 +66,12 @@ export async function reconcileApplicantCounts(
     identity: string,
     observedAt: Date
   ) => Promise<boolean | "defer">
-): Promise<{ baseline: boolean; created: number; backlog: number }> {
+): Promise<{
+  baseline: boolean;
+  created: number;
+  backlog: number;
+  newOccurrences: { identity: string; index: number }[];
+}> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -73,7 +94,7 @@ export async function reconcileApplicantCounts(
           [source, identity, count]
         );
       await client.query("COMMIT");
-      return { baseline: true, created: 0, backlog: 0 };
+      return { baseline: true, created: 0, backlog: 0, newOccurrences: [] };
     }
     const existing = await client.query<CountRow>(
       "SELECT identity, occurrence_count, deferred_observed_ats FROM applicant_source_counts WHERE source = $1",
@@ -91,6 +112,7 @@ export async function reconcileApplicantCounts(
     );
     let backlog = Number(pending.rows[0]?.count ?? 0);
     let created = 0;
+    const newOccurrences: { identity: string; index: number }[] = [];
     for (const identity of new Set([...previous.keys(), ...counts.keys()])) {
       const before = previous.get(identity) ?? 0;
       const current = counts.get(identity) ?? 0;
@@ -99,26 +121,37 @@ export async function reconcileApplicantCounts(
           ? []
           : (deferredAt.get(identity) ?? [])
               .slice(0, current - before)
-              .map((value) => new Date(value));
-      while (pendingTimes.length < current - before) pendingTimes.push(at);
-      const remaining: Date[] = [];
+              .map((value, index): DeferredObservation =>
+                typeof value === "string"
+                  ? { at: new Date(value), index: before + index }
+                  : { at: new Date(value.at), index: value.index }
+              );
+      while (pendingTimes.length < current - before)
+        pendingTimes.push({ at, index: before + pendingTimes.length });
+      const remaining: DeferredObservation[] = [];
       let admitted = 0;
       let suppressedCount = 0;
-      for (const observedAt of pendingTimes) {
-        const decision = await isSuppressed?.(identity, observedAt);
+      for (const occurrence of pendingTimes) {
+        const decision = await isSuppressed?.(identity, occurrence.at);
         if (
           decision === "defer" ||
           (decision === true && suppressedCount >= 1_000) ||
           (decision !== true && backlog >= backlogLimit)
         ) {
-          remaining.push(observedAt);
+          remaining.push(occurrence);
           continue;
         }
         const suppressed = decision === true;
         await client.query(
           "INSERT INTO applicant_source_intents (source, identity, observed_at, state) VALUES ($1, $2, $3, $4)",
-          [source, identity, observedAt, suppressed ? "suppressed" : "pending"]
+          [
+            source,
+            identity,
+            occurrence.at,
+            suppressed ? "suppressed" : "pending"
+          ]
         );
+        newOccurrences.push({ identity, index: occurrence.index });
         if (suppressed) suppressedCount++;
         else backlog++;
         admitted++;
@@ -141,7 +174,7 @@ export async function reconcileApplicantCounts(
       [source, at]
     );
     await client.query("COMMIT");
-    return { baseline: false, created, backlog };
+    return { baseline: false, created, backlog, newOccurrences };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -152,7 +185,9 @@ export async function reconcileApplicantCounts(
 
 export async function pollApplicantSheet(input: {
   pool: Pool;
-  readColumn(): Promise<unknown[]>;
+  readColumn?(): Promise<unknown[]>;
+  readRows?(): Promise<ApplicantSheetRow[]>;
+  resolveDossierPath?: (identity: string) => string | undefined;
   backlogLimit: number;
   now?: () => Date;
   isSuppressed?: (
@@ -165,30 +200,67 @@ export async function pollApplicantSheet(input: {
   backlog: number;
   invalid: number;
   truncated: number;
+  newApplicants: NewApplicant[];
 }> {
   // A failed read never enters the transaction or advances durable state.
-  const cells = await input.readColumn();
-  if (cells.length > 5_000) throw new Error("applicant_sheet_bounds_exceeded");
+  const rows = input.readRows
+    ? await input.readRows()
+    : (await input.readColumn!()).map((linkCell, index) => ({
+        row: index + 2,
+        linkCell
+      }));
+  if (rows.length > 5_000) throw new Error("applicant_sheet_bounds_exceeded");
   const counts = new Map<string, number>();
+  const occurrences = new Map<string, NewApplicant[]>();
   let invalid = 0;
   let truncated = 0;
-  for (const cell of cells) {
-    const parsed = parseApplicantCandidates(cell);
+  for (const row of rows) {
+    const parsed = parseApplicantCandidates(row.linkCell);
     invalid += parsed.invalid;
     truncated += Number(parsed.truncated);
-    for (const candidate of parsed.candidates)
+    for (const candidate of parsed.candidates) {
       counts.set(candidate.identity, (counts.get(candidate.identity) ?? 0) + 1);
+      const applicant: NewApplicant = {
+        battletag: displayField("battletag" in row ? row.battletag : undefined),
+        discordId: displayField("discordId" in row ? row.discordId : undefined),
+        characterName: displayField(
+          "characterName" in row ? row.characterName : undefined
+        ),
+        characterUrl: candidate.url,
+        ...(candidate.kind === "character"
+          ? {
+              dossierPath: `/dossiers/${candidate.key.region}/${candidate.key.realm}/${encodeURIComponent(candidate.key.name)}`
+            }
+          : {})
+      };
+      const list = occurrences.get(candidate.identity) ?? [];
+      list.push(applicant);
+      occurrences.set(candidate.identity, list);
+    }
   }
+  const reconciliation = await reconcileApplicantCounts(
+    input.pool,
+    counts,
+    input.backlogLimit,
+    input.now?.(),
+    input.isSuppressed
+  );
+  const { newOccurrences, ...state } = reconciliation;
   return {
-    ...(await reconcileApplicantCounts(
-      input.pool,
-      counts,
-      input.backlogLimit,
-      input.now?.(),
-      input.isSuppressed
-    )),
+    ...state,
     invalid,
-    truncated
+    truncated,
+    newApplicants: newOccurrences.flatMap(({ identity, index }) => {
+      const applicant = occurrences.get(identity)?.[index];
+      if (!applicant) return [];
+      const resolvedPath = input.resolveDossierPath?.(identity);
+      return [
+        {
+          ...applicant,
+          ...(resolvedPath ? { dossierPath: resolvedPath } : {})
+        }
+      ];
+    })
   };
 }
 
