@@ -283,9 +283,8 @@ export interface CharacterEvidenceRun {
 
 /**
  * `full` is every collection there has always been. `tier_search` is a full
- * collection that also walks one tier's guild attendance, reserved only by an
- * explicit request from the dossier (#435) and never by a read, a resume or a
- * retry.
+ * collection for one selected tier. A capped ranked walk keeps this mode on
+ * budgeted automatic continuations; completed guild attendance can be reused.
  */
 export type EvidenceRunMode = "full" | "tier_search";
 
@@ -553,6 +552,8 @@ export type StoredEvidenceTiers = Readonly<{
   /** Rotates scarce history requests fairly across the current name and aliases. */
   identityScanTurn?: number;
   rankedBackfillCursor?: StoredRankedBackfillCursor;
+  /** A prior search of this tier completed its guild attendance walk. */
+  tierSearchAttendanceComplete?: boolean;
   /**
    * Whether the newest completed run established that its only unfinished
    * collection work was parses. Absent is conservative: it does not license
@@ -760,9 +761,10 @@ export interface EvidenceRepository {
   }): Promise<EvidenceReservationResult>;
   /**
    * Reserves a tier search, under the same per-character lock as `reserve`.
-   * Nothing else reserves one, so it never becomes a default or a retry path.
-   * A search of the same tier created at or after `searchedSince` refuses it
-   * as `recent`, and an in-flight run of any mode as `active`.
+   * This reserves a new explicit search; `reserve` can separately continue a
+   * capped ranked walk once its retry is due. A search of the same tier
+   * created at or after `searchedSince` refuses another explicit request as
+   * `recent`, and an in-flight run of any mode as `active`.
    */
   /**
    * Each raid's newest tier search for the character created at or after

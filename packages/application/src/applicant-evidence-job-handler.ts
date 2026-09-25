@@ -1276,6 +1276,14 @@ export function createApplicantEvidenceJobHandler(
               : scanCap;
         const tierSearchAsked =
           tierWindow !== null && tierCaps !== null && tierCaps.tier > 0;
+        // A ranked cursor alone does not prove attendance finished. Skip its
+        // costly guild pages only when a published run recorded completion.
+        const tierSearchAttendanceAsked =
+          tierSearchAsked &&
+          !(savedRankedCursor && storedEvidence.tierSearchAttendanceComplete);
+        const continuationRankedCap =
+          rankedCap +
+          (tierCaps && !tierSearchAttendanceAsked ? tierCaps.tier : 0);
         // Asked for, with a tier to search, and no budget to search it with.
         // Recorded as such rather than as a search that never ran.
         tierSearchStarved = tierWindow !== null && !tierSearchAsked;
@@ -1586,7 +1594,7 @@ export function createApplicantEvidenceJobHandler(
                       )
                     }
                   : {}),
-                ...(tierSearchAsked
+                ...(tierSearchAttendanceAsked
                   ? {
                       tierSearch: {
                         ...tierWindow,
@@ -1604,11 +1612,13 @@ export function createApplicantEvidenceJobHandler(
                       }
                     }
                   : {}),
-                ...(tierSearchAsked && tierSearchRaidId && rankedCap > 0
+                ...(tierSearchAsked &&
+                tierSearchRaidId &&
+                continuationRankedCap > 0
                   ? {
                       rankedBackfill: {
                         journalRaidId: tierSearchRaidId,
-                        requestCap: rankedCap,
+                        requestCap: continuationRankedCap,
                         ...(rankedCursor ? { cursor: rankedCursor } : {})
                       }
                     }
@@ -1774,7 +1784,7 @@ export function createApplicantEvidenceJobHandler(
         await phaseWrites;
         // Only a search this run asked for is the run's to record.
         if (
-          tierSearchAsked &&
+          tierSearchAttendanceAsked &&
           response.kind === "evidence" &&
           response.tierSearch
         ) {

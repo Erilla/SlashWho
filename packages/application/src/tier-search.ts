@@ -9,7 +9,8 @@ import {
 /**
  * How long a character's tier stays searched. A search is an explicit, costly
  * request -- about 28 points an attendance page and 6 a hydrated report -- so
- * repeated clicks on one tier are refused rather than re-run (#435).
+ * repeated clicks on one tier are refused rather than re-run (#435). A capped
+ * ranked walk resumes through the evidence retry sweep, outside this limit.
  */
 export const TIER_SEARCH_SPACING_MS = 24 * 60 * 60 * 1_000;
 

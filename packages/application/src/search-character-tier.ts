@@ -37,10 +37,10 @@ export type SearchCharacterTierResult =
 /**
  * Queues one explicit search of a character's tier from the dossier (#435).
  *
- * It is the only way a tier search is reserved: a dossier read, a refresh, a
- * resume and a retry all reserve ordinary runs, so a search can never become
- * a default or a retry path -- which is what pinned Ryii at the cap (#433).
- * The mode is stored on the run, and the queue payload says only `full`.
+ * This is the only way to start a new tier search. A capped ranked walk may
+ * continue automatically after its retry time, without another button press.
+ * The mode is stored on the run, and the
+ * queue payload says only `full`.
  */
 export async function searchCharacterTier(options: {
   key: CharacterKey;
