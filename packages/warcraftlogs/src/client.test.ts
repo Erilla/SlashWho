@@ -3756,6 +3756,55 @@ describe("Warcraft Logs gateway", () => {
       expect(queries).not.toContain("GuildAttendance");
     });
 
+    it("keeps a verified kill searchable when its report omitted a fight", async () => {
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(body.query.match(/query (\w+)/)?.[1] ?? "");
+        if (body.query.includes("RecentReports")) {
+          return history([
+            {
+              code: "raidNight",
+              startTime: night - hours(1),
+              zone: { id: 23, name: "The Eternal Palace" },
+              masterData: {
+                actors: [
+                  {
+                    type: "Player",
+                    id: 7,
+                    name: "Sentinel",
+                    server: "Silvermoon"
+                  }
+                ]
+              },
+              fights: [
+                {
+                  id: 1,
+                  encounterID: 2299,
+                  name: "Queen Azshara",
+                  startTime: hours(3),
+                  endTime: hours(2),
+                  kill: true,
+                  difficulty: 5,
+                  friendlyPlayers: [7]
+                }
+              ]
+            }
+          ]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(queries).toContain("GuildAttendance");
+    });
+
     // A report holding one Mythic Queen Azshara kill by the character.
     const hydratedKill = (code: string) =>
       jsonResponse({
@@ -5943,11 +5992,102 @@ describe("Warcraft Logs gateway", () => {
   });
 
   it.each([
+    [1, [1], 2, 1],
+    [2, [1, 2], 1, 3]
+  ])(
+    "omits impossible fight times with a %i-page budget and keeps valid evidence",
+    async (requestCap, expectedPages, resumePage, killCount) => {
+      const pages = structuredClone(
+        (fixture("character-report-valid") as { pages: unknown[] }).pages
+      ) as Array<{
+        data: {
+          characterData: {
+            character: {
+              recentReports: {
+                data: Array<{ fights: Array<Record<string, unknown>> }>;
+              };
+            };
+          };
+        };
+      }>;
+      pages[0]!.data.characterData.character.recentReports.data[0]!.fights.unshift(
+        ...[
+          { id: 80, startTime: 20_000, endTime: 10_000, kill: false },
+          { id: 81, startTime: -20_000, endTime: 10_000, kill: true },
+          { id: 82, startTime: undefined, endTime: 10_000, kill: false },
+          { id: 83, startTime: 1.5, endTime: 10_000, kill: true },
+          { id: 84, startTime: 0, endTime: -10_000, kill: false },
+          {
+            id: 85,
+            startTime: 0,
+            endTime: 8_640_000_000_000_000 - 1,
+            kill: true
+          }
+        ].map((fight) => ({
+          ...fight,
+          encounterID: 1234,
+          name: "Queen Ansurek",
+          difficulty: 5,
+          friendlyPlayers: [7]
+        }))
+      );
+      const historyPages: number[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { page?: number };
+        };
+        if (body.query.includes("RecentReports")) {
+          historyPages.push(body.variables.page!);
+          return jsonResponse(pages[body.variables.page! - 1]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap,
+        parseRequestCap: 10
+      });
+
+      expect(historyPages).toEqual(expectedPages);
+      expect(result).toMatchObject({
+        kind: "evidence",
+        limitation: { code: "schema_drift" },
+        historyScanResumePage: resumePage,
+        kills: expect.arrayContaining([
+          expect.objectContaining({
+            fightUrl: expect.stringContaining("lateReport#fight=1")
+          })
+        ]),
+        wipes: [
+          expect.objectContaining({
+            fightUrl: expect.stringContaining("lateReport#fight=9")
+          })
+        ]
+      });
+      if (result.kind === "evidence") {
+        expect(result.kills).toHaveLength(killCount);
+        expect(result.wipes).toHaveLength(1);
+        if (requestCap === 2) {
+          expect(result.kills).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                fightUrl: expect.stringContaining("earlyReport#fight=7")
+              })
+            ])
+          );
+        }
+      }
+    }
+  );
+
+  it.each([
     ["negative start", -20_000, 3_600_000],
     ["negative end", 0, -10_000],
     ["missing start", undefined, 3_600_000],
     ["reversed interval", 3_600_001, 3_600_000]
-  ])("rejects a fight with a %s", async (_label, startTime, endTime) => {
+  ])("omits a fight with a %s", async (_label, startTime, endTime) => {
     const page = structuredClone(
       (fixture("character-report-valid") as { pages: unknown[] }).pages[1]
     ) as {
@@ -5974,7 +6114,13 @@ describe("Warcraft Logs gateway", () => {
 
     await expect(
       client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
-    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+    ).resolves.toMatchObject({
+      kind: "evidence",
+      limitation: { code: "schema_drift" },
+      historyScanResumePage: 1,
+      kills: [],
+      wipes: []
+    });
   });
 
   it("retains collected kills when the history deadline expires", async () => {

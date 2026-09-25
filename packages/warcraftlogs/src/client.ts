@@ -557,9 +557,14 @@ type ReportSpan = Readonly<{ start: number; end: number }>;
  * page. A verified kill inside one was either decoded from it or is not the
  * character's to claim from it, so attendance has nothing to add.
  */
-function reportSpans(value: unknown): readonly ReportSpan[] {
+function reportSpans(
+  value: unknown,
+  omittedReportCodes: ReadonlySet<string> = new Set()
+): readonly ReportSpan[] {
   return recentReportsData(value).flatMap((reportValue) => {
     const report = record(reportValue);
+    const code = report && nonEmptyString(report.code);
+    if (code && omittedReportCodes.has(code)) return [];
     const start = report && validTimestampMilliseconds(report.startTime);
     if (report === null || start === null || !Array.isArray(report.fights)) {
       return [];
@@ -912,6 +917,8 @@ function firstKillReports(
   const kills = new Map<string, WarcraftLogsFirstKillEvidence>();
   const wipes = new Map<string, WarcraftLogsWipeEvidence>();
   const killedByReportBoss = new Set<string>();
+  let omittedInvalidTimestamp = false;
+  const omittedInvalidTimestampReportCodes = new Set<string>();
   const schemaDrift = (): WarcraftLogsReportResult =>
     kills.size > 0 || wipes.size > 0
       ? {
@@ -1052,7 +1059,9 @@ function firstKillReports(
         fightEndTime === null ||
         fightEndTime < fightStartTime
       ) {
-        return schemaDrift();
+        omittedInvalidTimestamp = true;
+        omittedInvalidTimestampReportCodes.add(code);
+        continue;
       }
       // A Mythic dungeon boss carries the same difficulty as a Mythic raid
       // boss, so difficulty alone cannot say which fights are raid evidence.
@@ -1069,7 +1078,9 @@ function firstKillReports(
         !Number.isSafeInteger(evidenceAtMilliseconds) ||
         evidenceAtMilliseconds > MAX_DATE_MILLISECONDS
       ) {
-        return schemaDrift();
+        omittedInvalidTimestamp = true;
+        omittedInvalidTimestampReportCodes.add(code);
+        continue;
       }
       const evidenceAt = new Date(evidenceAtMilliseconds).toISOString();
       const reportUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(code)}`;
@@ -1120,6 +1131,18 @@ function firstKillReports(
 
   return {
     kind: "evidence",
+    ...(omittedInvalidTimestamp
+      ? {
+          omittedInvalidTimestamp: true as const,
+          omittedInvalidTimestampReportCodes: [
+            ...omittedInvalidTimestampReportCodes
+          ],
+          limitation: {
+            kind: "limitation" as const,
+            code: "schema_drift" as const
+          }
+        }
+      : {}),
     tierBests: [],
     parsedFightUrls: [],
     troubledRaidIds: { parses: [], tierBests: [] },
@@ -2387,6 +2410,7 @@ export function createWarcraftLogsClient(
     // already account for is not searched for again in attendance.
     const scannedSpans: ReportSpan[] = [];
     let scanLimitation: WarcraftLogsLimitation | undefined;
+    let omittedInvalidTimestamp = false;
     const scanSkipped = options.requestCap === 0;
     let historyScanStartPage = options.historyScanStartPage ?? 1;
     let lastDecodedHistoryPage: number | undefined;
@@ -2420,13 +2444,24 @@ export function createWarcraftLogsClient(
       if (probe.kind !== "success") return probe;
       const decodedProbe = firstKillReports(probe.value, key);
       if (decodedProbe.kind === "limitation") return decodedProbe;
-      if (decodedProbe.limitation) return decodedProbe.limitation;
+      if (decodedProbe.limitation && !decodedProbe.omittedInvalidTimestamp) {
+        return decodedProbe.limitation;
+      }
+      if (decodedProbe.omittedInvalidTimestamp) {
+        omittedInvalidTimestamp = true;
+        options.onLimitation?.("history_scan", "schema_drift");
+      }
       // A cleanly decoded page, whatever it proves about the offset. Keeping
       // its evidence is what lets attendance skip its reports.
       for (const kill of decodedProbe.kills) kills.set(kill.fightUrl, kill);
       for (const wipe of decodedProbe.wipes) wipes.set(wipe.fightUrl, wipe);
       for (const code of reportCodes(probe.value)) scannedReportCodes.add(code);
-      scannedSpans.push(...reportSpans(probe.value));
+      scannedSpans.push(
+        ...reportSpans(
+          probe.value,
+          new Set(decodedProbe.omittedInvalidTimestampReportCodes)
+        )
+      );
       if (
         lastReportCode(probe.value) !==
         options.historyScanResumeBoundaryReportCode
@@ -2483,15 +2518,24 @@ export function createWarcraftLogsClient(
       }
       if (normalized.limitation) {
         options.onLimitation?.("history_scan", normalized.limitation.code);
-        scanLimitation = normalized.limitation;
-        break;
+        if (normalized.omittedInvalidTimestamp) {
+          omittedInvalidTimestamp = true;
+        } else {
+          scanLimitation = normalized.limitation;
+          break;
+        }
       }
-      // Only after the page decoded cleanly: a drifted page stops at its first
-      // bad report, and those after it are left for attendance to recover.
+      // A page with only invalid fight times still proves its report boundary.
+      // Other schema drift stops before this point.
       for (const code of reportCodes(result.value)) {
         scannedReportCodes.add(code);
       }
-      scannedSpans.push(...reportSpans(result.value));
+      scannedSpans.push(
+        ...reportSpans(
+          result.value,
+          new Set(normalized.omittedInvalidTimestampReportCodes)
+        )
+      );
 
       // Below every terminal tier, so any further page can only re-find
       // evidence already stored. This is a clean stop: it sets no limitation,
@@ -2607,7 +2651,11 @@ export function createWarcraftLogsClient(
         }
         for (const kill of decoded.kills) kills.set(kill.fightUrl, kill);
         for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
-        if (decoded.limitation) scanLimitation ??= decoded.limitation;
+        if (decoded.omittedInvalidTimestamp) {
+          omittedInvalidTimestamp = true;
+        } else if (decoded.limitation) {
+          scanLimitation ??= decoded.limitation;
+        }
       }
     }
 
@@ -3501,9 +3549,20 @@ export function createWarcraftLogsClient(
     // and eight other characters with it. It stays partial, which carries
     // every stored kill forward, and the next run reads the whole history from
     // page one, where finishing does mean finished.
-    const restartFromFirstPage = resumedFromCursor && !scanLimitation;
+    const restartFromFirstPage =
+      (resumedFromCursor && !scanLimitation) ||
+      (omittedInvalidTimestamp && historyScanFinished && !scanLimitation);
     if (restartFromFirstPage) {
-      scanLimitation = { kind: "limitation", code: "request_cap" };
+      scanLimitation = {
+        kind: "limitation",
+        code: omittedInvalidTimestamp ? "schema_drift" : "request_cap"
+      };
+    }
+    if (
+      omittedInvalidTimestamp &&
+      (!scanLimitation || scanLimitation.code === "request_cap")
+    ) {
+      scanLimitation = { kind: "limitation", code: "schema_drift" };
     }
     const resume: Readonly<{
       historyScanResumePage?: number;
