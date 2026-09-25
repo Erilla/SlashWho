@@ -3814,6 +3814,9 @@ describe("PostgreSQL repositories", () => {
           {
             raidId: "43",
             raidName: "Nerub-ar Palace",
+            // So a combined zone's wipe can be placed in its raid (#492).
+            bossName: "Nexus-Princess Ky'veza",
+            journalBossId: "2920",
             attemptedAt: "2026-03-01T11:00:00.000Z",
             // So a wipe found through attendance can be re-read (#435).
             reportUrl: "https://www.warcraftlogs.com/reports/wipe"
@@ -6252,6 +6255,44 @@ describe("PostgreSQL repositories", () => {
           });
         }
       );
+
+      it("marks read only the fights a targeted search publishes", async () => {
+        // Break caught (#492 review): a search that parsed another raid's fight
+        // on the same night restamped that stored, unparsed kill as read, so no
+        // later run would parse it.
+        await publishOrdinary();
+        const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+        const searchId = await searchTier(searchedAt);
+
+        await repositories.evidence.publish(searchId, {
+          state: "complete",
+          limitationCode: null,
+          parseLimitationCode: null,
+          scanSkipped: true,
+          rankedBackfillCursor: null,
+          kills: [found],
+          wipes: [],
+          tierBests: [],
+          cuttingEdges: [],
+          parsedFightUrls: [found.fightUrl, nerubar.fightUrl],
+          completedAt: searchedAt
+        });
+
+        const rows = await pool.query<{
+          fight_url: string;
+          parses_read_at: Date | null;
+        }>(
+          `SELECT fight_url, parses_read_at FROM character_mythic_kills
+            WHERE evidence_run_id = $1`,
+          [searchId]
+        );
+        const readAt = new Map(
+          rows.rows.map((row) => [row.fight_url, row.parses_read_at])
+        );
+        expect(readAt.get(found.fightUrl)).toEqual(searchedAt);
+        expect(readAt.has(nerubar.fightUrl)).toBe(true);
+        expect(readAt.get(nerubar.fightUrl)).toBeNull();
+      });
 
       it("lets no targeted search refresh the ordinary evidence, or make it due", async () => {
         const ordinaryId = await publishOrdinary();

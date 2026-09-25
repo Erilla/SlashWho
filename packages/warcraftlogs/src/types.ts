@@ -466,6 +466,14 @@ export interface WarcraftLogsGateway {
        * tier search, the ranked walk and parse work can limit the result.
        */
       targetedOnly?: boolean;
+      /**
+       * The one Journal raid whose kills are parsed. A targeted search's
+       * reports can hold another raid's fights from the same nights, and
+       * parsing them would spend its budget on work it does not publish.
+       * Resolved by boss as well as zone, so a combined zone's kills are
+       * placed in their own raid.
+       */
+      parseJournalRaidId?: string;
       /** An explicit search of one tier's guild attendance (#435). */
       tierSearch?: WarcraftLogsTierSearch;
       /** Ranked reports for the same explicit tier search, with durable resume. */

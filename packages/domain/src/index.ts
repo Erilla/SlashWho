@@ -13,6 +13,7 @@ export {
   currentContentEligibilityByRaidId,
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
+  lookupRaidForEvidence,
   lookupRaiderIoBoss,
   raidOffersMythicRankings,
   raidTierConclusion,

@@ -3,6 +3,7 @@ import {
   currentContentEligibilityByRaidId,
   isNonRaidZone,
   lookupRaidByName,
+  lookupRaidForEvidence,
   raidOffersMythicRankings,
   supportedRegions,
   type CharacterKey
@@ -2347,6 +2348,8 @@ export function createWarcraftLogsClient(
        * tier search, the ranked walk and parse work can limit the result.
        */
       targetedOnly?: boolean;
+      /** The one Journal raid whose kills are parsed; see the gateway type. */
+      parseJournalRaidId?: string;
       /** An explicit search of one tier's guild attendance (#435). */
       tierSearch?: WarcraftLogsTierSearch;
       rankedBackfill?: Readonly<{
@@ -3251,6 +3254,13 @@ export function createWarcraftLogsClient(
       // read cleanly once, and a concluded tier cannot produce a new one.
       if (options.terminalRaidIds?.parses.has(kill.raidId)) continue;
       if (options.hydratedFightUrls?.has(kill.fightUrl)) continue;
+      // Another raid's kill on a targeted search's nights is not its to parse.
+      if (
+        options.parseJournalRaidId !== undefined &&
+        lookupRaidForEvidence(kill)?.raidId !== options.parseJournalRaidId
+      ) {
+        continue;
+      }
       const raidsInGroup = groupRaidIds.get(kill.reportCode);
       if (raidsInGroup) raidsInGroup.add(kill.raidId);
       else groupRaidIds.set(kill.reportCode, new Set([kill.raidId]));

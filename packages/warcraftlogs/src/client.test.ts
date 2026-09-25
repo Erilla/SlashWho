@@ -1811,6 +1811,39 @@ describe("Warcraft Logs gateway", () => {
     expect(reportCodes).toEqual([]);
   });
 
+  it("parses only the one raid a targeted search names", async () => {
+    // Break caught (#492 review): a tier search's reports can hold another
+    // raid's kills, and parsing them spent its budget on fights it discards.
+    const parsedFor = async (parseJournalRaidId: string) => {
+      const reportCodes: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables?: { code?: string };
+        };
+        if (body.query.includes("CharacterZoneParses")) {
+          return zoneRankingsResponse([]);
+        }
+        if (body.query.includes("ReportFightParses")) {
+          reportCodes.push(body.variables?.code ?? "?");
+          return emptyRankingsResponse(body.variables?.code ?? "report");
+        }
+        return jsonResponse(performanceReport([26]));
+      });
+      await client.getFirstKillReports(key, {
+        requestCap: 3,
+        parseRequestCap: 5,
+        parseJournalRaidId
+      });
+      return reportCodes;
+    };
+
+    // The fixture's kill is in Nerub-ar Palace.
+    expect(await parsedFor("1296")).toEqual([]);
+    expect(await parsedFor("1273")).not.toEqual([]);
+  });
+
   it("names the raids a zone failure touched so the rest can still settle", async () => {
     // A tier only goes terminal if the run that read it reported no limitation
     // for *it*. One zone's drift must neither freeze the others nor block them.

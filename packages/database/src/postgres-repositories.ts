@@ -1,7 +1,7 @@
 import type { PublicErrorCode } from "@slashwho/contracts";
 import {
   isNonRaidZone,
-  lookupRaidByName,
+  lookupRaidForEvidence,
   toRaiderIoUrl,
   type CharacterGuild,
   type CharacterKey
@@ -1189,7 +1189,7 @@ async function loadLatestTierSearchKills(
     }))
     .filter(
       ({ kill, journalRaidId }) =>
-        lookupRaidByName(kill.raidName)?.raidId === journalRaidId
+        lookupRaidForEvidence(kill)?.raidId === journalRaidId
     )
     .map(({ kill }) => kill);
 }
@@ -5286,7 +5286,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           // Fights this run got a ranking answer about, whatever the answer
           // was. A fight answered with nothing is what makes the difference:
           // recorded, it stops being re-requested every run (#297).
-          const parsedFightUrls = new Set(input.parsedFightUrls ?? []);
+          // A targeted search vouches only for the fights it publishes. One it
+          // parsed but left out -- another raid's, on the same night -- keeps
+          // the answer time it had, so a stored unparsed kill is not marked
+          // read without its parses (#492 review).
+          const parsedFightUrls = new Set(
+            (input.parsedFightUrls ?? []).filter(
+              (url) => !targeted || incomingFightUrls.has(url)
+            )
+          );
           const kills = new Map<string, (typeof incomingKills)[number]>(
             previous.kills.map((kill) => [
               kill.fightUrl,
@@ -5789,12 +5797,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           kills: (completed?.kills ?? []).map((kill) => ({
             raidId: kill.raidId,
             raidName: kill.raidName,
+            bossName: kill.bossName,
+            journalBossId: kill.journalBossId,
             killedAt: kill.killedAt,
             reportUrl: kill.reportUrl
           })),
           wipes: (completed?.wipes ?? []).map((wipe) => ({
             raidId: wipe.raidId,
             raidName: wipe.raidName,
+            bossName: wipe.bossName,
+            journalBossId: wipe.journalBossId,
             attemptedAt: wipe.attemptedAt,
             reportUrl: wipe.reportUrl
           })),

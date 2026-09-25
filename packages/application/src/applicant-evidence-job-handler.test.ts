@@ -5716,6 +5716,95 @@ describe("searching one tier from the dossier", () => {
     expect(result.tierBests.map((parse) => parse.raidId)).toEqual(["23"]);
   });
 
+  it("places a combined zone's fights in their raid by boss", async () => {
+    // Break caught (#492 review): Warcraft Logs files the opening Midnight
+    // raids under one zone, `VS / DR / MQD`, which names no raid. Scoping by
+    // zone name alone published nothing a Voidspire search found.
+    const voidspire = supportedRaidCatalogue().find(
+      (raid) => raid.raidName === "The Voidspire"
+    )!;
+    const evidence = store({
+      ...run,
+      mode: "tier_search",
+      tierSearchRaidId: voidspire.raidId
+    } as typeof run);
+    const combined = (
+      code: string,
+      bossName: string,
+      overrides: Record<string, unknown> = {}
+    ) => ({
+      ...foundKill("46", "VS / DR / MQD", code),
+      bossName,
+      journalBossId: null,
+      killedAt: "2026-04-01T20:00:00.000Z",
+      ...overrides
+    });
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [
+        combined("voidReport", "Imperator Averzian"),
+        combined("dreamReport", "Chimaerus the Undreamt God")
+      ],
+      wipes: [
+        {
+          ...foundWipe("46", "VS / DR / MQD", "voidReport"),
+          bossName: "Vorasius",
+          journalBossId: null
+        },
+        {
+          ...foundWipe("46", "VS / DR / MQD", "dreamReport"),
+          bossName: "Chimaerus the Undreamt God",
+          journalBossId: null
+        }
+      ],
+      tierBests: [
+        {
+          ...foundTierBest("46", "VS / DR / MQD"),
+          bossName: "Imperator Averzian"
+        },
+        {
+          ...foundTierBest("46", "VS / DR / MQD"),
+          bossName: "Chimaerus the Undreamt God"
+        }
+      ]
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const result = evidence.published.at(-1)!.result;
+    expect(result.kills.map((kill) => kill.bossName)).toEqual([
+      "Imperator Averzian"
+    ]);
+    expect(result.wipes.map((wipe) => wipe.bossName)).toEqual(["Vorasius"]);
+    expect(result.tierBests.map((parse) => parse.bossName)).toEqual([
+      "Imperator Averzian"
+    ]);
+  });
+
+  it("claims parses only for the fights it publishes", async () => {
+    // Break caught (#492 review): an out-of-scope fight dropped from the kills
+    // kept its URL in `parsedFightUrls`, so publishing restamped a stored,
+    // unparsed kill of another raid as read and no later run parsed it.
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const palace = foundKill("23", "The Eternal Palace", "palaceReport");
+    const crucible = foundKill("21", "Crucible of Storms", "crucibleReport");
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [palace, crucible],
+      parsedFightUrls: [palace.fightUrl, crucible.fightUrl]
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const options = (
+      getFirstKillReports.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    // The gateway is told which raid's kills are this search's to parse.
+    expect(options.parseJournalRaidId).toBe(eternalPalace.raidId);
+    const result = evidence.published.at(-1)!.result;
+    expect(result.parsedFightUrls).toEqual([palace.fightUrl]);
+  });
+
   it("publishes an empty search as complete, carrying no history state, and settles nothing", async () => {
     const evidence = withStoredTier(store(tierRun as typeof run));
     evidence.historicAliases = async () => [

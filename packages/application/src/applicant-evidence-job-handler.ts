@@ -17,7 +17,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import {
   canonicalCharacterId,
   isAccountWideCuttingEdgeAchievement,
-  lookupRaidByName
+  lookupRaidForEvidence
 } from "@slashwho/domain";
 import type {
   MythicBossRanking,
@@ -1600,7 +1600,9 @@ export function createApplicantEvidenceJobHandler(
                   historicAliases.length > 0
                     ? { ...terminalRaidIds, kills: new Set<string>() }
                     : terminalRaidIds,
-                ...(targeted ? { targetedOnly: true } : {}),
+                ...(targeted && tierSearchRaidId
+                  ? { targetedOnly: true, parseJournalRaidId: tierSearchRaidId }
+                  : {}),
                 ...(!targeted && historicAliases.length === 0 && killScanFloor
                   ? { killScanFloor }
                   : {}),
@@ -1923,24 +1925,39 @@ export function createApplicantEvidenceJobHandler(
         else await phaseLedger?.skipPendingBefore("raiderio_rankings");
         // A targeted search publishes only its own raid. A report found on
         // the tier's nights can hold another raid's fights too, and those are
-        // the ordinary collection's to find and parse.
-        const inScope = (raidName: string) =>
-          !targeted || lookupRaidByName(raidName)?.raidId === tierSearchRaidId;
+        // the ordinary collection's to find and parse. The boss decides, as
+        // it does in the dossier: a combined zone such as `VS / DR / MQD`
+        // names no raid of its own.
+        const inScope = (
+          evidence: Readonly<{
+            raidName: string;
+            bossName: string;
+            journalBossId?: string | null;
+          }>
+        ) =>
+          !targeted ||
+          lookupRaidForEvidence({
+            ...evidence,
+            journalBossId: evidence.journalBossId ?? null
+          })?.raidId === tierSearchRaidId;
         const allKills = new Map(
           carriedRankedKills.map((kill) => [kill.fightUrl, kill] as const)
         );
         for (const kill of response.kills) {
-          if (inScope(kill.raidName)) allKills.set(kill.fightUrl, kill);
+          if (inScope(kill)) allKills.set(kill.fightUrl, kill);
         }
         const publishedKills = [...allKills.values()].map(
           toCharacterMythicKillInput
         );
-        const publishedWipes = response.wipes.filter((wipe) =>
-          inScope(wipe.raidName)
-        );
-        const publishedTierBests = response.tierBests.filter((parse) =>
-          inScope(parse.raidName)
-        );
+        const publishedWipes = response.wipes.filter(inScope);
+        const publishedTierBests = response.tierBests.filter(inScope);
+        // Publishing restamps every listed fight as parsed, stored ones
+        // included, so a fight left out of the kills must be left out here
+        // too: its stored parse would otherwise be marked read and never
+        // fetched again.
+        const publishedParsedFightUrls = targeted
+          ? response.parsedFightUrls.filter((url) => allKills.has(url))
+          : response.parsedFightUrls;
         if (options.raiderio && !targeted) {
           const requests = new Map<string, MythicBossRankingsOptions>();
           for (const kill of publishedKills) {
@@ -2130,7 +2147,7 @@ export function createApplicantEvidenceJobHandler(
             wipes: publishedWipes,
             tierBests: publishedTierBests,
             cuttingEdges,
-            parsedFightUrls: response.parsedFightUrls,
+            parsedFightUrls: publishedParsedFightUrls,
             completedAt: now()
           },
           targeted ? undefined : response.troubledRaidIds

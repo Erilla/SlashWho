@@ -59,6 +59,34 @@ describe("tier search policy", () => {
     expect([...zones].sort()).toEqual(["2023", "23"]);
   });
 
+  it("places a combined zone in the tier by its boss", () => {
+    // Break caught (#492 review): `VS / DR / MQD` names no raid, so a search
+    // of The Voidspire could not ignore that zone's parse marks.
+    const voidspire = supportedRaidCatalogue().find(
+      (raid) => raid.raidName === "The Voidspire"
+    )!;
+    const combined = (bossName: string) => ({
+      raidId: "46",
+      raidName: "VS / DR / MQD",
+      bossName,
+      journalBossId: null,
+      killedAt: "2026-04-01T20:00:00.000Z"
+    });
+
+    expect([
+      ...tierSearchZoneIds(voidspire.raidId, {
+        kills: [combined("Imperator Averzian")],
+        wipes: []
+      })
+    ]).toEqual(["46"]);
+    expect([
+      ...tierSearchZoneIds(voidspire.raidId, {
+        kills: [combined("Chimaerus the Undreamt God")],
+        wipes: []
+      })
+    ]).toEqual([]);
+  });
+
   it("carves its cap out of the scan's rather than adding to the run's", () => {
     // The run budget is guarded as one number; a tier search that added its
     // own on top would spend past it unseen.
