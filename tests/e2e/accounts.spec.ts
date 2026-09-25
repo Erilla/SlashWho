@@ -65,6 +65,12 @@ test("registration needs mailbox verification before sign-in", async ({
   await page.getByRole("button", { name: "Verify email" }).click();
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
+  await expect(page.locator("main").getByText(email)).toBeVisible();
+  await expect(
+    page
+      .getByRole("navigation", { name: "Account settings" })
+      .getByRole("link", { name: /Change password/ })
+  ).toBeVisible();
 });
 
 test("recovery replaces a verified account password through its mailed link", async ({

@@ -16,7 +16,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: null,
         startedAt: null,
-        completedAt: null
+        completedAt: null,
+        phases: []
       },
       {
         key: { region: "eu", realm: "silvermoon", name: "retrying" },
@@ -28,7 +29,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: new Date("2026-09-20T12:15:00Z"),
         errorCode: null,
         startedAt: new Date("2026-09-20T11:45:00Z"),
-        completedAt: null
+        completedAt: null,
+        phases: []
       },
       {
         key: { region: "eu", realm: "silvermoon", name: "running" },
@@ -40,7 +42,20 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: null,
         startedAt: new Date("2026-09-20T11:50:00Z"),
-        completedAt: null
+        completedAt: null,
+        phases: [
+          {
+            id: "warcraft_logs_history",
+            state: "limited",
+            limitationCode: "schema_drift"
+          },
+          {
+            id: "warcraft_logs_fight_parses",
+            state: "active",
+            limitationCode: null
+          },
+          { id: "publication", state: "pending", limitationCode: null }
+        ]
       },
       {
         key: { region: "eu", realm: "silvermoon", name: "partial" },
@@ -52,7 +67,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: null,
         startedAt: new Date("2026-09-20T10:00:00Z"),
-        completedAt: new Date("2026-09-20T11:00:00Z")
+        completedAt: new Date("2026-09-20T11:00:00Z"),
+        phases: []
       },
       {
         key: { region: "eu", realm: "silvermoon", name: "failed" },
@@ -64,7 +80,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: "warcraft_logs_unavailable",
         startedAt: new Date("2026-09-20T09:00:00Z"),
-        completedAt: new Date("2026-09-20T09:30:00Z")
+        completedAt: new Date("2026-09-20T09:30:00Z"),
+        phases: []
       }
     ];
     const service = createCollectionMonitorService({
@@ -110,7 +127,16 @@ describe("operator collection monitor", () => {
           attempt: 1,
           startedAt: "2026-09-20T11:50:00.000Z",
           elapsedSeconds: 600,
-          retryAfterAt: null
+          retryAfterAt: null,
+          collectionProgress: [
+            {
+              id: "warcraft_logs_history",
+              state: "limited",
+              limitationCode: "schema_changed"
+            },
+            { id: "warcraft_logs_fight_parses", state: "active" },
+            { id: "publication", state: "pending" }
+          ]
         }
       ],
       completed: [
@@ -145,7 +171,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: null,
         startedAt: new Date("2026-09-20T09:00:00Z"),
-        completedAt: new Date("2026-09-20T09:30:00Z")
+        completedAt: new Date("2026-09-20T09:30:00Z"),
+        phases: []
       },
       {
         key: { region: "eu", realm: "silvermoon", name: "partial" },
@@ -157,7 +184,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: null,
         startedAt: new Date("2026-09-20T10:00:00Z"),
-        completedAt: new Date("2026-09-20T11:00:00Z")
+        completedAt: new Date("2026-09-20T11:00:00Z"),
+        phases: []
       },
       {
         key: { region: "eu", realm: "silvermoon", name: "failed" },
@@ -169,7 +197,8 @@ describe("operator collection monitor", () => {
         retryAfterAt: null,
         errorCode: "warcraft_logs_unavailable",
         startedAt: new Date("2026-09-20T09:00:00Z"),
-        completedAt: new Date("2026-09-20T09:30:00Z")
+        completedAt: new Date("2026-09-20T09:30:00Z"),
+        phases: []
       }
     ];
     const service = createCollectionMonitorService({

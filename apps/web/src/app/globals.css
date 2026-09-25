@@ -1305,6 +1305,72 @@ a {
   color: var(--muted);
 }
 
+/* A run's steps, indented beneath the character it is collecting. Collapsed to
+   the current step; the checklist is for when something looks stuck. */
+.collection-progress {
+  margin-top: 0.35rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border-strong);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* In the monitor the cell already separates it from its neighbours. */
+td > .collection-progress {
+  margin-top: 0;
+}
+
+.collection-progress-summary {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.collection-progress-spinner {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.collection-progress-steps {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.collection-progress-step {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.5rem;
+}
+
+.collection-progress-step[data-state="active"] {
+  color: var(--text);
+}
+
+.collection-progress-step[data-state="pending"],
+.collection-progress-step[data-state="skipped"] {
+  opacity: 0.75;
+}
+
+.collection-progress-state {
+  font-style: italic;
+}
+
+.collection-progress-step[data-state="limited"] .collection-progress-state {
+  color: var(--partial);
+}
+
+.collection-progress-step[data-state="failed"] .collection-progress-state,
+.collection-progress-step[data-state="cancelled"] .collection-progress-state {
+  color: var(--danger);
+}
+
 .source-badge {
   flex: none;
   border: 1px solid var(--border-strong);
@@ -2576,6 +2642,88 @@ a {
 
 .account-form-links a {
   color: inherit;
+}
+
+.account-page .account-form-links a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.account-page-status {
+  color: var(--muted);
+}
+
+.account-identity {
+  gap: 0.3rem;
+}
+
+.account-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.account-email {
+  overflow-wrap: anywhere;
+  font-size: 1.1rem;
+  font-weight: 650;
+}
+
+.account-page .account-notice {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--partial);
+  border-radius: 0.4rem;
+  color: var(--text);
+}
+
+.account-actions {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-action {
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem 2.75rem 1rem 1.25rem;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface);
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.account-action::after {
+  content: "›";
+  position: absolute;
+  top: 50%;
+  right: 1.25rem;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 1.4rem;
+}
+
+.account-action:hover,
+.account-action:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.account-action-title {
+  font-weight: 650;
+}
+
+.account-action-description {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .operator-login-form [role="alert"],

@@ -1,6 +1,7 @@
 import {
   applicantDossierSchema,
   type ApplicantDossier as ContractApplicantDossier,
+  type CollectionPhase,
   type DossierLimitation as ContractDossierLimitation
 } from "@slashwho/contracts";
 import type {
@@ -38,6 +39,10 @@ import type {
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { encryptCredential } from "./credential-encryption";
+import {
+  collectionProgress,
+  contractLimitationCode
+} from "./collection-progress";
 import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 import {
   historicWorldRankForKill,
@@ -221,14 +226,6 @@ type CuttingEdgeEvidenceResult = Readonly<{
   cuttingEdges: readonly DossierCuttingEdgeEvidence[];
   limitations: readonly DossierLimitation[];
 }>;
-
-function contractLimitationCode(
-  code: string
-): ContractDossierLimitation["code"] {
-  return code === "schema_drift"
-    ? "schema_changed"
-    : (code as ContractDossierLimitation["code"]);
-}
 
 function limitationMessage(
   source: EvidenceSource,
@@ -453,7 +450,12 @@ async function gatherCharacterEvidence(
     /** The subject the evidence is shown under, when not `character` itself. */
     attributeTo?: CharacterKey;
   }
-): Promise<EvidenceResult & { gathering: boolean }> {
+): Promise<
+  EvidenceResult & {
+    gathering: boolean;
+    collectionProgress: readonly CollectionPhase[];
+  }
+> {
   const attributed = options.attributeTo ?? character.key;
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
@@ -487,6 +489,9 @@ async function gatherCharacterEvidence(
   }
   const limitations: DossierLimitation[] = [];
   const completed = reservation.completed;
+  // The same run `gathering` below is keyed on, so the steps describe exactly
+  // the collection the row's spinner reports.
+  const activeRun = reservation.active;
   if (completed?.run.limitationCode) {
     limitations.push(
       limitation(
@@ -564,6 +569,11 @@ async function gatherCharacterEvidence(
     // below stays keyed on `kind` -- fresh evidence does not become incomplete
     // because a refresh is running over it.
     gathering: reservation.active !== null,
+    collectionProgress: activeRun
+      ? collectionProgress(
+          (await options.repositories.evidence.listPhases?.(activeRun.id)) ?? []
+        )
+      : [],
     evidenceState:
       reservation.kind === "fresh"
         ? completed?.run.status === "partial"
@@ -596,9 +606,14 @@ function uniqueBy<T>(items: readonly T[], keyOf: (item: T) => string | null) {
  * on any collection holds the subject back from negative conclusions, and the
  * least settled state is the one shown.
  */
+type IdentityEvidence = EvidenceResult & {
+  gathering: boolean;
+  collectionProgress: readonly CollectionPhase[];
+};
+
 function mergeIdentityEvidence(
-  results: readonly (EvidenceResult & { gathering: boolean })[]
-): EvidenceResult & { gathering: boolean } {
+  results: readonly IdentityEvidence[]
+): IdentityEvidence {
   const [own, ...others] = results;
   if (!own) throw new Error("identity_evidence_missing");
   if (others.length === 0) return own;
@@ -632,7 +647,11 @@ function mergeIdentityEvidence(
     ),
     collectedAt:
       collected.length === 0 ? null : new Date(Math.min(...collected)),
-    gathering: results.some((item) => item.gathering)
+    gathering: results.some((item) => item.gathering),
+    // One row shows one collection's steps: the subject's own while it runs,
+    // otherwise whichever other name is still collecting.
+    collectionProgress:
+      results.find((item) => item.gathering)?.collectionProgress ?? []
   };
 }
 
@@ -872,7 +891,11 @@ async function restoreMissingHistoricRanks(options: {
 
 function serializeDossierSubject(
   character: DossierSubject,
-  evidence?: { evidenceState: DossierEvidenceState; gathering: boolean },
+  evidence?: {
+    evidenceState: DossierEvidenceState;
+    gathering: boolean;
+    collectionProgress?: readonly CollectionPhase[];
+  },
   excluded = false,
   historicAliases: readonly CharacterKey[] = []
 ) {
@@ -904,7 +927,10 @@ function serializeDossierSubject(
           // the collection the page was reporting at the top.
           researchState: evidence.gathering
             ? ("gathering" as const)
-            : ("complete" as const)
+            : ("complete" as const),
+          ...(evidence.gathering && evidence.collectionProgress?.length
+            ? { collectionProgress: [...evidence.collectionProgress] }
+            : {})
         }
       : {})
   };

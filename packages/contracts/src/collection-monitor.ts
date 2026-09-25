@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { characterKeySchema } from "./dossier";
+import { characterKeySchema, collectionPhaseSchema } from "./dossier";
 
 const timestampSchema = z.iso.datetime({ offset: true });
 
@@ -11,7 +11,9 @@ export const collectionMonitorInFlightRunSchema = z
     attempt: z.number().int().nonnegative(),
     startedAt: timestampSchema.nullable(),
     elapsedSeconds: z.number().int().nonnegative().nullable(),
-    retryAfterAt: timestampSchema.nullable()
+    retryAfterAt: timestampSchema.nullable(),
+    /** The run's steps, as the dossier shows them; absent without a ledger. */
+    collectionProgress: z.array(collectionPhaseSchema).min(1).optional()
   })
   .strict();
 

@@ -17,6 +17,7 @@ export type {
 export {
   applicantDossierSchema,
   characterKeySchema,
+  collectionPhaseSchema,
   connectedCharacterExclusionRequestSchema,
   createDossierRequestSchema,
   warcraftLogsCharacterResolutionSchema,
@@ -30,6 +31,7 @@ export {
   dossierCuttingEdgeSchema,
   dossierFirstKillSchema,
   dossierGuildSchema,
+  dossierLimitationCodeSchema,
   dossierLimitationSchema,
   dossierResearchSchema,
   dossierRaidSchema,
@@ -38,6 +40,7 @@ export {
 export type {
   ApplicantDossier,
   CharacterKey,
+  CollectionPhase,
   ConnectedCharacterExclusionRequest,
   CreateDossierRequest,
   WarcraftLogsCharacterResolution,
@@ -49,6 +52,7 @@ export type {
   DossierEvidenceState,
   DossierCuttingEdge,
   DossierLimitation,
+  DossierLimitationCode,
   DossierResearch,
   DossierSourceLabel
 } from "./dossier";

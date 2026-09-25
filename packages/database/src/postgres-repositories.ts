@@ -24,6 +24,7 @@ import type {
   CreateSnapshotInput,
   DiscoveryRun,
   EvidenceCollectionDomain,
+  EvidenceMonitorPhase,
   EvidenceRunPhase,
   FingerprintAdmission,
   FingerprintContinuationAdmission,
@@ -6179,22 +6180,41 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           error_code: string | null;
           started_at: Date | null;
           completed_at: Date | null;
+          phases: EvidenceMonitorPhase[];
         }>(
-          `SELECT region, realm_slug, normalized_name, status,
-                  evidence_version, attempt, limitation_code,
-                  parse_limitation_code, retry_after_at, error_code,
-                  started_at, completed_at
-             FROM character_evidence_runs
+          // One query rather than one per run: a large dossier queues hundreds.
+          // The run id stays inside the join and never reaches the projection.
+          `SELECT runs.region, runs.realm_slug, runs.normalized_name,
+                  runs.status, runs.evidence_version, runs.attempt,
+                  runs.limitation_code, runs.parse_limitation_code,
+                  runs.retry_after_at, runs.error_code, runs.started_at,
+                  runs.completed_at, steps.phases
+             FROM character_evidence_runs runs
+             CROSS JOIN LATERAL (
+               SELECT COALESCE(
+                        json_agg(
+                          json_build_object(
+                            'id', phase.phase_id,
+                            'state', phase.state,
+                            'limitationCode', phase.limitation_code
+                          ) ORDER BY phase.ordinal
+                        ),
+                        '[]'::json
+                      ) AS phases
+                 FROM character_evidence_run_phases phase
+                WHERE phase.run_id = runs.id
+                  AND runs.status IN ('queued', 'running', 'retrying')
+             ) steps
             ORDER BY CASE
-                       WHEN status IN ('queued', 'running', 'retrying') THEN 0
-                       WHEN status IN ('complete', 'partial') THEN 1
+                       WHEN runs.status IN ('queued', 'running', 'retrying') THEN 0
+                       WHEN runs.status IN ('complete', 'partial') THEN 1
                        ELSE 2
                      END,
-                     CASE WHEN status IN ('queued', 'running', 'retrying')
-                       THEN COALESCE(started_at, created_at)
+                     CASE WHEN runs.status IN ('queued', 'running', 'retrying')
+                       THEN COALESCE(runs.started_at, runs.created_at)
                      END ASC NULLS LAST,
-                     completed_at DESC NULLS LAST,
-                     id DESC`
+                     runs.completed_at DESC NULLS LAST,
+                     runs.id DESC`
         );
         return result.rows.map((row) => ({
           key: {
@@ -6210,7 +6230,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           retryAfterAt: row.retry_after_at,
           errorCode: row.error_code,
           startedAt: row.started_at,
-          completedAt: row.completed_at
+          completedAt: row.completed_at,
+          phases: row.phases
         }));
       },
 
