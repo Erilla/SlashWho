@@ -5852,6 +5852,60 @@ describe("PostgreSQL repositories", () => {
       ).toEqual([]);
     });
 
+    it.each(["sql", "json"] as const)(
+      "resumes ordinary work after a ranked walk finishes with %s null cursor",
+      async (storedAs) => {
+        await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+        const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+        const searched = await repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: "946",
+          at: searchedAt,
+          searchedSince: dayBefore
+        });
+        if (searched.kind !== "reserved")
+          throw new Error("tier_search_not_reserved");
+        await repositories.evidence.claim(searched.run.id, 1);
+        const retryAt = new Date("2026-09-23T12:30:00.000Z");
+        await repositories.evidence.publish(searched.run.id, {
+          state: "partial",
+          limitationCode: "request_cap",
+          parseLimitationCode: null,
+          rankedBackfillCursor: null,
+          retryAfterAt: retryAt,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          completedAt: searchedAt
+        });
+        const stored = await pool.query<{ cursor_is_null: boolean }>(
+          `SELECT ranked_backfill_cursor IS NULL AS cursor_is_null
+           FROM character_evidence_runs WHERE id = $1`,
+          [searched.run.id]
+        );
+        expect(stored.rows[0]?.cursor_is_null).toBe(true);
+        // Prior deployments wrote JSON null; those rows must also stop the
+        // ranked continuation instead of restarting it from partition one.
+        if (storedAs === "json") {
+          await pool.query(
+            `UPDATE character_evidence_runs
+              SET ranked_backfill_cursor = 'null'::jsonb WHERE id = $1`,
+            [searched.run.id]
+          );
+        }
+        expect(await repositories.evidence.listResumable(10, retryAt)).toEqual(
+          expect.arrayContaining([rootKey])
+        );
+        const resumed = await repositories.evidence.reserve({
+          key: rootKey,
+          freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
+          at: retryAt
+        });
+        if (resumed.kind !== "reserved") throw new Error("resume_not_reserved");
+        expect(resumed.run.mode).toBe("full");
+      }
+    );
+
     it("continues the saved cursor after a failed continuation cools down", async () => {
       await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
       const first = await repositories.evidence.reserveTierSearch({
