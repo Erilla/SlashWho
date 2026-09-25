@@ -67,6 +67,25 @@ it("shows comma-separated historic identities on hover and keyboard focus", () =
   );
 });
 
+it("names Warcraft Logs-verified aliases alongside declared ones, once each", () => {
+  render(
+    <DossierCharacterName
+      character={{
+        ...mage,
+        historicAliases: [{ region: "eu", realm: "neptulon", name: "erilla" }],
+        warcraftLogsAliases: [
+          { region: "eu", realm: "Neptulon", name: "Erilla" },
+          { region: "eu", realm: "silvermoon", name: "ryun" }
+        ]
+      }}
+      showGuild
+    />
+  );
+  expect(screen.getByRole("tooltip")).toHaveTextContent(
+    "Also known as: Erilla-Neptulon, Ryun-Silvermoon"
+  );
+});
+
 it("does not create an alias tooltip when no aliases exist", () => {
   render(<DossierCharacterName character={mage} showGuild />);
   expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();

@@ -1374,17 +1374,29 @@ export function createApplicantEvidenceJobHandler(
               run.key,
               activeContext.signal
             );
-            if (
-              identity.kind === "identity" &&
-              canonicalCharacterId(identity.key) ===
-                canonicalCharacterId(run.key)
-            ) {
-              characterId = identity.characterId;
+            if (identity.kind === "identity") {
+              const ownKey =
+                canonicalCharacterId(identity.key) ===
+                canonicalCharacterId(run.key);
+              if (ownKey) characterId = identity.characterId;
+              // Recorded even when the answer names another key: a former
+              // name that Warcraft Logs answers with the current one is the
+              // rename that makes both one dossier identity (#423). Only the
+              // read above is limited to the run's own key.
               // Bookkeeping, not evidence: a failed write must not cost the
               // collection it accompanies.
-              await evidence
-                .recordWarcraftLogsCharacterId?.(run.key, characterId, now())
-                .catch(() => undefined);
+              const at = now();
+              for (const recordedKey of ownKey
+                ? [run.key]
+                : [run.key, identity.key]) {
+                await evidence
+                  .recordWarcraftLogsCharacterId?.(
+                    recordedKey,
+                    identity.characterId,
+                    at
+                  )
+                  .catch(() => undefined);
+              }
             }
             await phaseLedger?.transition(
               "warcraft_logs_identity_resolution",

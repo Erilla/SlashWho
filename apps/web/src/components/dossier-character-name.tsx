@@ -48,6 +48,7 @@ function resolveCharacter(
   className: string | null;
   guild?: DossierCharacter["guild"];
   historicAliases?: DossierCharacter["historicAliases"];
+  warcraftLogsAliases?: DossierCharacter["warcraftLogsAliases"];
 }> {
   if ("displayName" in reference) return reference;
 
@@ -98,7 +99,17 @@ export function DossierCharacterName({
   const characters = useContext(DossierCharactersContext);
   const resolved = resolveCharacter(character, characters);
   const tooltipId = useId();
-  const historicAliases = showGuild ? (resolved.historicAliases ?? []) : [];
+  // A reviewer can declare a name Warcraft Logs has also verified, so the
+  // two lists overlap; the tooltip names each former identity once.
+  const historicAliases = showGuild
+    ? [
+        ...(resolved.historicAliases ?? []),
+        ...(resolved.warcraftLogsAliases ?? [])
+      ].filter(
+        (alias, index, all) =>
+          all.findIndex((other) => sameCharacter(other, alias)) === index
+      )
+    : [];
   const modifier = colourClass(resolved.className);
   const className = [
     modifier

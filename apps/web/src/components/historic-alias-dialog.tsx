@@ -61,7 +61,10 @@ export function HistoricAliasDialog({
       setError("Enter a character name and realm, without a URL.");
       return;
     }
-    const alreadyLinked = (character.historicAliases ?? []).some(
+    const alreadyLinked = [
+      ...(character.historicAliases ?? []),
+      ...(character.warcraftLogsAliases ?? [])
+    ].some(
       (alias) =>
         alias.name.toLowerCase() === name.trim().toLowerCase() &&
         alias.realm.toLowerCase() === realm.trim().toLowerCase()

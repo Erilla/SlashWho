@@ -3964,6 +3964,52 @@ describe("PostgreSQL repositories", () => {
     );
   });
 
+  it("reads the recorded Warcraft Logs IDs of many keys at once", async () => {
+    const current = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "batchryun"
+    } as const;
+    const former = {
+      region: "eu",
+      realm: "neptulon",
+      name: "batcherilla"
+    } as const;
+    const unknown = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "batchunknown"
+    } as const;
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      current,
+      40989141,
+      new Date("2026-09-22T09:00:00.000Z")
+    );
+    await repositories.evidence.recordWarcraftLogsCharacterId(
+      former,
+      40989141,
+      new Date("2026-09-22T09:00:00.000Z")
+    );
+
+    const recorded = await repositories.evidence.warcraftLogsCharacterIds!([
+      current,
+      former,
+      unknown
+    ]);
+
+    expect(
+      [...recorded].sort((left, right) =>
+        left.key.name.localeCompare(right.key.name)
+      )
+    ).toEqual([
+      { key: former, characterId: 40989141 },
+      { key: current, characterId: 40989141 }
+    ]);
+    await expect(
+      repositories.evidence.warcraftLogsCharacterIds!([])
+    ).resolves.toEqual([]);
+  });
+
   it("refuses to store a Warcraft Logs ID that is not a positive integer", async () => {
     const key = { region: "eu", realm: "silvermoon", name: "badid" } as const;
     for (const id of [0, -1, 1.5]) {

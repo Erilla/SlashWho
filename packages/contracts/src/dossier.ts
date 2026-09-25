@@ -49,6 +49,12 @@ export const dossierCharacterSchema = z
     raiderIoUrl: z.url(),
     historicAliases: z.array(characterKeySchema).optional(),
     /**
+     * Other names that resolved to this character's Warcraft Logs ID, so are
+     * the same character (#423). Unlike `historicAliases` they are verified by
+     * the provider rather than declared by a reviewer, and cannot be removed.
+     */
+    warcraftLogsAliases: z.array(characterKeySchema).optional(),
+    /**
      * The character's guild as at the snapshot. Optional as well as nullable:
      * snapshots committed before this field existed carry no guild at all, and
      * this schema is strict, so requiring it would make them unreadable.

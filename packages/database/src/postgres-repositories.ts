@@ -5865,6 +5865,38 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0]?.character_id ?? null;
       },
 
+      async warcraftLogsCharacterIds(keys) {
+        if (keys.length === 0) return [];
+        const result = await pool.query<{
+          region: string;
+          realm_slug: string;
+          normalized_name: string;
+          character_id: number;
+        }>(
+          `SELECT ids.region, ids.realm_slug, ids.normalized_name,
+                  ids.character_id
+             FROM warcraft_logs_character_ids AS ids
+             JOIN unnest($1::text[], $2::text[], $3::text[])
+                    AS wanted(region, realm_slug, normalized_name)
+               ON ids.region = wanted.region
+              AND ids.realm_slug = wanted.realm_slug
+              AND ids.normalized_name = wanted.normalized_name`,
+          [
+            keys.map((key) => key.region),
+            keys.map((key) => key.realm),
+            keys.map((key) => key.name)
+          ]
+        );
+        return result.rows.map((row) => ({
+          key: {
+            region: row.region as CharacterKey["region"],
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
+          characterId: row.character_id
+        }));
+      },
+
       async markTerminalTiers(key, tiers, at) {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("character_terminal_tier_time_invalid");

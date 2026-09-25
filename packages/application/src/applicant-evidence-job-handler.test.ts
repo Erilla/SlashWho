@@ -4727,12 +4727,17 @@ describe("applicant evidence job handler", () => {
       );
     });
 
-    it("reads by name when Warcraft Logs resolves the key to another character", async () => {
+    it("reads by name, but remembers both keys, when Warcraft Logs answers a key with another", async () => {
       // Break caught: the ID of whatever the name now resolves to would be
       // read while report actors are still matched against the run's key.
+      // It is still recorded under both keys: a former name that Warcraft Logs
+      // answers with the current one is exactly the rename that makes the two
+      // one dossier identity (#423), and skipping the write left that link
+      // unrecorded.
       const evidence = store();
       const recordWarcraftLogsCharacterId = vi.fn(async () => undefined);
       evidence.recordWarcraftLogsCharacterId = recordWarcraftLogsCharacterId;
+      const answered = { ...key, realm: "argent-dawn" };
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
         parsedFightUrls: [],
@@ -4748,7 +4753,7 @@ describe("applicant evidence job handler", () => {
           getFirstKillReports,
           resolveCharacter: vi.fn(async () => ({
             kind: "identity" as const,
-            key: { ...key, realm: "argent-dawn" },
+            key: answered,
             displayName: "Rinn",
             characterId: 40989140
           }))
@@ -4757,7 +4762,10 @@ describe("applicant evidence job handler", () => {
 
       await handler.execute(run.id);
 
-      expect(recordWarcraftLogsCharacterId).not.toHaveBeenCalled();
+      expect(recordWarcraftLogsCharacterId.mock.calls).toEqual([
+        [key, 40989140, expect.any(Date)],
+        [answered, 40989140, expect.any(Date)]
+      ]);
       expect(getFirstKillReports).toHaveBeenCalledWith(
         key,
         expect.not.objectContaining({ characterId: expect.anything() })
