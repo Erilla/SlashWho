@@ -4706,7 +4706,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              )
              SELECT tier_search_raid_id FROM latest
               WHERE status = 'partial' AND ranked_backfill_attempted = true
-                AND ranked_backfill_cursor IS NOT NULL
+                AND jsonb_typeof(ranked_backfill_cursor) = 'object'
                 AND retry_after_at <= $4
                 AND NOT EXISTS (
                   SELECT 1 FROM character_evidence_runs failed
@@ -5507,7 +5507,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.historyScanResumePage ?? null,
               input.historyScanResumeBoundaryReportCode ?? null,
               Object.hasOwn(input, "rankedBackfillCursor"),
-              input.rankedBackfillCursor === undefined
+              // A finished walk is SQL NULL. JSON `null` would satisfy
+              // IS NOT NULL and look like a resumable cursor to old rows.
+              input.rankedBackfillCursor == null
                 ? null
                 : JSON.stringify(input.rankedBackfillCursor),
               Object.hasOwn(input, "historicAliasProgress"),
@@ -6017,14 +6019,17 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                FROM latest
               WHERE latest.due_at IS NOT NULL AND latest.due_at <= $1
                 AND NOT (latest.mode = 'tier_search'
-                         AND latest.ranked_backfill_cursor IS NOT NULL)
+                         AND COALESCE(
+                           jsonb_typeof(latest.ranked_backfill_cursor) = 'object',
+                           false
+                         ))
              UNION ALL
              SELECT ranked.region, ranked.realm_slug, ranked.normalized_name,
                     ranked.retry_after_at AS due_at
                FROM ranked
               WHERE ranked.status = 'partial'
                 AND ranked.ranked_backfill_attempted = true
-                AND ranked.ranked_backfill_cursor IS NOT NULL
+                AND jsonb_typeof(ranked.ranked_backfill_cursor) = 'object'
                 AND ranked.retry_after_at <= $1
                 AND NOT EXISTS (
                   SELECT 1 FROM character_evidence_runs failed
