@@ -64,6 +64,9 @@ test("reveals the dossier page scrollbar while scrolling or near the edge", asyn
   await page.goto("/demo");
 
   const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-dossier-scrollbar", "", {
+    timeout: 15_000
+  });
   const scrollbarColor = () =>
     root.evaluate((element) => getComputedStyle(element).scrollbarColor);
   const hidden = "rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)";
@@ -83,6 +86,101 @@ test("reveals the dossier page scrollbar while scrolling or near the edge", asyn
   await expect.poll(scrollbarColor).not.toBe(hidden);
   await page.mouse.move(20, 200);
   await expect.poll(scrollbarColor).toBe(hidden);
+});
+
+test("colours raid ticks and names by evidence while keeping section hover white", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  const logged = navigation.getByRole("link", {
+    name: "Raid: The Venomous Abyss"
+  });
+  const incomplete = navigation.getByRole("link", {
+    name: "Raid: Ny'alotha, the Waking City"
+  });
+  await expect(logged).toHaveAttribute("data-evidence", "kill-log");
+  await expect(logged).toHaveAttribute("aria-description", "Boss kill logged");
+  await expect(logged).toHaveCSS("color", "rgb(54, 89, 66)");
+  await logged.hover();
+  await expect(logged).toHaveCSS("color", "rgb(108, 171, 122)");
+  await expect(logged.locator(".dossier-section-navigation-label")).toHaveCSS(
+    "color",
+    "rgb(108, 171, 122)"
+  );
+  await expect(logged.locator(".dossier-section-navigation-label")).toHaveCSS(
+    "visibility",
+    "visible"
+  );
+  const raidLabel = await logged
+    .locator(".dossier-section-navigation-label")
+    .boundingBox();
+  const evidenceHeading = await navigation
+    .getByRole("link", { name: "Historic Mythic boss evidence" })
+    .locator(".dossier-section-navigation-label")
+    .boundingBox();
+  expect(raidLabel).not.toBeNull();
+  expect(evidenceHeading).not.toBeNull();
+  expect(raidLabel!.y).toBeGreaterThanOrEqual(
+    evidenceHeading!.y + evidenceHeading!.height
+  );
+  await expect(incomplete).toHaveAttribute("data-evidence", "incomplete");
+  await expect(incomplete).toHaveCSS("color", "rgb(48, 48, 57)");
+
+  const section = navigation.getByRole("link", {
+    name: "Historic Cutting Edge"
+  });
+  await section.locator(".dossier-section-navigation-label").hover();
+  await expect(section).toHaveCSS("color", "rgb(244, 244, 245)");
+});
+
+test("shows one raid label at a time while retaining the current tick", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  const current = navigation.getByRole("link", {
+    name: "Raid: Amirdrassil, the Dream's Hope"
+  });
+  const hovered = navigation.getByRole("link", {
+    name: "Raid: Aberrus, the Shadowed Crucible"
+  });
+  const currentLabel = current.locator(".dossier-section-navigation-label");
+  const hoveredLabel = hovered.locator(".dossier-section-navigation-label");
+
+  await current.click();
+  await expect(current).toHaveAttribute("aria-current", "location");
+  await page.mouse.move(20, 200);
+  await expect(currentLabel).toBeVisible();
+
+  await hovered.hover();
+  await expect(hovered).toHaveCSS("cursor", "pointer");
+  await expect(hoveredLabel).toBeVisible();
+  await expect(currentLabel).toBeHidden();
+  await expect(current).toHaveAttribute("aria-current", "location");
+  await expect(current).toHaveCSS("color", "rgb(108, 171, 122)");
+
+  await page.mouse.move(20, 200);
+  await expect(currentLabel).toBeVisible();
+
+  await current.hover();
+  await current.focus();
+  await page.keyboard.press("Tab");
+  await expect(hovered).toBeFocused();
+  expect(await current.evaluate((link) => link.matches(":hover"))).toBe(true);
+  expect(await hovered.evaluate((link) => link.matches(":focus-visible"))).toBe(
+    true
+  );
+  await expect(hoveredLabel).toBeVisible();
+  await expect(currentLabel).toBeHidden();
+  await page.mouse.move(20, 200);
+  await expect(hoveredLabel).toBeVisible();
+  await hovered.evaluate((link) => (link as HTMLElement).blur());
+  await expect(currentLabel).toBeVisible();
 });
 
 test("navigates a long dossier without hiding targets behind the header", async ({
