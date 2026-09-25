@@ -64,6 +64,27 @@ it("accepts a Google Sheet URL and a configured response column", () => {
   ).toThrow("ambiguous_applicant_sheet_source");
 });
 
+it("accepts a secure dossier origin and rejects other URL shapes", () => {
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_DOSSIER_BASE_URL: "https://web-test.example.test/"
+    }).applicantWatcher.dossierBaseUrl
+  ).toBe("https://web-test.example.test");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_DOSSIER_BASE_URL: "http://web-test.example.test"
+    })
+  ).toThrow("invalid_applicant_dossier_base_url");
+  expect(() =>
+    loadWorkerConfig({
+      ...environment,
+      APPLICANT_DOSSIER_BASE_URL: "https://web-test.example.test/other"
+    })
+  ).toThrow("invalid_applicant_dossier_base_url");
+});
+
 it("accepts an API key as the sole Google credential for an enabled watcher", () => {
   const config = loadWorkerConfig({
     ...environment,

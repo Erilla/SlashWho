@@ -382,3 +382,139 @@ it("admits every distinct supported link in a bounded multi-link cell", async ()
   );
   expect(Number(saved.rows[0]?.count)).toBe(17);
 });
+
+it("returns the new response's own details without persisting them", async () => {
+  const characterUrl = "https://raider.io/characters/eu/example/ivy";
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "Old#123",
+        discordId: "111",
+        characterName: "Aria",
+        linkCell: a
+      },
+      {
+        row: 3,
+        battletag: "Ivy#456",
+        discordId: "222",
+        characterName: "Ivy",
+        linkCell: characterUrl
+      }
+    ],
+    backlogLimit: 1000
+  });
+  expect(result.newApplicants).toEqual([
+    {
+      battletag: "Ivy#456",
+      discordId: "222",
+      characterName: "Ivy",
+      characterUrl,
+      dossierPath: "/dossiers/eu/example/ivy"
+    }
+  ]);
+  const stored = await pool.query<{ text: string }>(
+    "SELECT row_to_json(t)::text AS text FROM applicant_source_intents t WHERE identity LIKE '%ivy%'"
+  );
+  expect(stored.rows[0]?.text).not.toContain("Ivy#456");
+  expect(stored.rows[0]?.text).not.toContain("222");
+});
+
+it("attributes a repeated character submission to the later response", async () => {
+  const characterUrl = "https://raider.io/characters/eu/example/ivy";
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "First#111",
+        discordId: "111",
+        characterName: "First",
+        linkCell: characterUrl
+      },
+      {
+        row: 3,
+        battletag: "Second#222",
+        discordId: "222",
+        characterName: "Second",
+        linkCell: characterUrl
+      }
+    ],
+    backlogLimit: 1000
+  });
+  expect(result.newApplicants).toEqual([
+    {
+      battletag: "Second#222",
+      discordId: "222",
+      characterName: "Second",
+      characterUrl,
+      dossierPath: "/dossiers/eu/example/ivy"
+    }
+  ]);
+});
+
+it("adds a dossier path when a numeric Warcraft Logs link resolves", async () => {
+  const characterUrl = "https://www.warcraftlogs.com/character/id/777";
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "Numeric#777",
+        discordId: "777",
+        characterName: "Nora",
+        linkCell: characterUrl
+      }
+    ],
+    resolveDossierPath: (identity) =>
+      identity === "warcraftlogs_id:777"
+        ? "/dossiers/eu/example/nora"
+        : undefined,
+    isSuppressed: async () => false,
+    backlogLimit: 1000
+  });
+  expect(result.newApplicants[0]).toMatchObject({
+    characterUrl,
+    dossierPath: "/dossiers/eu/example/nora"
+  });
+});
+
+it("keeps each duplicate response's details when an earlier occurrence is deferred", async () => {
+  const characterUrl = "https://raider.io/characters/eu/example/piper";
+  const rows = [
+    {
+      row: 2,
+      battletag: "First#111",
+      discordId: "111",
+      characterName: "Piper One",
+      linkCell: characterUrl
+    },
+    {
+      row: 3,
+      battletag: "Second#222",
+      discordId: "222",
+      characterName: "Piper Two",
+      linkCell: characterUrl
+    }
+  ];
+  let calls = 0;
+  const first = await pollApplicantSheet({
+    pool,
+    readRows: async () => rows,
+    isSuppressed: async () => (++calls === 1 ? "defer" : false),
+    backlogLimit: 1000
+  });
+  expect(first.newApplicants.map((applicant) => applicant.battletag)).toEqual([
+    "Second#222"
+  ]);
+  const second = await pollApplicantSheet({
+    pool,
+    readRows: async () => rows,
+    isSuppressed: async () => false,
+    backlogLimit: 1000
+  });
+  expect(second.newApplicants.map((applicant) => applicant.battletag)).toEqual([
+    "First#111"
+  ]);
+});
