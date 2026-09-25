@@ -1269,6 +1269,49 @@ export function createApplicantDossierService(options: {
     }
     return false;
   }
+  /**
+   * The other keys of this dossier that share the target's recorded Warcraft
+   * Logs ID, so are shown on the target's row (#423). The root is left out: a
+   * dossier cannot exclude the character it is about. Empty when the target
+   * has no recorded ID or the store cannot read IDs.
+   */
+  async function sharedIdentityKeys(
+    repositories: typeof options.repositories,
+    root: CharacterKey,
+    target: CharacterKey
+  ): Promise<readonly CharacterKey[]> {
+    if (!repositories.evidence.warcraftLogsCharacterIds) return [];
+    const snapshot = await repositories.snapshots.getCurrent(root);
+    const keys = [...(snapshot?.characters.map((item) => item.key) ?? [])];
+    for (const connection of await repositories.manualConnections.list(root)) {
+      keys.push(connection.key);
+      if (connection.pending) continue;
+      const discovered = await repositories.snapshots.getCurrent(
+        connection.key
+      );
+      keys.push(...(discovered?.characters.map((item) => item.key) ?? []));
+    }
+    const recorded = await repositories.evidence.warcraftLogsCharacterIds([
+      target,
+      ...keys
+    ]);
+    const idOf = (key: CharacterKey) =>
+      recorded.find(
+        (entry) => canonicalCharacterId(entry.key) === canonicalCharacterId(key)
+      )?.characterId;
+    const targetId = idOf(target);
+    if (targetId === undefined) return [];
+    const excludedIds = new Set([
+      canonicalCharacterId(root),
+      canonicalCharacterId(target)
+    ]);
+    return keys.filter((key) => {
+      const id = canonicalCharacterId(key);
+      if (excludedIds.has(id) || idOf(key) !== targetId) return false;
+      excludedIds.add(id);
+      return true;
+    });
+  }
   async function queueHistoricAliasRecollection(
     character: CharacterKey,
     scope?: MeasurementScope
@@ -1501,23 +1544,31 @@ export function createApplicantDossierService(options: {
         return { kind: "invalid", code: "invalid_character_url" };
       }
       const repositories = scopedRepositories(scope);
-      const result = await repositories.manualConnections.setExcluded(
-        root,
-        target,
-        input.excluded
-      );
-      if (result === "updated") return { kind: "updated" };
-      if (!(await isConnectedToDossier(repositories, root, target)))
-        return { kind: "missing" };
-      const discovered =
-        await repositories.manualConnections.setDiscoveredExcluded?.(
+      const exclude = async (key: CharacterKey) => {
+        const result = await repositories.manualConnections.setExcluded(
           root,
-          target,
+          key,
           input.excluded
         );
-      return discovered === "updated"
-        ? { kind: "updated" }
-        : { kind: "missing" };
+        if (result === "updated") return true;
+        if (!(await isConnectedToDossier(repositories, root, key)))
+          return false;
+        const discovered =
+          await repositories.manualConnections.setDiscoveredExcluded?.(
+            root,
+            key,
+            input.excluded
+          );
+        return discovered === "updated";
+      };
+      if (!(await exclude(target))) return { kind: "missing" };
+      // A merged row is hidden while any of its names is excluded, so the
+      // row's action applies to every name, or Include would clear one of two
+      // exclusions and leave the row as it was, with no row for the other.
+      for (const key of await sharedIdentityKeys(repositories, root, target)) {
+        await exclude(key);
+      }
+      return { kind: "updated" };
     },
 
     async removeConnectedCharacter(root, input, scope) {
