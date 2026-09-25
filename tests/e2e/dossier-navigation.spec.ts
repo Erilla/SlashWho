@@ -57,6 +57,34 @@ test("centers a compact desktop timeline on a tall viewport", async ({
   }
 });
 
+test("reveals the dossier page scrollbar while scrolling or near the edge", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const root = page.locator("html");
+  const scrollbarColor = () =>
+    root.evaluate((element) => getComputedStyle(element).scrollbarColor);
+  const hidden = "rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)";
+  await expect.poll(scrollbarColor).toBe(hidden);
+
+  const scrollingColor = await page.evaluate(async () => {
+    await new Promise<void>((resolve) => {
+      window.addEventListener("scroll", () => resolve(), { once: true });
+      window.scrollTo(0, 500);
+    });
+    return getComputedStyle(document.documentElement).scrollbarColor;
+  });
+  expect(scrollingColor).not.toBe(hidden);
+  await expect.poll(scrollbarColor).toBe(hidden);
+
+  await page.mouse.move(1178, 200);
+  await expect.poll(scrollbarColor).not.toBe(hidden);
+  await page.mouse.move(20, 200);
+  await expect.poll(scrollbarColor).toBe(hidden);
+});
+
 test("navigates a long dossier without hiding targets behind the header", async ({
   page
 }) => {

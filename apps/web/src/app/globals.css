@@ -712,6 +712,19 @@ a {
   margin-top: 1rem;
 }
 
+@media (min-width: 75rem) and (forced-colors: none) {
+  html[data-dossier-scrollbar] {
+    scrollbar-color: transparent transparent;
+  }
+
+  html[data-dossier-scrollbar]:is(
+      [data-dossier-scrolling],
+      [data-dossier-scrollbar-hover]
+    ) {
+    scrollbar-color: #6b6b75 transparent;
+  }
+}
+
 @media (min-width: 75rem) {
   .page-shell.dossier-page {
     width: min(100% - 18rem, 84rem);

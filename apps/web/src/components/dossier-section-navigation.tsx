@@ -80,6 +80,40 @@ export function DossierSectionNavigation({
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.dossierScrollbar = "";
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      root.dataset.dossierScrolling = "";
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(
+        () => delete root.dataset.dossierScrolling,
+        1000
+      );
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      if (event.clientX >= window.innerWidth - 28)
+        root.dataset.dossierScrollbarHover = "";
+      else delete root.dataset.dossierScrollbarHover;
+    };
+    const onBlur = () => delete root.dataset.dossierScrollbarHover;
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("blur", onBlur);
+    return () => {
+      clearTimeout(scrollTimer);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("blur", onBlur);
+      delete root.dataset.dossierScrollbar;
+      delete root.dataset.dossierScrolling;
+      delete root.dataset.dossierScrollbarHover;
+    };
+  }, []);
+
   const startDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (
       event.pointerType !== "mouse" ||
