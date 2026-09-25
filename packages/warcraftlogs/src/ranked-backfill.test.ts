@@ -53,6 +53,69 @@ const report = (code: string, fightId: number, canonicalID = 40989140) => ({
 });
 
 describe("ranked Mythic backfill", () => {
+  it("excludes a post-content Antorus kill despite a canonical ranking", async () => {
+    let reportReads = 0;
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token")
+          return Response.json({ access_token: "token", expires_in: 3600 });
+        const { query } = JSON.parse(String(init?.body)) as { query: string };
+        if (query.includes("HistoricEncounterRankings"))
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  encounterRankings: {
+                    ranks: [
+                      {
+                        report: { code: "lateArgus", fightID: 10 },
+                        spec: "Holy"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          });
+        reportReads += 1;
+        const payload = report("lateArgus", 10);
+        payload.data.reportData.report.startTime = Date.UTC(2020, 0, 1);
+        return Response.json(payload);
+      }
+    );
+    const client = createWarcraftLogsClient({
+      fetch: fetch as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "secret"
+    });
+
+    const result = await client.getRankedKillReports(key, {
+      journalRaidId: "946",
+      requestCap: 4,
+      cursor: {
+        journalRaidId: "946",
+        characterId: 40989140,
+        zoneIds: [17],
+        partitionIds: [1],
+        zonesLoaded: true,
+        zoneIndex: 0,
+        encounterIds: [2092],
+        encountersLoaded: true,
+        encounterIndex: 0,
+        metricIndex: 0,
+        reportIndex: 0
+      }
+    });
+
+    expect(result).toMatchObject({ kind: "evidence", kills: [] });
+    if (result.kind !== "evidence") throw new Error("expected_evidence");
+    expect(result.cursor).toBeUndefined();
+    expect(reportReads).toBeGreaterThan(0);
+  });
+
   it("skips a report with null ranked characters and continues to the next fight", async () => {
     let unlinkedReads = 0;
     const fetch = vi.fn(
