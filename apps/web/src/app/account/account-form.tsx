@@ -100,6 +100,9 @@ export function AccountForm({ flow }: { flow: Flow }) {
   useEffect(() => {
     if (flow === "change-password") passwordRef.current?.focus();
   }, [flow]);
+  useEffect(() => {
+    if (feedback) statusRef.current?.focus();
+  }, [feedback]);
   const token = params.get("token");
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -138,7 +141,6 @@ export function AccountForm({ flow }: { flow: Flow }) {
       setFeedback("The request could not be completed. Try again.");
     } finally {
       setPending(false);
-      requestAnimationFrame(() => statusRef.current?.focus());
     }
   }
   return (
