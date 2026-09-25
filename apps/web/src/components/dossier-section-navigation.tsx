@@ -13,8 +13,57 @@ type Section = Readonly<{
   label: string;
   shortLabel?: string;
   raidName?: string;
-  raid?: boolean;
+  evidence?: RaidEvidence;
 }>;
+
+type Raid = ApplicantDossier["raids"][number];
+type RaidEvidenceState =
+  "kill-log" | "verified-kill" | "wipe-log" | "no-logs" | "incomplete";
+type RaidEvidence = Readonly<{
+  state: RaidEvidenceState;
+  label: string;
+}>;
+
+const raidEvidenceLabels: Record<RaidEvidenceState, string> = {
+  "kill-log": "Boss kill logged",
+  "verified-kill": "Boss kill verified",
+  "wipe-log": "Wipes logged",
+  "no-logs": "No logs",
+  incomplete: "Incomplete"
+};
+
+function raidEvidence(raid: Raid): RaidEvidence {
+  let hasVerifiedKill = false;
+  let hasWipe = false;
+
+  for (const boss of raid.bosses) {
+    if (boss.state === "kill") {
+      const kills = [boss.firstKill, ...(boss.firstKills ?? [])];
+      if (
+        kills.some(
+          (kill) =>
+            kill.reportUrl !== null ||
+            (kill.reportUrls?.length ?? 0) > 0 ||
+            (kill.reports?.length ?? 0) > 0
+        )
+      ) {
+        return { state: "kill-log", label: raidEvidenceLabels["kill-log"] };
+      }
+      hasVerifiedKill = true;
+    } else if (boss.state === "wipe") {
+      hasWipe = true;
+    }
+  }
+
+  const state: RaidEvidenceState = hasVerifiedKill
+    ? "verified-kill"
+    : hasWipe
+      ? "wipe-log"
+      : raid.bosses.some((boss) => boss.state === "no_logs")
+        ? "no-logs"
+        : "incomplete";
+  return { state, label: raidEvidenceLabels[state] };
+}
 
 export function DossierSectionNavigation({
   raids,
@@ -44,7 +93,7 @@ export function DossierSectionNavigation({
         id: dossierRaidTargetId(raid.raidId),
         label: `Raid: ${raid.raidName}`,
         raidName: raid.raidName,
-        raid: true
+        evidence: raidEvidence(raid)
       })),
       ...(hasLimitations
         ? [
@@ -239,9 +288,11 @@ export function DossierSectionNavigation({
             <a
               aria-current={activeId === section.id ? "location" : undefined}
               className={
-                section.raid ? "dossier-section-navigation-raid" : undefined
+                section.evidence ? "dossier-section-navigation-raid" : undefined
               }
               aria-label={section.label}
+              aria-description={section.evidence?.label}
+              data-evidence={section.evidence?.state}
               draggable={false}
               href={`#${section.id}`}
               onClick={(event) => {
@@ -273,6 +324,7 @@ export function DossierSectionNavigation({
               <span
                 className="dossier-section-navigation-label"
                 data-raid-name={section.raidName}
+                data-evidence-label={section.evidence?.label}
                 data-short-label={section.shortLabel}
               >
                 {section.label}

@@ -151,7 +151,7 @@ jobs:
         if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm build
         if: steps.scope.outputs.run_full == 'true'
-      - run: corepack pnpm playwright test tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts
+      - run: corepack pnpm playwright test tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts tests/e2e/dossier-navigation.spec.ts
         if: steps.scope.outputs.run_full == 'true'
       - run: docker build -f Dockerfile.web -t slashwho-web:ci .
         if: steps.scope.outputs.run_full == 'true'

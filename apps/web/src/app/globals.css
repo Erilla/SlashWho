@@ -851,6 +851,44 @@ a {
     height: 3px;
   }
 
+  .dossier-section-navigation-raid[data-evidence="kill-log"] {
+    --evidence-rest: #365942;
+    --evidence-highlight: #6cab7a;
+  }
+
+  .dossier-section-navigation-raid[data-evidence="verified-kill"] {
+    --evidence-rest: #69543b;
+    --evidence-highlight: #b08b55;
+  }
+
+  .dossier-section-navigation-raid[data-evidence="wipe-log"] {
+    --evidence-rest: #40566d;
+    --evidence-highlight: #7395b8;
+  }
+
+  .dossier-section-navigation-raid[data-evidence="no-logs"] {
+    --evidence-rest: #474954;
+    --evidence-highlight: #8d909e;
+  }
+
+  .dossier-section-navigation-raid[data-evidence="incomplete"] {
+    --evidence-rest: #303039;
+    --evidence-highlight: #777884;
+  }
+
+  .dossier-section-navigation a.dossier-section-navigation-raid {
+    color: var(--evidence-rest);
+  }
+
+  .dossier-section-navigation
+    a.dossier-section-navigation-raid:is(
+      :hover,
+      :focus-visible,
+      [aria-current="location"]
+    ) {
+    color: var(--evidence-highlight);
+  }
+
   .dossier-section-navigation-label {
     position: absolute;
     top: 50%;
@@ -863,7 +901,7 @@ a {
     line-height: 1.35;
     text-align: right;
     white-space: nowrap;
-    pointer-events: none;
+    pointer-events: auto;
   }
 
   .dossier-section-navigation-label[data-short-label] {
@@ -885,21 +923,33 @@ a {
 
   .dossier-section-navigation-raid .dossier-section-navigation-label {
     visibility: hidden;
-    color: var(--text);
+    color: inherit;
     font-size: 0;
+    transform: translateY(0);
   }
 
-  .dossier-section-navigation-raid .dossier-section-navigation-label::after {
+  .dossier-section-navigation-raid .dossier-section-navigation-label::before {
     content: attr(data-raid-name);
     font-size: 0.75rem;
   }
 
-  .dossier-section-navigation-raid:hover .dossier-section-navigation-label,
-  .dossier-section-navigation-raid:focus-visible
-    .dossier-section-navigation-label,
-  .dossier-section-navigation-raid[aria-current="location"]
+  .dossier-section-navigation-raid .dossier-section-navigation-label::after {
+    content: attr(data-evidence-label);
+    display: block;
+    color: #a4a4ae;
+    font-size: 0.6875rem;
+    font-weight: 400;
+  }
+
+  .dossier-section-navigation
+    a.dossier-section-navigation-raid:is(
+      :hover,
+      :focus-visible,
+      [aria-current="location"]
+    )
     .dossier-section-navigation-label {
     visibility: visible;
+    color: inherit;
   }
 
   .dossier-navigation-layout .dossier-layout {

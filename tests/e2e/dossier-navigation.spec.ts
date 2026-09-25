@@ -85,6 +85,54 @@ test("reveals the dossier page scrollbar while scrolling or near the edge", asyn
   await expect.poll(scrollbarColor).toBe(hidden);
 });
 
+test("colours raid ticks and names by evidence while keeping section hover white", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  const logged = navigation.getByRole("link", {
+    name: "Raid: The Venomous Abyss"
+  });
+  const incomplete = navigation.getByRole("link", {
+    name: "Raid: Ny'alotha, the Waking City"
+  });
+  await expect(logged).toHaveAttribute("data-evidence", "kill-log");
+  await expect(logged).toHaveAttribute("aria-description", "Boss kill logged");
+  await expect(logged).toHaveCSS("color", "rgb(54, 89, 66)");
+  await logged.hover();
+  await expect(logged).toHaveCSS("color", "rgb(108, 171, 122)");
+  await expect(logged.locator(".dossier-section-navigation-label")).toHaveCSS(
+    "color",
+    "rgb(108, 171, 122)"
+  );
+  await expect(logged.locator(".dossier-section-navigation-label")).toHaveCSS(
+    "visibility",
+    "visible"
+  );
+  const raidLabel = await logged
+    .locator(".dossier-section-navigation-label")
+    .boundingBox();
+  const evidenceHeading = await navigation
+    .getByRole("link", { name: "Historic Mythic boss evidence" })
+    .locator(".dossier-section-navigation-label")
+    .boundingBox();
+  expect(raidLabel).not.toBeNull();
+  expect(evidenceHeading).not.toBeNull();
+  expect(raidLabel!.y).toBeGreaterThanOrEqual(
+    evidenceHeading!.y + evidenceHeading!.height
+  );
+  await expect(incomplete).toHaveAttribute("data-evidence", "incomplete");
+  await expect(incomplete).toHaveCSS("color", "rgb(48, 48, 57)");
+
+  const section = navigation.getByRole("link", {
+    name: "Historic Cutting Edge"
+  });
+  await section.locator(".dossier-section-navigation-label").hover();
+  await expect(section).toHaveCSS("color", "rgb(244, 244, 245)");
+});
+
 test("navigates a long dossier without hiding targets behind the header", async ({
   page
 }) => {
