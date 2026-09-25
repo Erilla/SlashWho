@@ -374,7 +374,9 @@ export function createFingerprintAlertNotifier(
         );
       const body = discordWebhook
         ? {
-            content: `⚠️ ${alert.event} — ${Object.entries(alert.details)
+            content: `${alert.event === "applicant_new_intents" ? "📨" : "⚠️"} ${alert.event} — ${Object.entries(
+              alert.details
+            )
               .map(([name, count]) => `${name}: ${count}`)
               .join(" · ")}`,
             allowed_mentions: { parse: [] }
@@ -404,6 +406,23 @@ export function createFingerprintAlertNotifier(
       }
     }
   };
+}
+
+/** An alert is a best-effort side effect of a committed Sheet observation. */
+export async function announceNewApplicantIntents(
+  poll: { baseline: boolean; created: number },
+  notifier?: FingerprintAlertNotifier,
+  logger?: DiscoveryLogger
+): Promise<void> {
+  if (poll.baseline || poll.created === 0) return;
+  try {
+    await notifier?.notify({
+      event: "applicant_new_intents",
+      details: { count: poll.created }
+    });
+  } catch {
+    logger?.info({ event: "applicant_announcement_failed" });
+  }
 }
 
 /**
@@ -842,6 +861,11 @@ export async function createWorkerRuntime(
               applicantPollFailures = 0;
               applicantNextPollAttempt = 0;
               logger?.info({ event: "applicant_sheet_poll", ...poll });
+              await announceNewApplicantIntents(
+                poll,
+                fingerprintAlertNotifier,
+                logger
+              );
               if (
                 poll.truncated > 0 &&
                 Date.now() - applicantAlertedAt > 3_600_000

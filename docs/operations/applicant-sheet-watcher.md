@@ -8,6 +8,8 @@ Set `APPLICANT_POLL_CADENCE_MS`, `APPLICANT_ADMISSIONS_PER_TICK`, `APPLICANT_ADM
 
 A Discord channel webhook can be used as `MAINTAINER_ALERT_WEBHOOK_URL`; the worker renders a count-only message for Discord and suppresses mentions. Other HTTP alert receivers continue to receive the structured `{ event, details }` JSON body.
 
+After a poll commits new applicant intents, the worker sends `applicant_new_intents` with the count to `MAINTAINER_ALERT_WEBHOOK_URL`. Baseline and unchanged polls send no arrival alert. Delivery is best effort and a failed webhook never rolls back the intake. The alert contains no character identity or form answer. Discovery and evidence run messages still use `DISCOVERY_WEBHOOK_URL`.
+
 Every observed count increase has its own outbox intent. Two responses for the same character first seen in one poll share the discovery/evidence run, because no collection can become stale between their first observation. A submission first seen in a later poll gets a new freshness decision.
 
 Set `APPLICANT_WATCHER_ENABLED=false` to pause reads and dispatch. The outbox remains durable. Watch count-only `applicant_sheet_poll`, `applicant_sheet_drain`, and `applicant_sheet_tick_failed` events; a repeated failure, a backlog near its configured limit, or a spent allowance requires operator attention. The first activation intentionally drops all previously visible responses as baseline. Do not reset the `applicant_source_*` tables unless a new baseline is intended. Revoking access causes failed polls without changing the durable cursor.

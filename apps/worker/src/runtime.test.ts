@@ -28,8 +28,34 @@ import {
   createFingerprintIntegration,
   createRaiderIoGateway,
   createWorkerRuntime,
-  createAccountWarcraftLogsResolver
+  createAccountWarcraftLogsResolver,
+  announceNewApplicantIntents
 } from "./runtime";
+
+it("announces newly recorded applicant intents without alerting on baseline or unchanged polls", async () => {
+  const notify = vi.fn(async () => undefined);
+  const notifier = { notify };
+
+  await announceNewApplicantIntents({ baseline: true, created: 2 }, notifier);
+  await announceNewApplicantIntents({ baseline: false, created: 0 }, notifier);
+  await announceNewApplicantIntents({ baseline: false, created: 2 }, notifier);
+
+  expect(notify).toHaveBeenCalledExactlyOnceWith({
+    event: "applicant_new_intents",
+    details: { count: 2 }
+  });
+});
+
+it("does not let an applicant alert failure interrupt intake", async () => {
+  const notify = vi.fn(async () => {
+    throw new Error("webhook unavailable");
+  });
+
+  await expect(
+    announceNewApplicantIntents({ baseline: false, created: 1 }, { notify })
+  ).resolves.toBeUndefined();
+  expect(notify).toHaveBeenCalledOnce();
+});
 
 it("resolves the worker account key only while active and at the reserved version", async () => {
   const masterKey = Buffer.alloc(32, 7);
@@ -772,6 +798,35 @@ describe("worker runtime", () => {
     const request = fetch.mock.calls[0]![1] as RequestInit;
     expect(JSON.parse(request.body as string)).toEqual({
       content: "⚠️ applicant_backlog_pressure — backlog: 80 · limit: 100",
+      allowed_mentions: { parse: [] }
+    });
+  });
+
+  it("uses an arrival icon for a new application alert", async () => {
+    const fetch = vi.fn(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        expect(String(url)).toContain("discord.com/api/webhooks/");
+        expect(init?.method).toBe("POST");
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+
+    await notifier.notify({
+      event: "applicant_new_intents",
+      details: { count: 2 }
+    });
+
+    const request = fetch.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({
+      content: "📨 applicant_new_intents — count: 2",
       allowed_mentions: { parse: [] }
     });
   });
