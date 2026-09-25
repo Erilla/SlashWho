@@ -64,6 +64,9 @@ test("reveals the dossier page scrollbar while scrolling or near the edge", asyn
   await page.goto("/demo");
 
   const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-dossier-scrollbar", "", {
+    timeout: 15_000
+  });
   const scrollbarColor = () =>
     root.evaluate((element) => getComputedStyle(element).scrollbarColor);
   const hidden = "rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)";
