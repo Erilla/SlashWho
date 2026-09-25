@@ -876,8 +876,9 @@ a {
   }
 
   .dossier-section-navigation a:hover .dossier-section-navigation-label,
+  .dossier-section-navigation a:focus-visible .dossier-section-navigation-label,
   .dossier-section-navigation
-    a:focus-visible
+    a[aria-current="location"]
     .dossier-section-navigation-label {
     color: var(--text);
   }

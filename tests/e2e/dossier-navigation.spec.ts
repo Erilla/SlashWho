@@ -142,7 +142,7 @@ test("navigates a long dossier without hiding targets behind the header", async 
   expect(longLabel!.x).toBeGreaterThan(content!.x + content!.width);
 
   const mainSection = navigation.getByRole("link", {
-    name: "Connected characters"
+    name: "Historic Cutting Edge"
   });
   const mainLabel = mainSection.locator(".dossier-section-navigation-label");
   await expect(mainLabel).toBeVisible();
@@ -152,6 +152,10 @@ test("navigates a long dossier without hiding targets behind the header", async 
   await mainSection.hover();
   await expect(mainLabel).toHaveCSS("color", "rgb(244, 244, 245)");
   expect(mutedColor).not.toBe("rgb(244, 244, 245)");
+  await mainSection.click();
+  await expect(mainSection).toHaveAttribute("aria-current", "location");
+  await page.mouse.move(20, 200);
+  await expect(mainLabel).toHaveCSS("color", "rgb(244, 244, 245)");
 
   const targetLink = raids.last();
   const targetId = (await targetLink.getAttribute("href"))!.slice(1);
