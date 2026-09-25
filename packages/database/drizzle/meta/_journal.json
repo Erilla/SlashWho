@@ -358,6 +358,13 @@
       "when": 1792011600002,
       "tag": "0051_omitted_invalid_fight_timestamp",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1792011600003,
+      "tag": "0052_tier_search_publication_scope",
+      "breakpoints": true
     }
   ]
 }

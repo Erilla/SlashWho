@@ -294,19 +294,32 @@ nothing to search.
 
 ## What a tier search costs
 
-A tier search is a full collection that also walks one tier's guild
-attendance, asked for from the dossier (#435). It searches every guild known
-for the character (Raider.IO's, the stored kills', and the ones Warcraft Logs
-lists for the character) across the tier's current-content window. It hydrates
-each report there that may list the character, whether or not it holds a kill
-Raider.IO knows about, so guildless kills, wipe-only nights and kills below the
-scan floor can be found.
+A tier search is a targeted collection of one tier, asked for from the dossier
+(#435). It walks the tier's guild attendance and its ranked kills, and parses
+what those find. It searches every guild known for the character (the stored
+kills', and the ones Warcraft Logs lists for the character) across the tier's
+current-content window. It hydrates each report there that may list the
+character, whether or not it holds a known kill, so guildless kills, wipe-only
+nights and kills below the scan floor can be found.
+
+Since #450 it does nothing else. It resolves the character's Warcraft Logs
+identity, but it does not scan the character's history or former names, and
+it does not ask Raider.IO or Blizzard. It publishes additively: it keeps every
+stored kill, wipe and parse, in the searched raid as well as the others, even
+when it finds nothing, is capped, or fails. It keeps only the searched raid's
+share of what it finds, and it marks no tier terminal. The ordinary run's
+freshness, limitations, retry deadline, history cursor and cutting edges stay
+as that run left them. A published search has `publication_scope = 'tier'` on
+`character_evidence_runs`, and readers take those facts from the newest
+`'full'` publication instead.
 
 It is reserved only by that explicit request, never by a read, a resume or a
-retry, and at most once per tier per character a day. It has its own cap,
-`EVIDENCE_TIER_SEARCH_REQUEST_CAP` (60 by default). The cap is carved out of
-the run's scan cap, and the search takes at most half of it, so the run's
-points budget is unchanged. It gallops through a guild's attendance to find
+retry, and at most once per tier per character a day. The one exception is a
+capped ranked walk, which continues automatically after its retry time. It has
+its own cap, `EVIDENCE_TIER_SEARCH_REQUEST_CAP` (60 by default). The cap is
+carved out of the run's scan cap, and the search takes at most half of it. The
+share the split leaves for history goes unspent, so a search never spends more
+than the ordinary run's budget allowed. It gallops through a guild's attendance to find
 the window, then walks it page by page, so an old tier behind years of newer
 reports costs a few requests a guild instead of one for every page in between.
 
@@ -338,6 +351,7 @@ SELECT tier_search_outcome,
        sum(tier_search_reports_hydrated) AS reports_hydrated,
        sum(tier_search_recovered_kills) AS kills_recovered,
        sum(tier_search_recovered_wipes) AS wipes_recovered,
+       sum(history_scan_requests) AS history_requests,
        round(avg(points_spent)::numeric, 1) AS mean_points,
        count(points_spent) AS measured
 FROM character_evidence_run_costs
@@ -347,9 +361,11 @@ GROUP BY tier_search_outcome
 ORDER BY searches DESC;
 ```
 
-`mean_points` is the whole run's spend, not the search's alone. Points are not
-split by class, so weigh it against the history scan and parse requests on the
-same rows.
+Since #450, `mean_points` is the search's own spend: its attendance, its ranked
+walk, and the parses of the kills it found. Rows recorded before #450 were full
+collections, so their points include the history scan and the other providers.
+`history_requests` tells the two apart, because it is zero for a targeted
+search. To compare them, filter `recorded_at` on either side of the deploy.
 
 ## Keeping this honest
 

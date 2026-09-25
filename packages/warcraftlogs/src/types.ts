@@ -458,6 +458,14 @@ export interface WarcraftLogsGateway {
        * provider, so a Raider.IO failure cannot drop what it once helped find.
        */
       storedKillReportCodes?: readonly string[];
+      /**
+       * A targeted collection that deliberately reads no history (#450).
+       * Requires a request cap of zero. Unlike a parse-only resume, whose zero
+       * cap reports the history it left unread as `request_cap`, nothing
+       * here was asked of the history, so nothing fell short of it: only the
+       * tier search, the ranked walk and parse work can limit the result.
+       */
+      targetedOnly?: boolean;
       /** An explicit search of one tier's guild attendance (#435). */
       tierSearch?: WarcraftLogsTierSearch;
       /** Ranked reports for the same explicit tier search, with durable resume. */

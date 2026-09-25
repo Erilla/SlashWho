@@ -6595,6 +6595,51 @@ describe("searching one tier's guild attendance", () => {
     expect(result).not.toHaveProperty("limitation");
   });
 
+  it("reads no history on a targeted search, and reports no shortfall for it", async () => {
+    // Break caught (#450): a zero request cap reports the unread history as
+    // `request_cap`, which would make every targeted search partial and hide
+    // whether its own walk had finished.
+    const { client, requests } = tierClient();
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 0,
+      targetedOnly: true,
+      parseRequestCap: 1,
+      historyScanStartPage: 19,
+      historyScanResumeBoundaryReportCode: "lateReport",
+      tierSearch: {
+        from: tierFrom,
+        to: tierTo,
+        guilds: [guild],
+        requestCap: 60
+      }
+    });
+
+    expect(
+      requests.filter((request) => request.query === "RecentReports")
+    ).toEqual([]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      scanSkipped: true,
+      tierSearch: { outcome: "complete", recoveredKills: 21 }
+    });
+    expect(result).not.toHaveProperty("limitation");
+    expect(result).not.toHaveProperty("historyScanResumePage");
+  });
+
+  it("refuses a targeted search that was given history to scan", async () => {
+    const { client, requests } = tierClient();
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 5,
+      targetedOnly: true,
+      parseRequestCap: 1
+    });
+
+    expect(result).toEqual({ kind: "limitation", code: "request_cap" });
+    expect(requests).toEqual([]);
+  });
+
   it("keeps wipes, and hydrates only reports that may list the character", async () => {
     // A wipe-only night has no kill for Raider.IO to verify, which is why the
     // tier search exists. A report whose attendance rules the character out,

@@ -39,8 +39,10 @@ export type SearchCharacterTierResult =
  *
  * This is the only way to start a new tier search. A capped ranked walk may
  * continue automatically after its retry time, without another button press.
- * The mode is stored on the run, and the
- * queue payload says only `full`.
+ * The mode is stored on the run, and the queue payload says only `full`: the
+ * worker reads the run's `tier_search` mode and collects that tier alone
+ * (#450). The reservation keeps the full phase plan so the worker's ledger
+ * matches it; the phases a search does not run are recorded as skipped.
  */
 export async function searchCharacterTier(options: {
   key: CharacterKey;

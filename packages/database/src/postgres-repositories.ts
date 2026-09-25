@@ -240,6 +240,7 @@ interface EvidenceRunRow {
   class_name: string | null;
   mode?: EvidenceRunMode;
   tier_search_raid_id?: string | null;
+  publication_scope?: "full" | "tier";
 }
 
 interface CharacterMythicKillRow {
@@ -825,21 +826,38 @@ async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
 ): Promise<CompletedCharacterEvidence | null> {
-  const runResult = await client.query<EvidenceRunRow>(
-    `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-            evidence_version, attempt, limitation_code, parse_limitation_code,
-            retry_after_at, error_code, created_at, started_at,
-            completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-            ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
-     FROM character_evidence_runs
-     WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-       AND status IN ('complete', 'partial')
-     ORDER BY completed_at DESC, id DESC
-     LIMIT 1`,
-    [key.region, key.realm, key.name]
-  );
-  const run = runResult.rows[0];
-  if (!run) return null;
+  // Two runs speak for a character, and they are usually the same one. The
+  // newest publication holds the snapshot: every kill, wipe and parse there
+  // is. The newest `full` publication holds what was last collected in full:
+  // when, with what shortfall, when to retry, and the cutting edges. A
+  // targeted tier search adds to the snapshot without re-reading any of that
+  // (#450), so taking those facts from it would call untouched evidence
+  // freshly checked.
+  const selectRun = (scope: "any" | "full") =>
+    client.query<EvidenceRunRow>(
+      `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
+              evidence_version, attempt, limitation_code, parse_limitation_code,
+              retry_after_at, error_code, created_at, started_at,
+              completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
+              publication_scope,
+              ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
+       FROM character_evidence_runs
+       WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+         AND status IN ('complete', 'partial')
+         ${scope === "full" ? "AND publication_scope = 'full'" : ""}
+       ORDER BY completed_at DESC, id DESC
+       LIMIT 1`,
+      [key.region, key.realm, key.name]
+    );
+  const snapshot = (await selectRun("any")).rows[0];
+  if (!snapshot) return null;
+  // A character whose every publication is targeted has nothing better to
+  // report than the snapshot itself. `reserveTierSearch` refuses a character
+  // with no evidence, so this is only reachable after an operator removal.
+  const run =
+    snapshot.publication_scope === "tier"
+      ? ((await selectRun("full")).rows[0] ?? snapshot)
+      : snapshot;
 
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
@@ -851,7 +869,7 @@ async function loadCompletedEvidence(
      FROM character_mythic_kills
      WHERE evidence_run_id = $1
      ORDER BY killed_at, source_fight_key`,
-    [run.id]
+    [snapshot.id]
   );
   const wipesResult = await client.query<CharacterMythicWipeRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
@@ -859,14 +877,14 @@ async function loadCompletedEvidence(
      FROM character_mythic_wipes
      WHERE evidence_run_id = $1
      ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
-    [run.id]
+    [snapshot.id]
   );
   const tierBestsResult = await client.query<CharacterTierBestParseRow>(
     `SELECT ${tierBestParseColumns}
      FROM character_tier_best_parses
      WHERE evidence_run_id = $1
      ORDER BY raid_id, boss_id`,
-    [run.id]
+    [snapshot.id]
   );
   const cuttingEdgesResult = await client.query<{
     achievement_id: string;
@@ -894,7 +912,7 @@ async function loadCompletedEvidence(
       completedAt: row.completed_at.toISOString()
     })),
     cuttingEdgesCollected: blizzardPhase.rows[0]?.state === "completed",
-    wipeCapable: run.evidence_version >= 2
+    wipeCapable: snapshot.evidence_version >= 2
   };
 }
 
@@ -1141,13 +1159,12 @@ async function loadPositiveEvidenceForPartial(
 /**
  * A tier search can confirm an old exact report that `recentReports` will
  * never return to an ordinary scan. Keep the newest published search's kills
- * for its selected raid across complete ordinary runs. A new complete search
- * of the same raid can still retract a nonterminal kill it no longer verifies.
+ * for its selected raid across complete ordinary runs. A search is additive
+ * (#450), so its snapshot already holds every kill an earlier one confirmed.
  */
 async function loadLatestTierSearchKills(
   client: Queryable,
-  key: CharacterKey,
-  replacingRaidId: string | null
+  key: CharacterKey
 ): Promise<readonly StoredCharacterMythicKill[]> {
   const result = await client.query<
     CharacterMythicKillRow & { tier_search_raid_id: string }
@@ -1172,7 +1189,6 @@ async function loadLatestTierSearchKills(
     }))
     .filter(
       ({ kill, journalRaidId }) =>
-        journalRaidId !== replacingRaidId &&
         lookupRaidByName(kill.raidName)?.raidId === journalRaidId
     )
     .map(({ kill }) => kill);
@@ -5141,6 +5157,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             realm: activeRun.realm_slug,
             name: activeRun.normalized_name
           };
+          // A tier search is a targeted collection (#450): it read one raid's
+          // attendance and ranked kills and nothing else, so what it did not
+          // find says nothing about anything stored. Decided from the run
+          // rather than the input, so a republished stage, a recovered stage
+          // and a stopped attempt are all published the same way.
+          const targeted = activeRun.mode === "tier_search";
           // Raids this character is finished with. Collection no longer pages
           // into them, so for these raids "the run did not find it" no longer
           // means "it is gone" -- it means we deliberately did not look.
@@ -5166,23 +5188,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             activeKey
           );
           const tierSearchKills =
-            input.state === "complete"
-              ? await loadLatestTierSearchKills(
-                  client,
-                  activeKey,
-                  activeRun.mode === "tier_search"
-                    ? activeRun.tier_search_raid_id
-                    : null
-                )
+            input.state === "complete" && !targeted
+              ? await loadLatestTierSearchKills(client, activeKey)
               : [];
           // A partial publish carries everything forward, as it always has. A
-          // complete one carries forward terminal raids and kills confirmed
-          // by the latest explicit search of each tier. An ordinary history
-          // scan cannot re-find those old exact reports through recentReports.
-          // Every other raid keeps the contract where a kill a complete run
-          // stopped finding stops being claimed.
+          // complete ordinary one carries forward terminal raids and kills
+          // confirmed by the latest explicit search of each tier. An ordinary
+          // history scan cannot re-find those old exact reports through
+          // recentReports. Every other raid keeps the contract where a kill a
+          // complete run stopped finding stops being claimed. A targeted
+          // search is only ever additive, whatever its state.
           const previous =
-            input.state === "partial"
+            input.state === "partial" || targeted
               ? stored
               : {
                   kills: [
@@ -5439,7 +5456,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               ]
             );
           }
-          for (const cuttingEdge of input.cuttingEdges ?? []) {
+          // Cutting edges are read from the newest full publication, so a
+          // targeted one has none of its own to write.
+          for (const cuttingEdge of targeted
+            ? []
+            : (input.cuttingEdges ?? [])) {
             await client.query(
               `INSERT INTO character_evidence_cutting_edges
                 (evidence_run_id, achievement_id, completed_at)
@@ -5487,6 +5508,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                    WHEN $15 THEN $16::jsonb
                    ELSE historic_alias_progress
                  END,
+                 publication_scope = $18,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -5503,8 +5525,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               // that, so it stands in for the list.
               input.parseLimitationCodesSeen ??
                 (input.parseLimitationCode ? [input.parseLimitationCode] : []),
-              input.scanSkipped ?? false,
-              Object.hasOwn(input, "historyScanResumePage"),
+              // A targeted search read no history, whatever its input says,
+              // so it can neither stamp a clean scan nor move the ordinary
+              // history cursor or the aliases' progress.
+              targeted || (input.scanSkipped ?? false),
+              !targeted && Object.hasOwn(input, "historyScanResumePage"),
               input.historyScanResumePage ?? null,
               input.historyScanResumeBoundaryReportCode ?? null,
               Object.hasOwn(input, "rankedBackfillCursor"),
@@ -5513,9 +5538,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.rankedBackfillCursor == null
                 ? null
                 : JSON.stringify(input.rankedBackfillCursor),
-              Object.hasOwn(input, "historicAliasProgress"),
+              !targeted && Object.hasOwn(input, "historicAliasProgress"),
               JSON.stringify(input.historicAliasProgress ?? null),
-              input.omittedInvalidTimestamp ?? false
+              input.omittedInvalidTimestamp ?? false,
+              targeted ? "tier" : "full"
             ]
           );
           if (publication.rowCount !== 1) {
@@ -6001,6 +6027,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                ranked_backfill_cursor, retry_after_at AS due_at
              FROM character_evidence_runs
              WHERE status IN ('complete', 'partial')
+               -- A targeted search's deadline is its own, and only a ranked
+               -- continuation (below) acts on it (#450).
+               AND publication_scope = 'full'
              ORDER BY region, realm_slug, normalized_name,
                completed_at DESC, id DESC
            ), ranked AS (
