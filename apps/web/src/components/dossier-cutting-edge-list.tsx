@@ -1,5 +1,5 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
-import { buildBoundedCuttingEdgeSequence } from "@slashwho/domain";
+import { buildCuttingEdgeSequence } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
 import { DossierMediaFallback } from "./dossier-media-fallback";
@@ -30,7 +30,7 @@ export function DossierCuttingEdgeList({
         status: "recorded" as const,
         achievement
       }))
-    : buildBoundedCuttingEdgeSequence(orderedCuttingEdges);
+    : buildCuttingEdgeSequence(orderedCuttingEdges);
 
   useEffect(() => {
     const list = listRef.current;

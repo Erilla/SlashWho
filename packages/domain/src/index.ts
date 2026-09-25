@@ -49,7 +49,7 @@ export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
 export { isAccountWideCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
 export {
-  buildBoundedCuttingEdgeSequence,
+  buildCuttingEdgeSequence,
   lookupCuttingEdgeAchievement
 } from "./cutting-edge-catalogue";
 export type {
