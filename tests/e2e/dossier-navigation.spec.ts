@@ -287,6 +287,13 @@ test("scrubs through dossier sections while dragging the desktop timeline", asyn
 }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/demo");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-dossier-scrollbar",
+    "",
+    {
+      timeout: 15_000
+    }
+  );
 
   const navigation = page.getByRole("navigation", { name: "Dossier sections" });
   const first = navigation.getByRole("link", { name: "Connected characters" });

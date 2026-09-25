@@ -147,6 +147,13 @@ it("renders an official account-wide Cutting Edge achievement without character 
     screen.getByRole("heading", { name: "Historic Cutting Edge" })
   ).toBeVisible();
   expect(screen.getByText("Cutting Edge: Queen Ansurek")).toBeVisible();
+  const headings = screen.getAllByRole("heading", { level: 3 });
+  expect(headings).toHaveLength(33);
+  expect(headings[0]).toHaveTextContent("Cutting Edge: Ula'tek");
+  expect(headings.at(-1)).toHaveTextContent(
+    "Cutting Edge: Will of the Emperor"
+  );
+  expect(screen.getAllByText("Not recorded")).toHaveLength(32);
   expect(screen.queryByText("Ryii")).not.toBeInTheDocument();
   expect(
     screen.getByAltText("Cutting Edge: Queen Ansurek icon")
@@ -223,16 +230,16 @@ it("renders catalogue-ordered gaps as not recorded between earned achievements",
     />
   );
 
-  expect(
-    screen
-      .getAllByRole("heading", { level: 3 })
-      .map((heading) => heading.textContent)
-  ).toEqual([
+  const headings = screen
+    .getAllByRole("heading", { level: 3 })
+    .map((heading) => heading.textContent);
+  expect(headings).toHaveLength(33);
+  expect(headings.slice(4, 7)).toEqual([
     "Cutting Edge: Dimensius, the All-Devouring",
     "Cutting Edge: Chrome King Gallywix",
     "Cutting Edge: Queen Ansurek"
   ]);
-  expect(screen.getByText("Not recorded")).toBeVisible();
+  expect(screen.getAllByText("Not recorded")).toHaveLength(31);
   expect(
     screen.getByRole("img", { name: "2 Cutting Edge achievements" })
   ).toHaveTextContent("2");
