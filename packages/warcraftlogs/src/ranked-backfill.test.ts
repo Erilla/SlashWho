@@ -755,4 +755,157 @@ describe("ranked Mythic backfill", () => {
     });
     expect(result).toMatchObject({ kind: "evidence", kills: [] });
   });
+
+  describe("zone selection", () => {
+    // WCL files the opening Midnight raids under one zone whose name is no
+    // raid's. Voidspire's first boss places it; Chimaerus belongs to Dreamrift.
+    const combinedZone = {
+      id: 46,
+      name: "VS / DR / MQD",
+      partitions: [{ id: 1 }],
+      encounters: [
+        { id: 3176, name: "Imperator Averzian" },
+        { id: 3306, name: "Chimaerus the Undreamt God" }
+      ]
+    };
+    const zones = [
+      combinedZone,
+      {
+        id: 17,
+        name: "Antorus, The Burning Throne",
+        partitions: [{ id: 1 }],
+        encounters: [
+          { id: 2092, name: "Argus the Unmaker" },
+          { id: 2063, name: "Aggramar" }
+        ]
+      },
+      // Names another raid while listing an Antorus boss: its name decides.
+      {
+        id: 38,
+        name: "Nerub-ar Palace",
+        partitions: [{ id: 1 }],
+        encounters: [{ id: 2092, name: "Argus the Unmaker" }]
+      },
+      { id: 45, name: "Mythic+ Season 1", partitions: [{ id: 1 }] }
+    ];
+    const walk = (rankedEncounters: readonly number[]) => {
+      const asked: { zones: number[]; encounters: number[] } = {
+        zones: [],
+        encounters: []
+      };
+      const fetch = vi.fn(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(
+            typeof input === "string" || input instanceof URL
+              ? input
+              : input.url
+          );
+          if (url.pathname === "/oauth/token")
+            return Response.json({ access_token: "token", expires_in: 3600 });
+          const { query, variables } = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: Record<string, number | string>;
+          };
+          if (query.includes("HistoricRaidZones"))
+            return Response.json({ data: { worldData: { zones } } });
+          if (query.includes("HistoricZoneRankings")) {
+            asked.zones.push(Number(variables.zoneId));
+            const rankings = rankedEncounters.map((id) => ({
+              encounterID: id,
+              totalKills: 1
+            }));
+            return Response.json({
+              data: {
+                characterData: {
+                  character: {
+                    id: 40989140,
+                    damage: { rankings },
+                    healing: { rankings }
+                  }
+                }
+              }
+            });
+          }
+          if (query.includes("HistoricEncounterRankings")) {
+            const encounterId = Number(variables.encounterId);
+            if (!asked.encounters.includes(encounterId))
+              asked.encounters.push(encounterId);
+            return Response.json({
+              data: {
+                characterData: {
+                  character: {
+                    encounterRankings: {
+                      ranks: [
+                        {
+                          report: { code: "voidNight", fightID: 10 },
+                          spec: "Holy"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            });
+          }
+          const payload = report("voidNight", 10);
+          const hydrated = payload.data.reportData.report;
+          hydrated.startTime = Date.UTC(2026, 3, 1, 19);
+          hydrated.zone = {
+            id: 46,
+            name: "VS / DR / MQD",
+            encounters: [{ id: 3176, journalID: 0 }]
+          };
+          // A fight with no game zone falls back to the combined zone name,
+          // so only the boss can place the kill.
+          Object.assign(hydrated.fights[0]!, {
+            encounterID: 3176,
+            name: "Imperator Averzian",
+            gameZone: null
+          });
+          return Response.json(payload);
+        }
+      );
+      const client = createWarcraftLogsClient({
+        fetch: fetch as typeof globalThis.fetch,
+        clientId: "id",
+        clientSecret: "secret"
+      });
+      return { asked, client };
+    };
+
+    it("walks a combined zone for the Voidspire, but only Voidspire bosses", async () => {
+      const { asked, client } = walk([3176, 3306]);
+
+      const result = await client.getRankedKillReports(key, {
+        journalRaidId: "1307",
+        requestCap: 20
+      });
+
+      expect(asked.zones).toEqual([46]);
+      expect(asked.encounters).toEqual([3176]);
+      expect(result).toMatchObject({
+        kind: "evidence",
+        kills: [
+          {
+            fightUrl: "https://www.warcraftlogs.com/reports/voidNight#fight=10",
+            bossName: "Imperator Averzian",
+            raidName: "VS / DR / MQD"
+          }
+        ]
+      });
+    });
+
+    it("leaves an older single-raid tier's zones and encounters unchanged", async () => {
+      // Ranked in a boss the zone list omits: a named zone is walked whole.
+      const { asked, client } = walk([2063, 2092, 4000]);
+
+      await client.getRankedKillReports(key, {
+        journalRaidId: "946",
+        requestCap: 20
+      });
+
+      expect(asked.zones).toEqual([17]);
+      expect(asked.encounters).toEqual([2063, 2092, 4000]);
+    });
+  });
 });
