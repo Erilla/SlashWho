@@ -1,19 +1,11 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import {
-  accountSessionChangedEvent,
-  notifyAccountSessionChanged
-} from "../lib/account-session-events";
-
-type Account = {
-  email: string;
-  role: "user" | "admin";
-  passwordChangeRequired: boolean;
-};
+import { notifyAccountSessionChanged } from "../lib/account-session-events";
+import { useAccountSession } from "../lib/use-account-session";
 
 export function AccountNavigation() {
-  const [account, setAccount] = useState<Account | null>(null);
+  const account = useAccountSession();
   const [signOutError, setSignOutError] = useState("");
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -35,30 +27,6 @@ export function AccountNavigation() {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
-  useEffect(() => {
-    let current = true;
-    let generation = 0;
-    function refresh() {
-      const requestGeneration = ++generation;
-      fetch("/api/account/session", { cache: "no-store" })
-        .then((response) => (response.ok ? response.json() : null))
-        .then((data: { account?: Account } | null) => {
-          if (current && requestGeneration === generation)
-            setAccount(data?.account ?? null);
-        })
-        .catch(() => {
-          if (current && requestGeneration === generation) setAccount(null);
-        });
-    }
-    refresh();
-    window.addEventListener(accountSessionChangedEvent, refresh);
-    window.addEventListener("focus", refresh);
-    return () => {
-      current = false;
-      window.removeEventListener(accountSessionChangedEvent, refresh);
-      window.removeEventListener("focus", refresh);
-    };
-  }, []);
   async function signOut() {
     setSignOutError("");
     try {
@@ -72,7 +40,6 @@ export function AccountNavigation() {
       setSignOutError("Sign out failed. Please try again.");
       return;
     }
-    setAccount(null);
     notifyAccountSessionChanged();
     window.location.assign("/");
   }
