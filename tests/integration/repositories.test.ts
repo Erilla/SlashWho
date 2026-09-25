@@ -3814,6 +3814,9 @@ describe("PostgreSQL repositories", () => {
           {
             raidId: "43",
             raidName: "Nerub-ar Palace",
+            // So a combined zone's wipe can be placed in its raid (#492).
+            bossName: "Nexus-Princess Ky'veza",
+            journalBossId: "2920",
             attemptedAt: "2026-03-01T11:00:00.000Z",
             // So a wipe found through attendance can be re-read (#435).
             reportUrl: "https://www.warcraftlogs.com/reports/wipe"
@@ -5895,8 +5898,8 @@ describe("PostgreSQL repositories", () => {
       expect(
         (await repositories.evidence.getCompleted(rootKey))?.kills
       ).toEqual([expect.objectContaining({ fightUrl: historic.fightUrl })]);
-      // A later explicit search can retract a report that is no longer public
-      // or attributable; an ordinary recentReports scan cannot see this far.
+      // A later explicit search is targeted and only ever adds (#450): one
+      // that finds nothing, even cleanly, keeps what the earlier one found.
       const replacingAt = new Date(Date.now() + 25 * 60 * 60 * 1000);
       const replacing = await repositories.evidence.reserveTierSearch({
         key: rootKey,
@@ -5919,7 +5922,7 @@ describe("PostgreSQL repositories", () => {
       });
       expect(
         (await repositories.evidence.getCompleted(rootKey))?.kills
-      ).toEqual([]);
+      ).toEqual([expect.objectContaining({ fightUrl: historic.fightUrl })]);
     });
 
     it.each(["sql", "json"] as const)(
@@ -5963,12 +5966,14 @@ describe("PostgreSQL repositories", () => {
             [searched.run.id]
           );
         }
+        // Nothing is left for the finished walk to continue, and a targeted
+        // search's own deadline does not make ordinary evidence due (#450).
         expect(await repositories.evidence.listResumable(10, retryAt)).toEqual(
-          expect.arrayContaining([rootKey])
+          []
         );
         const resumed = await repositories.evidence.reserve({
           key: rootKey,
-          freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
+          freshnessCutoff: retryAt,
           at: retryAt
         });
         if (resumed.kind !== "reserved") throw new Error("resume_not_reserved");
@@ -6047,6 +6052,363 @@ describe("PostgreSQL repositories", () => {
       expect(retried).toMatchObject({
         kind: "reserved",
         run: { mode: "tier_search", tierSearchRaidId: tier }
+      });
+    });
+
+    describe("as a targeted, additive publication (#450)", () => {
+      const ordinaryAt = new Date("2026-09-22T12:00:00.000Z");
+      const palace = mythicKill({
+        raidId: "23",
+        raidName: "The Eternal Palace",
+        bossId: "2299",
+        bossName: "Queen Azshara",
+        journalBossId: "2364",
+        killedAt: "2019-09-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/palaceStored",
+        fightUrl: "https://www.warcraftlogs.com/reports/palaceStored#fight=4"
+      });
+      const nerubar = mythicKill();
+      const storedWipe = mythicWipe();
+      const storedBest = {
+        raidId: "42",
+        raidName: "Nerub-ar Palace",
+        bossId: "1234",
+        bossName: "Queen Ansurek",
+        rankingsUrl:
+          "https://www.warcraftlogs.com/character/eu/silvermoon/ryii#zone=42&boss=1234&difficulty=5",
+        performance: {
+          spec: null,
+          damage: { state: "available" as const, percentile: 88 },
+          healing: { state: "unavailable" as const },
+          bossDamage: { state: "unavailable" as const }
+        }
+      };
+      const cuttingEdge = {
+        achievementId: "40254",
+        completedAt: "2025-01-14T20:30:00.000Z"
+      };
+
+      // An ordinary collection that left a history cursor, a parse shortfall
+      // and a retry deadline behind, and collected cutting edges.
+      async function publishOrdinary() {
+        const reservation = await repositories.evidence.reserve({
+          key: rootKey,
+          freshnessCutoff: ordinaryAt,
+          at: ordinaryAt,
+          phasePlan: ["blizzard_achievements", "publication"]
+        });
+        if (reservation.kind !== "reserved")
+          throw new Error("evidence_not_reserved");
+        await repositories.evidence.claim(reservation.run.id, 1);
+        await repositories.evidence.recordPhaseTransitions?.(
+          reservation.run.id,
+          [
+            {
+              id: "blizzard_achievements",
+              state: "active",
+              startedAt: ordinaryAt,
+              completedAt: null,
+              limitationCode: null
+            }
+          ]
+        );
+        await repositories.evidence.recordPhaseTransitions?.(
+          reservation.run.id,
+          [
+            {
+              id: "blizzard_achievements",
+              state: "completed",
+              startedAt: ordinaryAt,
+              completedAt: ordinaryAt,
+              limitationCode: null
+            }
+          ]
+        );
+        await repositories.evidence.publish(reservation.run.id, {
+          state: "partial",
+          limitationCode: "request_cap",
+          parseLimitationCode: "parse_request_cap",
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "ordinaryBoundary",
+          retryAfterAt: new Date("2026-09-22T12:30:00.000Z"),
+          kills: [palace, nerubar],
+          wipes: [storedWipe],
+          tierBests: [storedBest],
+          cuttingEdges: [cuttingEdge],
+          completedAt: ordinaryAt
+        });
+        return reservation.run.id;
+      }
+
+      async function searchTier(at: Date) {
+        const search = await repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: "1179",
+          at,
+          searchedSince: new Date(at.getTime() - 24 * 60 * 60 * 1_000)
+        });
+        if (search.kind !== "reserved")
+          throw new Error("tier_search_not_reserved");
+        await repositories.evidence.claim(search.run.id, 1);
+        return search.run.id;
+      }
+
+      const found = mythicKill({
+        raidId: "23",
+        raidName: "The Eternal Palace",
+        bossId: "2298",
+        bossName: "Za'qul",
+        journalBossId: "2349",
+        killedAt: "2019-08-20T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/palaceFound",
+        fightUrl: "https://www.warcraftlogs.com/reports/palaceFound#fight=2"
+      });
+      const outcomes = [
+        {
+          name: "an empty complete search",
+          publication: {
+            state: "complete" as const,
+            limitationCode: null,
+            parseLimitationCode: null,
+            scanSkipped: true,
+            rankedBackfillCursor: null,
+            kills: [],
+            wipes: []
+          },
+          added: [] as string[]
+        },
+        {
+          name: "a search that found a kill and a wipe",
+          publication: {
+            state: "complete" as const,
+            limitationCode: null,
+            parseLimitationCode: null,
+            scanSkipped: true,
+            rankedBackfillCursor: null,
+            kills: [found],
+            wipes: [
+              mythicWipe({
+                raidId: "23",
+                raidName: "The Eternal Palace",
+                fightUrl:
+                  "https://www.warcraftlogs.com/reports/palaceFound#fight=1"
+              })
+            ]
+          },
+          added: [found.fightUrl]
+        },
+        {
+          name: "a capped search awaiting its continuation",
+          publication: {
+            state: "partial" as const,
+            limitationCode: "request_cap",
+            parseLimitationCode: null,
+            scanSkipped: true,
+            retryAfterAt: new Date("2026-09-23T12:30:00.000Z"),
+            kills: [],
+            wipes: []
+          },
+          added: [] as string[]
+        },
+        {
+          name: "a search stopped by a fault",
+          publication: {
+            state: "partial" as const,
+            limitationCode: "collection_failed",
+            parseLimitationCode: null,
+            // A stopped attempt names no scan state; storage supplies it.
+            retryAfterAt: new Date("2026-09-23T12:30:00.000Z"),
+            kills: [],
+            wipes: []
+          },
+          added: [] as string[]
+        }
+      ];
+
+      it.each(outcomes)(
+        "keeps every stored raid's evidence after $name",
+        async ({ publication, added }) => {
+          const ordinaryId = await publishOrdinary();
+          const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+          const searchId = await searchTier(searchedAt);
+
+          await repositories.evidence.publish(searchId, {
+            ...publication,
+            tierBests: [],
+            // A targeted publication has none; any it offered is not stored.
+            cuttingEdges: [
+              {
+                achievementId: "99999",
+                completedAt: "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            historyScanResumePage: 1,
+            historyScanResumeBoundaryReportCode: "searchBoundary",
+            completedAt: searchedAt
+          });
+
+          const completed = await repositories.evidence.getCompleted(rootKey);
+          // The snapshot is the search's, and holds everything there was.
+          expect(completed?.kills.map((kill) => kill.fightUrl).sort()).toEqual(
+            [palace.fightUrl, nerubar.fightUrl, ...added].sort()
+          );
+          expect(completed?.wipes.map((wipe) => wipe.fightUrl)).toEqual(
+            expect.arrayContaining([storedWipe.fightUrl])
+          );
+          expect(completed?.tierBests).toEqual([
+            expect.objectContaining({
+              raidId: "42",
+              performance: expect.objectContaining({
+                damage: { state: "available", percentile: 88 }
+              })
+            })
+          ]);
+          // What the ordinary run last collected still speaks for itself:
+          // when, with what shortfall, and the cutting edges.
+          expect(completed?.run).toMatchObject({
+            id: ordinaryId,
+            status: "partial",
+            limitationCode: "request_cap",
+            parseLimitationCode: "parse_request_cap",
+            completedAt: ordinaryAt,
+            retryAfterAt: new Date("2026-09-22T12:30:00.000Z")
+          });
+          expect(completed?.cuttingEdgesCollected).toBe(true);
+          expect(completed?.cuttingEdges).toEqual([cuttingEdge]);
+          // The ordinary history cursor, scan turn and parse work are as the
+          // ordinary run left them.
+          await expect(
+            repositories.evidence.storedEvidenceTiers(rootKey)
+          ).resolves.toMatchObject({
+            historyScanResumePage: 7,
+            historyScanResumeBoundaryReportCode: "ordinaryBoundary",
+            identityScanTurn: 1,
+            parseWorkOutstanding: false
+          });
+          const row = await pool.query<{
+            publication_scope: string;
+            kill_scan_skipped: boolean;
+            kill_scan_resume_page: number | null;
+          }>(
+            `SELECT publication_scope, kill_scan_skipped, kill_scan_resume_page
+               FROM character_evidence_runs WHERE id = $1`,
+            [searchId]
+          );
+          expect(row.rows[0]).toEqual({
+            publication_scope: "tier",
+            kill_scan_skipped: true,
+            kill_scan_resume_page: null
+          });
+        }
+      );
+
+      it("marks read only the fights a targeted search publishes", async () => {
+        // Break caught (#492 review): a search that parsed another raid's fight
+        // on the same night restamped that stored, unparsed kill as read, so no
+        // later run would parse it.
+        await publishOrdinary();
+        const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+        const searchId = await searchTier(searchedAt);
+
+        await repositories.evidence.publish(searchId, {
+          state: "complete",
+          limitationCode: null,
+          parseLimitationCode: null,
+          scanSkipped: true,
+          rankedBackfillCursor: null,
+          kills: [found],
+          wipes: [],
+          tierBests: [],
+          cuttingEdges: [],
+          parsedFightUrls: [found.fightUrl, nerubar.fightUrl],
+          completedAt: searchedAt
+        });
+
+        const rows = await pool.query<{
+          fight_url: string;
+          parses_read_at: Date | null;
+        }>(
+          `SELECT fight_url, parses_read_at FROM character_mythic_kills
+            WHERE evidence_run_id = $1`,
+          [searchId]
+        );
+        const readAt = new Map(
+          rows.rows.map((row) => [row.fight_url, row.parses_read_at])
+        );
+        expect(readAt.get(found.fightUrl)).toEqual(searchedAt);
+        expect(readAt.has(nerubar.fightUrl)).toBe(true);
+        expect(readAt.get(nerubar.fightUrl)).toBeNull();
+      });
+
+      it("lets no targeted search refresh the ordinary evidence, or make it due", async () => {
+        const ordinaryId = await publishOrdinary();
+        // Settle the ordinary run, so only the search could make it due.
+        await pool.query(
+          `UPDATE character_evidence_runs SET retry_after_at = NULL WHERE id = $1`,
+          [ordinaryId]
+        );
+        const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+        const searchId = await searchTier(searchedAt);
+        await repositories.evidence.publish(searchId, {
+          state: "partial",
+          limitationCode: null,
+          parseLimitationCode: "parse_request_cap",
+          scanSkipped: true,
+          retryAfterAt: new Date("2026-09-23T12:30:00.000Z"),
+          kills: [found],
+          wipes: [],
+          tierBests: [],
+          completedAt: searchedAt
+        });
+
+        // Its parse deadline is its own; no sweep resumes an ordinary run
+        // for it.
+        await expect(
+          repositories.evidence.listResumable(
+            10,
+            new Date("2026-09-23T13:00:00.000Z")
+          )
+        ).resolves.toEqual([]);
+        // Fresh by the search's clock, stale by the ordinary run's: stale.
+        const reservation = await repositories.evidence.reserve({
+          key: rootKey,
+          freshnessCutoff: new Date("2026-09-23T00:00:00.000Z"),
+          at: new Date("2026-09-23T13:00:00.000Z")
+        });
+        expect(reservation).toMatchObject({
+          kind: "reserved",
+          run: { mode: "full" },
+          completed: { run: { id: ordinaryId } }
+        });
+        // The ordinary run that follows carries the search's kill forward.
+        if (reservation.kind !== "reserved")
+          throw new Error("evidence_not_reserved");
+        await repositories.evidence.claim(reservation.run.id, 1);
+        await repositories.evidence.publish(reservation.run.id, {
+          state: "partial",
+          limitationCode: "request_cap",
+          parseLimitationCode: null,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          completedAt: new Date("2026-09-23T13:05:00.000Z")
+        });
+        expect(
+          (await repositories.evidence.getCompleted(rootKey))?.kills.map(
+            (kill) => kill.fightUrl
+          )
+        ).toEqual(expect.arrayContaining([found.fightUrl, palace.fightUrl]));
+      });
+
+      it("refuses a targeted scope on an ordinary run", async () => {
+        const ordinaryId = await publishOrdinary();
+        await expect(
+          pool.query(
+            `UPDATE character_evidence_runs SET publication_scope = 'tier'
+              WHERE id = $1`,
+            [ordinaryId]
+          )
+        ).rejects.toThrow(/character_evidence_runs_publication_scope_check/);
       });
     });
 

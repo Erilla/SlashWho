@@ -16,7 +16,8 @@ import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
 import {
   canonicalCharacterId,
-  isAccountWideCuttingEdgeAchievement
+  isAccountWideCuttingEdgeAchievement,
+  lookupRaidForEvidence
 } from "@slashwho/domain";
 import type {
   MythicBossRanking,
@@ -158,9 +159,10 @@ export type ApplicantEvidenceRun = Readonly<{
   accountCredentialVersion?: number | null;
   className?: string | null;
   /**
-   * What the run was reserved to do. A `tier_search` run is a full collection
-   * that also walks `tierSearchRaidId`'s guild attendance (#435). Absent is
-   * `full`.
+   * What the run was reserved to do. A `tier_search` run is a targeted
+   * collection of `tierSearchRaidId` alone (#435, #450): its guild attendance
+   * and ranked kills, with their parses, and no history scan or other
+   * provider. Absent is `full`.
    */
   mode?: "full" | "tier_search";
   tierSearchRaidId?: string | null;
@@ -1232,8 +1234,8 @@ export function createApplicantEvidenceJobHandler(
         // recent complete collection followed by a manual refresh still has
         // to look for new kills. The previous publication must also say that
         // parses were the only unfinished domain.
-        // A tier search is asked for explicitly, so it always scans: skipping
-        // the scan would publish a parse-only run for a request to look.
+        // A tier search is never a parse resume: it parses only what it finds
+        // in its own tier, and the ordinary run keeps its parse work.
         const parseOnlyResume =
           tierSearchRaidId === undefined &&
           historicAliases.length === 0 &&
@@ -1252,7 +1254,7 @@ export function createApplicantEvidenceJobHandler(
             : options.requestCap;
         // A tier search spends part of the scan cap rather than adding to it.
         // A raid with no catalogued window has no nights to search, so the run
-        // collects as an ordinary one would.
+        // publishes that and collects nothing.
         const tierWindow =
           tierSearchRaidId === undefined
             ? null
@@ -1271,8 +1273,13 @@ export function createApplicantEvidenceJobHandler(
               Math.max(1, Math.floor(tierCaps.tier / 2))
             )
           : 0;
-        const requestCap =
-          job.mode === "light"
+        // A tier search is targeted (#450): it reads no history at all, and
+        // what the split sets aside for history goes unspent rather than to
+        // the search, so the search's own caps are unchanged.
+        const targeted = tierSearchRaidId !== undefined;
+        const requestCap = targeted
+          ? 0
+          : job.mode === "light"
             ? 1
             : tierCaps
               ? tierCaps.history - rankedCap
@@ -1290,11 +1297,10 @@ export function createApplicantEvidenceJobHandler(
         // Asked for, with a tier to search, and no budget to search it with.
         // Recorded as such rather than as a search that never ran.
         tierSearchStarved = tierWindow !== null && !tierSearchAsked;
-        // The search ignores the tier's terminal marks for its one run, so a
-        // kill it recovers there is parsed and the tier's bests re-read. The
-        // kill marks stay: they are what carries the tier's stored kills
-        // through a complete publish, and the scan floor they set is what
-        // keeps the history scan from re-reading the years below.
+        // The search ignores the tier's parse marks for its one run, so a kill
+        // it recovers there is parsed and the tier's bests re-read. Only the
+        // run's view changes: the stored marks, the kill marks among them,
+        // stand as they are for every later ordinary run.
         if (tierSearchRaidId !== undefined && tierWindow) {
           for (const zone of tierSearchZoneIds(
             tierSearchRaidId,
@@ -1474,7 +1480,11 @@ export function createApplicantEvidenceJobHandler(
         // scans history in earnest, and never decides the run's status: a
         // lookup that fails skips recovery, and the run is judged by its
         // history scan alone.
-        const historicKills = options.raiderio?.getHistoricMythicKills;
+        // A targeted search asks no other provider: the guilds it walks come
+        // from stored kills and Warcraft Logs' own list of the character's.
+        const historicKills = targeted
+          ? undefined
+          : options.raiderio?.getHistoricMythicKills;
         const verified =
           historicKills && (requestCap > 1 || tierCaps !== null)
             ? await scope.time("raiderIoHistoricKills", () =>
@@ -1535,11 +1545,11 @@ export function createApplicantEvidenceJobHandler(
             progress
           ])
         );
-        const turn = tierSearchAsked
+        const turn = targeted
           ? 0
           : (storedEvidence.identityScanTurn ?? 0) % identities.length;
         const historyCaps = new Map<number, number>();
-        if (historicAliases.length === 0 || tierSearchAsked) {
+        if (targeted || historicAliases.length === 0) {
           // Explicit tier searches belong to the current identity. With no
           // aliases this is also the established parse-only zero-scan path.
           historyCaps.set(0, requestCap);
@@ -1579,8 +1589,18 @@ export function createApplicantEvidenceJobHandler(
             (position < parseRequestCap % selected.length ? 1 : 0)
           );
         };
-        const deferred = historyCaps.size < identities.length;
-        let response: WarcraftLogsReportResult = historyCaps.has(0)
+        // A targeted search defers no alias: it never scans one.
+        const deferred = !targeted && historyCaps.size < identities.length;
+        // A search with nothing to spend, or no window to spend it in, has no
+        // request worth making. It publishes that shortfall and nothing else.
+        const targetedShortfall: WarcraftLogsLimitationCode | undefined =
+          !targeted || tierSearchAsked
+            ? undefined
+            : tierWindow === null
+              ? "unavailable"
+              : "request_cap";
+        const collects = historyCaps.has(0) && targetedShortfall === undefined;
+        let response: WarcraftLogsReportResult = collects
           ? await scope.time("warcraftLogs", () =>
               gateway.getFirstKillReports(run.key, {
                 requestCap: historyCaps.get(0)!,
@@ -1592,7 +1612,10 @@ export function createApplicantEvidenceJobHandler(
                   historicAliases.length > 0
                     ? { ...terminalRaidIds, kills: new Set<string>() }
                     : terminalRaidIds,
-                ...(historicAliases.length === 0 && killScanFloor
+                ...(targeted && tierSearchRaidId
+                  ? { targetedOnly: true, parseJournalRaidId: tierSearchRaidId }
+                  : {}),
+                ...(!targeted && historicAliases.length === 0 && killScanFloor
                   ? { killScanFloor }
                   : {}),
                 ...(characterId !== undefined ? { characterId } : {}),
@@ -1638,7 +1661,9 @@ export function createApplicantEvidenceJobHandler(
                       }
                     }
                   : {}),
-                ...historyScanResumeOptions,
+                // The ordinary history cursor is not a targeted search's to
+                // prove or move.
+                ...(targeted ? {} : historyScanResumeOptions),
                 ...(parseOnlyResume
                   ? {
                       storedKills: (storedEvidence.parseOnlyKills ?? [])
@@ -1680,7 +1705,7 @@ export function createApplicantEvidenceJobHandler(
             )
           : {
               kind: "limitation",
-              code: "request_cap"
+              code: targetedShortfall ?? "request_cap"
             };
         // A former name is collected by name and realm, then its evidence is
         // published under the connected character's key. No alias becomes a
@@ -1842,8 +1867,14 @@ export function createApplicantEvidenceJobHandler(
           await stageAndPublish(
             {
               state: "partial",
-              ...(historicAliases.length > 0 ? { historicAliasProgress } : {}),
-              ...(storedEvidence.historyScanResumePage !== undefined
+              // A targeted search read no history, so it carries no history
+              // state of its own: storage keeps the ordinary run's.
+              ...(targeted ? { scanSkipped: true } : {}),
+              ...(!targeted && historicAliases.length > 0
+                ? { historicAliasProgress }
+                : {}),
+              ...(!targeted &&
+              storedEvidence.historyScanResumePage !== undefined
                 ? {
                     historyScanResumePage: storedEvidence.historyScanResumePage,
                     historyScanResumeBoundaryReportCode:
@@ -1865,7 +1896,9 @@ export function createApplicantEvidenceJobHandler(
               parsedFightUrls: [],
               completedAt: now()
             },
-            { parses: [], tierBests: [] }
+            // A targeted search settles no tier, so its stage says nothing
+            // that terminal marking could read.
+            targeted ? undefined : { parses: [], tierBests: [] }
           );
           return;
         }
@@ -1898,16 +1931,46 @@ export function createApplicantEvidenceJobHandler(
         }
         // The remaining providers are part of this run, not dossier-read
         // embellishments. Each phase is entered at its own gateway boundary
-        // and terminalised before the next one begins.
-        await phaseLedger?.skipPendingBefore("raiderio_rankings");
+        // and terminalised before the next one begins. A targeted search asks
+        // none of them, so each is recorded as skipped rather than checked.
+        if (targeted) await phaseLedger?.skipPending();
+        else await phaseLedger?.skipPendingBefore("raiderio_rankings");
+        // A targeted search publishes only its own raid. A report found on
+        // the tier's nights can hold another raid's fights too, and those are
+        // the ordinary collection's to find and parse. The boss decides, as
+        // it does in the dossier: a combined zone such as `VS / DR / MQD`
+        // names no raid of its own.
+        const inScope = (
+          evidence: Readonly<{
+            raidName: string;
+            bossName: string;
+            journalBossId?: string | null;
+          }>
+        ) =>
+          !targeted ||
+          lookupRaidForEvidence({
+            ...evidence,
+            journalBossId: evidence.journalBossId ?? null
+          })?.raidId === tierSearchRaidId;
         const allKills = new Map(
           carriedRankedKills.map((kill) => [kill.fightUrl, kill] as const)
         );
-        for (const kill of response.kills) allKills.set(kill.fightUrl, kill);
+        for (const kill of response.kills) {
+          if (inScope(kill)) allKills.set(kill.fightUrl, kill);
+        }
         const publishedKills = [...allKills.values()].map(
           toCharacterMythicKillInput
         );
-        if (options.raiderio) {
+        const publishedWipes = response.wipes.filter(inScope);
+        const publishedTierBests = response.tierBests.filter(inScope);
+        // Publishing restamps every listed fight as parsed, stored ones
+        // included, so a fight left out of the kills must be left out here
+        // too: its stored parse would otherwise be marked read and never
+        // fetched again.
+        const publishedParsedFightUrls = targeted
+          ? response.parsedFightUrls.filter((url) => allKills.has(url))
+          : response.parsedFightUrls;
+        if (options.raiderio && !targeted) {
           const requests = new Map<string, MythicBossRankingsOptions>();
           for (const kill of publishedKills) {
             const request = raiderIoRankingRequest(kill, run.key.region);
@@ -1985,7 +2048,7 @@ export function createApplicantEvidenceJobHandler(
           }
         }
         let cuttingEdges: readonly CharacterCuttingEdgeInput[] = [];
-        if (options.blizzard) {
+        if (options.blizzard && !targeted) {
           await phaseLedger?.transition("blizzard_achievements", "active");
           try {
             cuttingEdges = (
@@ -2024,8 +2087,11 @@ export function createApplicantEvidenceJobHandler(
         // Honest about the run, not just about its history scan: a run that
         // spent its whole parse budget did not finish, and reporting it
         // `complete` was the other half of why the character looked settled.
+        // A targeted search skipped the scan by design, not as a shortfall.
         const incomplete = Boolean(
-          response.limitation ?? drivingParse ?? response.scanSkipped
+          response.limitation ??
+          drivingParse ??
+          (targeted ? undefined : response.scanSkipped)
         );
         record.outcome = incomplete ? "partial" : "complete";
         record.limitationCode = response.limitation?.code ?? null;
@@ -2047,15 +2113,17 @@ export function createApplicantEvidenceJobHandler(
         await stageAndPublish(
           {
             state: incomplete ? "partial" : "complete",
-            ...(historicAliases.length > 0 ? { historicAliasProgress } : {}),
-            ...(response.scanSkipped ? { scanSkipped: true } : {}),
+            ...(!targeted && historicAliases.length > 0
+              ? { historicAliasProgress }
+              : {}),
+            ...(targeted || response.scanSkipped ? { scanSkipped: true } : {}),
             ...(response.omittedInvalidTimestamp
               ? { omittedInvalidTimestamp: true }
               : {}),
             ...(response.rankedBackfillCursor !== undefined
               ? { rankedBackfillCursor: response.rankedBackfillCursor }
               : {}),
-            ...(response.scanSkipped
+            ...(targeted || response.scanSkipped
               ? {}
               : response.historyScanResumePage !== undefined
                 ? {
@@ -2088,14 +2156,19 @@ export function createApplicantEvidenceJobHandler(
               ? { retryAfterAt: new Date(now().getTime() + retryAfterMs) }
               : {}),
             kills: publishedKills,
-            wipes: response.wipes,
-            tierBests: response.tierBests,
+            wipes: publishedWipes,
+            tierBests: publishedTierBests,
             cuttingEdges,
-            parsedFightUrls: response.parsedFightUrls,
+            parsedFightUrls: publishedParsedFightUrls,
             completedAt: now()
           },
-          response.troubledRaidIds
+          targeted ? undefined : response.troubledRaidIds
         );
+
+        // A targeted search settles nothing. It parsed only the kills it
+        // found, not the tier's stored ones, so it cannot vouch for the tier
+        // in any domain; the marks already stored stand as they are.
+        if (targeted) return;
 
         // Marked only after publication succeeded. A mark that outlived a
         // failed publish would stop the tier being collected while nothing

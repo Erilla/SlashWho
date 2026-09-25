@@ -1,8 +1,8 @@
 import type { DossierTierSearch } from "@slashwho/contracts";
 import type { StoredEvidenceTiers } from "@slashwho/database";
 import {
-  lookupRaidByName,
   lookupRaidCurrentContentWindow,
+  lookupRaidForEvidence,
   type CharacterKey
 } from "@slashwho/domain";
 
@@ -58,7 +58,12 @@ export function tierSearchZoneIds(
 ): ReadonlySet<string> {
   const zones = new Set<string>();
   for (const item of [...stored.kills, ...stored.wipes]) {
-    if (lookupRaidByName(item.raidName)?.raidId === journalRaidId) {
+    const raid = lookupRaidForEvidence({
+      raidName: item.raidName,
+      bossName: item.bossName ?? "",
+      journalBossId: item.journalBossId ?? null
+    });
+    if (raid?.raidId === journalRaidId) {
       zones.add(item.raidId);
     }
   }

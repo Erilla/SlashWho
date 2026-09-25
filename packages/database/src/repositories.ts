@@ -284,9 +284,13 @@ export interface CharacterEvidenceRun {
 }
 
 /**
- * `full` is every collection there has always been. `tier_search` is a full
- * collection for one selected tier. A capped ranked walk keeps this mode on
- * budgeted automatic continuations; completed guild attendance can be reused.
+ * `full` is every collection there has always been. `tier_search` is a
+ * targeted collection of one selected tier (#450): its guild attendance and
+ * ranked kills, with their parses, and no history scan or other provider. It
+ * publishes additively, so nothing it did not find is dropped, and it leaves
+ * the ordinary run's freshness, limitations, history cursor and cutting edges
+ * as they were. A capped ranked walk keeps this mode on budgeted automatic
+ * continuations; completed guild attendance can be reused.
  */
 export type EvidenceRunMode = "full" | "tier_search";
 
@@ -501,6 +505,13 @@ export type EmptyAttendanceSearch = Readonly<{
 export type StoredKillTier = Readonly<{
   raidId: string;
   raidName: string;
+  /**
+   * The boss, so a combined zone such as `VS / DR / MQD`, which names no raid,
+   * can still be placed in one. Absent from an implementation that does not
+   * store it.
+   */
+  bossName?: string;
+  journalBossId?: string | null;
   killedAt: string;
   /**
    * The report the kill came from, so a kill the character's own history
@@ -525,6 +536,9 @@ export type StoredWipeTier = Readonly<{
    * one did (#346).
    */
   raidName: string;
+  /** The boss, as on a stored kill tier. */
+  bossName?: string;
+  journalBossId?: string | null;
   attemptedAt: string;
   /**
    * The report the wipe came from, so a wipe found through guild attendance,

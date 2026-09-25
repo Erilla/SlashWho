@@ -5203,24 +5203,32 @@ describe("searching one tier from the dossier", () => {
     return evidence;
   };
 
-  it("walks the tier's attendance, out of the scan's cap, over every known guild", async () => {
+  it("walks only the tier's attendance and ranked kills, reading no history", async () => {
+    // Break caught (#450): a tier search also ran the ordinary history scan
+    // and Raider.IO recovery, so a targeted click cost a whole collection.
     const evidence = withStoredTier(store(tierRun as typeof run));
     const getFirstKillReports = vi.fn(evidenceFound);
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
 
+    expect(getFirstKillReports).toHaveBeenCalledTimes(1);
     const options = (
       getFirstKillReports.mock.calls[0] as unknown[]
     )[1] as Record<string, unknown>;
-    // 18,000 points at half the allowance is 300 requests: 210 history,
-    // 60 attendance, and 30 ranked discovery.
-    expect(options.requestCap).toBe(210);
+    // 18,000 points at half the allowance is 300 requests: 60 attendance and
+    // 30 ranked discovery. The 210 set aside for history go unspent.
+    expect(options.requestCap).toBe(0);
+    expect(options.targetedOnly).toBe(true);
+    expect(options).not.toHaveProperty("killScanFloor");
+    expect(options).not.toHaveProperty("verifiedKills");
+    expect(options).not.toHaveProperty("storedKillReportCodes");
+    expect(options).not.toHaveProperty("historyScanStartPage");
+    expect(options).not.toHaveProperty("storedKills");
     expect(options.tierSearch).toMatchObject({
       requestCap: 60,
-      guilds: [
-        { name: "SeriouslyCasual", realm: "silvermoon", region: "eu" },
-        { name: "Stored Guild", realm: "silvermoon", region: "eu" }
-      ],
+      // Raider.IO is not asked, so the guilds are the stored ones; Warcraft
+      // Logs adds the character's own list inside the search.
+      guilds: [{ name: "Stored Guild", realm: "silvermoon", region: "eu" }],
       // The stored kill's report is already decoded.
       skipReportCodes: ["zCFtRjmLgvHxynh7"]
     });
@@ -5465,7 +5473,9 @@ describe("searching one tier from the dossier", () => {
     });
   });
 
-  it("scans rather than resuming parses only, because it was asked to look", async () => {
+  it("searches the tier rather than resuming the ordinary parse work", async () => {
+    // A parse-only resume re-reads every stored kill's parses; a targeted
+    // search parses only what it finds.
     const evidence = withStoredTier(store(tierRun as typeof run));
     const tiers = evidence.storedEvidenceTiers.bind(evidence);
     evidence.storedEvidenceTiers = async (characterKey) => ({
@@ -5480,9 +5490,14 @@ describe("searching one tier from the dossier", () => {
     expect(getFirstKillReports).toHaveBeenCalledWith(
       key,
       expect.objectContaining({
-        requestCap: 210,
+        requestCap: 0,
+        parseRequestCap: 24,
         tierSearch: expect.anything()
       })
+    );
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ storedKills: expect.anything() })
     );
   });
 
@@ -5537,18 +5552,372 @@ describe("searching one tier from the dossier", () => {
 
     await handler.execute(run.id);
 
-    expect(getFirstKillReports).toHaveBeenCalledWith(
-      key,
-      expect.not.objectContaining({ tierSearch: expect.anything() })
-    );
+    // Nothing to spend means nothing worth asking, not an ordinary scan.
+    expect(getFirstKillReports).not.toHaveBeenCalled();
     expect(evidence.costs.at(-1)?.tierSearch).toMatchObject({
       outcome: "request_cap",
       requests: 0,
       recoveredKills: null
     });
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      state: "partial",
+      scanSkipped: true,
+      limitationCode: "request_cap",
+      kills: [],
+      wipes: []
+    });
   });
 
-  it("collects as an ordinary run for a raid with no window to search", async () => {
+  const unparsed = {
+    damage: { state: "unavailable" as const },
+    healing: { state: "unavailable" as const },
+    bossDamage: { state: "unavailable" as const }
+  };
+  const foundKill = (raidId: string, raidName: string, code: string) => ({
+    raidId,
+    raidName,
+    bossId: "2299",
+    bossName: "Queen Azshara",
+    journalBossId: "2361",
+    bossOrder: 8,
+    killedAt: "2020-01-14T20:34:49.222Z",
+    reportUrl: `https://www.warcraftlogs.com/reports/${code}`,
+    fightUrl: `https://www.warcraftlogs.com/reports/${code}#fight=4`,
+    guild: { name: "Stored Guild", realm: "silvermoon", region: "eu" as const },
+    reportCode: code,
+    fightId: 4,
+    difficulty: 5,
+    performance: unparsed
+  });
+  const foundWipe = (raidId: string, raidName: string, code: string) => ({
+    raidId,
+    raidName,
+    bossId: "2299",
+    bossName: "Queen Azshara",
+    journalBossId: "2361",
+    bossOrder: 8,
+    attemptedAt: "2020-01-14T19:34:49.222Z",
+    reportUrl: `https://www.warcraftlogs.com/reports/${code}`,
+    fightUrl: `https://www.warcraftlogs.com/reports/${code}#fight=2`,
+    guild: { name: "Stored Guild", realm: "silvermoon" }
+  });
+  const foundTierBest = (raidId: string, raidName: string) => ({
+    raidId,
+    raidName,
+    bossId: "2299",
+    bossName: "Queen Azshara",
+    rankingsUrl: `https://www.warcraftlogs.com/character/eu/silvermoon/ryii?zone=${raidId}`,
+    performance: unparsed
+  });
+
+  it("asks no other provider, and records their phases as skipped", async () => {
+    // Break caught (#450): a tier search refreshed Raider.IO rankings and
+    // Blizzard achievements for the whole character on every click.
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const transitions: Array<{ id: string; state: string }> = [];
+    evidence.listPhases = async () =>
+      [
+        "warcraft_logs_identity_resolution",
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "raiderio_rankings",
+        "blizzard_achievements",
+        "publication"
+      ].map((id, ordinal) => ({
+        id,
+        ordinal,
+        state: "pending" as const,
+        startedAt: null,
+        completedAt: null,
+        limitationCode: null
+      }));
+    evidence.recordPhaseTransitions = async (_runId, phases) => {
+      transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+    };
+    const getHistoricMythicKills = vi.fn();
+    const getMythicBossRankings = vi.fn();
+    const getCompletedAchievements = vi.fn();
+    const getFirstKillReports = vi.fn(
+      async (
+        _key: unknown,
+        collection: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
+      ) => {
+        collection.onRequest?.({ query: "guild_attendance", limited: false });
+        return {
+          ...(await evidenceFound()),
+          kills: [foundKill("23", "The Eternal Palace", "foundReport")]
+        };
+      }
+    );
+    const handler = createApplicantEvidenceJobHandler({
+      evidence,
+      warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
+        WarcraftLogsGateway,
+        "getFirstKillReports" | "getRateLimit"
+      >,
+      raiderio: { getMythicBossRankings, getHistoricMythicKills } as never,
+      blizzard: { getCompletedAchievements } as never,
+      requestCap: 500,
+      parseRequestCap: 24,
+      tierSearchRequestCap: 60,
+      capRetryMs: 1_800_000,
+      transientRetryMs: 900_000,
+      pointsReserve: 0,
+      retryCostCeiling: 250,
+      failureCooldownMs: 1_800_000,
+      killSettleMs: 7 * 24 * 60 * 60 * 1000
+    });
+
+    await handler.execute(run.id);
+
+    expect(getHistoricMythicKills).not.toHaveBeenCalled();
+    expect(getMythicBossRankings).not.toHaveBeenCalled();
+    expect(getCompletedAchievements).not.toHaveBeenCalled();
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      cuttingEdges: []
+    });
+    expect(transitions).toContainEqual({
+      id: "raiderio_rankings",
+      state: "skipped"
+    });
+    expect(transitions).toContainEqual({
+      id: "blizzard_achievements",
+      state: "skipped"
+    });
+    expect(transitions).not.toContainEqual({
+      id: "raiderio_rankings",
+      state: "active"
+    });
+    expect(transitions).not.toContainEqual({
+      id: "blizzard_achievements",
+      state: "active"
+    });
+  });
+
+  it("publishes only the searched raid's kills, wipes and parses", async () => {
+    // A report found on the tier's nights can hold another raid's fights, and
+    // those belong to the ordinary collection.
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [
+        foundKill("23", "The Eternal Palace", "palaceReport"),
+        foundKill("21", "Crucible of Storms", "crucibleReport")
+      ],
+      wipes: [
+        foundWipe("23", "The Eternal Palace", "palaceReport"),
+        foundWipe("21", "Crucible of Storms", "crucibleReport")
+      ],
+      tierBests: [
+        foundTierBest("23", "The Eternal Palace"),
+        foundTierBest("21", "Crucible of Storms")
+      ]
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const result = evidence.published.at(-1)!.result;
+    expect(result.kills.map((kill) => kill.raidId)).toEqual(["23"]);
+    expect(result.wipes.map((wipe) => wipe.raidId)).toEqual(["23"]);
+    expect(result.tierBests.map((parse) => parse.raidId)).toEqual(["23"]);
+  });
+
+  it("places a combined zone's fights in their raid by boss", async () => {
+    // Break caught (#492 review): Warcraft Logs files the opening Midnight
+    // raids under one zone, `VS / DR / MQD`, which names no raid. Scoping by
+    // zone name alone published nothing a Voidspire search found.
+    const voidspire = supportedRaidCatalogue().find(
+      (raid) => raid.raidName === "The Voidspire"
+    )!;
+    const evidence = store({
+      ...run,
+      mode: "tier_search",
+      tierSearchRaidId: voidspire.raidId
+    } as typeof run);
+    const combined = (
+      code: string,
+      bossName: string,
+      overrides: Record<string, unknown> = {}
+    ) => ({
+      ...foundKill("46", "VS / DR / MQD", code),
+      bossName,
+      journalBossId: null,
+      killedAt: "2026-04-01T20:00:00.000Z",
+      ...overrides
+    });
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [
+        combined("voidReport", "Imperator Averzian"),
+        combined("dreamReport", "Chimaerus the Undreamt God")
+      ],
+      wipes: [
+        {
+          ...foundWipe("46", "VS / DR / MQD", "voidReport"),
+          bossName: "Vorasius",
+          journalBossId: null
+        },
+        {
+          ...foundWipe("46", "VS / DR / MQD", "dreamReport"),
+          bossName: "Chimaerus the Undreamt God",
+          journalBossId: null
+        }
+      ],
+      tierBests: [
+        {
+          ...foundTierBest("46", "VS / DR / MQD"),
+          bossName: "Imperator Averzian"
+        },
+        {
+          ...foundTierBest("46", "VS / DR / MQD"),
+          bossName: "Chimaerus the Undreamt God"
+        }
+      ]
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const result = evidence.published.at(-1)!.result;
+    expect(result.kills.map((kill) => kill.bossName)).toEqual([
+      "Imperator Averzian"
+    ]);
+    expect(result.wipes.map((wipe) => wipe.bossName)).toEqual(["Vorasius"]);
+    expect(result.tierBests.map((parse) => parse.bossName)).toEqual([
+      "Imperator Averzian"
+    ]);
+  });
+
+  it("claims parses only for the fights it publishes", async () => {
+    // Break caught (#492 review): an out-of-scope fight dropped from the kills
+    // kept its URL in `parsedFightUrls`, so publishing restamped a stored,
+    // unparsed kill of another raid as read and no later run parsed it.
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const palace = foundKill("23", "The Eternal Palace", "palaceReport");
+    const crucible = foundKill("21", "Crucible of Storms", "crucibleReport");
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [palace, crucible],
+      parsedFightUrls: [palace.fightUrl, crucible.fightUrl]
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const options = (
+      getFirstKillReports.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    // The gateway is told which raid's kills are this search's to parse.
+    expect(options.parseJournalRaidId).toBe(eternalPalace.raidId);
+    const result = evidence.published.at(-1)!.result;
+    expect(result.parsedFightUrls).toEqual([palace.fightUrl]);
+  });
+
+  it("publishes an empty search as complete, carrying no history state, and settles nothing", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    evidence.historicAliases = async () => [
+      { region: "eu", realm: "silvermoon", name: "oldname" }
+    ];
+    const tiers = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await tiers(characterKey)),
+      historyScanResumePage: 12,
+      historyScanResumeBoundaryReportCode: "ordinaryBoundary",
+      historicAliasProgress: []
+    });
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      scanSkipped: true,
+      tierSearch: { ...searched, recoveredKills: 0, recoveredWipes: 0 }
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    // A former name is the ordinary collection's to scan.
+    expect(getFirstKillReports).toHaveBeenCalledTimes(1);
+    expect(getFirstKillReports).toHaveBeenCalledWith(key, expect.anything());
+    const result = evidence.published.at(-1)!.result as Record<string, unknown>;
+    expect(result).toMatchObject({
+      state: "complete",
+      scanSkipped: true,
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: []
+    });
+    expect(result).not.toHaveProperty("historyScanResumePage");
+    expect(result).not.toHaveProperty("historicAliasProgress");
+    expect(evidence.marked).toEqual([]);
+    // The stage cannot settle a tier on republication either.
+    expect(evidence.staged.get(run.id)).not.toHaveProperty("troubledRaidIds");
+  });
+
+  it("publishes a parse-capped search as partial, and marks no tier it parsed only in part", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [foundKill("23", "The Eternal Palace", "foundReport")],
+      parseLimitation: {
+        kind: "limitation" as const,
+        code: "parse_request_cap" as const
+      }
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      state: "partial",
+      scanSkipped: true,
+      limitationCode: null,
+      parseLimitationCode: "parse_request_cap",
+      kills: [expect.objectContaining({ raidId: "23" })]
+    });
+    expect(evidence.marked).toEqual([]);
+  });
+
+  it("publishes a capped ranked walk as a partial with a retry, leaving the history cursor alone", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const tiers = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await tiers(characterKey)),
+      historyScanResumePage: 12,
+      historyScanResumeBoundaryReportCode: "ordinaryBoundary"
+    });
+    const successor = {
+      journalRaidId: eternalPalace.raidId,
+      zoneIds: [23],
+      partitionIds: [1],
+      acceptedFightKeys: ["foundReport:4"],
+      zonesLoaded: true,
+      zoneIndex: 0,
+      encounterIds: [2299],
+      encountersLoaded: true,
+      encounterIndex: 0,
+      metricIndex: 0,
+      reportIndex: 2
+    };
+    const getFirstKillReports = vi.fn(async () => ({
+      ...(await evidenceFound()),
+      kills: [foundKill("23", "The Eternal Palace", "foundReport")],
+      rankedBackfillCursor: successor,
+      limitation: { kind: "limitation" as const, code: "request_cap" as const }
+    }));
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const result = evidence.published.at(-1)!.result as Record<string, unknown>;
+    expect(result).toMatchObject({
+      state: "partial",
+      scanSkipped: true,
+      limitationCode: "request_cap",
+      rankedBackfillCursor: successor,
+      kills: [expect.objectContaining({ raidId: "23" })]
+    });
+    expect(result.retryAfterAt).toBeInstanceOf(Date);
+    expect(result).not.toHaveProperty("historyScanResumePage");
+  });
+
+  it("publishes a raid with no window to search as unsearchable, collecting nothing", async () => {
     const evidence = withStoredTier(
       store({ ...tierRun, tierSearchRaidId: "not-a-raid" } as typeof run)
     );
@@ -5556,10 +5925,13 @@ describe("searching one tier from the dossier", () => {
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
 
-    expect(getFirstKillReports).toHaveBeenCalledWith(
-      key,
-      expect.not.objectContaining({ tierSearch: expect.anything() })
-    );
+    expect(getFirstKillReports).not.toHaveBeenCalled();
+    expect(evidence.published.at(-1)?.result).toMatchObject({
+      state: "partial",
+      scanSkipped: true,
+      limitationCode: "unavailable",
+      kills: []
+    });
     // Asked for and not run: the tier is named, and what it found is null.
     expect(evidence.costs.at(-1)?.tierSearch).toEqual({
       raidId: "not-a-raid",

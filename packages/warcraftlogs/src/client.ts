@@ -3,6 +3,7 @@ import {
   currentContentEligibilityByRaidId,
   isNonRaidZone,
   lookupRaidByName,
+  lookupRaidForEvidence,
   raidOffersMythicRankings,
   supportedRegions,
   type CharacterKey
@@ -2339,6 +2340,16 @@ export function createWarcraftLogsClient(
        * provider, so a Raider.IO failure cannot drop what it once helped find.
        */
       storedKillReportCodes?: readonly string[];
+      /**
+       * A targeted collection that deliberately reads no history (#450).
+       * Requires a request cap of zero. Unlike a parse-only resume, whose zero
+       * cap reports the history it left unread as `request_cap`, nothing
+       * here was asked of the history, so nothing fell short of it: only the
+       * tier search, the ranked walk and parse work can limit the result.
+       */
+      targetedOnly?: boolean;
+      /** The one Journal raid whose kills are parsed; see the gateway type. */
+      parseJournalRaidId?: string;
       /** An explicit search of one tier's guild attendance (#435). */
       tierSearch?: WarcraftLogsTierSearch;
       rankedBackfill?: Readonly<{
@@ -2366,7 +2377,11 @@ export function createWarcraftLogsClient(
       throw new Error("invalid_character_id");
     }
     const lookup = characterLookup(key, options.characterId);
-    if (!Number.isSafeInteger(options.requestCap) || options.requestCap < 0) {
+    if (
+      !Number.isSafeInteger(options.requestCap) ||
+      options.requestCap < 0 ||
+      (options.targetedOnly === true && options.requestCap !== 0)
+    ) {
       return { kind: "limitation", code: "request_cap" };
     }
     if (
@@ -2416,12 +2431,17 @@ export function createWarcraftLogsClient(
     let scanLimitation: WarcraftLogsLimitation | undefined;
     let omittedInvalidTimestamp = false;
     const scanSkipped = options.requestCap === 0;
-    let historyScanStartPage = options.historyScanStartPage ?? 1;
+    // A targeted search reads no history, so the history cursor is not its to
+    // prove, resume or restart.
+    let historyScanStartPage = options.targetedOnly
+      ? 1
+      : (options.historyScanStartPage ?? 1);
     let lastDecodedHistoryPage: number | undefined;
     let historyScanRequests = 0;
     let invalidatedStoredBoundary = false;
-    let historyScanResumeBoundaryReportCode =
-      options.historyScanResumeBoundaryReportCode;
+    let historyScanResumeBoundaryReportCode = options.targetedOnly
+      ? undefined
+      : options.historyScanResumeBoundaryReportCode;
     // Reports this run has already decoded from the character's own history.
     // Hydrating one again through attendance would re-read the same fights.
     const scannedReportCodes = new Set<string>();
@@ -2579,6 +2599,7 @@ export function createWarcraftLogsClient(
       }
     }
     if (
+      options.targetedOnly !== true &&
       scanLimitation === undefined &&
       historyScanRequests === options.requestCap &&
       !historyScanFinished
@@ -3233,6 +3254,13 @@ export function createWarcraftLogsClient(
       // read cleanly once, and a concluded tier cannot produce a new one.
       if (options.terminalRaidIds?.parses.has(kill.raidId)) continue;
       if (options.hydratedFightUrls?.has(kill.fightUrl)) continue;
+      // Another raid's kill on a targeted search's nights is not its to parse.
+      if (
+        options.parseJournalRaidId !== undefined &&
+        lookupRaidForEvidence(kill)?.raidId !== options.parseJournalRaidId
+      ) {
+        continue;
+      }
       const raidsInGroup = groupRaidIds.get(kill.reportCode);
       if (raidsInGroup) raidsInGroup.add(kill.raidId);
       else groupRaidIds.set(kill.reportCode, new Set([kill.raidId]));

@@ -850,14 +850,20 @@ export const characterEvidenceRuns = pgTable(
       { onDelete: "set null" }
     ),
     accountCredentialVersion: integer("account_credential_version"),
-    // What the run was reserved to do. `tier_search` is a full collection
-    // that also walks one tier's guild attendance, asked for from the
-    // dossier (#435). It lives on the run rather than only in the queue
+    // What the run was reserved to do. `tier_search` is a targeted collection
+    // of one tier's guild attendance and ranked kills, asked for from the
+    // dossier (#435, #450). It lives on the run rather than only in the queue
     // payload so a re-claimed attempt is still a tier search, and so nothing
     // that re-enqueues without a payload can turn one into a default.
     mode: text("mode").default("full").notNull(),
     /** The Journal raid id a `tier_search` run searches; null otherwise. */
     tierSearchRaidId: text("tier_search_raid_id"),
+    // What the published snapshot vouches for. `full` is an ordinary
+    // collection, whose completion, limitations, retry deadline and cutting
+    // edges speak for the character. `tier` is a targeted search that added
+    // to the previous snapshot without re-reading anything else (#450), so a
+    // reader takes those facts from the newest `full` run instead.
+    publicationScope: text("publication_scope").default("full").notNull(),
     retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -890,6 +896,10 @@ export const characterEvidenceRuns = pgTable(
     check(
       "character_evidence_runs_mode_check",
       sql`(${table.mode} = 'full' AND ${table.tierSearchRaidId} IS NULL) OR (${table.mode} = 'tier_search' AND ${table.tierSearchRaidId} IS NOT NULL)`
+    ),
+    check(
+      "character_evidence_runs_publication_scope_check",
+      sql`${table.publicationScope} = 'full' OR (${table.publicationScope} = 'tier' AND ${table.mode} = 'tier_search')`
     ),
     // A partial run must name a shortfall, in one of three channels: the
     // history scan's, the parse budget's, or a scan the run deliberately did
