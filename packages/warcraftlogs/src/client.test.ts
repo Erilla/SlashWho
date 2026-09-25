@@ -5929,6 +5929,55 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it.each([true, false])(
+    "keeps a timestamp omission visible when later data has schema drift (valid evidence: %s)",
+    async (withValidEvidence) => {
+      const page = structuredClone(
+        (fixture("character-report-valid") as { pages: unknown[] }).pages[0]
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: {
+                data: Array<{ fights: Array<Record<string, unknown>> }>;
+              };
+            };
+          };
+        };
+      };
+      const fights =
+        page.data.characterData.character.recentReports.data[0]!.fights;
+      if (!withValidEvidence) fights.splice(0);
+      fights.push(
+        {
+          id: 80,
+          encounterID: 1234,
+          name: "Queen Ansurek",
+          difficulty: 5,
+          friendlyPlayers: [7],
+          startTime: 20_000,
+          endTime: 10_000,
+          kill: false
+        },
+        { id: 81, encounterID: 1234, kill: true }
+      );
+      const { client } = clientFor((url) =>
+        url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+      );
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 1,
+        parseRequestCap: 10
+      });
+
+      expect(result).toMatchObject({
+        kind: "evidence",
+        omittedInvalidTimestamp: true,
+        limitation: { code: "schema_drift" }
+      });
+    }
+  );
+
   it("skips unrelated negative-time boss fights and continues to later history pages", async () => {
     // A shared report can contain fights before its report start. They cannot
     // describe this character when its actor ID is absent from friendlyPlayers.

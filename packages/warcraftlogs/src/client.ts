@@ -920,9 +920,17 @@ function firstKillReports(
   let omittedInvalidTimestamp = false;
   const omittedInvalidTimestampReportCodes = new Set<string>();
   const schemaDrift = (): WarcraftLogsReportResult =>
-    kills.size > 0 || wipes.size > 0
+    kills.size > 0 || wipes.size > 0 || omittedInvalidTimestamp
       ? {
           kind: "evidence",
+          ...(omittedInvalidTimestamp
+            ? {
+                omittedInvalidTimestamp: true as const,
+                omittedInvalidTimestampReportCodes: [
+                  ...omittedInvalidTimestampReportCodes
+                ]
+              }
+            : {}),
           kills: [...kills.values()],
           wipes: [...wipes.values()],
           tierBests: [],
@@ -1136,11 +1144,7 @@ function firstKillReports(
           omittedInvalidTimestamp: true as const,
           omittedInvalidTimestampReportCodes: [
             ...omittedInvalidTimestampReportCodes
-          ],
-          limitation: {
-            kind: "limitation" as const,
-            code: "schema_drift" as const
-          }
+          ]
         }
       : {}),
     tierBests: [],
@@ -2444,8 +2448,8 @@ export function createWarcraftLogsClient(
       if (probe.kind !== "success") return probe;
       const decodedProbe = firstKillReports(probe.value, key);
       if (decodedProbe.kind === "limitation") return decodedProbe;
-      if (decodedProbe.limitation && !decodedProbe.omittedInvalidTimestamp) {
-        return decodedProbe.limitation;
+      if (decodedProbe.limitation) {
+        return decodedProbe;
       }
       if (decodedProbe.omittedInvalidTimestamp) {
         omittedInvalidTimestamp = true;
@@ -2515,14 +2519,13 @@ export function createWarcraftLogsClient(
       for (const wipe of normalized.wipes) {
         wipes.set(wipe.fightUrl, wipe);
       }
+      if (normalized.omittedInvalidTimestamp) {
+        omittedInvalidTimestamp = true;
+      }
       if (normalized.limitation) {
-        if (normalized.omittedInvalidTimestamp) {
-          omittedInvalidTimestamp = true;
-        } else {
-          options.onLimitation?.("history_scan", normalized.limitation.code);
-          scanLimitation = normalized.limitation;
-          break;
-        }
+        options.onLimitation?.("history_scan", normalized.limitation.code);
+        scanLimitation = normalized.limitation;
+        break;
       }
       // A page with only invalid fight times still proves its report boundary.
       // Other schema drift stops before this point.
@@ -3580,7 +3583,8 @@ export function createWarcraftLogsClient(
             : {};
     return sortedKills.length ||
       sortedWipes.length ||
-      rankedBackfill !== undefined
+      rankedBackfill !== undefined ||
+      omittedInvalidTimestamp
       ? evidenceResult({
           kills: sortedKills,
           wipes: sortedWipes,
