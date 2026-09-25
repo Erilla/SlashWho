@@ -131,6 +131,13 @@ export type FingerprintAlertNotifier = {
       | "applicant_backlog_pressure"
       | "applicant_input_truncated";
     details: Record<string, number>;
+    applicant?: {
+      battletag?: string;
+      discordId?: string;
+      characterName?: string;
+      characterUrl: string;
+      dossierUrl?: string;
+    };
   }): Promise<void> | void;
 };
 

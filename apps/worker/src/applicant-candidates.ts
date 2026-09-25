@@ -6,8 +6,8 @@ import {
 import { characterIdentity, numericIdentity } from "./applicant-identity";
 
 export type ApplicantCandidate =
-  | { identity: string; kind: "character"; key: CharacterKey }
-  | { identity: string; kind: "warcraftlogs_id"; id: number };
+  | { identity: string; kind: "character"; key: CharacterKey; url: string }
+  | { identity: string; kind: "warcraftlogs_id"; id: number; url: string };
 
 export type CandidateParse = {
   candidates: ApplicantCandidate[];
@@ -44,7 +44,7 @@ export function parseApplicantCandidates(value: unknown): CandidateParse {
     if (id !== undefined) {
       const identity = numericIdentity(id);
       if (!seen.has(identity))
-        candidates.push({ identity, kind: "warcraftlogs_id", id });
+        candidates.push({ identity, kind: "warcraftlogs_id", id, url: clean });
       seen.add(identity);
       continue;
     }
@@ -52,7 +52,7 @@ export function parseApplicantCandidates(value: unknown): CandidateParse {
       const key = parseApplicantCharacterUrl(clean);
       const identity = characterIdentity(key);
       if (!seen.has(identity))
-        candidates.push({ identity, kind: "character", key });
+        candidates.push({ identity, kind: "character", key, url: clean });
       seen.add(identity);
     } catch {
       // Report links and other WCL paths are unrelated, not malformed applicants.

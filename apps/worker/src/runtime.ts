@@ -362,6 +362,14 @@ export function createFingerprintAlertNotifier(
 ): FingerprintAlertNotifier {
   const fetch = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? 5_000;
+  const escapeDiscord = (value: string | undefined) =>
+    (value?.slice(0, 200) || "—")
+      .replace(/\s+/g, " ")
+      .replace(/@/g, "@ ")
+      .replace(/</g, "< ")
+      .replace(/([\\*_`~|>()])/g, "\\$1")
+      .replaceAll("[", "\\[")
+      .replaceAll("]", "\\]");
   return {
     async notify(alert) {
       if (!config.maintainerAlertWebhookUrl) return;
@@ -372,13 +380,23 @@ export function createFingerprintAlertNotifier(
         config.maintainerAlertWebhookUrl.startsWith(
           "https://discordapp.com/api/webhooks/"
         );
+      const applicant = alert.applicant;
+      const details = Object.entries(alert.details)
+        .map(([name, count]) => `${name}: ${count}`)
+        .join(" · ");
+      const content = applicant
+        ? [
+            `📨 New application — ${details}`,
+            `Battletag: ${escapeDiscord(applicant.battletag)}`,
+            `Discord ID: ${escapeDiscord(applicant.discordId)}`,
+            `Character: ${escapeDiscord(applicant.characterName)}`,
+            `Character link: ${applicant.characterUrl}`,
+            `Dossier: ${applicant.dossierUrl ?? "pending character resolution"}`
+          ].join("\n")
+        : `${alert.event === "applicant_new_intents" ? "📨" : "⚠️"} ${alert.event} — ${details}`;
       const body = discordWebhook
         ? {
-            content: `${alert.event === "applicant_new_intents" ? "📨" : "⚠️"} ${alert.event} — ${Object.entries(
-              alert.details
-            )
-              .map(([name, count]) => `${name}: ${count}`)
-              .join(" · ")}`,
+            content,
             allowed_mentions: { parse: [] }
           }
         : alert;
@@ -410,18 +428,43 @@ export function createFingerprintAlertNotifier(
 
 /** An alert is a best-effort side effect of a committed Sheet observation. */
 export async function announceNewApplicantIntents(
-  poll: { baseline: boolean; created: number },
+  poll: {
+    baseline: boolean;
+    created: number;
+    newApplicants?: import("./applicant-watcher").NewApplicant[];
+  },
   notifier?: FingerprintAlertNotifier,
-  logger?: DiscoveryLogger
+  logger?: DiscoveryLogger,
+  dossierBaseUrl?: string
 ): Promise<void> {
   if (poll.baseline || poll.created === 0) return;
-  try {
-    await notifier?.notify({
-      event: "applicant_new_intents",
-      details: { count: poll.created }
-    });
-  } catch {
-    logger?.info({ event: "applicant_announcement_failed" });
+  if (!poll.newApplicants?.length) {
+    try {
+      await notifier?.notify({
+        event: "applicant_new_intents",
+        details: { count: poll.created }
+      });
+    } catch {
+      logger?.info({ event: "applicant_announcement_failed" });
+    }
+    return;
+  }
+  for (const applicant of poll.newApplicants) {
+    try {
+      const { dossierPath, ...details } = applicant;
+      await notifier?.notify({
+        event: "applicant_new_intents",
+        details: { count: 1 },
+        applicant: {
+          ...details,
+          ...(dossierPath && dossierBaseUrl
+            ? { dossierUrl: new URL(dossierPath, dossierBaseUrl).toString() }
+            : {})
+        }
+      });
+    } catch {
+      logger?.info({ event: "applicant_announcement_failed" });
+    }
   }
 }
 
@@ -821,9 +864,12 @@ export async function createWorkerRuntime(
             try {
               let numericChecks = 0;
               let numericAllowance: boolean | undefined;
+              const resolvedDossiers = new Map<string, string>();
               const poll = await pollApplicantSheet({
                 pool: pool as Pool,
-                readColumn: () => applicantSheet.readColumn(),
+                readRows: () => applicantSheet.readRows(),
+                resolveDossierPath: (identity) =>
+                  resolvedDossiers.get(identity),
                 isSuppressed: async (identity, observedAt) => {
                   const decoded = decodeApplicantIdentity(identity);
                   if (decoded.kind === "warcraftlogs_id") {
@@ -845,6 +891,10 @@ export async function createWorkerRuntime(
                       const resolved =
                         await evidenceGateway.resolveCharacterById(decoded.id);
                       if (resolved.kind !== "identity") return "defer";
+                      resolvedDossiers.set(
+                        identity,
+                        `/dossiers/${resolved.key.region}/${resolved.key.realm}/${encodeURIComponent(resolved.key.name)}`
+                      );
                       return wasSuppressedAt(
                         pool as Pool,
                         resolved.key,
@@ -860,11 +910,19 @@ export async function createWorkerRuntime(
               });
               applicantPollFailures = 0;
               applicantNextPollAttempt = 0;
-              logger?.info({ event: "applicant_sheet_poll", ...poll });
+              logger?.info({
+                event: "applicant_sheet_poll",
+                baseline: poll.baseline,
+                created: poll.created,
+                backlog: poll.backlog,
+                invalid: poll.invalid,
+                truncated: poll.truncated
+              });
               await announceNewApplicantIntents(
                 poll,
                 fingerprintAlertNotifier,
-                logger
+                logger,
+                config.applicantWatcher.dossierBaseUrl
               );
               if (
                 poll.truncated > 0 &&

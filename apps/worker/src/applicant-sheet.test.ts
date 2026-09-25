@@ -59,3 +59,55 @@ it("reads a public response column with an API key and no OAuth request", async 
   expect(cells).toEqual(["character-link"]);
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+it("reads applicant details and character links from separate ranges without adjacent answers", async () => {
+  const fetch = vi.fn(async (url: string) => {
+    const ranges = new URL(url).searchParams.getAll("ranges");
+    expect(ranges).toEqual(["'Form Responses'!B2:D", "'Form Responses'!F2:F"]);
+    return new Response(
+      JSON.stringify({
+        valueRanges: [
+          {
+            values: [["One#123", "111", "Aria"], [], ["Two#456", "222", "Bela"]]
+          },
+          {
+            values: [
+              ["https://raider.io/characters/eu/example/aria"],
+              [],
+              ["https://raider.io/characters/eu/example/bela"]
+            ]
+          }
+        ]
+      })
+    );
+  });
+  const rows = await createApplicantSheetClient({
+    sheetId: "fake-sheet",
+    column: "F",
+    apiKey: "test-api-key",
+    fetch: fetch as typeof globalThis.fetch
+  }).readRows();
+  expect(rows).toEqual([
+    {
+      row: 2,
+      battletag: "One#123",
+      discordId: "111",
+      characterName: "Aria",
+      linkCell: "https://raider.io/characters/eu/example/aria"
+    },
+    {
+      row: 3,
+      battletag: undefined,
+      discordId: undefined,
+      characterName: undefined,
+      linkCell: undefined
+    },
+    {
+      row: 4,
+      battletag: "Two#456",
+      discordId: "222",
+      characterName: "Bela",
+      linkCell: "https://raider.io/characters/eu/example/bela"
+    }
+  ]);
+});

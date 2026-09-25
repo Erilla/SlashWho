@@ -9,6 +9,7 @@ export type WorkerConfig = {
     enabled: boolean;
     sheetId?: string;
     column: string;
+    dossierBaseUrl?: string;
     apiKey?: string;
     serviceAccountEmail?: string;
     privateKey?: string;
@@ -137,6 +138,25 @@ function optionalHttpUrl(
   }
 }
 
+function applicantDossierOrigin(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const url = new URL(value.trim());
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    )
+      throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error("invalid_applicant_dossier_base_url");
+  }
+}
+
 export function loadWorkerConfig(
   environment: NodeJS.ProcessEnv = process.env
 ): WorkerConfig {
@@ -168,6 +188,9 @@ export function loadWorkerConfig(
     enabled: applicantEnabled,
     sheetId: applicantSheetId(environment),
     column: applicantSheetColumn(environment.APPLICANT_SHEET_COLUMN),
+    dossierBaseUrl: applicantDossierOrigin(
+      environment.APPLICANT_DOSSIER_BASE_URL
+    ),
     apiKey: optionalSecret(environment.APPLICANT_GOOGLE_API_KEY),
     serviceAccountEmail: optionalSecret(
       environment.APPLICANT_GOOGLE_SERVICE_ACCOUNT_EMAIL
