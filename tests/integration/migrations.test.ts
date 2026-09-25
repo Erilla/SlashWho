@@ -141,7 +141,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-23).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-24).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
@@ -165,7 +165,8 @@ describe("database migrations", () => {
       { idx: 46, tag: "0047_character_historic_aliases" },
       { idx: 47, tag: "0048_applicant_watcher" },
       { idx: 48, tag: "0049_optional_accounts" },
-      { idx: 49, tag: "0050_conventional_account_email" }
+      { idx: 49, tag: "0050_conventional_account_email" },
+      { idx: 50, tag: "0051_omitted_invalid_fight_timestamp" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
