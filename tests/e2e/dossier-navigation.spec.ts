@@ -133,6 +133,53 @@ test("colours raid ticks and names by evidence while keeping section hover white
   await expect(section).toHaveCSS("color", "rgb(244, 244, 245)");
 });
 
+test("shows one raid label at a time while retaining the current tick", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  const current = navigation.getByRole("link", {
+    name: "Raid: Amirdrassil, the Dream's Hope"
+  });
+  const hovered = navigation.getByRole("link", {
+    name: "Raid: Aberrus, the Shadowed Crucible"
+  });
+  const currentLabel = current.locator(".dossier-section-navigation-label");
+  const hoveredLabel = hovered.locator(".dossier-section-navigation-label");
+
+  await current.click();
+  await expect(current).toHaveAttribute("aria-current", "location");
+  await page.mouse.move(20, 200);
+  await expect(currentLabel).toBeVisible();
+
+  await hovered.hover();
+  await expect(hovered).toHaveCSS("cursor", "pointer");
+  await expect(hoveredLabel).toBeVisible();
+  await expect(currentLabel).toBeHidden();
+  await expect(current).toHaveAttribute("aria-current", "location");
+  await expect(current).toHaveCSS("color", "rgb(108, 171, 122)");
+
+  await page.mouse.move(20, 200);
+  await expect(currentLabel).toBeVisible();
+
+  await current.hover();
+  await current.focus();
+  await page.keyboard.press("Tab");
+  await expect(hovered).toBeFocused();
+  expect(await current.evaluate((link) => link.matches(":hover"))).toBe(true);
+  expect(await hovered.evaluate((link) => link.matches(":focus-visible"))).toBe(
+    true
+  );
+  await expect(hoveredLabel).toBeVisible();
+  await expect(currentLabel).toBeHidden();
+  await page.mouse.move(20, 200);
+  await expect(hoveredLabel).toBeVisible();
+  await hovered.evaluate((link) => (link as HTMLElement).blur());
+  await expect(currentLabel).toBeVisible();
+});
+
 test("navigates a long dossier without hiding targets behind the header", async ({
   page
 }) => {

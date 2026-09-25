@@ -786,7 +786,7 @@ a {
     background: transparent;
     padding: 0 0.3rem;
     color: #42424d;
-    cursor: grab;
+    cursor: pointer;
     user-select: none;
   }
 
@@ -950,6 +950,15 @@ a {
     .dossier-section-navigation-label {
     visibility: visible;
     color: inherit;
+  }
+
+  .dossier-section-navigation:has(a:focus-visible)
+    a.dossier-section-navigation-raid:not(:focus-visible)
+    .dossier-section-navigation-label,
+  .dossier-section-navigation:not(:has(a:focus-visible)):has(a:hover)
+    a.dossier-section-navigation-raid:not(:hover)
+    .dossier-section-navigation-label {
+    visibility: hidden;
   }
 
   .dossier-navigation-layout .dossier-layout {
