@@ -191,6 +191,7 @@ export const dossierLimitationSchema = z
       "request_cap",
       "unavailable",
       "schema_changed",
+      "invalid_fight_timestamp",
       "parse_private",
       "parse_rate_limited",
       "parse_request_cap",

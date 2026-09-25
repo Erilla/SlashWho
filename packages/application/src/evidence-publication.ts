@@ -25,6 +25,8 @@ export type EvidenceLimitationCode =
 export type EvidencePublication = Readonly<{
   state: "complete" | "partial";
   scanSkipped?: boolean;
+  /** Informational: impossible fight times were permanently omitted. */
+  omittedInvalidTimestamp?: boolean;
   /** See StagedEvidenceCollection.historyScanResumePage. */
   historyScanResumePage?: number | null;
   historyScanResumeBoundaryReportCode?: string | null;
@@ -82,6 +84,9 @@ export function toStagedCollection(
   return {
     state: publication.state,
     ...(publication.scanSkipped ? { scanSkipped: true } : {}),
+    ...(publication.omittedInvalidTimestamp
+      ? { omittedInvalidTimestamp: true }
+      : {}),
     ...(Object.hasOwn(publication, "historyScanResumePage")
       ? { historyScanResumePage: publication.historyScanResumePage }
       : {}),
@@ -119,6 +124,9 @@ export function fromStagedCollection(
   return {
     state: staged.state,
     ...(staged.scanSkipped ? { scanSkipped: true } : {}),
+    ...(staged.omittedInvalidTimestamp
+      ? { omittedInvalidTimestamp: true }
+      : {}),
     ...(Object.hasOwn(staged, "historyScanResumePage")
       ? { historyScanResumePage: staged.historyScanResumePage }
       : {}),

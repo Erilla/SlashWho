@@ -78,6 +78,9 @@ function mergeHistoricAliasResponse(
   ): T[] => [...new Map(values.map((value) => [key(value), value])).values()];
   return {
     ...current,
+    ...(current.omittedInvalidTimestamp || historic.omittedInvalidTimestamp
+      ? { omittedInvalidTimestamp: true as const }
+      : {}),
     kills: distinct(
       [...current.kills, ...historic.kills],
       (kill) => kill.fightUrl
@@ -2024,6 +2027,9 @@ export function createApplicantEvidenceJobHandler(
             state: incomplete ? "partial" : "complete",
             ...(historicAliases.length > 0 ? { historicAliasProgress } : {}),
             ...(response.scanSkipped ? { scanSkipped: true } : {}),
+            ...(response.omittedInvalidTimestamp
+              ? { omittedInvalidTimestamp: true }
+              : {}),
             ...(response.rankedBackfillCursor !== undefined
               ? { rankedBackfillCursor: response.rankedBackfillCursor }
               : {}),
