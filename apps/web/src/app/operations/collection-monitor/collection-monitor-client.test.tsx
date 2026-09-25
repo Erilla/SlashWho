@@ -120,6 +120,43 @@ describe("CollectionMonitorClient", () => {
     vi.useRealTimers();
   });
 
+  it("shows each in-flight run's current step without announcing it", () => {
+    render(
+      <CollectionMonitorClient
+        initialMonitor={{
+          ...inFlightMonitor,
+          hasActiveRuns: false,
+          inFlight: [
+            {
+              ...inFlightMonitor.inFlight[0]!,
+              collectionProgress: [
+                { id: "warcraft_logs_history", state: "completed" },
+                { id: "warcraft_logs_fight_parses", state: "active" },
+                { id: "publication", state: "pending" }
+              ]
+            },
+            inFlightMonitor.inFlight[1]!
+          ]
+        }}
+      />
+    );
+
+    const rowOf = (name: string) =>
+      screen
+        .getByRole("rowheader", { name: new RegExp(name, "i") })
+        .closest("tr");
+    const withSteps = rowOf("ryii");
+    const withoutSteps = rowOf("blocked");
+    expect(
+      withSteps?.querySelector(".collection-progress-summary")
+    ).toHaveTextContent("Reading per-fight parses");
+    expect(
+      withoutSteps?.querySelector(".collection-progress")
+    ).not.toBeInTheDocument();
+    // A table of runs polling together would otherwise read every one aloud.
+    expect(withSteps?.querySelector('[role="status"]')).not.toBeInTheDocument();
+  });
+
   it("moves the matching in-flight run into completed after a complete publication", async () => {
     // Break caught: an authoritative publication could leave the visible monitor stale.
     const fetchMock = mockFetchMonitor(completeMonitor);

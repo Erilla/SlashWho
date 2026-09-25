@@ -1,3 +1,4 @@
+import { collectionProgress } from "@slashwho/application";
 import {
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
@@ -37,6 +38,7 @@ export function createCollectionMonitorService(options: {
           row.status === "running" ||
           row.status === "retrying"
         ) {
+          const progress = collectionProgress(row.phases);
           response.inFlight.push({
             character: row.key,
             status: row.status,
@@ -51,7 +53,8 @@ export function createCollectionMonitorService(options: {
                       (generatedAt.getTime() - row.startedAt.getTime()) / 1_000
                     )
                   ),
-            retryAfterAt: row.retryAfterAt?.toISOString() ?? null
+            retryAfterAt: row.retryAfterAt?.toISOString() ?? null,
+            ...(progress.length > 0 ? { collectionProgress: progress } : {})
           });
           continue;
         }

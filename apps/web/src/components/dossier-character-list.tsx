@@ -1,6 +1,7 @@
 import type { DossierCharacter } from "@slashwho/contracts";
 import { useEffect, useRef, useState } from "react";
 
+import { CollectionProgress } from "./collection-progress";
 import {
   AddConnectedCharacterDialog,
   type AddedConnectedCharacter
@@ -113,7 +114,8 @@ export function DossierCharacterList({
             <div className="dossier-character-identity">
               <div className="dossier-character-name-line">
                 <DossierCharacterName character={character} showGuild />
-                {!character.evidenceState &&
+                {!character.collectionProgress &&
+                !character.evidenceState &&
                 character.researchState === "gathering" ? (
                   <svg
                     aria-label={`Research gathering for ${character.displayName}`}
@@ -128,6 +130,14 @@ export function DossierCharacterList({
               <span className="dossier-location">
                 {character.key.region.toUpperCase()} · {character.key.realm}
               </span>
+              {/* The steps replace both bare indicators: they say what the
+                  spinner said, and then what the run is actually doing. */}
+              {character.collectionProgress ? (
+                <CollectionProgress
+                  phases={character.collectionProgress}
+                  subject={character.displayName}
+                />
+              ) : null}
             </div>
             <div className="dossier-character-actions">
               {isRoot(character, root) ? null : (
@@ -141,7 +151,8 @@ export function DossierCharacterList({
                   Excluded
                 </span>
               ) : null}
-              {character.evidenceState === "scanning" ? (
+              {character.collectionProgress ? null : character.evidenceState ===
+                "scanning" ? (
                 <span
                   aria-label={evidenceStateLabel.scanning}
                   className="dossier-evidence-state dossier-evidence-state--scanning"
