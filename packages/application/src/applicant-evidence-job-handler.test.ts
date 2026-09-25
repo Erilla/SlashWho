@@ -5294,11 +5294,58 @@ describe("searching one tier from the dossier", () => {
     expect(getFirstKillReports).toHaveBeenCalledWith(
       key,
       expect.objectContaining({
-        rankedBackfill: expect.objectContaining({ cursor })
+        rankedBackfill: expect.objectContaining({ cursor, requestCap: 30 }),
+        tierSearch: expect.anything()
       })
+    );
+    // The cursor alone cannot establish that guild attendance finished.
+    expect(evidence.costs.at(-1)?.tierSearch?.raidId).toBe(
+      eternalPalace.raidId
     );
     expect(evidence.published.at(-1)?.result).toMatchObject({
       rankedBackfillCursor: successor
+    });
+  });
+
+  it("spends completed attendance's share on a ranked continuation", async () => {
+    const evidence = withStoredTier(store(tierRun as typeof run));
+    const cursor = {
+      journalRaidId: eternalPalace.raidId,
+      zoneIds: [23],
+      partitionIds: [1],
+      acceptedFightKeys: [],
+      zonesLoaded: true,
+      zoneIndex: 0,
+      encounterIds: [2299],
+      encountersLoaded: true,
+      encounterIndex: 0,
+      metricIndex: 0,
+      reportIndex: 1
+    };
+    const stored = evidence.storedEvidenceTiers.bind(evidence);
+    evidence.storedEvidenceTiers = async (characterKey) => ({
+      ...(await stored(characterKey)),
+      rankedBackfillCursor: cursor,
+      tierSearchAttendanceComplete: true
+    });
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({
+        rankedBackfill: expect.objectContaining({ cursor, requestCap: 90 })
+      })
+    );
+    expect(getFirstKillReports).toHaveBeenCalledWith(
+      key,
+      expect.not.objectContaining({ tierSearch: expect.anything() })
+    );
+    expect(evidence.costs.at(-1)?.tierSearch).toMatchObject({
+      raidId: eternalPalace.raidId,
+      outcome: null,
+      requests: null
     });
   });
 

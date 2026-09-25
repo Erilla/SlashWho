@@ -1,6 +1,7 @@
 import type { PublicErrorCode } from "@slashwho/contracts";
 import {
   isNonRaidZone,
+  lookupRaidByName,
   toRaiderIoUrl,
   type CharacterGuild,
   type CharacterKey
@@ -1134,6 +1135,46 @@ async function loadPositiveEvidenceForPartial(
       .map(mapCharacterMythicWipe)
       .filter((wipe) => !isNonRaidZone(wipe.raidName))
   };
+}
+
+/**
+ * A tier search can confirm an old exact report that `recentReports` will
+ * never return to an ordinary scan. Keep the newest published search's kills
+ * for its selected raid across complete ordinary runs. A new complete search
+ * of the same raid can still retract a nonterminal kill it no longer verifies.
+ */
+async function loadLatestTierSearchKills(
+  client: Queryable,
+  key: CharacterKey,
+  replacingRaidId: string | null
+): Promise<readonly StoredCharacterMythicKill[]> {
+  const result = await client.query<
+    CharacterMythicKillRow & { tier_search_raid_id: string }
+  >(
+    `WITH latest AS (
+       SELECT DISTINCT ON (tier_search_raid_id)
+              id, tier_search_raid_id
+         FROM character_evidence_runs
+        WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+          AND mode = 'tier_search' AND status IN ('complete', 'partial')
+        ORDER BY tier_search_raid_id, completed_at DESC, id DESC
+     )
+     SELECT kill.*, latest.tier_search_raid_id
+       FROM latest
+       JOIN character_mythic_kills kill ON kill.evidence_run_id = latest.id`,
+    [key.region, key.realm, key.name]
+  );
+  return result.rows
+    .map((row) => ({
+      kill: mapCharacterMythicKill(row),
+      journalRaidId: row.tier_search_raid_id
+    }))
+    .filter(
+      ({ kill, journalRaidId }) =>
+        journalRaidId !== replacingRaidId &&
+        lookupRaidByName(kill.raidName)?.raidId === journalRaidId
+    )
+    .map(({ kill }) => kill);
 }
 
 function encodeCursor(item: SnapshotHistoryItem): string {
@@ -4643,12 +4684,52 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const activeRun = active.rows[0]
             ? mapEvidenceRun(active.rows[0])
             : null;
+          // A capped ranked walk has already paid for its explicit tier
+          // search. Its retry is continuation work, even if an unrelated
+          // ordinary collection published after it. A failed attempt has no
+          // publication or cursor; retain the last published cursor and back
+          // off for 30 minutes after a failure so a low points balance cannot
+          // create a tight retry loop.
+          const rankedContinuation = await client.query<{
+            tier_search_raid_id: string;
+          }>(
+            `WITH latest AS (
+               SELECT DISTINCT ON (tier_search_raid_id)
+                      tier_search_raid_id, created_at, status,
+                      ranked_backfill_attempted, ranked_backfill_cursor,
+                      retry_after_at
+                 FROM character_evidence_runs
+                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                  AND mode = 'tier_search'
+                  AND status IN ('complete', 'partial')
+                ORDER BY tier_search_raid_id, created_at DESC, id DESC
+             )
+             SELECT tier_search_raid_id FROM latest
+              WHERE status = 'partial' AND ranked_backfill_attempted = true
+                AND ranked_backfill_cursor IS NOT NULL
+                AND retry_after_at <= $4
+                AND NOT EXISTS (
+                  SELECT 1 FROM character_evidence_runs failed
+                   WHERE failed.region = $1 AND failed.realm_slug = $2
+                     AND failed.normalized_name = $3
+                     AND failed.tier_search_raid_id = latest.tier_search_raid_id
+                     AND failed.mode = 'tier_search' AND failed.status = 'failed'
+                     AND failed.created_at > latest.created_at
+                     AND failed.completed_at > $4 - interval '30 minutes'
+                )
+              ORDER BY retry_after_at, tier_search_raid_id
+              LIMIT 1`,
+            [key.region, key.realm, key.name, at]
+          );
+          const continuationRaidId =
+            rankedContinuation.rows[0]?.tier_search_raid_id ?? null;
           if (
             completed !== null &&
             completed.evidenceVersion !== undefined &&
             completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION &&
             completed.run.completedAt !== null &&
             !aliasRecollectionPending &&
+            continuationRaidId === null &&
             isEvidenceFresh(
               completed.run.completedAt,
               completed.run.retryAfterAt,
@@ -4689,8 +4770,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-              (region, realm_slug, normalized_name, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+              (region, realm_slug, normalized_name, mode, tier_search_raid_id,
+               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version)
+             VALUES ($1, $2, $3,
+                     CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
+                     $4, $5, $6, $7, $8)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                        completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
@@ -4699,6 +4783,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               key.region,
               key.realm,
               key.name,
+              continuationRaidId,
               credentials && "wclClientIdEncrypted" in credentials
                 ? credentials.wclClientIdEncrypted
                 : null,
@@ -5036,8 +5121,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             region: CharacterKey["region"];
             realm_slug: string;
             normalized_name: string;
+            mode: EvidenceRunMode;
+            tier_search_raid_id: string | null;
           }>(
-            `SELECT id, region, realm_slug, normalized_name
+            `SELECT id, region, realm_slug, normalized_name, mode,
+                    tier_search_raid_id
              FROM character_evidence_runs
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')
              FOR UPDATE`,
@@ -5076,17 +5164,36 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             client,
             activeKey
           );
+          const tierSearchKills =
+            input.state === "complete"
+              ? await loadLatestTierSearchKills(
+                  client,
+                  activeKey,
+                  activeRun.mode === "tier_search"
+                    ? activeRun.tier_search_raid_id
+                    : null
+                )
+              : [];
           // A partial publish carries everything forward, as it always has. A
-          // complete one carries forward the terminal raids only: every other
-          // raid keeps the existing contract, where a kill a complete run
+          // complete one carries forward terminal raids and kills confirmed
+          // by the latest explicit search of each tier. An ordinary history
+          // scan cannot re-find those old exact reports through recentReports.
+          // Every other raid keeps the contract where a kill a complete run
           // stopped finding stops being claimed.
           const previous =
             input.state === "partial"
               ? stored
               : {
-                  kills: stored.kills.filter((kill) =>
-                    terminalKillRaidIds.has(kill.raidId)
-                  ),
+                  kills: [
+                    ...new Map(
+                      [
+                        ...tierSearchKills,
+                        ...stored.kills.filter((kill) =>
+                          terminalKillRaidIds.has(kill.raidId)
+                        )
+                      ].map((kill) => [kill.fightUrl, kill] as const)
+                    ).values()
+                  ],
                   wipes: stored.wipes.filter((wipe) =>
                     terminalKillRaidIds.has(wipe.raidId)
                   )
@@ -5614,6 +5721,21 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               [key.region, key.realm, key.name, tierSearchRaidId]
             )
           : null;
+        const attendance = tierSearchRaidId
+          ? await pool.query<{ tier_search_outcome: string }>(
+              `SELECT cost.tier_search_outcome
+                 FROM character_evidence_run_costs cost
+                 JOIN character_evidence_runs run ON run.id = cost.run_id
+                WHERE run.region = $1 AND run.realm_slug = $2
+                  AND run.normalized_name = $3
+                  AND run.tier_search_raid_id = $4
+                  AND run.status IN ('complete', 'partial')
+                  AND cost.tier_search_outcome IS NOT NULL
+                ORDER BY run.completed_at DESC, cost.attempt DESC
+                LIMIT 1`,
+              [key.region, key.realm, key.name, tierSearchRaidId]
+            )
+          : null;
         const aliasProgress = await pool.query<{
           historic_alias_progress: HistoricAliasScanProgress[];
         }>(
@@ -5674,6 +5796,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           identityScanTurn: Number(scanTurn.rows[0]?.count ?? 0),
           ...(ranked?.rows[0]?.ranked_backfill_cursor
             ? { rankedBackfillCursor: ranked.rows[0].ranked_backfill_cursor }
+            : {}),
+          ...(attendance?.rows[0]
+            ? {
+                tierSearchAttendanceComplete:
+                  attendance.rows[0].tier_search_outcome === "complete"
+              }
             : {})
         };
       },
@@ -5866,16 +5994,48 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }>(
           `WITH latest AS (
              SELECT DISTINCT ON (region, realm_slug, normalized_name)
-               region, realm_slug, normalized_name, retry_after_at AS due_at
+               region, realm_slug, normalized_name, mode,
+               ranked_backfill_cursor, retry_after_at AS due_at
              FROM character_evidence_runs
              WHERE status IN ('complete', 'partial')
              ORDER BY region, realm_slug, normalized_name,
                completed_at DESC, id DESC
+           ), ranked AS (
+             SELECT DISTINCT ON (region, realm_slug, normalized_name, tier_search_raid_id)
+                    region, realm_slug, normalized_name, tier_search_raid_id,
+                    created_at, status,
+                    ranked_backfill_attempted,
+                    ranked_backfill_cursor, retry_after_at
+               FROM character_evidence_runs
+              WHERE mode = 'tier_search'
+                AND status IN ('complete', 'partial')
+              ORDER BY region, realm_slug, normalized_name, tier_search_raid_id,
+                created_at DESC, id DESC
            ), due AS (
              SELECT latest.region, latest.realm_slug, latest.normalized_name,
                     latest.due_at
                FROM latest
               WHERE latest.due_at IS NOT NULL AND latest.due_at <= $1
+                AND NOT (latest.mode = 'tier_search'
+                         AND latest.ranked_backfill_cursor IS NOT NULL)
+             UNION ALL
+             SELECT ranked.region, ranked.realm_slug, ranked.normalized_name,
+                    ranked.retry_after_at AS due_at
+               FROM ranked
+              WHERE ranked.status = 'partial'
+                AND ranked.ranked_backfill_attempted = true
+                AND ranked.ranked_backfill_cursor IS NOT NULL
+                AND ranked.retry_after_at <= $1
+                AND NOT EXISTS (
+                  SELECT 1 FROM character_evidence_runs failed
+                   WHERE failed.region = ranked.region
+                     AND failed.realm_slug = ranked.realm_slug
+                     AND failed.normalized_name = ranked.normalized_name
+                     AND failed.tier_search_raid_id = ranked.tier_search_raid_id
+                     AND failed.mode = 'tier_search' AND failed.status = 'failed'
+                     AND failed.created_at > ranked.created_at
+                     AND failed.completed_at > $1 - interval '30 minutes'
+                )
              UNION ALL
              SELECT region, realm_slug, normalized_name, requested_at AS due_at
                FROM character_alias_recollections

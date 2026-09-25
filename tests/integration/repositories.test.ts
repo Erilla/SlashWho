@@ -5591,10 +5591,339 @@ describe("PostgreSQL repositories", () => {
       await expect(
         repositories.evidence.storedEvidenceTiers(rootKey, tier)
       ).resolves.toMatchObject({ rankedBackfillCursor: cursor });
+      await pool.query(
+        `INSERT INTO character_evidence_run_costs
+           (run_id, attempt, outcome, credentials, request_cap_used,
+            parse_request_cap_used, tier_search_outcome)
+         VALUES ($1, 1, 'published', 'own', 300, 24, 'complete')`,
+        [reserved.run.id]
+      );
+      await expect(
+        repositories.evidence.storedEvidenceTiers(rootKey, tier)
+      ).resolves.toMatchObject({ tierSearchAttendanceComplete: true });
       expect(
         (await repositories.evidence.storedEvidenceTiers(rootKey, "1190"))
           .rankedBackfillCursor
       ).toBeUndefined();
+    });
+
+    it("reserves a due capped ranked walk as a tier continuation", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const startedAt = new Date("2026-09-23T12:00:00.000Z");
+      const dueAt = new Date("2026-09-23T12:30:00.000Z");
+      const first = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: startedAt,
+        searchedSince: dayBefore
+      });
+      if (first.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(first.run.id, 1);
+      const cursor = {
+        journalRaidId: tier,
+        characterId: 40989140,
+        zoneIds: [23],
+        partitionIds: [1],
+        acceptedFightKeys: [],
+        zonesLoaded: true,
+        zoneIndex: 0,
+        encounterIds: [2299],
+        encountersLoaded: true,
+        encounterIndex: 0,
+        metricIndex: 0,
+        reportIndex: 3
+      };
+      await repositories.evidence.publish(first.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        rankedBackfillCursor: cursor,
+        retryAfterAt: dueAt,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: startedAt
+      });
+
+      await expect(
+        repositories.evidence.listResumable(10, new Date(dueAt.getTime() - 1))
+      ).resolves.toEqual([]);
+      // A separate refresh may finish while the ranked retry is waiting.
+      // Its newer complete row must not hide the tier's outstanding cursor.
+      const ordinaryAt = new Date("2026-09-23T12:10:00.000Z");
+      const ordinary = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: ordinaryAt,
+        at: ordinaryAt
+      });
+      if (ordinary.kind !== "reserved")
+        throw new Error("ordinary_run_not_reserved");
+      expect(ordinary.run.mode).toBe("full");
+      await repositories.evidence.claim(ordinary.run.id, 1);
+      await repositories.evidence.publish(ordinary.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: ordinaryAt
+      });
+      await expect(
+        repositories.evidence.listResumable(10, dueAt)
+      ).resolves.toEqual([rootKey]);
+      const resumed = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
+        at: dueAt
+      });
+      expect(resumed).toMatchObject({
+        kind: "reserved",
+        run: { mode: "tier_search", tierSearchRaidId: tier }
+      });
+      if (resumed.kind !== "reserved") throw new Error("resume_not_reserved");
+      await expect(
+        repositories.evidence.storedEvidenceTiers(rootKey, tier)
+      ).resolves.toMatchObject({ rankedBackfillCursor: cursor });
+      await repositories.evidence.claim(resumed.run.id, 1);
+      await repositories.evidence.publish(resumed.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        rankedBackfillCursor: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: dueAt
+      });
+      await expect(
+        repositories.evidence.listResumable(10, new Date(dueAt.getTime() + 1))
+      ).resolves.toEqual([]);
+      await expect(
+        repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: tier,
+          at: new Date(dueAt.getTime() + 1),
+          searchedSince: dayBefore
+        })
+      ).resolves.toMatchObject({ kind: "recent" });
+    });
+
+    it("keeps a tier-search kill through an unrelated complete history run", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const searchedAt = new Date("2026-09-23T12:00:00.000Z");
+      const searchedRaidId = "1179";
+      const search = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: searchedRaidId,
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+      if (search.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(search.run.id, 1);
+      const historic = mythicKill({
+        raidId: "23",
+        raidName: "The Eternal Palace",
+        bossId: "2299",
+        bossName: "Queen Azshara",
+        journalBossId: "2364",
+        killedAt: "2019-09-01T20:00:00.000Z",
+        reportUrl: "https://www.warcraftlogs.com/reports/historicRanked",
+        fightUrl: "https://www.warcraftlogs.com/reports/historicRanked#fight=10"
+      });
+      await repositories.evidence.publish(search.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        rankedBackfillCursor: {
+          journalRaidId: searchedRaidId,
+          zoneIds: [23],
+          partitionIds: [1],
+          acceptedFightKeys: ["historicRanked:10"],
+          zonesLoaded: true,
+          zoneIndex: 0,
+          encounterIds: [2299],
+          encountersLoaded: true,
+          encounterIndex: 0,
+          metricIndex: 0,
+          reportIndex: 1
+        },
+        retryAfterAt: new Date("2026-09-23T12:30:00.000Z"),
+        kills: [historic],
+        wipes: [],
+        tierBests: [],
+        completedAt: searchedAt
+      });
+
+      const refreshAt = new Date("2026-09-23T12:10:00.000Z");
+      const refresh = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: refreshAt,
+        at: refreshAt
+      });
+      if (refresh.kind !== "reserved") throw new Error("refresh_not_reserved");
+      await repositories.evidence.claim(refresh.run.id, 1);
+      await repositories.evidence.publish(refresh.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: refreshAt
+      });
+
+      expect(
+        (await repositories.evidence.getCompleted(rootKey))?.kills
+      ).toEqual([expect.objectContaining({ fightUrl: historic.fightUrl })]);
+      expect(
+        (
+          await repositories.evidence.storedEvidenceTiers(
+            rootKey,
+            searchedRaidId
+          )
+        ).parseOnlyKills
+      ).toEqual([expect.objectContaining({ fightUrl: historic.fightUrl })]);
+
+      const resumedAt = new Date("2026-09-23T12:30:00.000Z");
+      const resumed = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
+        at: resumedAt
+      });
+      if (resumed.kind !== "reserved") throw new Error("resume_not_reserved");
+      await repositories.evidence.claim(resumed.run.id, 1);
+      await repositories.evidence.publish(resumed.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        rankedBackfillCursor: null,
+        kills: [historic],
+        wipes: [],
+        tierBests: [],
+        completedAt: resumedAt
+      });
+      const laterAt = new Date("2026-09-23T13:00:00.000Z");
+      const later = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: laterAt,
+        at: laterAt
+      });
+      if (later.kind !== "reserved") throw new Error("later_not_reserved");
+      await repositories.evidence.claim(later.run.id, 1);
+      await repositories.evidence.publish(later.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: laterAt
+      });
+      expect(
+        (await repositories.evidence.getCompleted(rootKey))?.kills
+      ).toEqual([expect.objectContaining({ fightUrl: historic.fightUrl })]);
+      // A later explicit search can retract a report that is no longer public
+      // or attributable; an ordinary recentReports scan cannot see this far.
+      const replacingAt = new Date(Date.now() + 25 * 60 * 60 * 1000);
+      const replacing = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: searchedRaidId,
+        at: replacingAt,
+        searchedSince: new Date(replacingAt.getTime() - 24 * 60 * 60 * 1000)
+      });
+      if (replacing.kind !== "reserved")
+        throw new Error("replacing_search_not_reserved");
+      await repositories.evidence.claim(replacing.run.id, 1);
+      await repositories.evidence.publish(replacing.run.id, {
+        state: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        rankedBackfillCursor: null,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: replacingAt
+      });
+      expect(
+        (await repositories.evidence.getCompleted(rootKey))?.kills
+      ).toEqual([]);
+    });
+
+    it("continues the saved cursor after a failed continuation cools down", async () => {
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const first = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+      if (first.kind !== "reserved")
+        throw new Error("tier_search_not_reserved");
+      await repositories.evidence.claim(first.run.id, 1);
+      await repositories.evidence.publish(first.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        rankedBackfillCursor: {
+          journalRaidId: tier,
+          zoneIds: [23],
+          partitionIds: [1],
+          zonesLoaded: true,
+          zoneIndex: 0,
+          encounterIds: [2299],
+          encountersLoaded: true,
+          encounterIndex: 0,
+          metricIndex: 0,
+          reportIndex: 1
+        },
+        retryAfterAt: new Date("2026-09-23T12:30:00.000Z"),
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: searchedAt
+      });
+      const dueAt = new Date();
+      const continuation = await repositories.evidence.reserve({
+        key: rootKey,
+        at: dueAt,
+        freshnessCutoff: new Date(dueAt.getTime() - 24 * 60 * 60 * 1000)
+      });
+      if (continuation.kind !== "reserved")
+        throw new Error("continuation_not_reserved");
+      expect(continuation.run.mode).toBe("tier_search");
+      await repositories.evidence.claim(continuation.run.id, 1);
+      await repositories.evidence.fail(
+        continuation.run.id,
+        "points_budget_low"
+      );
+      const failed = await pool.query<{ completed_at: Date }>(
+        `SELECT completed_at FROM character_evidence_runs WHERE id = $1`,
+        [continuation.run.id]
+      );
+      const failedAt = failed.rows[0]!.completed_at;
+
+      await expect(
+        repositories.evidence.listResumable(
+          10,
+          new Date(failedAt.getTime() + 29 * 60 * 1000)
+        )
+      ).resolves.toEqual([]);
+      const retriedAt = new Date(failedAt.getTime() + 30 * 60 * 1000 + 1);
+      await expect(
+        repositories.evidence.listResumable(10, retriedAt)
+      ).resolves.toEqual([rootKey]);
+      const retried = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date(retriedAt.getTime() - 24 * 60 * 60 * 1000),
+        at: retriedAt
+      });
+      expect(retried).toMatchObject({
+        kind: "reserved",
+        run: { mode: "tier_search", tierSearchRaidId: tier }
+      });
     });
 
     it("never treats an ordinary run as a tier search", async () => {
