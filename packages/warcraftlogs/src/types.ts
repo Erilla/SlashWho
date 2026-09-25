@@ -252,6 +252,10 @@ export type WarcraftLogsRankedBackfillResult =
 export type WarcraftLogsReportResult =
   | Readonly<{
       kind: "evidence";
+      /** Fight times were impossible; valid evidence on the page was retained. */
+      omittedInvalidTimestamp?: true;
+      /** Reports whose spans cannot rule out a verified kill. */
+      omittedInvalidTimestampReportCodes?: readonly string[];
       /** True when history was intentionally omitted and only parses ran. */
       scanSkipped?: boolean;
       /**
