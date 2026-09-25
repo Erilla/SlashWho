@@ -264,6 +264,8 @@ export interface CharacterEvidenceRun {
   attempt: number;
   limitationCode: string | null;
   parseLimitationCode: string | null;
+  /** Finished collection omitted fights whose timestamps could not be used. */
+  omittedInvalidTimestamp?: boolean;
   retryAfterAt: Date | null;
   errorCode: string | null;
   createdAt: Date;
@@ -606,6 +608,7 @@ export type TerminalTier = Readonly<{
 export interface StagedEvidenceCollection {
   state: "complete" | "partial";
   scanSkipped?: boolean;
+  omittedInvalidTimestamp?: boolean;
   /**
    * Updates the stored history cursor: a page number resumes below a proved
    * prefix; null clears it after a clean full scan; absent preserves it.
@@ -799,6 +802,7 @@ export interface EvidenceRepository {
     runId: string,
     input: {
       scanSkipped?: boolean;
+      omittedInvalidTimestamp?: boolean;
       historyScanResumePage?: number | null;
       historyScanResumeBoundaryReportCode?: string | null;
       historicAliasProgress?: readonly HistoricAliasScanProgress[];

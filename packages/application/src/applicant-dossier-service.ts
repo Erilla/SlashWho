@@ -291,6 +291,8 @@ function limitationMessage(
       return `${label} history could not be fully loaded. Shown evidence is partial; other kills or wipes may exist.`;
     case "schema_changed":
       return `${label} returned an unexpected response, so history is incomplete. Shown evidence is partial; other kills or wipes may exist.`;
+    case "invalid_fight_timestamp":
+      return `${label} fights with impossible timestamps were omitted. Those fights cannot be shown as kills or wipes and will not be retried.`;
     case "current_content_window_unknown":
       return `${label} evidence could not be shown because this raid's current-content window has not been reviewed.`;
     case "current_content_evidence_withheld":
@@ -483,6 +485,16 @@ async function gatherCharacterEvidence(
         completed.run.limitationCode,
         completed.run.completedAt ?? new Date(),
         completed.run.retryAfterAt
+      )
+    );
+  }
+  if (completed?.run.omittedInvalidTimestamp) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        character.key,
+        "invalid_fight_timestamp",
+        completed.run.completedAt ?? new Date()
       )
     );
   }

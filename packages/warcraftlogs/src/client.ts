@@ -920,9 +920,17 @@ function firstKillReports(
   let omittedInvalidTimestamp = false;
   const omittedInvalidTimestampReportCodes = new Set<string>();
   const schemaDrift = (): WarcraftLogsReportResult =>
-    kills.size > 0 || wipes.size > 0
+    kills.size > 0 || wipes.size > 0 || omittedInvalidTimestamp
       ? {
           kind: "evidence",
+          ...(omittedInvalidTimestamp
+            ? {
+                omittedInvalidTimestamp: true as const,
+                omittedInvalidTimestampReportCodes: [
+                  ...omittedInvalidTimestampReportCodes
+                ]
+              }
+            : {}),
           kills: [...kills.values()],
           wipes: [...wipes.values()],
           tierBests: [],
@@ -1136,11 +1144,7 @@ function firstKillReports(
           omittedInvalidTimestamp: true as const,
           omittedInvalidTimestampReportCodes: [
             ...omittedInvalidTimestampReportCodes
-          ],
-          limitation: {
-            kind: "limitation" as const,
-            code: "schema_drift" as const
-          }
+          ]
         }
       : {}),
     tierBests: [],
@@ -2444,12 +2448,11 @@ export function createWarcraftLogsClient(
       if (probe.kind !== "success") return probe;
       const decodedProbe = firstKillReports(probe.value, key);
       if (decodedProbe.kind === "limitation") return decodedProbe;
-      if (decodedProbe.limitation && !decodedProbe.omittedInvalidTimestamp) {
-        return decodedProbe.limitation;
+      if (decodedProbe.limitation) {
+        return decodedProbe;
       }
       if (decodedProbe.omittedInvalidTimestamp) {
         omittedInvalidTimestamp = true;
-        options.onLimitation?.("history_scan", "schema_drift");
       }
       // A cleanly decoded page, whatever it proves about the offset. Keeping
       // its evidence is what lets attendance skip its reports.
@@ -2516,14 +2519,13 @@ export function createWarcraftLogsClient(
       for (const wipe of normalized.wipes) {
         wipes.set(wipe.fightUrl, wipe);
       }
+      if (normalized.omittedInvalidTimestamp) {
+        omittedInvalidTimestamp = true;
+      }
       if (normalized.limitation) {
         options.onLimitation?.("history_scan", normalized.limitation.code);
-        if (normalized.omittedInvalidTimestamp) {
-          omittedInvalidTimestamp = true;
-        } else {
-          scanLimitation = normalized.limitation;
-          break;
-        }
+        scanLimitation = normalized.limitation;
+        break;
       }
       // A page with only invalid fight times still proves its report boundary.
       // Other schema drift stops before this point.
@@ -3513,6 +3515,9 @@ export function createWarcraftLogsClient(
     ) => ({
       kind: "evidence" as const,
       scanSkipped,
+      ...(omittedInvalidTimestamp
+        ? { omittedInvalidTimestamp: true as const }
+        : {}),
       kills: result.kills,
       wipes: result.wipes,
       tierBests,
@@ -3549,20 +3554,11 @@ export function createWarcraftLogsClient(
     // and eight other characters with it. It stays partial, which carries
     // every stored kill forward, and the next run reads the whole history from
     // page one, where finishing does mean finished.
-    const restartFromFirstPage =
-      (resumedFromCursor && !scanLimitation) ||
-      (omittedInvalidTimestamp && historyScanFinished && !scanLimitation);
+    // Impossible fight times are permanent omissions, reported separately;
+    // once page one reaches the end, they leave no history work to retry.
+    const restartFromFirstPage = resumedFromCursor && !scanLimitation;
     if (restartFromFirstPage) {
-      scanLimitation = {
-        kind: "limitation",
-        code: omittedInvalidTimestamp ? "schema_drift" : "request_cap"
-      };
-    }
-    if (
-      omittedInvalidTimestamp &&
-      (!scanLimitation || scanLimitation.code === "request_cap")
-    ) {
-      scanLimitation = { kind: "limitation", code: "schema_drift" };
+      scanLimitation = { kind: "limitation", code: "request_cap" };
     }
     const resume: Readonly<{
       historyScanResumePage?: number;
@@ -3587,7 +3583,8 @@ export function createWarcraftLogsClient(
             : {};
     return sortedKills.length ||
       sortedWipes.length ||
-      rankedBackfill !== undefined
+      rankedBackfill !== undefined ||
+      omittedInvalidTimestamp
       ? evidenceResult({
           kills: sortedKills,
           wipes: sortedWipes,

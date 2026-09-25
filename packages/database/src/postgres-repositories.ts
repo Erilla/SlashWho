@@ -225,6 +225,7 @@ interface EvidenceRunRow {
   attempt: number;
   limitation_code: string | null;
   parse_limitation_code: string | null;
+  omitted_invalid_timestamp: boolean;
   retry_after_at: Date | null;
   error_code: string | null;
   created_at: Date;
@@ -569,7 +570,7 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
 // What a run was reserved to do. Selected everywhere a run is mapped, so a
 // re-claimed tier search is still a tier search.
 function evidenceRunModeSql(alias = "character_evidence_runs"): string {
-  return `${alias}.mode, ${alias}.tier_search_raid_id`;
+  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp`;
 }
 
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
@@ -585,6 +586,7 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     attempt: row.attempt,
     limitationCode: row.limitation_code,
     parseLimitationCode: row.parse_limitation_code,
+    omittedInvalidTimestamp: row.omitted_invalid_timestamp,
     retryAfterAt: row.retry_after_at,
     errorCode: row.error_code,
     createdAt: row.created_at,
@@ -5397,6 +5399,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `UPDATE character_evidence_runs
              SET status = $2, limitation_code = $3, parse_limitation_code = $4,
                  parse_limitation_codes_seen = $8,
+                 omitted_invalid_timestamp = $17,
                  retry_after_at = $5, error_code = NULL, completed_at = $6, evidence_version = $7,
                  kill_scan_skipped = $9,
                  kill_scan_completed_at = CASE
@@ -5445,7 +5448,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 ? null
                 : JSON.stringify(input.rankedBackfillCursor),
               Object.hasOwn(input, "historicAliasProgress"),
-              JSON.stringify(input.historicAliasProgress ?? null)
+              JSON.stringify(input.historicAliasProgress ?? null),
+              input.omittedInvalidTimestamp ?? false
             ]
           );
           if (publication.rowCount !== 1) {

@@ -4355,6 +4355,33 @@ describe("PostgreSQL repositories", () => {
     }
   });
 
+  it("stores permanent timestamp omissions on a complete run", async () => {
+    const reserved = await repositories.evidence.reserve({
+      key: { ...rootKey, name: "timestampomissions" },
+      freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      omittedInvalidTimestamp: true,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    await expect(
+      repositories.evidence.find(reserved.run.id)
+    ).resolves.toMatchObject({
+      status: "complete",
+      limitationCode: null,
+      omittedInvalidTimestamp: true
+    });
+  });
+
   it("round-trips normalized kill parses", async () => {
     // Break caught: storage could lose a normalized parse state or percentile,
     // including a valid zero, while replacing a completed evidence scan.

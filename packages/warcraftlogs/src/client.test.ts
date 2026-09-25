@@ -5529,60 +5529,91 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("never reports a resumed scan as a finished history", async () => {
-    // Break caught: a resumed scan reads only the pages below its cursor.
-    // Reaching their end was reported as a clean read, the run published
-    // complete, and a complete publish keeps only what the run found outside
-    // terminal raids -- then marked raids terminal from that fraction. Ryii
-    // went from 751 kills to 269 on 2026-09-23, and eight characters with it.
-    const page = (fixture("character-report-valid") as { pages: unknown[] })
-      .pages[0];
-    const historyPages: number[] = [];
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as {
-        query: string;
-        variables: { page?: number };
+  it.each([false, true])(
+    "never reports a resumed scan as a finished history (omission: %s)",
+    async (omitted) => {
+      // Break caught: a resumed scan reads only the pages below its cursor.
+      // Reaching their end was reported as a clean read, the run published
+      // complete, and a complete publish keeps only what the run found outside
+      // terminal raids -- then marked raids terminal from that fraction. Ryii
+      // went from 751 kills to 269 on 2026-09-23, and eight characters with it.
+      const page = structuredClone(
+        (fixture("character-report-valid") as { pages: unknown[] }).pages[0]
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: {
+                data: Array<{ fights: Array<Record<string, unknown>> }>;
+              };
+            };
+          };
+        };
       };
-      if (body.query.includes("RecentReports")) {
-        const requestedPage = body.variables.page ?? 0;
-        historyPages.push(requestedPage);
-        return jsonResponse(
-          requestedPage === 66
-            ? page
-            : {
-                data: {
-                  characterData: {
-                    character: {
-                      server: { normalizedName: "Silvermoon" },
-                      recentReports: { data: [], has_more_pages: false }
+      if (omitted) {
+        page.data.characterData.character.recentReports.data[0]!.fights.unshift(
+          {
+            id: 80,
+            encounterID: 1234,
+            name: "Queen Ansurek",
+            difficulty: 5,
+            friendlyPlayers: [7],
+            startTime: 20_000,
+            endTime: 10_000,
+            kill: false
+          }
+        );
+      }
+      const historyPages: number[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { page?: number };
+        };
+        if (body.query.includes("RecentReports")) {
+          const requestedPage = body.variables.page ?? 0;
+          historyPages.push(requestedPage);
+          return jsonResponse(
+            requestedPage === 66
+              ? page
+              : {
+                  data: {
+                    characterData: {
+                      character: {
+                        server: { normalizedName: "Silvermoon" },
+                        recentReports: { data: [], has_more_pages: false }
+                      }
                     }
                   }
                 }
-              }
-        );
-      }
-      return emptyZoneRankingsResponse();
-    });
+          );
+        }
+        return emptyZoneRankingsResponse();
+      });
 
-    const result = await client.getFirstKillReports(key, {
-      requestCap: 300,
-      parseRequestCap: 10,
-      historyScanStartPage: 67,
-      historyScanResumeBoundaryReportCode: "lateReport"
-    });
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 300,
+        parseRequestCap: 10,
+        historyScanStartPage: 67,
+        historyScanResumeBoundaryReportCode: "lateReport"
+      });
 
-    // The whole budget was not needed, and the history below the cursor ran
-    // out -- which is exactly the case that must not read as finished.
-    expect(historyPages).toEqual([66, 67]);
-    expect(result).toMatchObject({
-      kind: "evidence",
-      limitation: { code: "request_cap" },
-      // Page one with no boundary: the next run reads the whole history.
-      historyScanResumePage: 1
-    });
-    expect(result).not.toHaveProperty("historyScanResumeBoundaryReportCode");
-  });
+      // The whole budget was not needed, and the history below the cursor ran
+      // out -- which is exactly the case that must not read as finished.
+      expect(historyPages).toEqual([66, 67]);
+      expect(result).toMatchObject({
+        kind: "evidence",
+        limitation: { code: "request_cap" },
+        // Page one with no boundary: the next run reads the whole history.
+        historyScanResumePage: 1
+      });
+      expect(result).not.toHaveProperty("historyScanResumeBoundaryReportCode");
+      expect(result.kind === "evidence" && result.omittedInvalidTimestamp).toBe(
+        omitted ? true : undefined
+      );
+    }
+  );
 
   it("still reports a whole-history scan from page one as finished", async () => {
     const page = (fixture("character-report-valid") as { pages: unknown[] })
@@ -5898,6 +5929,55 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it.each([true, false])(
+    "keeps a timestamp omission visible when later data has schema drift (valid evidence: %s)",
+    async (withValidEvidence) => {
+      const page = structuredClone(
+        (fixture("character-report-valid") as { pages: unknown[] }).pages[0]
+      ) as {
+        data: {
+          characterData: {
+            character: {
+              recentReports: {
+                data: Array<{ fights: Array<Record<string, unknown>> }>;
+              };
+            };
+          };
+        };
+      };
+      const fights =
+        page.data.characterData.character.recentReports.data[0]!.fights;
+      if (!withValidEvidence) fights.splice(0);
+      fights.push(
+        {
+          id: 80,
+          encounterID: 1234,
+          name: "Queen Ansurek",
+          difficulty: 5,
+          friendlyPlayers: [7],
+          startTime: 20_000,
+          endTime: 10_000,
+          kill: false
+        },
+        { id: 81, encounterID: 1234, kill: true }
+      );
+      const { client } = clientFor((url) =>
+        url.pathname === "/oauth/token" ? token() : jsonResponse(page)
+      );
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 1,
+        parseRequestCap: 10
+      });
+
+      expect(result).toMatchObject({
+        kind: "evidence",
+        omittedInvalidTimestamp: true,
+        limitation: { code: "schema_drift" }
+      });
+    }
+  );
+
   it("skips unrelated negative-time boss fights and continues to later history pages", async () => {
     // A shared report can contain fights before its report start. They cannot
     // describe this character when its actor ID is absent from friendlyPlayers.
@@ -5992,11 +6072,17 @@ describe("Warcraft Logs gateway", () => {
   });
 
   it.each([
-    [1, [1], 2, 1],
-    [2, [1, 2], 1, 3]
+    [1, [1], 2, 1, "request_cap"],
+    [2, [1, 2], undefined, 3, undefined]
   ])(
     "omits impossible fight times with a %i-page budget and keeps valid evidence",
-    async (requestCap, expectedPages, resumePage, killCount) => {
+    async (
+      requestCap,
+      expectedPages,
+      resumePage,
+      killCount,
+      limitationCode
+    ) => {
       const pages = structuredClone(
         (fixture("character-report-valid") as { pages: unknown[] }).pages
       ) as Array<{
@@ -6053,8 +6139,7 @@ describe("Warcraft Logs gateway", () => {
       expect(historyPages).toEqual(expectedPages);
       expect(result).toMatchObject({
         kind: "evidence",
-        limitation: { code: "schema_drift" },
-        historyScanResumePage: resumePage,
+        omittedInvalidTimestamp: true,
         kills: expect.arrayContaining([
           expect.objectContaining({
             fightUrl: expect.stringContaining("lateReport#fight=1")
@@ -6067,6 +6152,8 @@ describe("Warcraft Logs gateway", () => {
         ]
       });
       if (result.kind === "evidence") {
+        expect(result.limitation?.code).toBe(limitationCode);
+        expect(result.historyScanResumePage).toBe(resumePage);
         expect(result.kills).toHaveLength(killCount);
         expect(result.wipes).toHaveLength(1);
         if (requestCap === 2) {
@@ -6112,15 +6199,18 @@ describe("Warcraft Logs gateway", () => {
       url.pathname === "/oauth/token" ? token() : jsonResponse(page)
     );
 
-    await expect(
-      client.getFirstKillReports(key, { requestCap: 1, parseRequestCap: 10 })
-    ).resolves.toMatchObject({
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 10
+    });
+    expect(result).toMatchObject({
       kind: "evidence",
-      limitation: { code: "schema_drift" },
-      historyScanResumePage: 1,
+      omittedInvalidTimestamp: true,
       kills: [],
       wipes: []
     });
+    expect(result).not.toHaveProperty("limitation");
+    expect(result).not.toHaveProperty("historyScanResumePage");
   });
 
   it("retains collected kills when the history deadline expires", async () => {
