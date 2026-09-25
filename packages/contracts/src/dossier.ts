@@ -41,6 +41,58 @@ export const dossierReportSchema = z
   })
   .strict();
 
+export const dossierLimitationCodeSchema = z.enum([
+  "not_found",
+  "private",
+  "rate_limited",
+  "points_budget_low",
+  "collection_failed",
+  "request_cap",
+  "unavailable",
+  "schema_changed",
+  "invalid_fight_timestamp",
+  "parse_private",
+  "parse_rate_limited",
+  "parse_request_cap",
+  "parse_unavailable",
+  "parse_schema_drift",
+  "parse_identity_unmatched",
+  "current_content_window_unknown",
+  "current_content_evidence_withheld",
+  "unmatched_encounter"
+]);
+
+/**
+ * One step of the evidence run collecting a character right now, in run order.
+ * An operational projection of the phase ledger (#431): it names the step and
+ * how it stands, and carries no provider result.
+ */
+export const collectionPhaseSchema = z
+  .object({
+    id: z.enum([
+      "warcraft_logs_identity_resolution",
+      "warcraft_logs_history",
+      "warcraft_logs_tier_bests",
+      "warcraft_logs_fight_parses",
+      "warcraft_logs_ranking_identities",
+      "raiderio_rankings",
+      "blizzard_achievements",
+      "publication"
+    ]),
+    state: z.enum([
+      "pending",
+      "active",
+      "completed",
+      "skipped",
+      "limited",
+      "failed",
+      "cancelled"
+    ]),
+    /** The limitation this step raised, on the step that raised it. */
+    limitationCode: dossierLimitationCodeSchema.optional()
+  })
+  .strict();
+
 export const dossierCharacterSchema = z
   .object({
     key: characterKeySchema,
@@ -58,6 +110,8 @@ export const dossierCharacterSchema = z
     evidenceState: dossierEvidenceStateSchema.optional(),
     /** A manually added character a reviewer has excluded from the evidence. */
     excluded: z.literal(true).optional(),
+    /** The in-flight run's steps; absent when nothing is collecting. */
+    collectionProgress: z.array(collectionPhaseSchema).min(1).optional(),
     /** @deprecated Use evidenceState for the precise scan state. */
     researchState: z.enum(["complete", "gathering"]).optional()
   })
@@ -182,26 +236,7 @@ export const dossierLimitationSchema = z
   .object({
     source: z.enum(["raiderio", "warcraft_logs", "blizzard"]),
     character: characterKeySchema.nullable(),
-    code: z.enum([
-      "not_found",
-      "private",
-      "rate_limited",
-      "points_budget_low",
-      "collection_failed",
-      "request_cap",
-      "unavailable",
-      "schema_changed",
-      "invalid_fight_timestamp",
-      "parse_private",
-      "parse_rate_limited",
-      "parse_request_cap",
-      "parse_unavailable",
-      "parse_schema_drift",
-      "parse_identity_unmatched",
-      "current_content_window_unknown",
-      "current_content_evidence_withheld",
-      "unmatched_encounter"
-    ]),
+    code: dossierLimitationCodeSchema,
     message: z.string().min(1),
     observedAt: z.iso.datetime(),
     retryAt: z.iso.datetime().optional()
@@ -274,6 +309,8 @@ export type DossierEvidenceState = z.infer<typeof dossierEvidenceStateSchema>;
 export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
 export type DossierCuttingEdge = z.infer<typeof dossierCuttingEdgeSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;
+export type DossierLimitationCode = z.infer<typeof dossierLimitationCodeSchema>;
+export type CollectionPhase = z.infer<typeof collectionPhaseSchema>;
 export type DossierResearch = z.infer<typeof dossierResearchSchema>;
 export type ApplicantDossierParseMetric = z.infer<
   typeof applicantDossierParseMetricSchema

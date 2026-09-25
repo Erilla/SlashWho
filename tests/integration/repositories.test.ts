@@ -3468,8 +3468,30 @@ describe("PostgreSQL repositories", () => {
           '2026-09-20T06:05:00Z', '2026-09-20T07:00:00Z', NULL, NULL)`
     );
 
+    // Steps are an in-flight concern: a finished run's ledger stays behind
+    // the monitor, so only the running one should report any.
+    await pool.query(
+      `INSERT INTO character_evidence_run_phases
+         (run_id, phase_id, ordinal, state, limitation_code)
+       SELECT id, phase.phase_id, phase.ordinal, phase.state, phase.code
+         FROM character_evidence_runs,
+              (VALUES ('publication', 1, 'pending', NULL),
+                      ('warcraft_logs_history', 0, 'limited', 'rate_limited'))
+                AS phase (phase_id, ordinal, state, code)
+        WHERE normalized_name IN ('running', 'complete')`
+    );
+
     const rows = await repositories.evidence.listForMonitor();
 
+    expect(rows.find((row) => row.status === "running")?.phases).toEqual([
+      {
+        id: "warcraft_logs_history",
+        state: "limited",
+        limitationCode: "rate_limited"
+      },
+      { id: "publication", state: "pending", limitationCode: null }
+    ]);
+    expect(rows.find((row) => row.status === "queued")?.phases).toEqual([]);
     expect(rows.map((row) => row.status)).toEqual([
       "queued",
       "running",
@@ -3488,8 +3510,10 @@ describe("PostgreSQL repositories", () => {
       retryAfterAt: null,
       errorCode: null,
       startedAt: new Date("2026-09-20T08:05:00Z"),
-      completedAt: new Date("2026-09-20T09:00:00Z")
+      completedAt: new Date("2026-09-20T09:00:00Z"),
+      phases: []
     });
+    expect(rows.find((row) => row.status === "complete")?.phases).toEqual([]);
     expect(JSON.stringify(rows)).not.toContain("cipher");
     expect(rows.every((row) => !("id" in row) && !("queueJobId" in row))).toBe(
       true

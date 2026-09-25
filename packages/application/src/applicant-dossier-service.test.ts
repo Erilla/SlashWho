@@ -1,6 +1,7 @@
 import type { SearchService } from "./search-service";
 import type {
   DiscoveryQueue,
+  EvidenceRunPhase,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -94,6 +95,8 @@ function fixture(
     activeLimitationCode?: string | null;
     /** Fresh stored evidence with a refresh collecting over it right now. */
     refreshingCharacter?: CharacterKey | null;
+    /** The phase ledger `listPhases` returns for the active run. */
+    activePhases?: readonly EvidenceRunPhase[];
     onCacheEvent?: (source: string, event: string) => void;
     tierSearches?: readonly {
       raidId: string;
@@ -160,6 +163,13 @@ function fixture(
     },
     runs: { create: runsCreate },
     evidence: {
+      listPhases: vi
+        .fn()
+        .mockImplementation(async (runId: string) =>
+          runId === "10000000-0000-4000-8000-000000000013"
+            ? (options.activePhases ?? [])
+            : []
+        ),
       historicAliases: vi.fn().mockResolvedValue([]),
       addHistoricAlias: vi.fn().mockResolvedValue("added"),
       removeHistoricAlias: vi.fn().mockResolvedValue("removed"),
@@ -1262,6 +1272,112 @@ describe("applicant dossier service", () => {
         ]
       }
     });
+  });
+
+  it("shows the active run's collection steps beneath a gathering character", async () => {
+    const at = new Date("2026-09-11T12:01:00.000Z");
+    const result = await fixture({
+      gatheringCharacter: alt,
+      activePhases: [
+        {
+          id: "warcraft_logs_identity_resolution",
+          ordinal: 0,
+          state: "completed",
+          startedAt: at,
+          completedAt: at,
+          limitationCode: null
+        },
+        {
+          id: "warcraft_logs_history",
+          ordinal: 1,
+          state: "limited",
+          startedAt: at,
+          completedAt: at,
+          limitationCode: "schema_drift"
+        },
+        {
+          id: "warcraft_logs_tier_bests",
+          ordinal: 2,
+          state: "skipped",
+          startedAt: null,
+          completedAt: at,
+          limitationCode: null
+        },
+        {
+          id: "warcraft_logs_fight_parses",
+          ordinal: 3,
+          state: "active",
+          startedAt: at,
+          completedAt: null,
+          limitationCode: null
+        },
+        {
+          id: "publication",
+          ordinal: 4,
+          state: "pending",
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }
+      ]
+    }).dossiers.read(root);
+
+    if (result.kind !== "ready") throw new Error("expected_ready");
+    expect(result.dossier.characters[0]).not.toHaveProperty(
+      "collectionProgress"
+    );
+    expect(result.dossier.characters[1]?.collectionProgress).toEqual([
+      { id: "warcraft_logs_identity_resolution", state: "completed" },
+      // The ledger stores provider codes; the contract speaks its own.
+      {
+        id: "warcraft_logs_history",
+        state: "limited",
+        limitationCode: "schema_changed"
+      },
+      { id: "warcraft_logs_tier_bests", state: "skipped" },
+      { id: "warcraft_logs_fight_parses", state: "active" },
+      { id: "publication", state: "pending" }
+    ]);
+  });
+
+  it("drops a ledger step the contract does not know rather than failing the read", async () => {
+    const result = await fixture({
+      gatheringCharacter: alt,
+      activePhases: [
+        {
+          id: "warcraft_logs_history",
+          ordinal: 0,
+          state: "active",
+          startedAt: null,
+          completedAt: null,
+          limitationCode: "a_code_from_the_future"
+        },
+        {
+          id: "a_phase_from_the_future",
+          ordinal: 1,
+          state: "pending",
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }
+      ]
+    }).dossiers.read(root);
+
+    if (result.kind !== "ready") throw new Error("expected_ready");
+    expect(result.dossier.characters[1]?.collectionProgress).toEqual([
+      { id: "warcraft_logs_history", state: "active" }
+    ]);
+  });
+
+  it("omits collection steps for a run that recorded no ledger", async () => {
+    const result = await fixture({ gatheringCharacter: alt }).dossiers.read(
+      root
+    );
+
+    if (result.kind !== "ready") throw new Error("expected_ready");
+    expect(result.dossier.characters[1]).not.toHaveProperty(
+      "collectionProgress"
+    );
   });
 
   it("reports gathering while a refresh re-collects evidence that is still fresh", async () => {

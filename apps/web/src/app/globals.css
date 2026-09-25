@@ -1305,6 +1305,72 @@ a {
   color: var(--muted);
 }
 
+/* A run's steps, indented beneath the character it is collecting. Collapsed to
+   the current step; the checklist is for when something looks stuck. */
+.collection-progress {
+  margin-top: 0.35rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border-strong);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* In the monitor the cell already separates it from its neighbours. */
+td > .collection-progress {
+  margin-top: 0;
+}
+
+.collection-progress-summary {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.collection-progress-spinner {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.collection-progress-steps {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.collection-progress-step {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.5rem;
+}
+
+.collection-progress-step[data-state="active"] {
+  color: var(--text);
+}
+
+.collection-progress-step[data-state="pending"],
+.collection-progress-step[data-state="skipped"] {
+  opacity: 0.75;
+}
+
+.collection-progress-state {
+  font-style: italic;
+}
+
+.collection-progress-step[data-state="limited"] .collection-progress-state {
+  color: var(--partial);
+}
+
+.collection-progress-step[data-state="failed"] .collection-progress-state,
+.collection-progress-step[data-state="cancelled"] .collection-progress-state {
+  color: var(--danger);
+}
+
 .source-badge {
   flex: none;
   border: 1px solid var(--border-strong);

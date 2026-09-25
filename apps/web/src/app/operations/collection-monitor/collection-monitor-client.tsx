@@ -12,6 +12,8 @@ import {
   useAuthoritativePoll
 } from "../../../lib/use-authoritative-poll";
 
+import { CollectionProgress } from "../../../components/collection-progress";
+
 import { OperatorLogoutButton } from "./operator-logout-button";
 
 function characterText(character: {
@@ -153,6 +155,7 @@ export function CollectionMonitorView({
               <tr>
                 <th scope="col">Character</th>
                 <th scope="col">Status</th>
+                <th scope="col">Step</th>
                 <th scope="col">Attempt</th>
                 <th scope="col">Started</th>
                 <th scope="col">Elapsed</th>
@@ -162,7 +165,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.inFlight.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     No evidence runs are in flight or pending.
                   </td>
                 </tr>
@@ -174,6 +177,15 @@ export function CollectionMonitorView({
                       <span className="state-badge" data-state={run.status}>
                         {run.status}
                       </span>
+                    </td>
+                    <td>
+                      {run.collectionProgress ? (
+                        <CollectionProgress
+                          announce={false}
+                          phases={run.collectionProgress}
+                          subject={characterText(run.character)}
+                        />
+                      ) : null}
                     </td>
                     <td>{run.attempt}</td>
                     <td>{dateTime(run.startedAt)}</td>

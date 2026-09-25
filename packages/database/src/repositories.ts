@@ -325,7 +325,14 @@ export type EvidenceMonitorRun = Readonly<{
   errorCode: string | null;
   startedAt: Date | null;
   completedAt: Date | null;
+  /** The in-flight run's steps in order; empty once the run has settled. */
+  phases: readonly EvidenceMonitorPhase[];
 }>;
+
+export type EvidenceMonitorPhase = Pick<
+  EvidenceRunPhase,
+  "id" | "state" | "limitationCode"
+>;
 
 /** A privacy-safe operational projection; provider payloads never enter it. */
 export type EvidenceRunPhase = Readonly<{

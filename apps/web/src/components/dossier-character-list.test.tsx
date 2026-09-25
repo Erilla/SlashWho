@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -426,4 +432,41 @@ it("refreshes the dossier when a row action changes a connection", async () => {
   await user.click(screen.getByRole("menuitem", { name: "Exclude" }));
 
   await waitFor(() => expect(onCharactersChanged).toHaveBeenCalledTimes(1));
+});
+
+it("shows a collecting character's current step beneath its name instead of the bare spinner", () => {
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: null,
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted",
+          evidenceState: "scanning",
+          researchState: "gathering",
+          collectionProgress: [
+            { id: "warcraft_logs_identity_resolution", state: "completed" },
+            { id: "warcraft_logs_history", state: "active" },
+            { id: "publication", state: "pending" }
+          ]
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+
+  const identity = document.querySelector(".dossier-character-identity");
+  expect(
+    within(identity as HTMLElement).getByText("Scanning report history", {
+      selector: "summary > span"
+    })
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("img", { name: "Evidence currently being scanned" })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("status", { name: /research gathering/i })
+  ).not.toBeInTheDocument();
 });
