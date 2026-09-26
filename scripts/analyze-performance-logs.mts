@@ -15,6 +15,11 @@ export type OutcomeSummary = {
   fields: Record<string, FieldSummary>;
 };
 
+/** One endpoint's own count and field percentiles, split again by status. */
+export type EndpointSummary = OutcomeSummary & {
+  byStatus: Record<string, OutcomeSummary>;
+};
+
 export type PerformanceSummary = {
   event: string;
   count: number;
@@ -27,6 +32,14 @@ export type PerformanceSummary = {
    * Records with no `outcome` field contribute only to the overall summary.
    */
   byOutcome: Record<string, OutcomeSummary>;
+  /**
+   * The same breakdown for records that carry an `endpoint` (http_request),
+   * which have no `outcome`. Without it a dossier read's p95 pools with an
+   * account call's, and a 200 with a fast 500. Status nests inside endpoint so
+   * each endpoint keeps its own total; records with no `status` count only at
+   * the endpoint level.
+   */
+  byEndpoint: Record<string, EndpointSummary>;
   providers: Record<string, number>;
   /**
    * How often each repository call was the slowest one in a request. `dbMs`
@@ -35,6 +48,9 @@ export type PerformanceSummary = {
    */
   dbMaxCallNames: Record<string, number>;
 };
+
+/** A breakdown bucket: how many records joined it, and their numeric fields. */
+type Group = { count: number; samples: Map<string, number[]> };
 
 export function percentile(samples: readonly number[], target: number): number {
   if (samples.length === 0) return 0;
@@ -55,10 +71,25 @@ export function summarize(
 ): PerformanceSummary {
   const samples = new Map<string, number[]>();
   const outcomeSamples = new Map<string, Map<string, number[]>>();
+  const endpointGroups = new Map<
+    string,
+    Group & { byStatus: Map<string, Group> }
+  >();
   const outcomes: Record<string, number> = {};
   const providers: Record<string, number> = {};
   const dbMaxCallNames: Record<string, number> = {};
   let count = 0;
+
+  const join = <G extends Group>(
+    target: Map<string, G>,
+    key: string,
+    create: () => G
+  ): G => {
+    const group = target.get(key) ?? create();
+    group.count += 1;
+    target.set(key, group);
+    return group;
+  };
 
   const tally = (target: Record<string, number>, key: string) => {
     target[key] = (target[key] ?? 0) + 1;
@@ -105,10 +136,27 @@ export function summarize(
       outcomeSamples.set(outcome, perOutcome);
     }
 
+    const grouped: Map<string, number[]>[] = perOutcome ? [perOutcome] : [];
+    if (typeof record.endpoint === "string") {
+      const endpoint = join(endpointGroups, record.endpoint, () => ({
+        count: 0,
+        samples: new Map(),
+        byStatus: new Map()
+      }));
+      grouped.push(endpoint.samples);
+      if (typeof record.status === "number") {
+        const status = join(endpoint.byStatus, String(record.status), () => ({
+          count: 0,
+          samples: new Map()
+        }));
+        grouped.push(status.samples);
+      }
+    }
+
     for (const [key, value] of Object.entries(record)) {
       if (typeof value === "number" && Number.isFinite(value)) {
         collect(samples, key, value);
-        if (perOutcome) collect(perOutcome, key, value);
+        for (const target of grouped) collect(target, key, value);
       }
     }
     if (typeof record.provider === "string") tally(providers, record.provider);
@@ -139,12 +187,27 @@ export function summarize(
     };
   }
 
+  const summarizeGroup = (group: Group): OutcomeSummary => ({
+    count: group.count,
+    fields: summarizeFields(group.samples)
+  });
+
+  const byEndpoint: Record<string, EndpointSummary> = {};
+  for (const [endpoint, group] of endpointGroups) {
+    const byStatus: Record<string, OutcomeSummary> = {};
+    for (const [status, statusGroup] of group.byStatus) {
+      byStatus[status] = summarizeGroup(statusGroup);
+    }
+    byEndpoint[endpoint] = { ...summarizeGroup(group), byStatus };
+  }
+
   return {
     event,
     count,
     fields: summarizeFields(samples),
     outcomes,
     byOutcome,
+    byEndpoint,
     providers,
     dbMaxCallNames
   };
