@@ -8,7 +8,8 @@ This repository uses a single-context layout:
 /
 ├── CONTEXT.md
 ├── docs/adr/
-└── src/
+├── apps/
+└── packages/
 ```
 
 Use terminology defined in `CONTEXT.md`. Explicitly flag any proposed change that contradicts an existing ADR.

@@ -26,6 +26,12 @@ years, and deliberately: the question is always _what does a run cost now_, and
 an older row describes a configuration that no longer runs. Keeping those
 around would re-open the trap this table was built to close.
 
+Since #554 the table is also read by the dossier, not only by people: a stale
+read queues a light run instead of a full one only when a published run's
+Raider.IO lookup answered (`raiderio_historic_outcome = 'evidence'`) within
+the last seven days. Retention must stay above that week, or a settled
+character falls back to a full run before the week is out.
+
 ### Reading the columns
 
 - `points_spent` is the run's own delta. **Null means unavailable** — the
@@ -276,6 +282,10 @@ sizing the cap from `request_cap` rows, tell the two apart:
 `history_scan_requests < request_cap_used` is a resumed scan that finished, not
 budget exhaustion.
 
+A light refresh is a manual refresh inside its cooldown or, since #554, a
+stale dossier read of a settled character. Its cost row reads `mode = 'full'`;
+tell it apart by joining `character_evidence_runs.light_refresh` on `run_id`.
+
 A light refresh neither resumes nor moves the history cursor: it reads the
 newest page and republishes the stored cursor unchanged on its own run. It has
 to republish it: the cursor lives on each run's row and is read from the
@@ -383,13 +393,14 @@ as that run left them. A published search has `publication_scope = 'tier'` on
 
 One press of **Search this tier** queues a search of that tier for every
 included dossier character: the submitted character and each connected one,
-including any beyond the dossier's display cap, but never an excluded one
-(#449). Characters sharing a Warcraft Logs ID are one character and are searched
-once. Each character's search is a run of its own, with its own reservation,
-cap, cooldown and cost row, so a character that is cooling down or already
-collecting never stops the others being queued. One press queues at most 30
-searches (`DOSSIER_TIER_SEARCH_CHARACTER_LIMIT`). Only searches it queues, or
-tries to queue and fails, count: a character that is cooling down, collecting or
+including any beyond the dossier's character ceiling
+(`DOSSIER_CHARACTER_CEILING`), but never an excluded one (#449). Characters
+sharing a Warcraft Logs ID are one character and are searched once. Each
+character's search is a run of its own, with its own reservation, cap, cooldown
+and cost row, so a character that is cooling down or already collecting never
+stops the others being queued. One press queues at most 50 searches
+(`DOSSIER_TIER_SEARCH_CHARACTER_LIMIT`, raised from 30 in #557). Only searches
+it queues, or tries to queue and fails, count: a character that is cooling down, collecting or
 has nothing collected takes no place, so a later press reaches the characters
 after it. Characters a press cannot reach are reported as not queued, never
 dropped. A press can therefore spend up to that many runs' tier-search caps,
