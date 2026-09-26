@@ -372,6 +372,27 @@ export const recentDossierSearchesResponseSchema = z
   })
   .strict();
 
+/**
+ * The raid nights a dossier's stored Mythic kills place in one guild (#611).
+ * A night is a UTC calendar day; kills whose report names no guild are not
+ * counted, so an absent night is "not seen", never "guildless".
+ */
+export const dossierGuildHistoryEntrySchema = z
+  .object({
+    guild: dossierGuildSchema,
+    nights: z
+      .array(
+        z
+          .object({
+            date: z.iso.date(),
+            characters: z.array(characterKeySchema).min(1)
+          })
+          .strict()
+      )
+      .min(1)
+  })
+  .strict();
+
 export const applicantDossierSchema = z
   .object({
     root: characterKeySchema,
@@ -380,6 +401,11 @@ export const applicantDossierSchema = z
     raids: z.array(dossierRaidSchema),
     cuttingEdges: z.array(dossierCuttingEdgeSchema),
     limitations: z.array(dossierLimitationSchema),
+    /**
+     * Each guild's raid nights, oldest guild first. Absent on payloads written
+     * before this field existed, including the frozen demo snapshot.
+     */
+    guildHistory: z.array(dossierGuildHistoryEntrySchema).optional(),
     /**
      * When this dossier's evidence was last collected, as the oldest of its
      * characters' completed runs — so it reads as "everything is at least this

@@ -1100,6 +1100,109 @@ a {
   grid-column: 1 / -1;
 }
 
+.dossier-guild-history-panel {
+  grid-column: 1 / -1;
+}
+
+/* A fixed width per year, so years stay readable however long the history:
+   the timeline scrolls rather than squeezing a decade into the panel. */
+.dossier-guild-timeline-frame {
+  margin-top: 0.75rem;
+}
+
+.dossier-guild-timeline-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--page);
+}
+
+.dossier-guild-timeline-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dossier-guild-timeline-frame {
+  position: relative;
+}
+
+.dossier-guild-timeline svg {
+  display: block;
+  font-size: 0.75rem;
+}
+
+.dossier-guild-timeline-tier line {
+  stroke: var(--muted);
+  stroke-dasharray: 3 3;
+  stroke-opacity: 0.55;
+}
+
+.dossier-guild-timeline-tier:hover line {
+  stroke-opacity: 1;
+}
+
+.dossier-guild-timeline-year line {
+  stroke: var(--border-strong);
+}
+
+.dossier-guild-timeline-year text {
+  fill: var(--muted);
+}
+
+.dossier-guild-timeline-bar {
+  cursor: default;
+  outline: none;
+}
+
+.dossier-guild-timeline-bar:focus-visible rect,
+.dossier-guild-timeline-current:focus-visible circle {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.dossier-guild-timeline-current {
+  outline: none;
+}
+
+.dossier-guild-timeline-current circle {
+  fill: var(--page);
+  stroke-width: 2.5;
+}
+
+.dossier-guild-timeline-label {
+  fill: var(--page);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.dossier-guild-timeline-label--outside {
+  fill: var(--text);
+  font-weight: 400;
+}
+
+.dossier-guild-timeline-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 0.1rem;
+  max-width: 15rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.4rem;
+  background: var(--surface-raised);
+  padding: 0.4rem 0.6rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.dossier-guild-timeline-tooltip strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .dossier-layout > .dossier-limitations {
   grid-column: 1 / -1;
 }

@@ -67,9 +67,12 @@ function raidEvidence(raid: Raid): RaidEvidence {
 
 export function DossierSectionNavigation({
   raids,
+  hasGuildHistory = false,
   hasLimitations
 }: Readonly<{
   raids: ApplicantDossier["raids"];
+  /** Absent on payloads written before the guild history existed. */
+  hasGuildHistory?: boolean;
   hasLimitations: boolean;
 }>) {
   const sections = useMemo<Section[]>(
@@ -84,6 +87,15 @@ export function DossierSectionNavigation({
         label: "Historic Cutting Edge",
         shortLabel: "Cutting Edge"
       },
+      ...(hasGuildHistory
+        ? [
+            {
+              id: "guild-history-heading",
+              label: "Guild history",
+              shortLabel: "Guilds"
+            }
+          ]
+        : []),
       {
         id: "historic-mythic-evidence-heading",
         label: "Historic Mythic boss evidence",
@@ -105,7 +117,7 @@ export function DossierSectionNavigation({
           ]
         : [])
     ],
-    [raids, hasLimitations]
+    [raids, hasGuildHistory, hasLimitations]
   );
   const [activeId, setActiveId] = useState(sections[0]?.id);
   const sectionIds = sections.map((section) => section.id).join("|");

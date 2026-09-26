@@ -18,6 +18,7 @@ import type {
 } from "@slashwho/database";
 import {
   buildApplicantDossier,
+  collectGuildRaidNights,
   formatCharacterDisplayName,
   canonicalCharacterId,
   lookupCuttingEdgeAchievement,
@@ -1310,6 +1311,9 @@ async function assembleDossier(options: {
       const tierSearch = tierSearches.get(raid.raidId);
       return tierSearch ? { ...raid, tierSearch } : raid;
     }),
+    // Every stored kill, not only the first kills the raids lead with: a
+    // guild's history is the nights it raided, which the raids do not keep.
+    guildHistory: collectGuildRaidNights(ranked.kills),
     lastCollectedAt:
       collectedTimes.length === 0
         ? null

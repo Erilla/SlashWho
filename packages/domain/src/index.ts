@@ -19,12 +19,25 @@ export {
   raidOffersMythicRankings,
   raidTierConclusion,
   raidTierConclusionForEvidence,
+  raidTiers,
   supportedRaidCatalogue
 } from "./raid-catalogue";
 export type {
   RaidEvidenceIdentity,
+  RaidTier,
   RaidTierConclusion
 } from "./raid-catalogue";
+export {
+  collectGuildRaidNights,
+  guildIdentity,
+  guildTimelineSpans
+} from "./guild-history";
+export type {
+  DossierGuildHistoryEntry,
+  DossierGuildRaidNight,
+  GuildTimelineOptions,
+  GuildTimelineSpan
+} from "./guild-history";
 export {
   buildApplicantDossier,
   summarizeLimitationEncounters

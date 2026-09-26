@@ -28,6 +28,7 @@ import {
   DossierCharacterProvider
 } from "../../../../../components/dossier-character-name";
 import { DossierCuttingEdgeList } from "../../../../../components/dossier-cutting-edge-list";
+import { DossierGuildHistory } from "../../../../../components/dossier-guild-history";
 import { DossierLimitations } from "../../../../../components/dossier-limitations";
 import { DossierRaidList } from "../../../../../components/dossier-raid-list";
 import { DossierRateLimitCountdown } from "../../../../../components/dossier-rate-limit-countdown";
@@ -789,6 +790,7 @@ function DossierPageState({
           <div className="dossier-navigation-layout">
             <DossierSectionNavigation
               raids={dossier.raids}
+              hasGuildHistory={dossier.guildHistory !== undefined}
               hasLimitations={dossier.limitations.length > 0}
             />
             <div className="dossier-layout">
@@ -826,6 +828,13 @@ function DossierPageState({
                 cuttingEdges={dossier.cuttingEdges}
                 limitations={dossier.limitations}
               />
+              {dossier.guildHistory ? (
+                <DossierGuildHistory
+                  characters={dossier.characters}
+                  filter={filter}
+                  guildHistory={dossier.guildHistory}
+                />
+              ) : null}
               <DossierRaidList
                 filter={filter}
                 onShowAllCharacters={visibility.showAll}

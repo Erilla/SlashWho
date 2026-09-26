@@ -10,9 +10,44 @@ import {
   raidContentWindowOpenedBetween,
   raidOffersMythicRankings,
   raidTierConclusion,
+  raidTiers,
   supportedRaidCatalogue
 } from "./raid-catalogue";
 import currentContentWindowSnapshot from "./raid-current-content-windows.generated.json";
+
+it("groups the catalogue into tiers, folding side raids into their parent tier", () => {
+  // Pinned by name and date: a count or an ordering check passes over a raid
+  // filed under the wrong tier, which is exactly what would split or merge a
+  // guild's bar on the timeline (#611).
+  expect(raidTiers().map((tier) => [tier.startsOn, tier.name])).toEqual([
+    ["2013-09-10", "Siege of Orgrimmar"],
+    ["2014-12-02", "Highmaul"],
+    ["2015-02-03", "Blackrock Foundry"],
+    ["2015-06-23", "Hellfire Citadel"],
+    ["2016-09-20", "The Emerald Nightmare / Trial of Valor"],
+    ["2017-01-17", "The Nighthold"],
+    ["2017-06-20", "Tomb of Sargeras"],
+    ["2017-11-28", "Antorus, the Burning Throne"],
+    ["2018-09-04", "Uldir"],
+    ["2019-01-22", "Battle of Dazar'alor / Crucible of Storms"],
+    ["2019-07-09", "The Eternal Palace"],
+    ["2020-01-21", "Ny'alotha, the Waking City"],
+    ["2020-12-08", "Castle Nathria"],
+    ["2021-07-06", "Sanctum of Domination"],
+    ["2022-03-01", "Sepulcher of the First Ones"],
+    ["2022-12-13", "Vault of the Incarnates"],
+    ["2023-05-09", "Aberrus, the Shadowed Crucible"],
+    ["2023-11-14", "Amirdrassil, the Dream's Hope"],
+    ["2024-09-10", "Nerub-ar Palace"],
+    ["2025-03-04", "Liberation of Undermine"],
+    ["2025-08-12", "Manaforge Omega"],
+    [
+      "2026-03-17",
+      "March on Quel'Danas / The Dreamrift / The Voidspire / Sporefall"
+    ],
+    ["2026-08-18", "The Tidebound Grotto / The Venomous Abyss"]
+  ]);
+});
 
 /** A kill named only by its Warcraft Logs zone, as the history scan sees it. */
 function evidenceIn(raidName: string) {
