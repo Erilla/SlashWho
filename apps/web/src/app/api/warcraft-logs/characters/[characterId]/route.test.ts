@@ -4,6 +4,7 @@ import {
 } from "@slashwho/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { webLogger } from "../../../../../server/logger";
 import type {
   CharacterIdResolution,
   CharacterIdResolver
@@ -79,6 +80,27 @@ describe("GET /api/warcraft-logs/characters/:characterId", () => {
       undefined,
       expect.any(AbortSignal)
     );
+  });
+
+  it("times the resolution as a Warcraft Logs call in the request record", async () => {
+    // Break caught: an untimed upstream call leaves the http_request record
+    // with a durationMs and no breakdown of where it went (#505).
+    const info = vi.spyOn(webLogger, "info").mockImplementation(() => {});
+    try {
+      await GET(request(), context("40989140"));
+
+      expect(info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "http_request",
+          endpoint: "warcraft_logs_character",
+          warcraftLogsCalls: 1,
+          warcraftLogsMs: expect.any(Number),
+          warcraftLogsMaxCallMs: expect.any(Number)
+        })
+      );
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("passes a visitor's own Warcraft Logs credentials through", async () => {
