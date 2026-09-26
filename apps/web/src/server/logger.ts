@@ -16,6 +16,9 @@ const allowlist = new Set([
   // construction: any field not named here is dropped before serialization.
   "errorName",
   // Performance totals. Integers and booleans only -- never identity.
+  "raiderIoMs",
+  "raiderIoCalls",
+  "raiderIoMaxCallMs",
   "raiderIoRankingsMs",
   "raiderIoRankingsCalls",
   "raiderIoRankingsMaxCallMs",
