@@ -4898,7 +4898,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             kind: "reserved",
             run: reservedRun,
             completed,
-            active: reservedRun
+            active: reservedRun,
+            completedVersionCurrent:
+              completed?.evidenceVersion !== undefined &&
+              completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
           } satisfies EvidenceReservationResult;
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -5122,6 +5125,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [id, attempt]
         );
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
+      },
+
+      async markLightRefresh(id) {
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET light_refresh = true
+           WHERE id = $1 AND status = 'queued'`,
+          [id]
+        );
+        if (result.rowCount !== 1) {
+          throw new Error("character_evidence_run_not_enqueuable");
+        }
       },
 
       async markEnqueued(id, queueJobId) {
@@ -5964,6 +5979,20 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               }
             : {})
         };
+      },
+
+      async lastRaiderIoRecoveryAt(key) {
+        const result = await pool.query<{ completed_at: Date | null }>(
+          `SELECT max(run.completed_at) AS completed_at
+             FROM character_evidence_run_costs cost
+             JOIN character_evidence_runs run ON run.id = cost.run_id
+            WHERE run.region = $1 AND run.realm_slug = $2
+              AND run.normalized_name = $3
+              AND run.status IN ('complete', 'partial')
+              AND cost.raiderio_historic_outcome = 'evidence'`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows[0]?.completed_at ?? null;
       },
 
       async terminalTiers(key) {

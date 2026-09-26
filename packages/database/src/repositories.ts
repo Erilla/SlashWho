@@ -530,6 +530,13 @@ export type EvidenceReservationResult =
       completed: CompletedCharacterEvidence | null;
       /** Always the run this call created -- the same value as `run`. */
       active: CharacterEvidenceRun;
+      /**
+       * Whether `completed` was collected by the current collector. A snapshot
+       * from an older one is re-collected in full whatever else it holds, so a
+       * caller deciding how much this run should read must not treat it as
+       * settled. Absent reads as false.
+       */
+      completedVersionCurrent?: boolean;
     };
 
 /**
@@ -892,6 +899,12 @@ export interface EvidenceRepository {
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
   markEnqueued(id: string, queueJobId: string): Promise<void>;
+  /**
+   * Records a still-queued run as a light refresh, for a caller that can only
+   * decide that after `reserve` created it: a stale dossier read of a settled
+   * character (#540). The same flag `reserve({ lightRefresh })` sets.
+   */
+  markLightRefresh(id: string): Promise<void>;
   seedPhases?(
     runId: string,
     phases: readonly { id: string; ordinal: number }[]
@@ -1032,6 +1045,14 @@ export interface EvidenceRepository {
     tierSearchRaidId?: string
   ): Promise<StoredEvidenceTiers>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
+  /**
+   * When the newest published run whose Raider.IO lookup answered with
+   * evidence completed, or null if none has within the run-cost retention.
+   * Only such a run can recover a kill the character's own report history
+   * omits, through guild attendance, so this is how long that recovery has
+   * gone unasked.
+   */
+  lastRaiderIoRecoveryAt(key: CharacterKey): Promise<Date | null>;
   /**
    * Records tiers as terminal, stamping each with its domain's current
    * collection version. Idempotent: a run that re-reads an already-settled

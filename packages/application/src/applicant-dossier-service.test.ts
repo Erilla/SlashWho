@@ -182,6 +182,14 @@ function fixture(
             : []
         ),
       historicAliases: vi.fn().mockResolvedValue([]),
+      // Nothing settled by default: no clean scan and no terminal tier, so a
+      // stale read queues the full run it always has.
+      storedEvidenceTiers: vi.fn().mockResolvedValue({ kills: [], wipes: [] }),
+      terminalTiers: vi.fn().mockResolvedValue([]),
+      hydratedFightUrls: vi.fn().mockResolvedValue([]),
+      collectedTierZones: vi.fn().mockResolvedValue([]),
+      lastRaiderIoRecoveryAt: vi.fn().mockResolvedValue(null),
+      markLightRefresh: vi.fn().mockResolvedValue(undefined),
       addHistoricAlias: vi.fn().mockResolvedValue("added"),
       removeHistoricAlias: vi.fn().mockResolvedValue("removed"),
       latestTierSearches: vi.fn().mockResolvedValue(options.tierSearches ?? []),
@@ -421,6 +429,323 @@ function raidWithKill(firstKill: Record<string, unknown>) {
     ])
   });
 }
+
+describe("a stale dossier read (#540)", () => {
+  const settledFight = "https://www.warcraftlogs.com/reports/example#fight=9";
+
+  /**
+   * Turns the submitted character's fresh reservation into the one a stale
+   * read gets.
+   */
+  function staleReservation(
+    repositories: Repositories,
+    overrides: Record<string, unknown> = {}
+  ) {
+    const reserve = repositories.evidence.reserve as ReturnType<typeof vi.fn>;
+    const reserveFresh = reserve.getMockImplementation() as (request: {
+      key: CharacterKey;
+    }) => Promise<Record<string, unknown> & { run: object }>;
+    reserve.mockImplementation(async (request: { key: CharacterKey }) => {
+      const fresh = await reserveFresh(request);
+      // Only the submitted character's evidence has gone stale.
+      if (request.key !== root) return fresh;
+      const run = {
+        ...fresh.run,
+        id: "10000000-0000-4000-8000-000000000051",
+        status: "queued",
+        mode: "full",
+        completedAt: null
+      };
+      return {
+        ...fresh,
+        kind: "reserved",
+        run,
+        active: run,
+        completedVersionCurrent: true,
+        ...overrides
+      };
+    });
+  }
+
+  /** Every tier the fixture's kills are in, finished in every domain. */
+  function settle(
+    repositories: Repositories,
+    lastCleanKillScanAt = new Date(Date.now() - 60_000).toISOString()
+  ) {
+    const evidence = repositories.evidence as unknown as Record<
+      string,
+      ReturnType<typeof vi.fn>
+    >;
+    evidence.terminalTiers!.mockResolvedValue([
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "parses" },
+      { raidId: "42", domain: "tier_bests" }
+    ]);
+    evidence.storedEvidenceTiers!.mockResolvedValue(
+      storedTiers({ lastCleanKillScanAt })
+    );
+    evidence.hydratedFightUrls!.mockResolvedValue([settledFight]);
+    evidence.collectedTierZones!.mockResolvedValue([
+      ["42", "2024-11-01T00:00:00.000Z"]
+    ]);
+    evidence.lastRaiderIoRecoveryAt!.mockResolvedValue(
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    );
+  }
+
+  /** The fixture's stored kill, as the scan floor sees it. */
+  function storedTiers(overrides: Record<string, unknown> = {}) {
+    return {
+      kills: [
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          killedAt: "2024-10-01T20:00:00.000Z"
+        }
+      ],
+      wipes: [],
+      lastCleanKillScanAt: new Date(Date.now() - 60_000).toISOString(),
+      ...overrides
+    };
+  }
+
+  function queuedMode(enqueueCharacterEvidence: ReturnType<typeof vi.fn>) {
+    expect(enqueueCharacterEvidence).toHaveBeenCalledTimes(1);
+    return (enqueueCharacterEvidence.mock.calls[0]![1] as { mode?: string })
+      .mode;
+  }
+
+  it("queues only the newest page for a character with nothing left to collect", async () => {
+    // Break caught: every stale read queued a full run, even for a character
+    // whose every tier was terminal and whose parses were all read.
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBe("light");
+  });
+
+  it("still queues a full run when a raid window opened after the last clean scan", async () => {
+    // Break caught: a new tier has no terminal mark for anyone, so a
+    // character settled before it opened would never have it collected.
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    // Before The Tidebound Grotto opened on 2026-08-18.
+    settle(repositories, "2026-08-10T00:00:00.000Z");
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it("still queues a full run while any held tier is unfinished in a domain", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+    vi.mocked(repositories.evidence.terminalTiers).mockResolvedValue([
+      { raidId: "42", domain: "kills" },
+      { raidId: "42", domain: "tier_bests" }
+    ]);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it("still queues a full run while a held fight's parses are unread", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+    vi.mocked(repositories.evidence.hydratedFightUrls).mockResolvedValue([]);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it("still queues a full run after a limited collection", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture({
+      evidenceStatus: "partial"
+    });
+    staleReservation(repositories);
+    settle(repositories);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it("still queues a full run for a snapshot from an older collector", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories, { completedVersionCurrent: false });
+    settle(repositories);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it.each([
+    ["a history scan still resuming", { historyScanResumePage: 3 }],
+    [
+      "a former name's history scan still resuming",
+      {
+        historicAliasProgress: [
+          {
+            key: { region: "eu", realm: "silvermoon", name: "ryiiold" },
+            historyScanResumePage: 2
+          }
+        ]
+      }
+    ],
+    // How a pending alias re-collection presents once `reserve` cleared it.
+    ["no clean history scan", { lastCleanKillScanAt: undefined }],
+    [
+      "a wipe in a raid that is not terminal for kills",
+      {
+        // A wipe-only night a tier search found (#435): a light run does not
+        // re-read it, so its first complete publish would drop it.
+        wipes: [
+          {
+            raidId: "44",
+            raidName: "Manaforge Omega",
+            attemptedAt: "2025-09-01T20:00:00.000Z"
+          }
+        ]
+      }
+    ]
+  ])("still queues a full run with %s", async (_label, overrides) => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+    vi.mocked(repositories.evidence.storedEvidenceTiers).mockResolvedValue(
+      storedTiers(overrides) as never
+    );
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it("still queues a full run when a tier's bests predate its newest kill", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+    vi.mocked(repositories.evidence.collectedTierZones).mockResolvedValue([
+      ["42", "2024-09-01T00:00:00.000Z"]
+    ]);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it.each([
+    ["no run has asked Raider.IO", null],
+    [
+      "the last run that asked Raider.IO is over a week old",
+      new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000)
+    ]
+  ])(
+    "still queues a full run when %s",
+    async (_label, recoveredAt: Date | null) => {
+      // Break caught: a light run never asks Raider.IO, so a settled
+      // character's light runs stood in for full ones until the next tier
+      // opened, and a kill found only through guild attendance stayed
+      // missing for months.
+      const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+      staleReservation(repositories);
+      settle(repositories);
+      vi.mocked(repositories.evidence.lastRaiderIoRecoveryAt).mockResolvedValue(
+        recoveredAt
+      );
+
+      await dossiers.read(root);
+
+      expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+    }
+  );
+
+  it("records the light run as a light refresh before queuing it", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+
+    await dossiers.read(root);
+
+    const markLightRefresh = vi.mocked(repositories.evidence.markLightRefresh);
+    expect(markLightRefresh).toHaveBeenCalledExactlyOnceWith(
+      "10000000-0000-4000-8000-000000000051"
+    );
+    expect(markLightRefresh.mock.invocationCallOrder[0]!).toBeLessThan(
+      enqueueCharacterEvidence.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does not record a full run as a light refresh", async () => {
+    const { dossiers, repositories } = fixture();
+    staleReservation(repositories);
+
+    await dossiers.read(root);
+
+    expect(repositories.evidence.markLightRefresh).not.toHaveBeenCalled();
+  });
+
+  const invalidTimestampNotices = (
+    limitations: readonly Readonly<{ character: unknown; code: string }>[]
+  ) =>
+    limitations.filter(
+      (item) =>
+        item.code === "invalid_fight_timestamp" &&
+        JSON.stringify(item.character) === JSON.stringify(root)
+    );
+
+  it("keeps the last run's invalid-timestamp notice while a stale read's light run collects", async () => {
+    // Break caught: the light run was stored as a full run, so it superseded
+    // the last run and hid a notice a one-page read never replaces (#541).
+    const { dossiers, repositories } = fixture({
+      omittedInvalidTimestamp: true
+    });
+    staleReservation(repositories);
+    settle(repositories);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+
+    expect(invalidTimestampNotices(result.dossier.limitations)).toHaveLength(1);
+  });
+
+  it("drops the last run's invalid-timestamp notice while a full run re-reads it", async () => {
+    const { dossiers, repositories } = fixture({
+      omittedInvalidTimestamp: true
+    });
+    staleReservation(repositories);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+
+    expect(invalidTimestampNotices(result.dossier.limitations)).toEqual([]);
+  });
+
+  it("leaves a ranked continuation's mode to the continuation", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    const reserve = vi.mocked(repositories.evidence.reserve);
+    const stale = reserve.getMockImplementation()!;
+    reserve.mockImplementation(async (request) => {
+      const reserved = await stale(request);
+      const run = { ...reserved.run, mode: "tier_search" as const };
+      return { ...reserved, run, active: run } as typeof reserved;
+    });
+    settle(repositories);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+});
 
 describe("applicant dossier service", () => {
   it("reserves the complete collection phase plan before evidence can be queued", async () => {

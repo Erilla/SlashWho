@@ -7,6 +7,7 @@ import {
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
   mythicDifficultyExistedDuring,
+  raidContentWindowOpenedBetween,
   raidOffersMythicRankings,
   raidTierConclusion,
   supportedRaidCatalogue
@@ -233,6 +234,54 @@ it("orders every current-content window start before its end", () => {
       : [];
   });
   expect(inverted).toEqual([]);
+});
+
+// A stale dossier read runs only the newest page for a character whose tiers
+// are all terminal (#540). A tier that opened since its last clean scan has no
+// mark for anyone yet, so that read has to see the opening and collect in full.
+it("sees a raid window that opened inside the interval, and none outside it", () => {
+  // The Tidebound Grotto's regional opening.
+  expect(
+    raidContentWindowOpenedBetween(
+      new Date("2026-08-18T00:00:00.000Z"),
+      new Date("2026-08-19T00:00:00.000Z")
+    )
+  ).toBe(true);
+  expect(
+    raidContentWindowOpenedBetween(
+      new Date("2026-08-19T00:00:00.000Z"),
+      new Date("2026-08-25T00:00:00.000Z")
+    )
+  ).toBe(false);
+  // The interval is half-open: a window that opened at `since` was already
+  // open when that scan ran.
+  expect(
+    raidContentWindowOpenedBetween(
+      new Date("2026-08-18T15:00:00.000Z"),
+      new Date("2026-08-25T00:00:00.000Z")
+    )
+  ).toBe(false);
+});
+
+it("counts an unreadable interval as a window having opened", () => {
+  expect(
+    raidContentWindowOpenedBetween(
+      new Date(Number.NaN),
+      new Date("2026-08-25T00:00:00.000Z")
+    )
+  ).toBe(true);
+});
+
+it("reads every current-content window's opening as a time", () => {
+  const unreadable = supportedRaidCatalogue().flatMap((raid) => {
+    const window = lookupRaidCurrentContentWindow(raid.raidId);
+    return window !== null && Number.isNaN(Date.parse(window.startsAt))
+      ? [raid.raidId]
+      : [];
+  });
+  // An unreadable opening reads as a window opening at every moment, which
+  // would quietly send every stale read back to a full collection.
+  expect(unreadable).toEqual([]);
 });
 
 // Break caught: generating the windows alone moved Sporefall's opening from the

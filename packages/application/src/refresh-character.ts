@@ -1,14 +1,14 @@
-import type {
-  Repositories,
-  DiscoveryQueue,
-  EvidenceCollectionDomain
-} from "@slashwho/database";
+import type { Repositories, DiscoveryQueue } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 
 import { measuredRepositories } from "./measured-repositories";
 import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 import type { MeasurementScope } from "./measurement";
 import { refreshMode, type RefreshMode } from "./refresh-mode";
+import {
+  killTiersAreSettled,
+  type SettledCollectionEvidence
+} from "./settled-collection";
 
 export type RefreshCharacterResult = Readonly<{
   mode: RefreshMode;
@@ -22,15 +22,8 @@ async function lightCollectionIsSettled(options: {
   key: CharacterKey;
   at: Date;
   cooldownMs: number;
-  evidence: Pick<
-    Repositories["evidence"],
-    | "getCompleted"
-    | "storedEvidenceTiers"
-    | "terminalTiers"
-    | "hydratedFightUrls"
-    | "collectedTierZones"
-    | "listStatus"
-  >;
+  evidence: Pick<Repositories["evidence"], "getCompleted" | "listStatus"> &
+    SettledCollectionEvidence;
 }): Promise<boolean> {
   const [completed, stored, terminal, status] = await Promise.all([
     options.evidence.getCompleted(options.key),
@@ -51,33 +44,12 @@ async function lightCollectionIsSettled(options: {
   )
     return false;
 
-  const kills = completed.kills;
-  const raidIds = new Set(kills.map((kill) => kill.raidId));
-  const terminalByDomain = new Map<EvidenceCollectionDomain, Set<string>>();
-  for (const tier of terminal) {
-    const raids = terminalByDomain.get(tier.domain) ?? new Set<string>();
-    raids.add(tier.raidId);
-    terminalByDomain.set(tier.domain, raids);
-  }
-  if (
-    !(["kills", "parses", "tier_bests"] as const).every((domain) =>
-      [...raidIds].every((raidId) => terminalByDomain.get(domain)?.has(raidId))
-    )
-  )
-    return false;
-
-  const settledBefore = new Date(options.at.getTime() - options.cooldownMs);
-  const [hydrated, collectedZones] = await Promise.all([
-    options.evidence.hydratedFightUrls(options.key, settledBefore),
-    options.evidence.collectedTierZones(options.key)
-  ]);
-  const hydratedUrls = new Set(hydrated);
-  if (!kills.every((kill) => hydratedUrls.has(kill.fightUrl))) return false;
-
-  const zones = new Map(collectedZones);
-  return kills.every((kill) => {
-    const collectedAt = zones.get(kill.raidId);
-    return collectedAt !== undefined && collectedAt > kill.killedAt;
+  return killTiersAreSettled({
+    key: options.key,
+    completed,
+    terminal,
+    settledBefore: new Date(options.at.getTime() - options.cooldownMs),
+    evidence: options.evidence
   });
 }
 

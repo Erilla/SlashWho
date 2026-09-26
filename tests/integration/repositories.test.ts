@@ -2730,6 +2730,93 @@ describe("PostgreSQL repositories", () => {
     expect(after?.kills[0]?.performance.damage).toEqual(expected);
   });
 
+  it("records a queued run as a light refresh after reserving it", async () => {
+    // A stale dossier read decides a run is light only after `reserve` made
+    // it (#540), and the dossier reads the mark to leave the last run's
+    // notices standing (#541).
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect(reserved.run.lightRefresh).toBeUndefined();
+
+    await repositories.evidence.markLightRefresh(reserved.run.id);
+
+    await expect(
+      repositories.evidence.find(reserved.run.id)
+    ).resolves.toMatchObject({ lightRefresh: true });
+    const joined = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    expect(joined).toMatchObject({
+      kind: "active",
+      active: { id: reserved.run.id, lightRefresh: true }
+    });
+
+    // A run a worker already claimed is past being re-described.
+    await repositories.evidence.claim(reserved.run.id, 1);
+    await expect(
+      repositories.evidence.markLightRefresh(reserved.run.id)
+    ).rejects.toThrow("character_evidence_run_not_enqueuable");
+  });
+
+  it("says whether a reservation's completed evidence is from the current collector", async () => {
+    // Break caught: a stale dossier read queues only the newest page for a
+    // settled character (#540). A snapshot from an older collector is not
+    // settled whatever its marks say, and the application layer cannot see
+    // the version to tell.
+    const first = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (first.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect(first.completedVersionCurrent).toBe(false);
+    await repositories.evidence.publish(first.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    const stale = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-05T13:00:00.000Z"),
+      at: new Date("2026-08-05T13:00:00.000Z")
+    });
+    if (stale.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect(stale.completedVersionCurrent).toBe(true);
+    await repositories.evidence.publish(stale.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-08-05T13:05:00.000Z")
+    });
+
+    await pool.query(
+      `UPDATE character_evidence_runs SET evidence_version = 1
+        WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+      [rootKey.region, rootKey.realm, rootKey.name]
+    );
+    const outdated = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-05T13:00:00.000Z"),
+      at: new Date("2026-08-05T14:00:00.000Z")
+    });
+    if (outdated.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect(outdated.completedVersionCurrent).toBe(false);
+  });
+
   it("carries forward tier bests for zones a later run did not read", async () => {
     // Break caught: one run reads only the newest few zones, so a publish that
     // did not reach a zone would blank a best parse it already holds.
@@ -7041,6 +7128,53 @@ describe("PostgreSQL repositories", () => {
       );
       return result.rows as ReadonlyArray<Record<string, unknown>>;
     }
+
+    it("dates the newest published run whose Raider.IO lookup answered", async () => {
+      // A stale dossier read goes light only while attendance recovery has
+      // been asked recently (#540), so a lookup that failed, a run that never
+      // asked, and a run that never published must not count.
+      async function publishedRun(
+        at: string,
+        raiderIoOutcome: string | null
+      ): Promise<void> {
+        const runId = await reserveRun(rootKey, new Date(at));
+        await repositories.evidence.recordRunCost(
+          cost(runId, {
+            recovery: { ...cost(runId).recovery, raiderIoOutcome }
+          })
+        );
+        await repositories.evidence.publish(runId, {
+          state: "complete",
+          limitationCode: null,
+          parseLimitationCode: null,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          completedAt: new Date(at)
+        });
+      }
+
+      await expect(
+        repositories.evidence.lastRaiderIoRecoveryAt(rootKey)
+      ).resolves.toBeNull();
+
+      await publishedRun("2026-09-10T12:00:00.000Z", "evidence");
+      await publishedRun("2026-09-11T12:00:00.000Z", "unavailable");
+      await publishedRun("2026-09-12T12:00:00.000Z", null);
+      // Asked and answered, but never published.
+      const unpublished = await reserveRun(
+        rootKey,
+        new Date("2026-09-13T12:00:00.000Z")
+      );
+      await repositories.evidence.recordRunCost(cost(unpublished));
+
+      await expect(
+        repositories.evidence.lastRaiderIoRecoveryAt(rootKey)
+      ).resolves.toEqual(new Date("2026-09-10T12:00:00.000Z"));
+      await expect(
+        repositories.evidence.lastRaiderIoRecoveryAt(altKey)
+      ).resolves.toBeNull();
+    });
 
     it("records what an attempt spent, with the caps it was given", async () => {
       const runId = await reserveRun(rootKey, new Date());

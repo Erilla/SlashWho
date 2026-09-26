@@ -420,6 +420,12 @@ function policyFixture(
       async storedEvidenceTiers() {
         return { kills: [], wipes: [] };
       },
+      async markLightRefresh() {
+        throw new Error("not used");
+      },
+      async lastRaiderIoRecoveryAt() {
+        return null;
+      },
       async terminalTiers() {
         return [];
       },
