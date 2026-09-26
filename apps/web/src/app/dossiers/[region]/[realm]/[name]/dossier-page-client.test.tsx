@@ -371,6 +371,92 @@ describe("DossierPageClient live evidence", () => {
     }
   );
 
+  it("shows each character's outcome when a tier search press could queue nothing", async () => {
+    // A 503 from the search still says what happened to each character
+    // (#494 review), so it is an answer, not a bare failure.
+    const settled = withEvidenceState(expanded, "complete");
+    const raid = settled.raids[0]!;
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          state: "failed",
+          searchableAgainAt: null,
+          characters: [
+            {
+              key: identity,
+              displayName: "Ryii",
+              outcome: "failed",
+              searchableAgainAt: null
+            }
+          ]
+        },
+        { status: 503 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={settled}
+        jobId={null}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `Search guild logs for ${raid.raidName}`
+      })
+    );
+
+    expect(
+      await screen.findByRole("list", {
+        name: `${raid.raidName} search by character`
+      })
+    ).toHaveTextContent("Ryii: failed: could not be queued");
+  });
+
+  it("follows a tier search in flight for a character the list does not show", async () => {
+    // Break caught (#449): polling followed only the listed characters, so a
+    // search queued for one beyond the display cap was never seen to finish.
+    vi.useFakeTimers();
+    const settled = withEvidenceState(expanded, "complete");
+    const searching = {
+      ...settled,
+      raids: settled.raids.map((raid) => ({
+        ...raid,
+        tierSearch: {
+          state: "queued" as const,
+          searchedAt: "2026-09-23T06:00:00.000Z",
+          searchableAgainAt: "2026-09-24T06:00:00.000Z",
+          characters: [
+            {
+              key: { region: "eu" as const, realm: "silvermoon", name: "far" },
+              displayName: "Far",
+              state: "queued" as const,
+              searchedAt: "2026-09-23T06:00:00.000Z",
+              searchableAgainAt: "2026-09-24T06:00:00.000Z"
+            }
+          ]
+        }
+      }))
+    };
+    const fetchMock = vi.fn(async () => Response.json(settled));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={searching}
+        jobId={null}
+      />
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The read showed no search in flight, so polling stops there.
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps credential headers and no-store on a live dossier read", async () => {
     vi.useFakeTimers();
     writeStoredCredentials({

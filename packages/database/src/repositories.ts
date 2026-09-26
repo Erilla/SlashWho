@@ -301,6 +301,8 @@ export type EvidenceRunMode = "full" | "tier_search";
  */
 /** The newest tier search of one raid for a character, for the dossier. */
 export type LatestTierSearch = Readonly<{
+  /** The character the search was for. */
+  key: CharacterKey;
   /** The Journal raid id the search was asked for. */
   raidId: string;
   status: EvidenceRunStatus;
@@ -803,10 +805,22 @@ export interface EvidenceRepository {
    * `since`, so the dossier can say whether a tier's search is queued,
    * running or done without a request per tier.
    */
+  /**
+   * Each character's newest search of each tier since a time. A dossier
+   * searches a tier for all of its characters (#449), so it reads them in one
+   * query rather than one per character.
+   */
   latestTierSearches(
-    key: CharacterKey,
+    keys: readonly CharacterKey[],
     since: Date
   ): Promise<readonly LatestTierSearch[]>;
+  /**
+   * The keys among these with a complete or partial collection: the ones a
+   * tier search can add to, by the same test `reserveTierSearch` applies.
+   */
+  withCompletedEvidence?(
+    keys: readonly CharacterKey[]
+  ): Promise<readonly CharacterKey[]>;
   reserveTierSearch(input: {
     key: CharacterKey;
     raidId: string;

@@ -54,11 +54,15 @@ import {
   type RefreshCharacterResult
 } from "./refresh-character";
 import {
-  searchCharacterTier,
-  type SearchCharacterTierResult
-} from "./search-character-tier";
+  searchDossierTier,
+  type SearchDossierTierResult
+} from "./search-dossier-tier";
 import { groupBySharedWarcraftLogsId } from "./shared-warcraft-logs-identity";
-import { TIER_SEARCH_SPACING_MS, tierSearchStates } from "./tier-search";
+import {
+  TIER_SEARCH_SPACING_MS,
+  tierSearchStates,
+  type TierSearchSubject
+} from "./tier-search";
 
 /**
  * How long after a collection a manual refresh does the light path instead.
@@ -171,15 +175,16 @@ export interface ApplicantDossierService {
     scope?: MeasurementScope
   ): Promise<RefreshCharacterResult>;
   /**
-   * Queues one explicit search of the character's tier (#435), keyed by the
-   * Journal raid id the dossier shows it under.
+   * Queues one explicit search of a tier (#435), keyed by the Journal raid id
+   * the dossier shows it under, for every included character of the dossier
+   * (#449): each keeps its own reservation, cap, cooldown and run.
    */
   searchTier(
     key: CharacterKey,
     raidId: string,
     scope?: MeasurementScope,
     overrides?: DossierGatewayOverrides
-  ): Promise<SearchCharacterTierResult>;
+  ): Promise<SearchDossierTierResult>;
   /** Backend-only progress projection for the dossier and operator monitor. */
   readEvidencePhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
 }
@@ -936,6 +941,31 @@ function serializeDossierSubject(
   };
 }
 
+/** The submitted character alone, before any snapshot names its connections. */
+function rootOnlySubject(key: CharacterKey): DossierSubject {
+  return {
+    key,
+    displayName: key.name,
+    className: null,
+    guild: null,
+    raiderIoUrl: toRaiderIoUrl(key),
+    source: "submitted"
+  };
+}
+
+/** Included dossier characters, as a tier search names and reads them. */
+function tierSearchSubjects(
+  subjects: readonly DossierSubject[]
+): readonly TierSearchSubject[] {
+  return subjects.map((subject) => ({
+    key: subject.key,
+    displayName: formatCharacterDisplayName(subject.displayName),
+    ...(subject.warcraftLogsAliases?.length
+      ? { aliases: subject.warcraftLogsAliases }
+      : {})
+  }));
+}
+
 async function assembleDossier(options: {
   root: CharacterKey;
   subjects: readonly DossierSubject[];
@@ -1040,20 +1070,42 @@ async function assembleDossier(options: {
   const collectedTimes = evidence.flatMap((item) =>
     item.collectedAt ? [item.collectedAt.getTime()] : []
   );
-  // Only the submitted character is searched from the dossier, so only its
-  // searches are shown. A failure to read them costs the button its state,
-  // never the dossier.
+  // A tier is searched for every included character (#449), including any
+  // the display cap skipped, so each one's search is shown. A failure to read
+  // them costs the button its state, never the dossier.
   const searchedAt = new Date();
+  const searchSubjects = tierSearchSubjects([
+    ...options.subjects,
+    ...options.skippedSubjects
+  ]);
+  // A character with nothing collected cannot be searched, so it is never
+  // offered as remaining. Searches reserve under the name shown, so that is
+  // the name checked; a failed read leaves every character searchable.
+  const withEvidence = await Promise.resolve()
+    .then(() =>
+      options.repositories.evidence.withCompletedEvidence?.(
+        searchSubjects.map((subject) => subject.key)
+      )
+    )
+    .then((keys) =>
+      keys ? new Set(keys.map(canonicalCharacterId)) : undefined
+    )
+    .catch(() => undefined);
   const tierSearches = tierSearchStates(
+    searchSubjects,
     await Promise.resolve()
       .then(() =>
         options.repositories.evidence.latestTierSearches(
-          options.root,
+          searchSubjects.flatMap((subject) => [
+            subject.key,
+            ...(subject.aliases ?? [])
+          ]),
           new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
         )
       )
       .catch(() => []),
-    searchedAt
+    searchedAt,
+    withEvidence
   );
   return applicantDossierSchema.parse({
     ...dossier,
@@ -1412,6 +1464,160 @@ export function createApplicantDossierService(options: {
       }
     };
   }
+  /**
+   * The dossier's characters: each included identity in ranked order, split
+   * at the display cap into `selected` and `skipped`, and the excluded ones.
+   * Null when no snapshot contains the character yet. Reading and searching a
+   * tier both go through here, so they can never disagree about who is in
+   * the dossier.
+   */
+  async function resolveSubjects(
+    key: CharacterKey,
+    repositories: ReturnType<typeof scopedRepositories>
+  ) {
+    const snapshot =
+      (await repositories.snapshots.getCurrent(key)) ??
+      (await repositories.snapshots.getCurrentContainingCharacter?.(key));
+    if (!snapshot) return null;
+    const seen = new Set(
+      snapshot.characters.map((character) =>
+        canonicalCharacterId(character.key)
+      )
+    );
+    // A manually connected character is a full participant, not a lone row.
+    // Adding it starts a discovery run rooted at that character, which walks
+    // its Raider.IO alts and fingerprints its Blizzard guild roster, so merge
+    // that snapshot in as well. The root's own snapshot stays untouched: a
+    // dossier is a view of the moment rather than a stored record.
+    // Level only orders the list; it is not part of a dossier subject.
+    type RankedSubject = DossierSubject & Readonly<{ level: number }>;
+    const manual: RankedSubject[] = [];
+    const excluded: RankedSubject[] = [];
+    const manualExcludedIds = new Set<string>();
+    for (const character of await repositories.manualConnections.list(
+      snapshot.rootKey
+    )) {
+      if (character.excluded) {
+        manualExcludedIds.add(canonicalCharacterId(character.key));
+      }
+      const admit = (candidate: RankedSubject, into = manual) => {
+        const id = canonicalCharacterId(candidate.key);
+        if (seen.has(id)) return;
+        seen.add(id);
+        into.push(candidate);
+      };
+      // An undiscovered character has no snapshot to merge yet. Its own run
+      // is still queued, and the next read picks the characters up.
+      const connectedSnapshot = character.pending
+        ? null
+        : await repositories.snapshots.getCurrent(character.key);
+      // A manual connection carries no guild of its own, and `seen` keeps its
+      // row from being replaced by the one its own discovery wrote. Read the
+      // guild across before admitting, or a manually added character would
+      // show none however much is known about it.
+      const connectedGuild =
+        connectedSnapshot?.characters.find(
+          (discovered) =>
+            canonicalCharacterId(discovered.key) ===
+            canonicalCharacterId(character.key)
+        )?.guild ?? null;
+      // An excluded character joins the list and nothing else, so the
+      // exclusion can be reversed from the same row. Its own discoveries
+      // still follow: excluding one character is not undoing the add, and
+      // those characters stand on their own evidence.
+      admit(
+        { ...character, guild: connectedGuild, source: "manually_added" },
+        character.excluded ? excluded : manual
+      );
+      if (character.pending) continue;
+      for (const discovered of connectedSnapshot?.characters ?? []) {
+        admit(discovered);
+      }
+    }
+
+    const rootId = canonicalCharacterId(snapshot.rootKey);
+    // Rank before applying the cap so the displayed list and evidence requests
+    // prioritise the same characters without changing the immutable snapshot.
+    const discoveredExclusions = new Set(
+      (
+        (await repositories.manualConnections.listDiscoveredExclusions?.(
+          snapshot.rootKey
+        )) ?? []
+      ).map(canonicalCharacterId)
+    );
+    for (const id of manualExcludedIds) discoveredExclusions.add(id);
+    const isExcluded = (character: RankedSubject) =>
+      discoveredExclusions.has(canonicalCharacterId(character.key));
+    const isRoot = (character: RankedSubject) =>
+      canonicalCharacterId(character.key) === rootId;
+    const ordered = [...snapshot.characters, ...manual].sort((left, right) => {
+      const rootOrder =
+        Number(canonicalCharacterId(right.key) === rootId) -
+        Number(canonicalCharacterId(left.key) === rootId);
+      return (
+        rootOrder ||
+        right.level - left.level ||
+        left.key.region.localeCompare(right.key.region, "en") ||
+        left.key.realm.localeCompare(right.key.realm, "en") ||
+        left.key.name.localeCompare(right.key.name, "en")
+      );
+    });
+    // Keys that resolved to one Warcraft Logs ID are one character under
+    // several names (#423), so they share one row and one cap slot. A failed
+    // read costs only the merge: every key is then listed on its own, as it
+    // was before the IDs were known.
+    const candidates = [...ordered, ...excluded];
+    const recordedIds = await Promise.resolve()
+      .then(
+        () =>
+          repositories.evidence.warcraftLogsCharacterIds?.(
+            candidates.map((character) => character.key)
+          ) ?? []
+      )
+      .catch(() => []);
+    const identities = groupBySharedWarcraftLogsId(
+      candidates,
+      recordedIds,
+      // The searched character is never renamed out from under its own
+      // dossier. Otherwise an excluded key leads an excluded identity, so
+      // the row's Include reverses the exclusion that hides it.
+      (members) =>
+        members.find(isRoot) ?? members.find(isExcluded) ?? members[0]!
+    ).map(({ primary, aliases }) => ({
+      subject:
+        aliases.length === 0
+          ? primary
+          : {
+              ...primary,
+              warcraftLogsAliases: aliases.map((alias) => alias.key)
+            },
+      // An exclusion on any of the names hides the character they share,
+      // except the searched character, which a dossier cannot exclude.
+      excluded: !isRoot(primary) && [primary, ...aliases].some(isExcluded)
+    }));
+    const includedOrdered = identities.flatMap((identity) =>
+      identity.excluded ? [] : [identity.subject]
+    );
+    const excludedIdentities = identities.flatMap((identity) =>
+      identity.excluded ? [identity.subject] : []
+    );
+    const selected = includedOrdered.slice(
+      0,
+      options.config.DOSSIER_CHARACTER_CAP
+    );
+    const skipped = includedOrdered.slice(selected.length);
+    // Excluded characters are ranked among themselves only, so one of them
+    // never costs a researchable character its place under the cap.
+    const excludedOrdered = [...excludedIdentities].sort(
+      (left, right) =>
+        right.level - left.level ||
+        left.key.region.localeCompare(right.key.region, "en") ||
+        left.key.realm.localeCompare(right.key.realm, "en") ||
+        left.key.name.localeCompare(right.key.name, "en")
+    );
+    return { snapshot, selected, skipped, excludedOrdered };
+  }
+
   async function readRootOnly(
     key: CharacterKey,
     hasStoredEvidence: boolean,
@@ -1424,16 +1630,7 @@ export function createApplicantDossierService(options: {
       kind: "ready",
       dossier: await assembleDossier({
         root: key,
-        subjects: [
-          {
-            key,
-            displayName: key.name,
-            className: null,
-            guild: null,
-            raiderIoUrl: toRaiderIoUrl(key),
-            source: "submitted"
-          }
-        ],
+        subjects: [rootOnlySubject(key)],
         skippedSubjects: [],
         excludedSubjects: [],
         research: {
@@ -1602,13 +1799,21 @@ export function createApplicantDossierService(options: {
     },
 
     async searchTier(key, raidId, scope, overrides) {
-      return searchCharacterTier({
-        key,
+      // The same characters the dossier researches, before its display cap:
+      // a character the list has no room for still has gaps to fill.
+      const resolved = await resolveSubjects(key, scopedRepositories(scope));
+      const subjects = resolved
+        ? [...resolved.selected, ...resolved.skipped]
+        : [rootOnlySubject(key)];
+      return searchDossierTier({
+        subjects: tierSearchSubjects(subjects),
         raidId,
         at: new Date(),
         repositories: options.repositories,
         queue: options.queue,
-        credentials: overrides?.wclCredentialRef,
+        ...(overrides?.wclCredentialRef
+          ? { credentials: overrides.wclCredentialRef }
+          : {}),
         ...(scope ? { scope } : {})
       });
     },
@@ -1668,10 +1873,8 @@ export function createApplicantDossierService(options: {
 
     async read(key, signal, overrides, scope) {
       const repositories = scopedRepositories(scope);
-      const snapshot =
-        (await repositories.snapshots.getCurrent(key)) ??
-        (await repositories.snapshots.getCurrentContainingCharacter?.(key));
-      if (!snapshot) {
+      const resolved = await resolveSubjects(key, repositories);
+      if (!resolved) {
         // Evidence is keyed by character, not by dossier. Reuse that already
         // public material here, while the ordinary assembly path below still
         // reserves stale collection work.
@@ -1679,6 +1882,7 @@ export function createApplicantDossierService(options: {
         if (!completed) return { kind: "not_ready" };
         return readRootOnly(key, true, repositories, signal, overrides, scope);
       }
+      const { snapshot, selected, skipped, excludedOrdered } = resolved;
 
       // The existing dossier stays readable while this cadence-gated background
       // sweep checks for members who joined current or historical guilds. Its
@@ -1690,144 +1894,6 @@ export function createApplicantDossierService(options: {
           options.logger?.info({ event: "fingerprint_sweep_schedule_failed" });
         });
 
-      const seen = new Set(
-        snapshot.characters.map((character) =>
-          canonicalCharacterId(character.key)
-        )
-      );
-      // A manually connected character is a full participant, not a lone row.
-      // Adding it starts a discovery run rooted at that character, which walks
-      // its Raider.IO alts and fingerprints its Blizzard guild roster, so merge
-      // that snapshot in as well. The root's own snapshot stays untouched: a
-      // dossier is a view of the moment rather than a stored record.
-      // Level only orders the list; it is not part of a dossier subject.
-      type RankedSubject = DossierSubject & Readonly<{ level: number }>;
-      const manual: RankedSubject[] = [];
-      const excluded: RankedSubject[] = [];
-      const manualExcludedIds = new Set<string>();
-      for (const character of await repositories.manualConnections.list(
-        snapshot.rootKey
-      )) {
-        if (character.excluded) {
-          manualExcludedIds.add(canonicalCharacterId(character.key));
-        }
-        const admit = (candidate: RankedSubject, into = manual) => {
-          const id = canonicalCharacterId(candidate.key);
-          if (seen.has(id)) return;
-          seen.add(id);
-          into.push(candidate);
-        };
-        // An undiscovered character has no snapshot to merge yet. Its own run
-        // is still queued, and the next read picks the characters up.
-        const connectedSnapshot = character.pending
-          ? null
-          : await repositories.snapshots.getCurrent(character.key);
-        // A manual connection carries no guild of its own, and `seen` keeps its
-        // row from being replaced by the one its own discovery wrote. Read the
-        // guild across before admitting, or a manually added character would
-        // show none however much is known about it.
-        const connectedGuild =
-          connectedSnapshot?.characters.find(
-            (discovered) =>
-              canonicalCharacterId(discovered.key) ===
-              canonicalCharacterId(character.key)
-          )?.guild ?? null;
-        // An excluded character joins the list and nothing else, so the
-        // exclusion can be reversed from the same row. Its own discoveries
-        // still follow: excluding one character is not undoing the add, and
-        // those characters stand on their own evidence.
-        admit(
-          { ...character, guild: connectedGuild, source: "manually_added" },
-          character.excluded ? excluded : manual
-        );
-        if (character.pending) continue;
-        for (const discovered of connectedSnapshot?.characters ?? []) {
-          admit(discovered);
-        }
-      }
-
-      const rootId = canonicalCharacterId(snapshot.rootKey);
-      // Rank before applying the cap so the displayed list and evidence requests
-      // prioritise the same characters without changing the immutable snapshot.
-      const discoveredExclusions = new Set(
-        (
-          (await repositories.manualConnections.listDiscoveredExclusions?.(
-            snapshot.rootKey
-          )) ?? []
-        ).map(canonicalCharacterId)
-      );
-      for (const id of manualExcludedIds) discoveredExclusions.add(id);
-      const isExcluded = (character: RankedSubject) =>
-        discoveredExclusions.has(canonicalCharacterId(character.key));
-      const isRoot = (character: RankedSubject) =>
-        canonicalCharacterId(character.key) === rootId;
-      const ordered = [...snapshot.characters, ...manual].sort(
-        (left, right) => {
-          const rootOrder =
-            Number(canonicalCharacterId(right.key) === rootId) -
-            Number(canonicalCharacterId(left.key) === rootId);
-          return (
-            rootOrder ||
-            right.level - left.level ||
-            left.key.region.localeCompare(right.key.region, "en") ||
-            left.key.realm.localeCompare(right.key.realm, "en") ||
-            left.key.name.localeCompare(right.key.name, "en")
-          );
-        }
-      );
-      // Keys that resolved to one Warcraft Logs ID are one character under
-      // several names (#423), so they share one row and one cap slot. A failed
-      // read costs only the merge: every key is then listed on its own, as it
-      // was before the IDs were known.
-      const candidates = [...ordered, ...excluded];
-      const recordedIds = await Promise.resolve()
-        .then(
-          () =>
-            repositories.evidence.warcraftLogsCharacterIds?.(
-              candidates.map((character) => character.key)
-            ) ?? []
-        )
-        .catch(() => []);
-      const identities = groupBySharedWarcraftLogsId(
-        candidates,
-        recordedIds,
-        // The searched character is never renamed out from under its own
-        // dossier. Otherwise an excluded key leads an excluded identity, so
-        // the row's Include reverses the exclusion that hides it.
-        (members) =>
-          members.find(isRoot) ?? members.find(isExcluded) ?? members[0]!
-      ).map(({ primary, aliases }) => ({
-        subject:
-          aliases.length === 0
-            ? primary
-            : {
-                ...primary,
-                warcraftLogsAliases: aliases.map((alias) => alias.key)
-              },
-        // An exclusion on any of the names hides the character they share,
-        // except the searched character, which a dossier cannot exclude.
-        excluded: !isRoot(primary) && [primary, ...aliases].some(isExcluded)
-      }));
-      const includedOrdered = identities.flatMap((identity) =>
-        identity.excluded ? [] : [identity.subject]
-      );
-      const excludedIdentities = identities.flatMap((identity) =>
-        identity.excluded ? [identity.subject] : []
-      );
-      const selected = includedOrdered.slice(
-        0,
-        options.config.DOSSIER_CHARACTER_CAP
-      );
-      const skipped = includedOrdered.slice(selected.length);
-      // Excluded characters are ranked among themselves only, so one of them
-      // never costs a researchable character its place under the cap.
-      const excludedOrdered = [...excludedIdentities].sort(
-        (left, right) =>
-          right.level - left.level ||
-          left.key.region.localeCompare(right.key.region, "en") ||
-          left.key.realm.localeCompare(right.key.realm, "en") ||
-          left.key.name.localeCompare(right.key.name, "en")
-      );
       return {
         kind: "ready",
         dossier: await assembleDossier({

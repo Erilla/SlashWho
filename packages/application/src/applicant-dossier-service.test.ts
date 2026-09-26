@@ -12,6 +12,7 @@ import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type { CharacterKey } from "@slashwho/contracts";
+import { supportedRaidCatalogue } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
@@ -99,6 +100,7 @@ function fixture(
     activePhases?: readonly EvidenceRunPhase[];
     onCacheEvent?: (source: string, event: string) => void;
     tierSearches?: readonly {
+      key: CharacterKey;
       raidId: string;
       status: "queued" | "running" | "complete" | "partial" | "failed";
       createdAt: Date;
@@ -486,7 +488,7 @@ describe("applicant dossier service", () => {
     });
   });
 
-  it("says where the submitted character's search of each tier stands", async () => {
+  it("says where each character's search of each tier stands", async () => {
     // The button's queued, running and done states come from the dossier the
     // page already polls, not from a request per tier.
     const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
@@ -496,7 +498,7 @@ describe("applicant dossier service", () => {
     expect(plain.dossier.raids[0]).not.toHaveProperty("tierSearch");
 
     const searching = await fixture({
-      tierSearches: [{ raidId, status: "running", createdAt }]
+      tierSearches: [{ key: root, raidId, status: "running", createdAt }]
     }).dossiers.read(root);
     if (searching.kind !== "ready") throw new Error("dossier_not_ready");
 
@@ -505,6 +507,10 @@ describe("applicant dossier service", () => {
     ).toMatchObject({
       tierSearch: {
         state: "running",
+        characters: [
+          expect.objectContaining({ key: root, state: "running" }),
+          expect.objectContaining({ key: alt, state: "not_searched" })
+        ],
         searchedAt: createdAt.toISOString(),
         searchableAgainAt: new Date(
           createdAt.getTime() + 24 * 60 * 60 * 1_000
@@ -2999,5 +3005,263 @@ describe("applicant dossier Warcraft Logs identity", () => {
     expect(result.dossier.characters[0]).not.toHaveProperty(
       "warcraftLogsAliases"
     );
+  });
+});
+
+describe("applicant dossier tier search across characters", () => {
+  // One press searches the tier for every included dossier character (#449).
+  const eternalPalace = supportedRaidCatalogue().find(
+    (raid) => raid.raidName === "The Eternal Palace"
+  )!.raidId;
+  const thirdCharacter: StoredSnapshot["characters"][number] = {
+    characterId: "10000000-0000-4000-8000-000000000003",
+    key: third,
+    displayName: "Third",
+    className: "Rogue",
+    level: 70,
+    guild: null,
+    raiderIoUrl: "https://raider.io/characters/eu/silvermoon/third",
+    source: "fingerprint",
+    displayOrder: 2
+  };
+  const threeCharacters = () =>
+    storedSnapshot([...storedSnapshot().characters, thirdCharacter]);
+
+  function withTierSearchStore(
+    repositories: Repositories,
+    answer: (key: CharacterKey) => Record<string, unknown> = () => ({})
+  ) {
+    const reserveTierSearch = vi.fn(
+      async ({ key, raidId }: { key: CharacterKey; raidId: string }) => {
+        const { run, ...rest } = answer(key) as {
+          run?: Record<string, unknown>;
+        };
+        return {
+          kind: "reserved",
+          ...rest,
+          run: {
+            id: `run-${key.name}`,
+            key,
+            status: "queued",
+            mode: "tier_search",
+            tierSearchRaidId: raidId,
+            createdAt: new Date(),
+            ...run
+          }
+        };
+      }
+    );
+    Object.assign(repositories.evidence, { reserveTierSearch });
+    return reserveTierSearch;
+  }
+
+  function withSharedId(repositories: Repositories, keys: CharacterKey[]) {
+    Object.assign(repositories.evidence, {
+      warcraftLogsCharacterIds: vi.fn(async () =>
+        keys.map((key) => ({ key, characterId: 40989140 }))
+      )
+    });
+  }
+
+  function excludeDiscovered(repositories: Repositories, key: CharacterKey) {
+    (
+      repositories.manualConnections.listDiscoveredExclusions as ReturnType<
+        typeof vi.fn
+      >
+    ).mockResolvedValue([key]);
+  }
+
+  it("searches every included character, past the display cap, and not an excluded one", async () => {
+    // Break caught: only the character in the page URL was searched, so the
+    // section's gaps belonging to connected characters could never be filled.
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture({
+      characterCap: 1,
+      snapshot: threeCharacters()
+    });
+    excludeDiscovered(repositories, third);
+    const reserveTierSearch = withTierSearchStore(repositories);
+
+    const result = await dossiers.searchTier(root, eternalPalace);
+
+    expect(result).toEqual({
+      kind: "searched",
+      characters: [
+        { key: root, displayName: "Ryii", outcome: { kind: "queued" } },
+        { key: alt, displayName: "Ryalts", outcome: { kind: "queued" } }
+      ]
+    });
+    expect(reserveTierSearch.mock.calls.map(([input]) => input)).toEqual([
+      expect.objectContaining({ key: root, raidId: eternalPalace }),
+      expect.objectContaining({ key: alt, raidId: eternalPalace })
+    ]);
+    expect(enqueueCharacterEvidence.mock.calls.map(([id]) => id)).toEqual([
+      "run-ryii",
+      "run-ryalts"
+    ]);
+  });
+
+  it("searches a merged character once", async () => {
+    const { dossiers, repositories } = fixture({ snapshot: threeCharacters() });
+    withSharedId(repositories, [root, alt]);
+    const reserveTierSearch = withTierSearchStore(repositories);
+
+    const result = await dossiers.searchTier(root, eternalPalace);
+
+    if (result.kind !== "searched") throw new Error("expected_searched");
+    expect(result.characters.map((item) => item.key)).toEqual([root, third]);
+    expect(reserveTierSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues the eligible characters when others are cooling down or collecting", async () => {
+    const searchedAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture({
+      snapshot: threeCharacters()
+    });
+    withTierSearchStore(repositories, (key) =>
+      key.name === "ryii"
+        ? {
+            kind: "recent",
+            run: { status: "complete", createdAt: searchedAt }
+          }
+        : key.name === "ryalts"
+          ? { kind: "active", run: { status: "running", mode: "full" } }
+          : {}
+    );
+
+    const result = await dossiers.searchTier(root, eternalPalace);
+
+    if (result.kind !== "searched") throw new Error("expected_searched");
+    expect(
+      result.characters.map((item) => [item.key.name, item.outcome.kind])
+    ).toEqual([
+      ["ryii", "recent"],
+      ["ryalts", "busy"],
+      ["third", "queued"]
+    ]);
+    expect(enqueueCharacterEvidence).toHaveBeenCalledTimes(1);
+  });
+
+  it("searches the submitted character alone before its connections are known", async () => {
+    const { dossiers, repositories } = fixture({ snapshot: null });
+    const reserveTierSearch = withTierSearchStore(repositories);
+
+    const result = await dossiers.searchTier(root, eternalPalace);
+
+    if (result.kind !== "searched") throw new Error("expected_searched");
+    expect(result.characters.map((item) => item.key)).toEqual([root]);
+    expect(reserveTierSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows every included character's search of a tier, past the display cap", async () => {
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const plain = await fixture().dossiers.read(root);
+    if (plain.kind !== "ready") throw new Error("dossier_not_ready");
+    const raidId = plain.dossier.raids[0]!.raidId;
+    const { dossiers, repositories } = fixture({
+      characterCap: 1,
+      snapshot: threeCharacters(),
+      tierSearches: [
+        { key: root, raidId, status: "complete", createdAt },
+        { key: alt, raidId, status: "running", createdAt },
+        { key: third, raidId, status: "complete", createdAt }
+      ]
+    });
+    excludeDiscovered(repositories, third);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(repositories.evidence.latestTierSearches).toHaveBeenCalledWith(
+      [root, alt],
+      expect.any(Date)
+    );
+    expect(
+      result.dossier.raids.find((raid) => raid.raidId === raidId)?.tierSearch
+    ).toMatchObject({
+      state: "running",
+      characters: [
+        { key: root, displayName: "Ryii", state: "completed" },
+        { key: alt, displayName: "Ryalts", state: "running" }
+      ]
+    });
+  });
+
+  it("marks a character with nothing collected as a search that cannot run", async () => {
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const plain = await fixture().dossiers.read(root);
+    if (plain.kind !== "ready") throw new Error("dossier_not_ready");
+    const raidId = plain.dossier.raids[0]!.raidId;
+    const { dossiers, repositories } = fixture({
+      characterCap: 1,
+      tierSearches: [{ key: root, raidId, status: "complete", createdAt }]
+    });
+    const withCompletedEvidence = vi.fn(async () => [root]);
+    Object.assign(repositories.evidence, { withCompletedEvidence });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(withCompletedEvidence).toHaveBeenCalledWith([root, alt]);
+    expect(
+      result.dossier.raids.find((raid) => raid.raidId === raidId)?.tierSearch
+    ).toMatchObject({
+      state: "searched",
+      characters: [
+        { key: root, state: "completed" },
+        { key: alt, state: "no_evidence" }
+      ]
+    });
+  });
+
+  it("treats every character as searchable when their evidence cannot be read", async () => {
+    // A failed read costs the button its precision, never the dossier.
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const plain = await fixture().dossiers.read(root);
+    if (plain.kind !== "ready") throw new Error("dossier_not_ready");
+    const raidId = plain.dossier.raids[0]!.raidId;
+    const { dossiers, repositories } = fixture({
+      tierSearches: [{ key: root, raidId, status: "complete", createdAt }]
+    });
+    Object.assign(repositories.evidence, {
+      withCompletedEvidence: vi.fn(async () => {
+        throw new Error("database_down");
+      })
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(
+      result.dossier.raids.find((raid) => raid.raidId === raidId)?.tierSearch
+    ).toMatchObject({
+      state: "partly_searched",
+      characters: [{ state: "completed" }, { state: "not_searched" }]
+    });
+  });
+
+  it("keeps every character's verified evidence when one character's search failed", async () => {
+    // A failed search publishes nothing (#492), so the section still shows
+    // what every character had before it.
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const before = await fixture().dossiers.read(root);
+    if (before.kind !== "ready") throw new Error("dossier_not_ready");
+    const raid = before.dossier.raids[0]!;
+
+    const after = await fixture({
+      tierSearches: [
+        { key: root, raidId: raid.raidId, status: "complete", createdAt },
+        { key: alt, raidId: raid.raidId, status: "failed", createdAt }
+      ]
+    }).dossiers.read(root);
+    if (after.kind !== "ready") throw new Error("dossier_not_ready");
+
+    const searched = after.dossier.raids.find(
+      (item) => item.raidId === raid.raidId
+    )!;
+    expect(searched.bosses).toEqual(raid.bosses);
+    expect(searched.tierSearch).toMatchObject({
+      state: "searched",
+      characters: [{ state: "completed" }, { state: "failed" }]
+    });
   });
 });

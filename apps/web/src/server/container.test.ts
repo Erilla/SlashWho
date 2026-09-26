@@ -205,7 +205,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
       };
     },
     async searchTier() {
-      return { kind: "no_evidence" as const };
+      return { kind: "unknown_tier" as const };
     }
   };
   const raiderio = { getCharacter: vi.fn() };
