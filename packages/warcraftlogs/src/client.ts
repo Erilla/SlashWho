@@ -2792,7 +2792,7 @@ export function createWarcraftLogsClient(
         );
       // Whether this guild's walk reached a conclusion: past every wanted
       // night, out of pages, or told the guild does not exist.
-      let concluded = false;
+      let concluded: boolean;
       let unreadable = false;
       type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
       const pages = new Map<number, Page>();
