@@ -1677,6 +1677,7 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
+        dbCallMs: 0,
         dbCalls: 9,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
@@ -1685,6 +1686,7 @@ describe("discovery job handler", () => {
         raiderIoMs: 0,
         // Two calls walk the relationships; the rest read each discovered
         // character's guild, which the profile payload does not carry.
+        raiderIoCallMs: 0,
         raiderIoCalls: 5,
         raiderIoMaxCallMs: 0
       }
@@ -1758,6 +1760,97 @@ describe("discovery job handler", () => {
     ).toBeLessThanOrEqual(value("durationMs"));
   });
 
+  it("keeps the buckets within the run duration when sweep reads overlap", async () => {
+    // Break caught: with concurrent candidate reads, summing each call's own
+    // time counted the same wall time once per overlapping read, so blizzardMs
+    // (and dbMs, from the budget writes inside them) ran to several times the
+    // sweep's duration; and time queued in the client's request limiter read
+    // as Blizzard latency.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const records: Array<Record<string, unknown>> = [];
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted" as const,
+      reservationId: "reservation-overlap",
+      requestCap: 300
+    });
+    repositories.fingerprintSweeps.recordRequest = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    };
+    const fingerprint = achievementFingerprint();
+    const members = Array.from({ length: 18 }, (_unused, index) => ({
+      region: "eu" as const,
+      realm: "silvermoon",
+      name: `member${String.fromCharCode(97 + index)}`
+    }));
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = members.map(candidate);
+    blizzardGateway.fingerprints.set(keyId(rootKey), fingerprint);
+    let inFlight = 0;
+    let peak = 0;
+    // Typed as the interface, which passes the limiter's slot wait.
+    const limitedGateway: BlizzardGateway = blizzardGateway;
+    limitedGateway.getAchievementFingerprint = async (
+      key,
+      _signal,
+      onProfileRequest,
+      waitForSlot
+    ) => {
+      await onProfileRequest?.();
+      // Stands in for the client's limiter: a queue wait, then the request.
+      await waitForSlot!(
+        () => new Promise((resolve) => setTimeout(resolve, 20))
+      );
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      inFlight -= 1;
+      return blizzardGateway.fingerprints.get(keyId(key)) ?? fingerprint;
+    };
+
+    vi.useFakeTimers({ now: 0 });
+    try {
+      const execution = handlerFor(repositories, new MutableGateway(), {
+        blizzardGateway,
+        fingerprint: {
+          requestCap: 300,
+          hourlyBudget: 28_800,
+          cadenceMs: 7 * 24 * 60 * 60 * 1_000,
+          minimumCommon: 200,
+          minimumIdenticalPercent: 20,
+          readConcurrency: 6
+        },
+        logger: {
+          info(record) {
+            records.push(record);
+          }
+        },
+        monotonic: () => Date.now()
+      }).execute(run.id, delivery());
+      await vi.advanceTimersByTimeAsync(10_000);
+      await execution;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const record = records[0]!;
+    const value = (field: string) => (record[field] as number | undefined) ?? 0;
+
+    expect(peak).toBe(6);
+    // The roster, the root and every member.
+    expect(value("blizzardCalls")).toBe(members.length + 2);
+    // The reads really did overlap: their own times add up to far more than
+    // the wall time they were charged.
+    expect(value("blizzardCallMs")).toBeGreaterThan(value("durationMs") * 2);
+    expect(
+      value("raiderIoMs") + value("blizzardMs") + value("dbMs")
+    ).toBeLessThanOrEqual(value("durationMs"));
+    // Queueing is reported, and not as latency: each read's own time is its
+    // 100 ms request, not its 20 ms wait on top. The root reads the same way.
+    expect(value("blizzardLimiterWaitMs")).toBe(20 * (members.length + 1));
+    expect(value("blizzardCallMs")).toBe(100 * (members.length + 1));
+  });
+
   it("records a failure outcome without upstream detail", async () => {
     // Break caught: a permanent failure could log the upstream body, an owner id, or
     // a guess string while explaining itself.
@@ -1797,12 +1890,14 @@ describe("discovery job handler", () => {
         fingerprintUsedRequests: 0,
         fingerprintDurationMs: 0,
         dbMs: 0,
+        dbCallMs: 0,
         dbCalls: 5,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
         // timed is the one that set the maximum.
         dbMaxCallName: "runs.claim",
         raiderIoMs: 0,
+        raiderIoCallMs: 0,
         raiderIoCalls: 1,
         raiderIoMaxCallMs: 0
       }
