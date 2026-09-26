@@ -192,6 +192,47 @@ Settle the reserve from a window whose `window_moved` is zero and whose
 `unaccounted_spend` is clean. A sample that fails either check describes
 something other than what one run costs.
 
+## What one request costs
+
+Warcraft Logs publishes no price per field, so the per-request figures come
+from measuring one request at a time: read the allowance, send the request,
+read it again, and take the delta less the one point of the second read.
+Measured on 2026-09-26 (#538) with the worker's credentials. Each figure was
+repeated three times and matched to the hundredth of a point, so nothing else
+spent in between.
+
+| Request                                | Every actor | `actors(type: "Player")` |
+| -------------------------------------- | ----------- | ------------------------ |
+| History page (`RecentReports`, 10)     | 20.81       | 20.81                    |
+| Hydrated report (`ReportByCode`)       | 2.07        | 2.07                     |
+| History page complexity, at 50 reports | 81,254      | 81,254                   |
+
+**Asking only for players saves nothing.** #525 made that change; the report
+used lost 1,040 of its 2,829 actors and cost the same. The saving is response
+size, not points.
+
+Points are charged per report, not per response size. A hydrated report cost
+2.07 across six reports of 31 to 77 fights and 32 to 1,789 player actors (one
+read 2.10). A history page is linear in its page size: 2.09 for one report,
+10.41 for five, 20.81 for ten, 41.73 for twenty and 52.19 for twenty-five,
+which is about 2.08 a report. An earlier figure of about 6 a hydrated report
+does not reproduce; the 2026-09-23 research note had about 2.2.
+
+Query complexity is scored from the query's shape, not its data. It is about
+1,625 a report, identical with either actor selection, so the 50,000 ceiling
+admits at most 30 reports a page. A query over the ceiling is rejected and
+still costs one point.
+
+`REPORTS_PER_PAGE` therefore stays at 10. A larger page would fit, but it
+saves no points because they scale by report. It would also:
+
+- move every stored history cursor, because the cursor is a page number;
+- make a light refresh, which reads one page, cost more;
+- change what a request is worth against `EVIDENCE_REQUEST_CAP`, which is
+  counted in requests and was sized at 30 points a page.
+
+The one thing it would save is round trips.
+
 ## What attendance recovery costs, and what it finds
 
 Guild attendance is searched only for Mythic kills Raider.IO attributes to the
@@ -281,8 +322,9 @@ distinguishes, and a query must not merge them:
   spent. `0` is a search that found nothing.
 
 Points are not split by class, so weigh cost with the per-request figures
-measured one request at a time on 2026-09-23: about 28 points an attendance
-page and about 6 a hydrated report.
+measured one request at a time: about 28 points an attendance page
+(2026-09-23) and about 2 a hydrated report (2026-09-26, see
+[What one request costs](#what-one-request-costs)).
 
 ```sql
 SELECT raiderio_historic_outcome,
