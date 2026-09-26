@@ -17,8 +17,8 @@ import {
  * `tests/fixtures/recorded/`. An out-of-band step run by a maintainer, never by
  * the pull-request gate; see `tests/fixtures/recorded/README.md`.
  *
- *   corepack pnpm record:payloads raiderio character:no-guild=eu/silvermoon/name
- *   corepack pnpm record:payloads blizzard guild-roster:root-guild=eu/argent-dawn/name
+ *   corepack pnpm exec tsx --env-file-if-exists=.env scripts/record-provider-payloads.mts raiderio character:no-guild=eu/silvermoon/name
+ *   corepack pnpm exec tsx --env-file-if-exists=.env scripts/record-provider-payloads.mts blizzard guild-roster:root-guild=eu/argent-dawn/name
  *
  * Each target is `<endpoint>:<label>=<target>`. The label names the output
  * file, so it must describe the scenario, never the character. Targets are
@@ -47,7 +47,7 @@ const endpointsByProvider: Readonly<Record<Provider, readonly string[]>> = {
 
 function usage(message: string): never {
   process.stderr.write(
-    `${message}\nusage: record:payloads <raiderio|blizzard> <endpoint>:<label>=<target>... [--show-unrecognised]\n`
+    `${message}\nusage: record-provider-payloads.mts <raiderio|blizzard> <endpoint>:<label>=<target>... [--show-unrecognised]\n`
   );
   process.exit(2);
 }

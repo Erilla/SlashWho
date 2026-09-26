@@ -95,9 +95,13 @@ unseen message is exactly the text that might echo a requested name back.
 Recording is out-of-band, run by a maintainer, never in CI:
 
 ```bash
-corepack pnpm record:payloads raiderio character:claimed=eu/silvermoon/<name> view-characters:claimed=owner-of:eu/silvermoon/<name>
-corepack pnpm record:payloads blizzard guild-roster:root-guild=eu/argent-dawn/<name> character-achievements:root=eu/argent-dawn/<name> playable-class-index:eu=eu
+corepack pnpm exec tsx --env-file-if-exists=.env scripts/record-provider-payloads.mts raiderio character:claimed=eu/silvermoon/<name> view-characters:claimed=owner-of:eu/silvermoon/<name>
+corepack pnpm exec tsx --env-file-if-exists=.env scripts/record-provider-payloads.mts blizzard guild-roster:root-guild=eu/argent-dawn/<name> character-achievements:root=eu/argent-dawn/<name> playable-class-index:eu=eu
 ```
+
+It is deliberately not a `package.json` script: `pnpm run` echoes the whole
+command line, real names included, before the recorder starts. `pnpm exec`
+does not.
 
 - Each target is `<endpoint>:<label>=<target>`. Raider.IO endpoints:
   `character`, `view-characters`. Blizzard endpoints: `character-profile`,
