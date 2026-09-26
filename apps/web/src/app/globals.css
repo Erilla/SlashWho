@@ -255,19 +255,83 @@ a {
 .home-shell {
   display: grid;
   min-height: calc(100vh - var(--header-height));
-  place-items: center;
-  padding: 2rem 1.25rem 9rem;
+  justify-items: center;
+  align-content: start;
+  padding: clamp(2rem, 8vh, 5rem) 1.25rem 4rem;
 }
 
 .home-search {
   width: min(100%, 42rem);
 }
 
-.home-introduction {
-  max-width: 34rem;
-  margin: -1.25rem auto 1.5rem;
+.recent-searches-heading {
+  margin: 0 0 0.75rem;
   color: var(--muted);
-  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.recent-searches-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.recent-searches-table td {
+  padding: 0.6rem 0.25rem;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.recent-searches-table tr:last-child td {
+  border-bottom: 1px solid var(--border);
+}
+
+.recent-searches-character {
+  overflow-wrap: anywhere;
+}
+
+.recent-searches-character a {
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.recent-searches-character a:hover,
+.recent-searches-character a:focus-visible {
+  color: var(--accent);
+}
+
+.recent-searches-started {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.recent-searches-state {
+  width: 2rem;
+  text-align: right;
+}
+
+.recent-searches-status {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.recent-searches-status--complete {
+  color: var(--success);
+}
+
+.recent-searches-status--complete svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
 }
 
 .wordmark {
@@ -2888,8 +2952,7 @@ td > .collection-progress {
   }
 
   .home-shell {
-    align-items: start;
-    padding-top: 19vh;
+    padding-top: 2rem;
   }
 
   .site-header {

@@ -6543,6 +6543,101 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       }
     },
 
+    recentSearches: {
+      async record(key, at = new Date()) {
+        // GREATEST keeps a slow request from moving a newer search backwards.
+        await pool.query(
+          `INSERT INTO dossier_searches
+            (region, realm_slug, normalized_name, searched_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (region, realm_slug, normalized_name)
+           DO UPDATE SET searched_at =
+             GREATEST(dossier_searches.searched_at, EXCLUDED.searched_at)`,
+          [key.region, key.realm, key.name, at]
+        );
+      },
+
+      async listRecent(limit) {
+        // The current snapshot is chosen as getCurrent chooses it: the newest
+        // one published by a completed run, so a snapshot whose membership is
+        // still being written is never read.
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+          display_name: string | null;
+          searched_at: Date;
+          in_progress: boolean;
+        }>(
+          `SELECT search.region, search.realm_slug, search.normalized_name,
+                  root.display_name, search.searched_at,
+                  (
+                    EXISTS (
+                      SELECT 1 FROM discovery_runs run
+                      WHERE run.root_region = search.region
+                        AND run.root_realm_slug = search.realm_slug
+                        AND run.root_normalized_name = search.normalized_name
+                        AND run.status IN ${activeRunSql}
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM character_evidence_runs evidence
+                      WHERE evidence.status IN ${activeRunSql}
+                        AND (
+                          (evidence.region = search.region
+                            AND evidence.realm_slug = search.realm_slug
+                            AND evidence.normalized_name = search.normalized_name)
+                          OR EXISTS (
+                            SELECT 1
+                            FROM snapshot_characters membership
+                            JOIN characters member
+                              ON member.id = membership.character_id
+                            WHERE membership.snapshot_id = current_snapshot.id
+                              AND member.region = evidence.region
+                              AND member.realm_slug = evidence.realm_slug
+                              AND member.normalized_name = evidence.normalized_name
+                          )
+                        )
+                    )
+                  ) AS in_progress
+           FROM dossier_searches search
+           LEFT JOIN characters root
+             ON root.region = search.region
+            AND root.realm_slug = search.realm_slug
+            AND root.normalized_name = search.normalized_name
+           LEFT JOIN LATERAL (
+             SELECT snapshot.id
+             FROM snapshots snapshot
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE snapshot.root_character_id = root.id
+               AND run.status = 'complete'
+             ORDER BY snapshot.refreshed_at DESC, snapshot.id DESC
+             LIMIT 1
+           ) current_snapshot ON true
+           WHERE NOT EXISTS (
+             SELECT 1 FROM suppressed_characters suppression
+             WHERE suppression.region = search.region
+               AND suppression.realm_slug = search.realm_slug
+               AND suppression.normalized_name = search.normalized_name
+               AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+           )
+           ORDER BY search.searched_at DESC, search.region, search.realm_slug,
+                    search.normalized_name
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map((row) => ({
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
+          displayName: row.display_name,
+          searchedAt: row.searched_at,
+          inProgress: row.in_progress
+        }));
+      }
+    },
+
     negativeCache: {
       async put(key, expiresAt) {
         const client = await pool.connect();

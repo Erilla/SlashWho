@@ -74,6 +74,8 @@ export type {
   ProviderCredentials,
   ProviderPresence,
   RateLimitRepository,
+  RecentDossierSearch,
+  RecentDossierSearchRepository,
   Repositories,
   SearchReservationRepository,
   SearchReservationResult,

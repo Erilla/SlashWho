@@ -64,6 +64,7 @@ describe("database migrations", () => {
       "characters",
       "discovery_runs",
       "dossier_character_exclusions",
+      "dossier_searches",
       "fingerprint_sweep_admissions",
       "fingerprint_sweep_request_events",
       "fingerprint_sweep_reservations",
@@ -169,7 +170,8 @@ describe("database migrations", () => {
       { idx: 50, tag: "0051_omitted_invalid_fight_timestamp" },
       { idx: 51, tag: "0052_tier_search_publication_scope" },
       { idx: 52, tag: "0053_other_upstream_run_costs" },
-      { idx: 53, tag: "0054_evidence_run_timings" }
+      { idx: 53, tag: "0054_evidence_run_timings" },
+      { idx: 54, tag: "0055_dossier_searches" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes

@@ -190,6 +190,7 @@ describe("PostgreSQL repositories", () => {
       character_terminal_tiers,
       character_historic_aliases,
       dossier_character_exclusions,
+      dossier_searches,
       character_attendance_searches,
       snapshot_characters,
       snapshots,
@@ -1944,6 +1945,77 @@ describe("PostgreSQL repositories", () => {
         guild,
         source: "declared_main"
       })
+    ]);
+  });
+
+  it("lists each searched character once, newest search first", async () => {
+    // Break caught: the landing page listed a character once per search, or a
+    // slow request moved a newer search back behind an older one.
+    const recent = repositories.recentSearches!;
+    await seedCompleteSnapshot(repositories);
+    await recent.record(rootKey, new Date("2026-09-26T10:00:00Z"));
+    await recent.record(altKey, new Date("2026-09-26T11:00:00Z"));
+    await recent.record(rootKey, new Date("2026-09-26T12:00:00Z"));
+    await recent.record(rootKey, new Date("2026-09-26T09:00:00Z"));
+
+    expect(await recent.listRecent(10)).toEqual([
+      {
+        key: rootKey,
+        displayName: "Ryii",
+        searchedAt: new Date("2026-09-26T12:00:00Z"),
+        inProgress: false
+      },
+      {
+        // Searched, but not yet created by discovery.
+        key: altKey,
+        displayName: null,
+        searchedAt: new Date("2026-09-26T11:00:00Z"),
+        inProgress: false
+      }
+    ]);
+    expect(await recent.listRecent(1)).toHaveLength(1);
+  });
+
+  it("reports a recent search in progress while its discovery or any member's evidence is collecting", async () => {
+    // Break caught: the spinner followed only the searched character's own
+    // runs, so a dossier still gathering an alt's evidence read as complete.
+    const recent = repositories.recentSearches!;
+    await seedCompleteSnapshot(repositories, {
+      characters: [
+        observation(rootKey, "Ryii"),
+        observation(altKey, "Other", "claimed")
+      ]
+    });
+    await recent.record(rootKey);
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+
+    const discovery = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(true);
+    await repositories.runs.fail(discovery.id, "search_failed");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+
+    const evidence = await repositories.evidence.reserve({
+      key: altKey,
+      freshnessCutoff: new Date(),
+      at: new Date()
+    });
+    if (evidence.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(true);
+    await repositories.evidence.fail(evidence.run.id, "collection_failed");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+  });
+
+  it("leaves suppressed characters off the recent searches", async () => {
+    const recent = repositories.recentSearches!;
+    await recent.record(rootKey);
+    await recent.record(altKey);
+    await repositories.suppressions.suppress(rootKey, "removal_request", null);
+
+    expect((await recent.listRecent(10)).map(({ key }) => key)).toEqual([
+      altKey
     ]);
   });
 

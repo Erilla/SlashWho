@@ -235,6 +235,24 @@ test("keeps landing search fields compact and usable at desktop and mobile width
   ).resolves.toBe(true);
 });
 
+test("anchors the landing wordmark near the top at desktop and mobile widths", async ({
+  page
+}) => {
+  // Break caught: a vertically centred wordmark left no room for the recent
+  // searches beneath it.
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 }
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    const wordmark = page.getByRole("heading", { level: 1, name: "Who" });
+    await expect(wordmark).toBeVisible();
+    const { y: top } = (await wordmark.boundingBox())!;
+    expect(top).toBeLessThan(viewport.height * 0.3);
+  }
+});
+
 test("keeps landing search controls centered vertically and close to the logo", async ({
   page
 }) => {

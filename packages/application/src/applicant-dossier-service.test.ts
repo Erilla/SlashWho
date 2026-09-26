@@ -290,6 +290,10 @@ function fixture(
             }
       ),
       markEnqueued
+    },
+    recentSearches: {
+      record: vi.fn().mockResolvedValue(undefined),
+      listRecent: vi.fn().mockResolvedValue([])
     }
   } as unknown as Repositories;
   const search = {
@@ -901,6 +905,68 @@ describe("applicant dossier service", () => {
       });
     }
   );
+
+  it("records a search that opened a dossier, under its canonical key", async () => {
+    // Break caught: the landing page's recent searches would miss a character
+    // searched by its Warcraft Logs URL, or list it under a second key.
+    const { dossiers, repositories } = fixture();
+
+    await dossiers.start({
+      characterUrl: "https://www.warcraftlogs.com/character/eu/silvermoon/ryii",
+      headers
+    });
+
+    expect(repositories.recentSearches?.record).toHaveBeenCalledWith(root);
+  });
+
+  it.each([
+    { kind: "not_found", code: "character_not_found" },
+    { kind: "not_found", code: "suppressed_character" },
+    { kind: "rate_limited", retryAfterSeconds: 5 },
+    { kind: "failed", code: "upstream_unavailable" }
+  ] as const)(
+    "does not record a search that opened no dossier ($kind)",
+    async (outcome) => {
+      const { dossiers, repositories, search } = fixture();
+      vi.mocked(search.create).mockResolvedValue(outcome);
+
+      await expect(
+        dossiers.start({ characterUrl: raiderUrl, headers })
+      ).resolves.toBe(outcome);
+      expect(repositories.recentSearches?.record).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still starts the dossier when recording the search fails", async () => {
+    // Break caught: a failed write to a convenience list turned a working
+    // search into an error page.
+    const { dossiers, repositories } = fixture();
+    vi.mocked(repositories.recentSearches!.record).mockRejectedValue(
+      new Error("database_unavailable")
+    );
+
+    await expect(
+      dossiers.start({ characterUrl: raiderUrl, headers })
+    ).resolves.toMatchObject({ kind: "character" });
+  });
+
+  it("lists recent searches from the repository", async () => {
+    const { dossiers, repositories } = fixture();
+    const recent = [
+      {
+        key: root,
+        displayName: "Ryii",
+        searchedAt: new Date("2026-09-26T12:00:00Z"),
+        inProgress: true
+      }
+    ];
+    vi.mocked(repositories.recentSearches!.listRecent).mockResolvedValue(
+      recent
+    );
+
+    await expect(dossiers.listRecentSearches(10)).resolves.toBe(recent);
+    expect(repositories.recentSearches?.listRecent).toHaveBeenCalledWith(10);
+  });
 
   it("threads the request scope through to search.create so start's own database work is measured", async () => {
     // Break caught: start and addConnectedCharacter do real database and
