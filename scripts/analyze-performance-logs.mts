@@ -47,6 +47,11 @@ export type PerformanceSummary = {
    * call to look at first.
    */
   dbMaxCallNames: Record<string, number>;
+  /**
+   * How often each Warcraft Logs query kind was the slowest request in an
+   * evidence run, the same attribution for `warcraftLogsMs`.
+   */
+  warcraftLogsMaxRequestNames: Record<string, number>;
 };
 
 /** A breakdown bucket: how many records joined it, and their numeric fields. */
@@ -78,6 +83,7 @@ export function summarize(
   const outcomes: Record<string, number> = {};
   const providers: Record<string, number> = {};
   const dbMaxCallNames: Record<string, number> = {};
+  const warcraftLogsMaxRequestNames: Record<string, number> = {};
   let count = 0;
 
   const join = <G extends Group>(
@@ -163,6 +169,9 @@ export function summarize(
     if (typeof record.dbMaxCallName === "string") {
       tally(dbMaxCallNames, record.dbMaxCallName);
     }
+    if (typeof record.warcraftLogsMaxRequestName === "string") {
+      tally(warcraftLogsMaxRequestNames, record.warcraftLogsMaxRequestName);
+    }
   }
 
   const summarizeFields = (
@@ -209,7 +218,8 @@ export function summarize(
     byOutcome,
     byEndpoint,
     providers,
-    dbMaxCallNames
+    dbMaxCallNames,
+    warcraftLogsMaxRequestNames
   };
 }
 

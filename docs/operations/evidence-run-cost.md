@@ -210,6 +210,14 @@ Recovery's requests are counted apart from the history scan:
 All three draw on the same scan cap. Rows written before the split read zero in
 both, with their recovery counted inside `history_scan_requests`.
 
+A search gallops through a guild's attendance, as the tier search does: it
+doubles its way to the first page that is not wholly newer than every wanted
+night, bisects for it, and walks on from there until it is past the oldest.
+A night 40 pages back costs about a dozen pages rather than 41. Before, the
+walk read every page from page one, so `guild_attendance_requests` grew with
+how old the kill was, and a kill far enough back could not be reached within
+the cap at all.
+
 A search never limits the run: a guild Warcraft Logs does not know, a page it
 will not serve, or a spent budget recovers nothing and leaves the run's status
 to its history scan. A re-read that fails for any reason other than the report
@@ -449,6 +457,49 @@ Weigh `blizzard_achievements_requests` against that budget by hand, not as if
 the budget already accounted for it. The budget is hourly and the query above
 is per run, so the comparison also needs attempts per hour: bucket `count(*)`
 by `date_trunc('hour', recorded_at)`.
+
+## Where a run's time goes
+
+Since #502 each attempt also keeps the timing totals from its `evidence_job`
+line, so run latency outlives Railway's log rotation:
+
+- `duration_ms`: the attempt, from when the handler picked the job up to when
+  it logged.
+- `queue_wait_ms`: how long the job waited between being enqueued and being
+  picked up. Not part of `duration_ms`.
+- `warcraft_logs_ms` and `warcraft_logs_historic_alias_ms`: time inside the
+  Warcraft Logs collection, and inside the extra scan for a historic alias.
+- `db_ms`: the attempt's repository calls added together. `db_max_call_name`
+  names the single slowest call.
+
+**Null means not measured**, never a zero. That covers a job enqueued without
+a timestamp, a bucket the attempt never entered (no historic alias, or a run
+stopped before it reached Warcraft Logs) and every row recorded before #502.
+The query counts measured rows apart for this reason.
+
+```sql
+SELECT mode,
+       count(*) AS attempts,
+       count(duration_ms) AS measured,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::numeric
+         AS duration_p50_ms,
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric
+         AS duration_p95_ms,
+       max(duration_ms) AS duration_max_ms,
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY queue_wait_ms)::numeric
+         AS queue_wait_p95_ms,
+       round(avg(warcraft_logs_ms)::numeric) AS mean_warcraft_logs_ms,
+       round(avg(db_ms)::numeric) AS mean_db_ms
+FROM character_evidence_run_costs
+WHERE recorded_at >= now() - interval '7 days'
+GROUP BY mode
+ORDER BY attempts DESC;
+```
+
+The buckets are not a breakdown of `duration_ms`, so they will not sum to it.
+Time outside any timed call is in none of them. That includes Raider.IO
+rankings, Blizzard and the handler's own work. The Raider.IO historic lookup
+has its own column, `raiderio_historic_ms`.
 
 ## Keeping this honest
 

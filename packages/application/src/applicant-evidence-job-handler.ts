@@ -30,6 +30,7 @@ import type {
   WarcraftLogsReportResult,
   WarcraftLogsLimitationCode,
   WarcraftLogsQueryType,
+  WarcraftLogsRequestEvent,
   WarcraftLogsRateLimit,
   WarcraftLogsTierSearchOutcome
 } from "@slashwho/warcraftlogs";
@@ -46,7 +47,7 @@ import {
   retryDelayMsFor
 } from "./limitation-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
-import { createMeasurementScope } from "./measurement";
+import { createMeasurementScope, type MeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
 import {
   fromStagedCollection,
@@ -464,6 +465,22 @@ const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
     fight_parses: "warcraftLogsFightParses",
     ranking_identities: "warcraftLogsRankingIdentities"
   };
+
+/**
+ * Counts and times one upstream Warcraft Logs request against its query kind.
+ * `warcraftLogsMs` times the gateway call, which is many requests; these say
+ * which of them the time went on. The slowest is named by its query kind, a
+ * closed set authored in source, so no request argument reaches the record.
+ */
+function observeRequest(
+  scope: MeasurementScope,
+  event: WarcraftLogsRequestEvent
+): void {
+  const prefix = REQUEST_COUNTER_PREFIX[event.query];
+  scope.increment(`${prefix}Requests`);
+  scope.observe(`${prefix}Ms`, event.durationMs);
+  scope.observeSlowest("warcraftLogsMaxRequest", event.durationMs, event.query);
+}
 
 // The queue's own ceiling. `requestedRetryDelaySeconds` rejects anything above
 // `retryDelayMax` and the job then falls back to `retryDelay: 1` with backoff,
@@ -1703,9 +1720,7 @@ export function createApplicantEvidenceJobHandler(
                 // rankings, rather than a total nobody can act on (#303).
                 onRequest: (event) => {
                   observePhase(event.query);
-                  scope.increment(
-                    `${REQUEST_COUNTER_PREFIX[event.query]}Requests`
-                  );
+                  observeRequest(scope, event);
                   if (event.limited) {
                     scope.increment(
                       `${REQUEST_COUNTER_PREFIX[event.query]}Limited`
@@ -1771,9 +1786,7 @@ export function createApplicantEvidenceJobHandler(
               },
               onRequest: (event) => {
                 observePhase(event.query);
-                scope.increment(
-                  `${REQUEST_COUNTER_PREFIX[event.query]}Requests`
-                );
+                observeRequest(scope, event);
               },
               signal: activeContext.signal
             })
@@ -2087,11 +2100,16 @@ export function createApplicantEvidenceJobHandler(
         if (options.blizzard && !targeted) {
           await phaseLedger?.transition("blizzard_achievements", "active");
           try {
+            const blizzard = options.blizzard;
+            // The request observer only bumps a counter, so unlike discovery's
+            // database-writing observer it needs no exclusion from the bucket.
             cuttingEdges = (
-              await options.blizzard.getCompletedAchievements(
-                run.key,
-                activeContext.signal,
-                () => scope.increment("blizzardAchievementsRequests")
+              await scope.time("blizzard", () =>
+                blizzard.getCompletedAchievements(
+                  run.key,
+                  activeContext.signal,
+                  () => scope.increment("blizzardAchievementsRequests")
+                )
               )
             )
               .filter((achievement) =>
@@ -2307,8 +2325,10 @@ export function createApplicantEvidenceJobHandler(
           await evidence.fail(claimedRunId, "collection_failed");
         }
       } finally {
+        // Outside the logger guard: the cost row stores it too, and a handler
+        // built without a logger still ran for as long as it ran.
+        record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
         if (options.logger) {
-          record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
           options.logger.info({ ...record, ...scope.totals() });
         }
         if (announced) {
@@ -2348,6 +2368,12 @@ export function createApplicantEvidenceJobHandler(
           const requests = (field: string) => {
             const value = totals[`${field}Requests`];
             return typeof value === "number" ? value : 0;
+          };
+          // Absent from the totals is a bucket never timed, which stays null
+          // rather than reading as time the attempt did not spend.
+          const measured = (field: string) => {
+            const value = totals[field];
+            return typeof value === "number" ? value : null;
           };
           try {
             // `options.evidence`, not the measured wrapper: the totals this
@@ -2424,6 +2450,21 @@ export function createApplicantEvidenceJobHandler(
                   number | null,
                 verifiedKillsSkippedEmpty: record.verifiedKillsSkippedEmpty as
                   number | null
+              },
+              // The same totals the log line carries, so historical latency
+              // survives the log rotation (#502).
+              timings: {
+                durationMs: record.durationMs as number,
+                queueWaitMs: record.queueWaitMs as number | null,
+                warcraftLogsMs: measured("warcraftLogsMs"),
+                warcraftLogsHistoricAliasMs: measured(
+                  "warcraftLogsHistoricAliasMs"
+                ),
+                dbMs: measured("dbMs"),
+                dbMaxCallName:
+                  typeof totals.dbMaxCallName === "string"
+                    ? totals.dbMaxCallName
+                    : null
               }
             });
           } catch {

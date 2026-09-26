@@ -759,6 +759,19 @@ export type EvidenceRunCost = Readonly<{
     recoveredKills: number | null;
     recoveredWipes: number | null;
   }> | null;
+  /**
+   * Where the attempt's time went, from the totals the log line carries.
+   * Absent, or any field null, is not measured -- never a zero, which is a
+   * measured bucket the attempt spent no time in.
+   */
+  timings?: Readonly<{
+    durationMs: number | null;
+    queueWaitMs: number | null;
+    warcraftLogsMs: number | null;
+    warcraftLogsHistoricAliasMs: number | null;
+    dbMs: number | null;
+    dbMaxCallName: string | null;
+  }> | null;
 }>;
 
 export interface EvidenceRepository {

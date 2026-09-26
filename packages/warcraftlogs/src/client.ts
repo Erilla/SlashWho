@@ -316,6 +316,8 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
   onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  /** Times each request for `onRequest`. Injected so tests control it. */
+  monotonic?: () => number;
 }>;
 
 type AccessToken = Readonly<{
@@ -1982,6 +1984,9 @@ export function createWarcraftLogsClient(
   if (baseUrl && !/^https?:$/.test(baseUrl.protocol)) {
     throw new Error("invalid_base_url");
   }
+  const monotonic = options.monotonic ?? (() => performance.now());
+  const elapsedSince = (startedAt: number) =>
+    Math.max(0, Math.round(monotonic() - startedAt));
   let cachedToken: AccessToken | undefined;
   let tokenRequest: Promise<string | WarcraftLogsLimitation> | undefined;
 
@@ -2199,7 +2204,9 @@ export function createWarcraftLogsClient(
       variables: Record<string, string | number>
     ): Promise<GraphqlResult | null> => {
       if (spent >= options.requestCap) return null;
+      const startedAt = monotonic();
       const result = await graphql(query, variables, options.signal);
+      const durationMs = elapsedSince(startedAt);
       spent += 1;
       try {
         options.onRequest?.({
@@ -2207,7 +2214,8 @@ export function createWarcraftLogsClient(
           limited: result.kind !== "success",
           ...(result.kind === "limitation"
             ? { limitationCode: result.code }
-            : {})
+            : {}),
+          durationMs
         });
       } catch {
         /* Observation never changes evidence. */
@@ -2466,19 +2474,24 @@ export function createWarcraftLogsClient(
     // Counted here rather than inside `graphql` so the observer stays scoped to
     // this call: the client is a process-wide singleton, so a
     // construction-level observer could not attribute a request to the run that
-    // issued it. Every call site passes its result through, limitation or not
-    // -- the request was issued and paid for either way.
-    const counted = <T extends GraphqlResult>(
+    // issued it. Every call site passes its request through, limitation or
+    // not -- the request was issued and paid for either way. It takes the
+    // request unissued so the clock starts with it.
+    const counted = async <T extends GraphqlResult>(
       query: WarcraftLogsQueryType,
-      result: T
-    ): T => {
+      issue: () => Promise<T>
+    ): Promise<T> => {
+      const startedAt = monotonic();
+      const result = await issue();
+      const durationMs = elapsedSince(startedAt);
       try {
         options.onRequest?.({
           query,
           limited: result.kind !== "success",
           ...(result.kind === "limitation"
             ? { limitationCode: result.code }
-            : {})
+            : {}),
+          durationMs
         });
       } catch {
         // A counter must never cost the collection it is measuring.
@@ -2521,9 +2534,8 @@ export function createWarcraftLogsClient(
       // backdated one). The final report code on the last proved page is an
       // anchor: any insertion above the resume point moves it. This probe is
       // a history request and therefore belongs to the same hard budget.
-      const probe = counted(
-        "history_scan",
-        await graphql(
+      const probe = await counted("history_scan", () =>
+        graphql(
           recentReportsQuery(lookup),
           { ...characterVariables(lookup), page: historyScanStartPage - 1 },
           options.signal
@@ -2575,9 +2587,8 @@ export function createWarcraftLogsClient(
       historyScanRequests < options.requestCap;
       page++
     ) {
-      const result = counted(
-        "history_scan",
-        await graphql(
+      const result = await counted("history_scan", () =>
+        graphql(
           recentReportsQuery(lookup),
           { ...characterVariables(lookup), page },
           options.signal
@@ -2692,9 +2703,8 @@ export function createWarcraftLogsClient(
       return covered ? [] : [{ verified, at }];
     });
     const hydrate = async (code: string) => {
-      const report = counted(
-        "report_hydration",
-        await graphql(reportByCodeQuery, { code }, options.signal)
+      const report = await counted("report_hydration", () =>
+        graphql(reportByCodeQuery, { code }, options.signal)
       );
       historyScanRequests += 1;
       if (report.kind !== "success") return report;
@@ -2794,18 +2804,26 @@ export function createWarcraftLogsClient(
       // night, out of pages, or told the guild does not exist.
       let concluded: boolean;
       let unreadable = false;
-      walk: for (let page = 1; ; page++) {
-        if (historyScanRequests >= options.requestCap) break search;
+      type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
+      const pages = new Map<number, Page>();
+      // A page, or why the walk has to end without one: the budget ran out,
+      // or Warcraft Logs answered with something that settles the walk one
+      // way or the other.
+      const page = async (
+        number: number
+      ): Promise<Page | "budget" | { concluded: boolean }> => {
+        const cached = pages.get(number);
+        if (cached) return cached;
+        if (historyScanRequests >= options.requestCap) return "budget";
         recoverySearched = true;
-        const attendance = counted(
-          "guild_attendance",
-          await graphql(
+        const attendance = await counted("guild_attendance", () =>
+          graphql(
             guildAttendanceQuery,
             {
               name: guild.name,
               realm: guild.realm,
               region: guild.region,
-              page
+              page: number
             },
             options.signal
           )
@@ -2814,53 +2832,107 @@ export function createWarcraftLogsClient(
         if (attendance.kind !== "success") {
           // A guild Warcraft Logs does not have holds nothing to find. Any
           // other refusal may pass, so it proves nothing.
-          concluded = attendance.code === "not_found";
-          break walk;
+          return { concluded: attendance.code === "not_found" };
         }
-        const attendancePage = guildAttendancePage(attendance.value, key.name);
-        if (attendancePage === null) {
+        const decoded = guildAttendancePage(attendance.value, key.name);
+        if (decoded === null) {
           // `guild: null` is Warcraft Logs saying it has no such guild; a
           // page that is otherwise unreadable proves nothing.
-          concluded = guildIsAbsent(attendance.value);
-          break walk;
+          return { concluded: guildIsAbsent(attendance.value) };
         }
-        for (const {
-          code,
-          startTime,
-          listsCharacter
-        } of attendancePage.reports) {
-          if (scannedReportCodes.has(code)) continue;
-          if (listsCharacter === false || !wanted(startTime)) continue;
-          if (historyScanRequests >= options.requestCap) break search;
-          const decoded = await hydrate(code);
-          scannedReportCodes.add(code);
-          if (decoded.kind === "limitation") {
-            // A report that is gone holds nothing; one that could not be
-            // read might have held the kill.
-            if (decoded.code !== "not_found" && decoded.code !== "private") {
-              unreadable = true;
+        pages.set(number, decoded);
+        return decoded;
+      };
+      const starts = (value: Page) =>
+        value.reports.map((report) => report.startTime);
+      // Newest first, and pages overlap by hours at a boundary, so a page is
+      // wholly newer than every wanted night only when each report on it is
+      // more than the overlap beyond the newest. An undated report says
+      // nothing about its reach, and it is wanted, so it stops the gallop.
+      const newestWanted = Math.max(...times) + REPORT_COVER_SLACK_MS;
+      const newerThanNights = (value: Page) =>
+        value.reports.length > 0 &&
+        starts(value).every(
+          (start) =>
+            start !== null && start > newestWanted + ATTENDANCE_PAGE_OVERLAP_MS
+        );
+      const pastNights = (value: Page) =>
+        value.reports.length > 0 &&
+        starts(value).every((start) => start !== null && start < pagedPast);
+
+      walk: {
+        // Attendance is every report the guild ever logged, and an old night
+        // sits behind years of newer ones: gallop to the first page that is
+        // not wholly newer, then bisect for it, as the tier search does. A
+        // page skipped on the way is wholly newer than every wanted night,
+        // so it holds no report the walk would have hydrated.
+        let before = 0;
+        let first = 1;
+        for (;;) {
+          const value = await page(first);
+          if (value === "budget") break search;
+          if (!("reports" in value)) {
+            concluded = value.concluded;
+            break walk;
+          }
+          if (!newerThanNights(value)) break;
+          // The whole of this guild's attendance is newer than the nights.
+          if (!value.hasMorePages) {
+            concluded = true;
+            break walk;
+          }
+          before = first;
+          first *= 2;
+        }
+        while (first - before > 1) {
+          const middle = Math.floor((before + first) / 2);
+          const value = await page(middle);
+          if (value === "budget") break search;
+          if (!("reports" in value)) {
+            concluded = value.concluded;
+            break walk;
+          }
+          if (newerThanNights(value)) before = middle;
+          else first = middle;
+        }
+
+        for (let number = first; ; number++) {
+          const attendancePage = await page(number);
+          if (attendancePage === "budget") break search;
+          if (!("reports" in attendancePage)) {
+            concluded = attendancePage.concluded;
+            break walk;
+          }
+          for (const {
+            code,
+            startTime,
+            listsCharacter
+          } of attendancePage.reports) {
+            if (scannedReportCodes.has(code)) continue;
+            if (listsCharacter === false || !wanted(startTime)) continue;
+            if (historyScanRequests >= options.requestCap) break search;
+            const decoded = await hydrate(code);
+            scannedReportCodes.add(code);
+            if (decoded.kind === "limitation") {
+              // A report that is gone holds nothing; one that could not be
+              // read might have held the kill.
+              if (decoded.code !== "not_found" && decoded.code !== "private") {
+                unreadable = true;
+              }
+              continue;
             }
-            continue;
+            for (const kill of decoded.kills) {
+              if (!kills.has(kill.fightUrl)) attendanceRecoveredKills += 1;
+              kills.set(kill.fightUrl, kill);
+            }
+            for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
           }
-          for (const kill of decoded.kills) {
-            if (!kills.has(kill.fightUrl)) attendanceRecoveredKills += 1;
-            kills.set(kill.fightUrl, kill);
+          // Out of pages, or a page wholly past every wanted night: nothing
+          // older can hold one.
+          if (!attendancePage.hasMorePages || pastNights(attendancePage)) {
+            concluded = true;
+            break walk;
           }
-          for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
-        }
-        if (!attendancePage.hasMorePages) {
-          concluded = true;
-          break walk;
-        }
-        // Newest first, so a page wholly past every wanted night ends the
-        // walk. A page with an undated report says nothing about its reach.
-        const starts = attendancePage.reports.map((report) => report.startTime);
-        if (
-          starts.length > 0 &&
-          starts.every((start) => start !== null && start < pagedPast)
-        ) {
-          concluded = true;
-          break walk;
         }
       }
       if (!concluded || unreadable) continue;
@@ -2930,9 +3002,8 @@ export function createWarcraftLogsClient(
       // that knows a guild no kill was attributed to. A failure to read it
       // leaves the guilds the caller knew about.
       if (spend()) {
-        const listed = counted(
-          "character_guilds",
-          await graphql(
+        const listed = await counted("character_guilds", () =>
+          graphql(
             characterGuildsQuery,
             { name: key.name, realm: key.realm, region: key.region },
             options.signal
@@ -2955,9 +3026,8 @@ export function createWarcraftLogsClient(
         ): Promise<Page | null | undefined> => {
           if (pages.has(number)) return pages.get(number);
           if (!spend()) return undefined;
-          const attendance = counted(
-            "guild_attendance",
-            await graphql(
+          const attendance = await counted("guild_attendance", () =>
+            graphql(
               guildAttendanceQuery,
               {
                 name: guild.name,
@@ -3046,13 +3116,8 @@ export function createWarcraftLogsClient(
               continue;
             }
             if (!spend()) break search;
-            const hydrated = counted(
-              "report_hydration",
-              await graphql(
-                reportByCodeQuery,
-                { code: report.code },
-                options.signal
-              )
+            const hydrated = await counted("report_hydration", () =>
+              graphql(reportByCodeQuery, { code: report.code }, options.signal)
             );
             scannedReportCodes.add(report.code);
             if (hydrated.kind !== "success") {
@@ -3229,9 +3294,8 @@ export function createWarcraftLogsClient(
     }
     for (const zone of pendingZones.slice(0, zoneRequestCap)) {
       parseRequests += 1;
-      const rankings = counted(
-        "zone_rankings",
-        await graphql(
+      const rankings = await counted("zone_rankings", () =>
+        graphql(
           characterZoneParsesQuery(lookup),
           { ...characterVariables(lookup), zoneID: zone.zoneId },
           options.signal
@@ -3417,9 +3481,8 @@ export function createWarcraftLogsClient(
         break;
       }
       parseRequests += 1;
-      const rankings = counted(
-        "fight_parses",
-        await graphql(
+      const rankings = await counted("fight_parses", () =>
+        graphql(
           reportFightParsesQuery,
           { code: group.reportCode, fightIDs: [...group.fights.keys()] },
           options.signal
@@ -3485,9 +3548,8 @@ export function createWarcraftLogsClient(
         troubleGroups(decodedGroups.map(({ group }) => group));
       } else {
         const canonicalIdentities = [...identities.values()];
-        const canonical = counted(
-          "ranking_identities",
-          await graphql(
+        const canonical = await counted("ranking_identities", () =>
+          graphql(
             rankingCharacterIdentityQuery(canonicalIdentities),
             Object.fromEntries(
               canonicalIdentities.map((identity, index) => [

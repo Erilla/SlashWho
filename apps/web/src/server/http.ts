@@ -12,6 +12,7 @@ import {
 import { parseRaiderIoCharacterUrl, type CharacterKey } from "@slashwho/domain";
 import { randomUUID } from "node:crypto";
 
+import { errorName } from "./error-name";
 import { webLogger } from "./logger";
 
 export function apiError(
@@ -72,18 +73,6 @@ export function parseCharacterRoute(params: {
 type HttpLogger = {
   info(value: Record<string, unknown>): void;
 };
-
-/**
- * The error's class name, reduced to identifier characters and bounded in length.
- * Never its message, the request URL, the request body, or an upstream payload.
- */
-function errorName(error: unknown): string {
-  const raw =
-    error instanceof Error
-      ? (error.constructor?.name ?? error.name)
-      : typeof error;
-  return raw.replaceAll(/[^A-Za-z0-9_]/g, "").slice(0, 64) || "unknown";
-}
 
 function publicResponseCount(body: string): number | undefined {
   let value: Record<string, unknown> | null;

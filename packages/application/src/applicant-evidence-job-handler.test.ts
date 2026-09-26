@@ -2621,6 +2621,52 @@ describe("applicant evidence job handler", () => {
       expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(1_900);
     });
 
+    it.each([
+      ["answers", async () => []],
+      [
+        "fails",
+        async () => {
+          throw new Error("Blizzard unavailable");
+        }
+      ]
+    ])(
+      "times the Blizzard achievements read when it %s",
+      async (_outcome, answer) => {
+        // Break caught: the achievements read ran untimed, so evidence_job
+        // carried no blizzardMs and a slow or timed-out Blizzard call left no
+        // trace beyond the phase ledger's timestamps.
+        const records: Array<Record<string, unknown>> = [];
+        let now = 0;
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          logger: { info: (record) => records.push(record) },
+          monotonic: () => now,
+          blizzard: {
+            getCompletedAchievements: async () => {
+              now += 40;
+              return answer();
+            }
+          }
+        });
+
+        await handler.execute(
+          {
+            runId: "run-1",
+            correlationId: "c1",
+            enqueuedAt: new Date().toISOString()
+          },
+          { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+        );
+
+        expect(records[0]).toMatchObject({
+          event: "evidence_job",
+          blizzardMs: 40,
+          blizzardCalls: 1,
+          blizzardMaxCallMs: 40
+        });
+      }
+    );
+
     it("records the requests the collection issued, by query type", async () => {
       // Break caught: `warcraftLogsCalls=1` counts gateway invocations, not
       // upstream requests, so there was no way to tell whether a run's points
@@ -2631,13 +2677,30 @@ describe("applicant evidence job handler", () => {
         warcraftLogs: {
           ...openGate,
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "zone_rankings", limited: true });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "zone_rankings",
+              limited: true,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             options.onRequest?.({
               query: "ranking_identities",
-              limited: false
+              limited: false,
+              durationMs: 0
             });
             return {
               kind: "evidence" as const,
@@ -2661,6 +2724,52 @@ describe("applicant evidence job handler", () => {
         warcraftLogsFightParsesRequests: 1,
         warcraftLogsRankingIdentitiesRequests: 1
       });
+    });
+
+    it("records request time by query type and names the slowest request", async () => {
+      // Break caught: `warcraftLogsMs` was one bucket, so a slow run showed
+      // what it asked for but not which part of the collection was slow.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (_key, options) => {
+            for (const [query, durationMs] of [
+              ["history_scan", 120],
+              ["history_scan", 80],
+              ["guild_attendance", 900],
+              ["report_hydration", 300],
+              ["fight_parses", 900]
+            ] as const) {
+              options.onRequest?.({ query, limited: false, durationMs });
+            }
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              troubledRaidIds: { parses: [], tierBests: [] },
+              tierBests: [],
+              kills: [],
+              wipes: []
+            };
+          }
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-timed");
+
+      expect(records[0]).toMatchObject({
+        warcraftLogsHistoryScanMs: 200,
+        warcraftLogsGuildAttendanceMs: 900,
+        warcraftLogsReportHydrationMs: 300,
+        warcraftLogsFightParsesMs: 900,
+        warcraftLogsMaxRequestMs: 900,
+        // The first to reach the maximum keeps the name, as `dbMaxCallName`.
+        warcraftLogsMaxRequestName: "guild_attendance"
+      });
+      // A kind the run never asked for leaves no field, as its count does not.
+      expect(records[0]).not.toHaveProperty("warcraftLogsZoneRankingsMs");
     });
 
     it("records a limitation outcome", async () => {
@@ -2978,16 +3087,34 @@ describe("applicant evidence job handler", () => {
                 onRequest?: (event: {
                   query: string;
                   limited: boolean;
+                  durationMs: number;
                 }) => void;
               }
             ) => {
-              options.onRequest?.({ query: "history_scan", limited: false });
-              options.onRequest?.({ query: "history_scan", limited: false });
-              options.onRequest?.({ query: "zone_rankings", limited: false });
-              options.onRequest?.({ query: "fight_parses", limited: false });
+              options.onRequest?.({
+                query: "history_scan",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
+                query: "history_scan",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
+                query: "zone_rankings",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
+                query: "fight_parses",
+                limited: false,
+                durationMs: 0
+              });
               options.onRequest?.({
                 query: "ranking_identities",
-                limited: false
+                limited: false,
+                durationMs: 0
               });
               return {
                 kind: "evidence" as const,
@@ -3047,9 +3174,88 @@ describe("applicant evidence job handler", () => {
               verifiedKillsSearched: null,
               verifiedKillsSkippedEmpty: null,
               recoveredKills: null
+            },
+            timings: {
+              durationMs: expect.any(Number),
+              // Enqueued without a timestamp, so the wait was not measured.
+              queueWaitMs: null,
+              warcraftLogsMs: expect.any(Number),
+              // No historic alias, so that bucket was never timed.
+              warcraftLogsHistoricAliasMs: null,
+              dbMs: expect.any(Number),
+              dbMaxCallName: expect.any(String)
             }
           }
         ]);
+      });
+
+      it("records where the attempt's time went, as the log line reports it", async () => {
+        // Break caught: only `raiderio_historic_ms` reached the table, and the
+        // rest of the run's timing lived on a log line Railway rotates away,
+        // so historical run latency could not be analysed (#502).
+        const { costs, store: evidence } = recordingStore();
+        const records: Array<Record<string, unknown>> = [];
+        let clock = 0;
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          warcraftLogs: {
+            ...openGate,
+            getFirstKillReports: async () => {
+              clock += 700;
+              return {
+                kind: "evidence" as const,
+                parsedFightUrls: [],
+                troubledRaidIds: { parses: [], tierBests: [] },
+                tierBests: [],
+                kills: [],
+                wipes: []
+              };
+            }
+          },
+          logger: { info: (record) => records.push(record) },
+          monotonic: () => (clock += 5)
+        });
+
+        await handler.execute(
+          {
+            runId: "run-cost-timed",
+            enqueuedAt: new Date(Date.now() - 3_000).toISOString()
+          },
+          { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+        );
+
+        const log = records.find((record) => record.event === "evidence_job")!;
+        expect(costs[0]?.timings).toEqual({
+          durationMs: log.durationMs,
+          queueWaitMs: log.queueWaitMs,
+          warcraftLogsMs: log.warcraftLogsMs,
+          warcraftLogsHistoricAliasMs: null,
+          dbMs: log.dbMs,
+          dbMaxCallName: log.dbMaxCallName
+        });
+        expect(costs[0]?.timings?.queueWaitMs).toBeGreaterThanOrEqual(2_900);
+        expect(costs[0]?.timings?.warcraftLogsMs).toBeGreaterThanOrEqual(700);
+        expect(costs[0]?.timings?.durationMs).toBeGreaterThan(
+          costs[0]!.timings!.warcraftLogsMs!
+        );
+      });
+
+      it("records the duration even when nothing logs it", async () => {
+        // The log line was the only place the duration was ever computed, so
+        // a handler built without a logger would have stored a run that took
+        // no time at all.
+        const { costs, store: evidence } = recordingStore();
+        let clock = 0;
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          monotonic: () => (clock += 10)
+        });
+
+        await handler.execute("run-cost-unlogged");
+
+        expect(costs[0]?.timings?.durationMs).toBeGreaterThan(0);
       });
 
       it("says why a run fell short, not merely that it did", async () => {
@@ -4261,7 +4467,11 @@ describe("applicant evidence job handler", () => {
         },
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
             await waiting;
             return {
               kind: "evidence" as const,
@@ -4322,7 +4532,11 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             return {
               kind: "evidence" as const,
               parsedFightUrls: [],
@@ -4374,8 +4588,16 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             return {
               kind: "evidence" as const,
               parsedFightUrls: [],
@@ -4425,8 +4647,16 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             return {
               kind: "evidence" as const,
               parsedFightUrls: [],
@@ -4478,8 +4708,16 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             throw new Error("gateway failed");
           }
         }
@@ -4530,14 +4768,31 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "zone_rankings", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "zone_rankings",
+              limited: false,
+              durationMs: 0
+            });
             options.onLimitation?.("zone_rankings", "parse_request_cap");
-            options.onRequest?.({ query: "zone_rankings", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "zone_rankings",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             options.onRequest?.({
               query: "ranking_identities",
-              limited: false
+              limited: false,
+              durationMs: 0
             });
             return {
               kind: "evidence" as const,
@@ -4648,7 +4903,11 @@ describe("applicant evidence job handler", () => {
             },
             async getFirstKillReports(_key, options) {
               collectionAttempts += 1;
-              options.onRequest?.({ query: "history_scan", limited: false });
+              options.onRequest?.({
+                query: "history_scan",
+                limited: false,
+                durationMs: 0
+              });
               if (collectionAttempts === 1) {
                 throw Object.assign(new Error("socket reset"), {
                   code: "ECONNRESET"
@@ -5987,7 +6246,11 @@ describe("searching one tier from the dossier", () => {
         _key: unknown,
         collection: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
       ) => {
-        collection.onRequest?.({ query: "guild_attendance", limited: false });
+        collection.onRequest?.({
+          query: "guild_attendance",
+          limited: false,
+          durationMs: 0
+        });
         return {
           ...(await evidenceFound()),
           kills: [foundKill("23", "The Eternal Palace", "foundReport")]

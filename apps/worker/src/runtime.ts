@@ -46,7 +46,8 @@ import {
   wasSuppressedAt
 } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
-import { type Clock, elapsedMs, errorName, monotonicClock } from "./cycle-log";
+import { type Clock, elapsedMs, monotonicClock } from "./cycle-log";
+import { errorName } from "./process-errors";
 import {
   AccountMailStopTimeoutError,
   startAccountMailWorker
@@ -209,6 +210,51 @@ async function readWorkerHealthProbe(
     throw new Error("worker_health_probe_invalid");
   }
   return { lastSuccessfulRunAgeMs, queueDepth };
+}
+
+export type QueueDepth = { depth: number; oldestWaitMs: number | null };
+
+// Counts only, never a payload or singleton key: a job's data carries a
+// character key, and this record exists to be kept and read over time.
+// "Waiting" matches the probe's depth (anything not yet active), and the age
+// runs from enqueue, so a retried job keeps its original age.
+export async function readQueueDepths(
+  pool: RuntimePool
+): Promise<Record<string, QueueDepth>> {
+  const result = await pool.query(
+    `SELECT
+       name,
+       COUNT(*) AS depth,
+       GREATEST(
+         0,
+         EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(created_on))) * 1000
+       ) AS oldest_wait_ms
+     FROM pgboss.job
+     WHERE name = ANY($1::text[])
+       AND state < 'active'
+     GROUP BY name`,
+    [workerQueueNames]
+  );
+  const queues: Record<string, QueueDepth> = Object.fromEntries(
+    workerQueueNames.map((name) => [name, { depth: 0, oldestWaitMs: null }])
+  );
+  for (const row of result.rows) {
+    const name = row?.name;
+    const depth = Number(row?.depth);
+    const oldestWaitMs = Math.round(Number(row?.oldest_wait_ms));
+    if (
+      typeof name !== "string" ||
+      !(name in queues) ||
+      !Number.isInteger(depth) ||
+      depth < 0 ||
+      !Number.isFinite(oldestWaitMs) ||
+      oldestWaitMs < 0
+    ) {
+      throw new Error("worker_queue_depth_invalid");
+    }
+    queues[name] = { depth, oldestWaitMs };
+  }
+  return queues;
 }
 
 export function createFingerprintIntegration(
@@ -818,6 +864,21 @@ export async function createWorkerRuntime(
     // this cannot spend more per hour than a reader already could.
     await initializedQueue.scheduleEvidenceResume(async () => {
       const sweepStartedAt = clock();
+      // The backlog over time (#509). It rides this five-minute tick because
+      // the cadence is modest and the tick already runs on every worker, and
+      // it samples before the sweep enqueues anything of its own. Guarded like
+      // recovery below: a failed read must never cost the sweep.
+      try {
+        logger?.info({
+          event: "queue_depth",
+          queues: await readQueueDepths(pool)
+        });
+      } catch (error) {
+        logger?.info({
+          event: "queue_depth_failed",
+          failure: error instanceof Error ? error.name : "unknown"
+        });
+      }
       // Recovery runs first, and shares this five-minute schedule rather than
       // the hourly cleanup, because an abandoned run is precisely what hides a
       // character from the pass below: `reserve` counts it as active, so the

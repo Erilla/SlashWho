@@ -1,6 +1,7 @@
 import { decryptAccountMail } from "@slashwho/application";
 import type { AccountMailRepository } from "@slashwho/database";
-import { type Clock, elapsedMs, errorName, monotonicClock } from "./cycle-log";
+import { type Clock, elapsedMs, monotonicClock } from "./cycle-log";
+import { errorName } from "./process-errors";
 
 export type AccountMailConfig = {
   resendApiKey: string;
