@@ -3,15 +3,14 @@ import { dossierResearchStatusSchema } from "@slashwho/contracts";
 import { getContainer } from "../../../../../server/container";
 import {
   apiError,
+  jsonNoStore,
   publicReadAuthorizationResponse,
   withHttpRequest
 } from "../../../../../server/http";
 
-type JobParams = { jobId: string };
-
 export async function GET(
   request: Request,
-  context: { params: Promise<JobParams> }
+  context: RouteContext<"/api/dossiers/jobs/[jobId]">
 ): Promise<Response> {
   return withHttpRequest("dossier_research_status", async (scope) => {
     const { jobId } = await context.params;
@@ -29,12 +28,9 @@ export async function GET(
     if (denied) return denied;
     const run = await searches.getRun(jobId);
     if (!run) return apiError("character_not_found");
-    return Response.json(
-      dossierResearchStatusSchema.parse({
-        status: run.status,
-        error: run.error
-      }),
-      { headers: { "cache-control": "no-store" } }
-    );
+    return jsonNoStore(dossierResearchStatusSchema, {
+      status: run.status,
+      error: run.error
+    });
   });
 }
