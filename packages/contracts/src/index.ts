@@ -75,6 +75,8 @@ export {
 } from "./history";
 export type { HistoricalSnapshot, HistoryItem, HistoryPage } from "./history";
 export {
+  collectionMonitorCompletedLimitMax,
+  collectionMonitorCompletedPageSize,
   collectionMonitorCompletedRunSchema,
   collectionMonitorFailedRunSchema,
   collectionMonitorInFlightRunSchema,

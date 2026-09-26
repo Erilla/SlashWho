@@ -1087,8 +1087,14 @@ export interface EvidenceRepository {
     settled: Date;
     active: Date;
   }): Promise<number>;
-  /** Every persisted run, projected only to the fields the operator monitor displays. */
-  listForMonitor(): Promise<readonly EvidenceMonitorRun[]>;
+  /**
+   * Persisted runs, projected only to the fields the operator monitor displays:
+   * every unsettled and failed run, plus the `completedLimit` most recently
+   * completed ones. Completed runs accumulate forever, so they alone are paged.
+   */
+  listForMonitor(options: {
+    completedLimit: number;
+  }): Promise<readonly EvidenceMonitorRun[]>;
   /**
    * Every run `reserve` currently counts as active, oldest first, with the two
    * facts recovery judges them by: the job they were sent to, and when a

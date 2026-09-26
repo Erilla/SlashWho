@@ -36,7 +36,7 @@ it("refreshes the projection after sign-in and password change", async () => {
   expect(await screen.findByRole("link", { name: "Sign in" })).toBeVisible();
   window.dispatchEvent(new Event("slashwho:account-session-changed"));
   expect(
-    await screen.findByRole("link", { name: "Admin settings" })
+    await screen.findByRole("link", { name: "Account Management" })
   ).toBeVisible();
   expect(screen.getByText("admin@example.test")).toBeVisible();
   expect(screen.getByText("admin@example.test").closest("a")).toBeNull();
@@ -45,7 +45,9 @@ it("refreshes the projection after sign-in and password change", async () => {
   expect(screen.queryByRole("link", { name: "Create account" })).toBeNull();
   window.dispatchEvent(new Event("slashwho:account-session-changed"));
   await waitFor(() =>
-    expect(screen.queryByRole("link", { name: "Admin settings" })).toBeNull()
+    expect(
+      screen.queryByRole("link", { name: "Account Management" })
+    ).toBeNull()
   );
   expect(screen.getByRole("link", { name: "Sign in" })).toBeVisible();
 });
