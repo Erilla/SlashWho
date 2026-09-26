@@ -17,6 +17,8 @@ import {
 } from "./operator-auth";
 import {
   accountAuthFixture,
+  accountEmail,
+  operatorCredential,
   operatorMutation,
   operatorOrigin
 } from "./operator-auth-test-fixture";
@@ -81,12 +83,13 @@ it("issues a session for a freshly verified account without consuming a login at
   ).resolves.toEqual({ principal: null });
 });
 
+const day = 24 * 60 * 60_000;
+
 it.each([
   "disabled",
   "unverified",
   "credential-version",
-  "idle-expired",
-  "absolute-expired"
+  "idle-expired"
 ] as const)(
   "denies an existing account session when %s without relying on revocation",
   async (reason) => {
@@ -99,20 +102,7 @@ it.each([
     if (reason === "credential-version")
       fixture.setAccount({ credentialVersion: 2 });
     if (reason === "idle-expired")
-      fixture.setTime(new Date(issuedAt.getTime() + 30 * 60_000));
-    if (reason === "absolute-expired") {
-      for (let minutes = 20; minutes <= 460; minutes += 20) {
-        fixture.setTime(new Date(issuedAt.getTime() + minutes * 60_000));
-        expect(
-          (
-            await fixture.auth.authenticate(
-              new Request(operatorOrigin, { headers: { cookie } })
-            )
-          ).principal?.kind
-        ).toBe("account");
-      }
-      fixture.setTime(new Date(issuedAt.getTime() + 8 * 60 * 60_000));
-    }
+      fixture.setTime(new Date(issuedAt.getTime() + 400 * day));
     expect(
       await fixture.auth.authenticate(
         new Request(operatorOrigin, { headers: { cookie } })
@@ -124,6 +114,43 @@ it.each([
     expect(fixture.repository.revokeSession).not.toHaveBeenCalled();
   }
 );
+
+it("issues account sessions with no absolute lifetime and a 400-day idle window", async () => {
+  const fixture = await accountAuthFixture();
+  const signedIn = await fixture.auth.signIn(
+    operatorMutation({ email: accountEmail, password: operatorCredential })
+  );
+  const issued = vi.mocked(fixture.repository.issueSession).mock.calls[0]![0];
+  expect(issued.absoluteExpiresAt).toBeNull();
+  expect(issued.idleExpiresAt.getTime() - issued.issuedAt.getTime()).toBe(
+    400 * day
+  );
+  expect(signedIn.cookie).toMatchObject({
+    maxAge: (400 * day) / 1000,
+    expires: issued.idleExpiresAt
+  });
+});
+
+it("keeps an account signed in for as long as it keeps being used", async () => {
+  const fixture = await accountAuthFixture();
+  const cookie = await fixture.cookie();
+  const issuedAt = vi.mocked(fixture.repository.issueSession).mock.calls[0]![0]
+    .issuedAt;
+  // Well past the operator console's eight-hour cap, and past 400 days in
+  // total, as long as no gap between visits reaches the idle window.
+  for (const days of [1, 30, 399, 798, 1197]) {
+    const at = new Date(issuedAt.getTime() + days * day);
+    fixture.setTime(at);
+    const used = await fixture.auth.authenticate(
+      new Request(operatorOrigin, { headers: { cookie } })
+    );
+    expect(used.principal?.kind).toBe("account");
+    expect(used.cookie).toMatchObject({
+      maxAge: (400 * day) / 1000,
+      expires: new Date(at.getTime() + 400 * day)
+    });
+  }
+});
 
 it("authenticates verified accounts and reads current role and required-change state", async () => {
   let account: AccountCredential = {
@@ -144,7 +171,7 @@ it("authenticates verified accounts and reads current role and required-change s
     secretDigest: string;
     credentialVersion: number;
     idleExpiresAt: Date;
-    absoluteExpiresAt: Date;
+    absoluteExpiresAt: Date | null;
     revokedAt: Date | null;
   } | null = null;
   const repository = {
@@ -189,7 +216,8 @@ it("authenticates verified accounts and reads current role and required-change s
           !account.verifiedAt ||
           session.credentialVersion !== account.credentialVersion ||
           session.idleExpiresAt <= input.at ||
-          session.absoluteExpiresAt <= input.at
+          (session.absoluteExpiresAt !== null &&
+            session.absoluteExpiresAt <= input.at)
         )
           return null;
         session = { ...session, idleExpiresAt: input.idleExpiresAt };

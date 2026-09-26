@@ -347,6 +347,84 @@ describe("PostgreSQL repositories", () => {
     expect(persisted.rows[0]?.revoked_at).toBeNull();
   });
 
+  it("renews an account session with no absolute lifetime on idle alone", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const day = 24 * 60 * 60_000;
+    const account = await repositories.accountAuth.provisionAdmin(
+      registration("persistent@example.com", at)
+    );
+    const session = await repositories.accountAuth.issueSession({
+      sessionId: crypto.randomUUID(),
+      secretDigest: "persistent-secret",
+      accountId: account.id,
+      credentialVersion: 1,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date(at.getTime() + 400 * day),
+      absoluteExpiresAt: null
+    });
+    expect(session?.absoluteExpiresAt).toBeNull();
+    if (!session) throw new Error("expected session");
+    const use = (atUse: Date) =>
+      repositories.accountAuth.useSession({
+        sessionId: session.id,
+        secretDigest: "persistent-secret",
+        at: atUse,
+        idleExpiresAt: new Date(atUse.getTime() + 400 * day)
+      });
+    const later = new Date(at.getTime() + 399 * day);
+    expect(await use(later)).toMatchObject({
+      session: {
+        idleExpiresAt: new Date(later.getTime() + 400 * day),
+        absoluteExpiresAt: null
+      }
+    });
+    const muchLater = new Date(later.getTime() + 399 * day);
+    expect((await use(muchLater))?.account.id).toBe(account.id);
+    expect(
+      await repositories.accountAuth.changePassword({
+        accountId: account.id,
+        sessionId: session.id,
+        expectedCredentialVersion: 1,
+        expectedPasswordHash: "derived-password-hash",
+        passwordHash: "new-hash",
+        passwordSalt: "new-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at: muchLater
+      })
+    ).toBe(true);
+    expect(await use(muchLater)).toBeNull();
+  });
+
+  it("rejects an uncapped account session once its idle window lapses", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const day = 24 * 60 * 60_000;
+    const account = await repositories.accountAuth.provisionAdmin(
+      registration("lapsed@example.com", at)
+    );
+    const session = await repositories.accountAuth.issueSession({
+      sessionId: crypto.randomUUID(),
+      secretDigest: "lapsed-secret",
+      accountId: account.id,
+      credentialVersion: 1,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date(at.getTime() + 400 * day),
+      absoluteExpiresAt: null
+    });
+    if (!session) throw new Error("expected session");
+    const atUse = new Date(at.getTime() + 400 * day);
+    expect(
+      await repositories.accountAuth.useSession({
+        sessionId: session.id,
+        secretDigest: "lapsed-secret",
+        at: atUse,
+        idleExpiresAt: new Date(atUse.getTime() + 400 * day)
+      })
+    ).toBeNull();
+  });
+
   it("consumes verification once only after matching the registration credential", async () => {
     const at = new Date("2026-09-23T12:00:00Z");
     const account = await repositories.accountAuth.registerPending(

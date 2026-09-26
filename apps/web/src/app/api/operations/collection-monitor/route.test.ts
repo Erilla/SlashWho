@@ -113,12 +113,12 @@ describe("GET /api/operations/collection-monitor", () => {
     }
   );
 
-  it("accepts the short-lived admin browser session cookie", async () => {
+  it("accepts the admin browser session cookie", async () => {
     fixture.setAccount({ role: "admin" });
     const cookie = await fixture.cookie();
     const response = await GET(request({ cookie }));
     expect(response.headers.get("set-cookie")).toContain(cookie);
-    expect(response.headers.get("set-cookie")).toContain("Max-Age=1800");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=34560000");
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual(monitor);
