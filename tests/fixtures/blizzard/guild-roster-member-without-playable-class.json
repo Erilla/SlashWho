@@ -1,0 +1,22 @@
+{
+  "status": 200,
+  "body": {
+    "members": [
+      {
+        "character": {
+          "name": "Alt",
+          "realm": { "slug": "silvermoon" },
+          "level": 80
+        }
+      },
+      {
+        "character": {
+          "name": "Keeper",
+          "realm": { "slug": "silvermoon" },
+          "playable_class": { "id": 2 },
+          "level": 70
+        }
+      }
+    ]
+  }
+}

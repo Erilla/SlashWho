@@ -1,0 +1,12 @@
+{
+  "status": 200,
+  "body": {
+    "achievements": [
+      {
+        "id": 40254,
+        "completed_timestamp": 1737232200000,
+        "criteria": { "is_completed": false }
+      }
+    ]
+  }
+}

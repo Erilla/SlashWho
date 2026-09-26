@@ -680,11 +680,12 @@ function DossierPageState({
   }, [guildTitle]);
 
   // The header owns this slot, so the identity is laid out by the header grid
-  // instead of floating over whatever the header happens to hold.
+  // instead of floating over whatever the header happens to hold. A group, not
+  // a live region: it appears on scroll, which is nothing to announce.
   const identityBadge = (
     <div
       className="dossier-header-identity"
-      role="status"
+      role="group"
       aria-label="Current character"
     >
       <span className="dossier-character-name-line">

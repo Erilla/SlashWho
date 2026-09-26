@@ -21,6 +21,11 @@ export function DossierRateLimitCountdown({
 }>) {
   const target = Date.parse(retryAt);
   const [remaining, setRemaining] = useState(() => target - Date.now());
+  const running = Number.isFinite(target) && remaining > 0;
+  // A limit that had already reset when the page loaded says nothing at all;
+  // one seen running is announced when it finishes.
+  const [seenRunning, setSeenRunning] = useState(running);
+  if (running && !seenRunning) setSeenRunning(true);
 
   useEffect(() => {
     const update = () => setRemaining(target - Date.now());
@@ -29,10 +34,6 @@ export function DossierRateLimitCountdown({
     return () => window.clearInterval(interval);
   }, [target]);
 
-  if (!Number.isFinite(target) || remaining <= 0) {
-    return null;
-  }
-
   const provider =
     source === "warcraft_logs"
       ? "Warcraft Logs"
@@ -40,9 +41,31 @@ export function DossierRateLimitCountdown({
         ? "Raider.IO"
         : "Blizzard";
 
+  // Empty on mount and filled once the region is in place: a live region reads
+  // changes, not what it held when it appeared. The ticking text stays outside
+  // it, so a screen reader hears the start and the finish, not every second.
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    if (!seenRunning) return;
+    setAnnouncement(
+      running
+        ? `${provider} limit reached. It resets in ${formatRemaining(target - Date.now())}.`
+        : `${provider} limit has reset.`
+    );
+  }, [provider, running, seenRunning, target]);
+
+  if (!seenRunning) return null;
+
   return (
-    <p className="dossier-rate-limit-countdown" role="status">
-      {provider} limit resets in {formatRemaining(remaining)}
-    </p>
+    <>
+      {running ? (
+        <p className="dossier-rate-limit-countdown">
+          {provider} limit resets in {formatRemaining(remaining)}
+        </p>
+      ) : null}
+      <p className="visually-hidden" role="status">
+        {announcement}
+      </p>
+    </>
   );
 }
