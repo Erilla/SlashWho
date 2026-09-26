@@ -1,6 +1,6 @@
 import type { Pool, PoolClient, QueryResult } from "pg";
 import { describe, expect, it, vi } from "vitest";
-import { one, withTransaction } from "./sql";
+import { one, withConsistentRead, withTransaction } from "./sql";
 
 function fakePool(options: { failOn?: string } = {}) {
   const statements: string[] = [];
@@ -62,6 +62,24 @@ describe("withTransaction", () => {
       "COMMIT_failed"
     );
     expect(statements).toEqual(["BEGIN", "COMMIT", "ROLLBACK"]);
+  });
+});
+
+describe("withConsistentRead", () => {
+  it("reads inside one read-only repeatable-read transaction", async () => {
+    const { pool, statements } = fakePool();
+
+    await withConsistentRead(pool, async (tx) => {
+      await tx.query("SELECT 1");
+      await tx.query("SELECT 2");
+    });
+
+    expect(statements).toEqual([
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT 1",
+      "SELECT 2",
+      "COMMIT"
+    ]);
   });
 });
 

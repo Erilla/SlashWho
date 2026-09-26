@@ -6,13 +6,37 @@ import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
  * way. Returning early is how a transaction ends early, so nothing inside
  * `work` issues COMMIT or ROLLBACK itself.
  */
-export async function withTransaction<T>(
+export function withTransaction<T>(
   pool: Pool,
+  work: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return transaction(pool, "BEGIN", work);
+}
+
+/**
+ * Runs several reads against one snapshot of the database. Under the default
+ * READ COMMITTED each statement sees whatever had committed when it started,
+ * so a write landing between two reads can make them disagree.
+ */
+export function withConsistentRead<T>(
+  pool: Pool,
+  work: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return transaction(
+    pool,
+    "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+    work
+  );
+}
+
+async function transaction<T>(
+  pool: Pool,
+  begin: string,
   work: (client: PoolClient) => Promise<T>
 ): Promise<T> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query(begin);
     const result = await work(client);
     await client.query("COMMIT");
     return result;

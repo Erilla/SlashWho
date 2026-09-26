@@ -8,7 +8,7 @@ import {
 } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import { withAccountMailClient } from "./account-mail-query";
-import { one, withTransaction } from "./sql";
+import { one, withConsistentRead, withTransaction } from "./sql";
 import type {
   CallerClass,
   CharacterEvidenceRun,
@@ -1334,6 +1334,12 @@ async function loadSnapshot(
     characterCount: characters.length,
     characters
   };
+}
+
+// A snapshot is read in two statements, its row and then its membership. An
+// amend can commit between them, so both run against one database snapshot.
+function readSnapshot(pool: Pool, id: string): Promise<StoredSnapshot | null> {
+  return withConsistentRead(pool, (client) => loadSnapshot(client, id));
 }
 
 function characterIdentity(key: CharacterKey): string {
@@ -3451,7 +3457,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            LIMIT 1`,
           [key.region, key.realm, key.name]
         );
-        return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
+        return result.rows[0] ? readSnapshot(pool, result.rows[0].id) : null;
       },
 
       async getCurrentDeclaringCharacter(key) {
@@ -3490,7 +3496,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            LIMIT 1`,
           [key.region, key.realm, key.name]
         );
-        return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
+        return result.rows[0] ? readSnapshot(pool, result.rows[0].id) : null;
       },
 
       async listReverseDeclaredCharacters(key) {
@@ -3553,7 +3559,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       },
 
       async find(id) {
-        return loadSnapshot(pool, id);
+        return readSnapshot(pool, id);
       },
 
       async listHistory(key, page): Promise<SnapshotHistoryPage> {
