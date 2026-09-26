@@ -99,6 +99,7 @@ export {
   attributeThrottlesTo,
   bindThrottleScope,
   throttleFields,
+  throttleReporter,
   upstreamThrottleRecord
 } from "./throttle-attribution";
 export type { ThrottledProvider, ThrottleUnit } from "./throttle-attribution";

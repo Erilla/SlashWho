@@ -104,3 +104,21 @@ export function upstreamThrottleRecord(
     ...unit
   };
 }
+
+/**
+ * An upstream client's `onThrottle` callback: logs each throttled response as
+ * its `upstream_throttle` record, counting it on the enclosing unit of work.
+ * The record names the provider and the delay only, never whose credentials
+ * the client was using.
+ */
+export function throttleReporter(
+  logger: { info(record: Record<string, unknown>): void } | undefined,
+  provider: ThrottledProvider
+): (event: Readonly<{ retryAfterMs: number | undefined }>) => void {
+  return (event) => {
+    // Built before the logger is consulted: building it is what counts the
+    // throttle, and that should not depend on a logger being wired in.
+    const record = upstreamThrottleRecord(provider, event);
+    logger?.info(record);
+  };
+}

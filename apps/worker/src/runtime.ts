@@ -9,7 +9,7 @@ import {
   fullEvidencePhasePlan,
   attributeThrottlesTo,
   decryptCredential,
-  upstreamThrottleRecord,
+  throttleReporter,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -55,6 +55,12 @@ import {
   startAccountMailWorker
 } from "./account-mail";
 import type { WorkerHealth, WorkerHealthProbe } from "./health-server";
+import {
+  announceNewApplicantIntents,
+  createDiscoveryRunNotifier,
+  createEvidenceRunNotifier,
+  createFingerprintAlertNotifier
+} from "./notifiers";
 
 // Ciphertext for an abandoned evidence run's WCL credentials should not
 // outlive the run by more than this window. Normal completion (`publish` or
@@ -285,8 +291,7 @@ export function createFingerprintIntegration(
       clientId: config.blizzardClientId,
       clientSecret: config.blizzardClientSecret,
       baseUrl: config.blizzardBaseUrl,
-      onThrottle: (event) =>
-        logger?.info(upstreamThrottleRecord("blizzard", event)),
+      onThrottle: throttleReporter(logger, "blizzard"),
       requestLimits: BLIZZARD_WORKER_REQUEST_LIMITS
     }),
     fingerprint: {
@@ -300,239 +305,6 @@ export function createFingerprintIntegration(
       minimumIdenticalPercent: config.fingerprintMinimumIdenticalPercent
     }
   };
-}
-
-/**
- * Announces each discovery run to a chat webhook. Discord rejects any body
- * without `content`, `embeds` or `file`, so the run is rendered as a message
- * rather than posted as the raw record. Delivery is best effort: the channel is
- * a convenience for whoever is watching, never a dependency of the run.
- */
-export function createDiscoveryRunNotifier(
-  config: WorkerConfig,
-  options: {
-    logger?: DiscoveryLogger;
-    fetch?: typeof globalThis.fetch;
-    timeoutMs?: number;
-  } = {}
-): DiscoveryRunNotifier {
-  const fetch = options.fetch ?? globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? 5_000;
-  return {
-    async started(run) {
-      if (!config.discoveryWebhookUrl) return;
-      const content = `🔍 Discovery run started — **${run.name}** (${run.region}/${run.realm}) · attempt ${run.attempt} · run \`${run.runId}\``;
-      try {
-        const response = await fetch(config.discoveryWebhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content }),
-          signal: AbortSignal.timeout(timeoutMs)
-        });
-        if (!response.ok) {
-          options.logger?.info({
-            event: "discovery_announcement_delivery_failed",
-            failure: "http_status",
-            status: response.status
-          });
-        }
-      } catch {
-        options.logger?.info({
-          event: "discovery_announcement_delivery_failed",
-          failure: "network_or_timeout"
-        });
-      }
-    }
-  };
-}
-
-/**
- * Announces each evidence run to the same chat webhook as discovery, at its
- * start and again on its outcome. Evidence runs spend the Warcraft Logs
- * allowance, so `limitationCode`, `parseLimitationCode` and the points spent
- * are what the message exists to carry.
- *
- * Delivery is best effort throughout, exactly as it is for a discovery run:
- * the channel is a convenience for whoever is watching, never a dependency of
- * the run.
- */
-export function createEvidenceRunNotifier(
-  config: WorkerConfig,
-  options: {
-    logger?: DiscoveryLogger;
-    fetch?: typeof globalThis.fetch;
-    timeoutMs?: number;
-  } = {}
-): EvidenceRunNotifier {
-  const fetch = options.fetch ?? globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? 5_000;
-
-  async function post(content: string): Promise<void> {
-    if (!config.discoveryWebhookUrl) return;
-    try {
-      const response = await fetch(config.discoveryWebhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-        signal: AbortSignal.timeout(timeoutMs)
-      });
-      if (!response.ok) {
-        options.logger?.info({
-          event: "evidence_announcement_delivery_failed",
-          failure: "http_status",
-          status: response.status
-        });
-      }
-    } catch {
-      options.logger?.info({
-        event: "evidence_announcement_delivery_failed",
-        failure: "network_or_timeout"
-      });
-    }
-  }
-
-  return {
-    async started(run) {
-      await post(
-        `🧾 Evidence run started — **${run.name}** (${run.region}/${run.realm}) · attempt ${run.attempt} · run \`${run.runId}\``
-      );
-    },
-    async finished(run) {
-      // Only what is actually known: a run with no limitation and no readable
-      // allowance announces its outcome and nothing more.
-      const limitations = [run.limitationCode, run.parseLimitationCode].filter(
-        (code): code is string => Boolean(code)
-      );
-      const details = [
-        ...(limitations.length > 0 ? [limitations.join(" / ")] : []),
-        ...(run.pointsSpent === null ? [] : [`${run.pointsSpent} points`])
-      ];
-      const icon = run.outcome === "complete" ? "✅" : "⚠️";
-      await post(
-        [
-          `${icon} Evidence run ${run.outcome} — **${run.name}** (${run.region}/${run.realm})`,
-          ...details,
-          `run \`${run.runId}\``
-        ].join(" · ")
-      );
-    }
-  };
-}
-
-export function createFingerprintAlertNotifier(
-  config: WorkerConfig,
-  options: {
-    fetch?: typeof globalThis.fetch;
-    logger?: DiscoveryLogger;
-    timeoutMs?: number;
-  } = {}
-): FingerprintAlertNotifier {
-  const fetch = options.fetch ?? globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? 5_000;
-  const escapeDiscord = (value: string | undefined) =>
-    (value?.slice(0, 200) || "—")
-      .replace(/\s+/g, " ")
-      .replace(/@/g, "@ ")
-      .replace(/</g, "< ")
-      .replace(/([\\*_`~|>()])/g, "\\$1")
-      .replaceAll("[", "\\[")
-      .replaceAll("]", "\\]");
-  return {
-    async notify(alert) {
-      if (!config.maintainerAlertWebhookUrl) return;
-      const discordWebhook =
-        config.maintainerAlertWebhookUrl.startsWith(
-          "https://discord.com/api/webhooks/"
-        ) ||
-        config.maintainerAlertWebhookUrl.startsWith(
-          "https://discordapp.com/api/webhooks/"
-        );
-      const applicant = alert.applicant;
-      const details = Object.entries(alert.details)
-        .map(([name, count]) => `${name}: ${count}`)
-        .join(" · ");
-      const content = applicant
-        ? [
-            `📨 New application — ${details}`,
-            `Battletag: ${escapeDiscord(applicant.battletag)}`,
-            `Discord ID: ${escapeDiscord(applicant.discordId)}`,
-            `Character: ${escapeDiscord(applicant.characterName)}`,
-            `Character link: ${applicant.characterUrl}`,
-            `Dossier: ${applicant.dossierUrl ?? "pending character resolution"}`
-          ].join("\n")
-        : `${alert.event === "applicant_new_intents" ? "📨" : "⚠️"} ${alert.event} — ${details}`;
-      const body = discordWebhook
-        ? {
-            content,
-            allowed_mentions: { parse: [] }
-          }
-        : alert;
-      try {
-        const response = await fetch(config.maintainerAlertWebhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs)
-        });
-        if (!response.ok) {
-          options.logger?.info({
-            event: "maintainer_alert_delivery_failed",
-            alertEvent: alert.event,
-            failure: "http_status",
-            status: response.status
-          });
-        }
-      } catch {
-        options.logger?.info({
-          event: "maintainer_alert_delivery_failed",
-          alertEvent: alert.event,
-          failure: "network_or_timeout"
-        });
-      }
-    }
-  };
-}
-
-/** An alert is a best-effort side effect of a committed Sheet observation. */
-export async function announceNewApplicantIntents(
-  poll: {
-    baseline: boolean;
-    created: number;
-    newApplicants?: import("./applicant-watcher").NewApplicant[];
-  },
-  notifier?: FingerprintAlertNotifier,
-  logger?: DiscoveryLogger,
-  dossierBaseUrl?: string
-): Promise<void> {
-  if (poll.baseline || poll.created === 0) return;
-  if (!poll.newApplicants?.length) {
-    try {
-      await notifier?.notify({
-        event: "applicant_new_intents",
-        details: { count: poll.created }
-      });
-    } catch {
-      logger?.info({ event: "applicant_announcement_failed" });
-    }
-    return;
-  }
-  for (const applicant of poll.newApplicants) {
-    try {
-      const { dossierPath, ...details } = applicant;
-      await notifier?.notify({
-        event: "applicant_new_intents",
-        details: { count: 1 },
-        applicant: {
-          ...details,
-          ...(dossierPath && dossierBaseUrl
-            ? { dossierUrl: new URL(dossierPath, dossierBaseUrl).toString() }
-            : {})
-        }
-      });
-    } catch {
-      logger?.info({ event: "applicant_announcement_failed" });
-    }
-  }
 }
 
 /**
@@ -551,8 +323,7 @@ export function createRaiderIoGateway(
     baseUrl: config.raiderIoBaseUrl,
     timeoutMs: config.raiderIoTimeoutMs,
     accessKey: config.raiderIoAccessKey,
-    onThrottle: (event) =>
-      logger?.info(upstreamThrottleRecord("raiderio", event))
+    onThrottle: throttleReporter(logger, "raiderio")
   });
 }
 
@@ -608,8 +379,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       fetch: globalThis.fetch,
       clientId: config.warcraftLogsClientId,
       clientSecret: config.warcraftLogsClientSecret,
-      onThrottle: (event) =>
-        logger?.info(upstreamThrottleRecord("warcraftlogs", event))
+      onThrottle: throttleReporter(logger, "warcraftlogs")
     }),
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
@@ -634,6 +404,596 @@ function fingerprintAdmissionRetry(retryAt: Date): Error & {
   });
 }
 
+/** What every stage of the runtime shares once storage and the queue are up. */
+type WorkerContext = Readonly<{
+  config: WorkerConfig;
+  pool: RuntimePool;
+  repositories: Repositories;
+  queue: DiscoveryQueue;
+  clock: Clock;
+  logger: DiscoveryLogger | undefined;
+}>;
+
+/**
+ * Waits for the database to answer, backing off exponentially between
+ * attempts, and rethrows the last failure once the attempts run out.
+ */
+async function connectWithRetry(
+  pool: RuntimePool,
+  config: WorkerConfig,
+  sleep: WorkerRuntimeDependencies["sleep"]
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await pool.query("SELECT 1");
+      return;
+    } catch (error) {
+      if (attempt >= config.databaseStartupAttempts) throw error;
+      await sleep(config.databaseStartupRetryMs * 2 ** (attempt - 1));
+    }
+  }
+}
+
+type WorkerHandlers = Readonly<{
+  handler: DiscoveryJobHandler;
+  evidenceHandler: ReturnType<typeof createApplicantEvidenceJobHandler>;
+  gateway: ReturnType<WorkerRuntimeDependencies["createGateway"]>;
+  evidenceGateway: ReturnType<
+    WorkerRuntimeDependencies["createEvidenceGateway"]
+  >;
+  fingerprintAlertNotifier: FingerprintAlertNotifier | undefined;
+}>;
+
+/**
+ * The discovery and evidence job handlers, with the upstream clients and
+ * notifiers they are built on. Nothing here touches the queue's workers or
+ * schedules; it only wires dependencies together.
+ */
+function buildHandlers(
+  context: WorkerContext,
+  dependencies: WorkerRuntimeDependencies
+): WorkerHandlers {
+  const { config, repositories, queue, logger } = context;
+  const gateway = dependencies.createGateway(config, logger);
+  const fingerprintIntegration = dependencies.createFingerprintIntegration?.(
+    config,
+    logger
+  );
+  const fingerprintAlertNotifier =
+    dependencies.createFingerprintAlertNotifier?.(config, logger);
+  const discoveryRunNotifier = dependencies.createDiscoveryRunNotifier?.(
+    config,
+    logger
+  );
+  const handler = dependencies.createHandler({
+    repositories,
+    gateway,
+    ...fingerprintIntegration,
+    ...(fingerprintAlertNotifier ? { fingerprintAlertNotifier } : {}),
+    ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
+    enqueueFingerprintAdmission: (runId) =>
+      queue.enqueueFingerprintAdmission(runId),
+    enqueueFullEvidence: async (key) => {
+      const at = new Date();
+      // A fingerprint admission is a genuinely new dossier connection, so
+      // use `at` as the cutoff and collect its complete public log history.
+      // `reserve` coalesces an already active collection instead of queuing
+      // duplicate work.
+      const reservation = await repositories.evidence.reserve({
+        key,
+        freshnessCutoff: at,
+        at,
+        phasePlan: fullEvidencePhasePlan()
+      });
+      if (reservation.kind !== "reserved") return;
+      const queueJobId = await queue.enqueueCharacterEvidence(
+        reservation.run.id,
+        { enqueuedAt: at.toISOString(), mode: "full" }
+      );
+      await repositories.evidence.markEnqueued(reservation.run.id, queueJobId);
+    },
+    requestCap: config.discoveryRequestCap,
+    negativeCacheTtlMs: config.negativeCacheTtlMs,
+    ...(logger ? { logger } : {})
+  });
+  const evidence = (
+    repositories as Repositories & {
+      evidence: Parameters<
+        typeof createApplicantEvidenceJobHandler
+      >[0]["evidence"];
+    }
+  ).evidence;
+  if (!evidence) throw new Error("character_evidence_repository_unavailable");
+  const evidenceRunNotifier = dependencies.createEvidenceRunNotifier?.(
+    config,
+    logger
+  );
+  const evidenceGateway = dependencies.createEvidenceGateway(config, logger);
+  const evidenceHandler = dependencies.createEvidenceHandler({
+    evidence,
+    isSuppressed: (key) => repositories.suppressions.isActive(key, new Date()),
+    warcraftLogs: evidenceGateway,
+    resolveAccountWarcraftLogs: createAccountWarcraftLogsResolver(
+      repositories.accountCredentials,
+      config.accountCredentialEncryptionKey
+    ),
+    // These are collection dependencies too: the dossier reader only reads
+    // the facts this worker publishes, so progress and publication share
+    // one durable run.
+    raiderio: gateway,
+    ...(fingerprintIntegration?.blizzardGateway
+      ? { blizzard: fingerprintIntegration.blizzardGateway }
+      : {}),
+    // A run carrying a visitor's own credentials gets its own client, and it
+    // reports throttling exactly as the shared one does: the record names the
+    // provider and the delay only, never whose key was in use.
+    createWarcraftLogsGateway: (credentials) =>
+      createWarcraftLogsClient({
+        fetch: globalThis.fetch,
+        clientId: credentials.clientId,
+        clientSecret: credentials.clientSecret,
+        onThrottle: throttleReporter(logger, "warcraftlogs")
+      }),
+    decryptionKey: config.evidenceJobCredentialEncryptionKey,
+    requestCap: config.evidenceRequestCap,
+    parseRequestCap: config.evidenceParseRequestCap,
+    tierSearchRequestCap: config.evidenceTierSearchRequestCap,
+    capRetryMs: config.evidenceCapRetryMs,
+    transientRetryMs: config.evidenceTransientRetryMs,
+    pointsReserve: config.evidencePointsReserve,
+    killSettleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
+    retryCostCeiling: config.evidenceRetryCostCeiling,
+    failureCooldownMs: config.evidenceFailureCooldownMs,
+    ...(evidenceRunNotifier ? { evidenceRunNotifier } : {}),
+    ...(logger ? { logger } : {})
+  });
+  return {
+    handler,
+    evidenceHandler,
+    gateway,
+    evidenceGateway,
+    fingerprintAlertNotifier
+  };
+}
+
+/** Sends an admitted fingerprint run back to discovery. */
+function fingerprintRunDispatcher(
+  context: WorkerContext
+): (runId: string) => Promise<void> {
+  const { repositories, queue } = context;
+  return async (runId) => {
+    const run = await repositories.runs.find(runId);
+    if (!run) return;
+    const resume = await repositories.fingerprintSweeps.getResumeState(
+      run.rootKey
+    );
+    // The root having a cursor is not enough: the cursor belongs to whichever
+    // run published the snapshot it points at. A fresh refresh for the same
+    // root is a different run, and dispatching it as a continuation would
+    // skip its own discovery entirely and amend someone else's snapshot
+    // without ever completing itself. It goes out as an ordinary job.
+    const continues = resume !== null && resume.runId === runId;
+    // No correlationId is available here: this dispatch is a background
+    // fingerprint-admission follow-up, not the continuation of an HTTP
+    // request, so it stays absent rather than being invented.
+    await queue.enqueue({
+      runId,
+      key: run.rootKey,
+      enqueuedAt: new Date().toISOString(),
+      ...(continues ? { continuation: true as const } : {})
+    });
+    await repositories.fingerprintSweeps.markDispatched(runId, new Date());
+  };
+}
+
+/**
+ * Picks up fingerprint work a previous process left behind: re-enqueues every
+ * run still waiting for admission, and dispatches every run that was admitted
+ * but never sent back to discovery.
+ */
+async function drainFingerprintBacklog(
+  context: WorkerContext,
+  dispatch: (runId: string) => Promise<void>
+): Promise<void> {
+  const { repositories, queue } = context;
+  for (let offset = 0; ;) {
+    const waitingFingerprintRuns =
+      await repositories.fingerprintSweeps.listWaiting(100, offset);
+    for (const runId of waitingFingerprintRuns) {
+      await queue.enqueueFingerprintAdmission(runId);
+    }
+    if (waitingFingerprintRuns.length < 100) break;
+    offset += waitingFingerprintRuns.length;
+  }
+  for (;;) {
+    const admittedFingerprintRuns =
+      await repositories.fingerprintSweeps.listAdmittedUndispatched(100);
+    if (admittedFingerprintRuns.length === 0) break;
+    for (const runId of admittedFingerprintRuns) {
+      await dispatch(runId);
+    }
+  }
+}
+
+/** One fingerprint admission attempt, dispatching the run once admitted. */
+function fingerprintAdmissionWork(
+  context: WorkerContext,
+  dispatch: (runId: string) => Promise<void>
+): (runId: string) => Promise<void> {
+  const { repositories, clock, logger } = context;
+  return async (runId) => {
+    // One record per admission attempt, whatever it decided. The run id
+    // stays out: the outcome and the time taken are what show a slow cycle.
+    const startedAt = clock();
+    let outcome: string | undefined;
+    let failure: string | undefined;
+    try {
+      const admission = await repositories.fingerprintSweeps.admitWaiting(
+        runId,
+        new Date()
+      );
+      outcome = admission.kind;
+      if (admission.kind === "waiting") {
+        const blockedForMs = admission.blockedSince
+          ? Math.max(0, Date.now() - admission.blockedSince.getTime())
+          : 0;
+        if (blockedForMs >= 15 * 60_000) {
+          logger?.info({
+            event: "fingerprint_admission_blocked",
+            blockedForMs
+          });
+        }
+        throw fingerprintAdmissionRetry(admission.retryAt);
+      }
+      if (admission.kind !== "admitted") return;
+      await dispatch(runId);
+    } catch (error) {
+      // A waiting run throws only to ask the queue for a later retry; that
+      // is the outcome working, not a failure.
+      if (outcome !== "waiting") failure = errorName(error);
+      throw error;
+    } finally {
+      logger?.info({
+        event: "fingerprint_admission",
+        ...(outcome === undefined ? {} : { outcome }),
+        durationMs: elapsedMs(clock, startedAt),
+        ...(failure === undefined ? {} : { errorName: failure })
+      });
+    }
+  };
+}
+
+/**
+ * What actually drives a waiting run. `reserve` is otherwise reached only
+ * from a dossier read or the refresh endpoint, so a run that deferred itself
+ * resumed only when somebody happened to load the page — which made the
+ * dossier nobody was watching the one that quietly never finished.
+ *
+ * It only reserves and enqueues. The evidence queue still collects one run at
+ * a time and the points gate still refuses a run it cannot afford, so this
+ * cannot spend more per hour than a reader already could.
+ */
+async function evidenceResumeSweep(context: WorkerContext): Promise<void> {
+  const { config, pool, repositories, queue, clock, logger } = context;
+  const sweepStartedAt = clock();
+  // The backlog over time (#509). It rides this five-minute tick because
+  // the cadence is modest and the tick already runs on every worker, and
+  // it samples before the sweep enqueues anything of its own. Guarded like
+  // recovery below: a failed read must never cost the sweep.
+  try {
+    logger?.info({
+      event: "queue_depth",
+      queues: await readQueueDepths(pool)
+    });
+  } catch (error) {
+    logger?.info({
+      event: "queue_depth_failed",
+      failure: error instanceof Error ? error.name : "unknown"
+    });
+  }
+  // Recovery runs first, and shares this five-minute schedule rather than
+  // the hourly cleanup, because an abandoned run is precisely what hides a
+  // character from the pass below: `reserve` counts it as active, so the
+  // resume sweep skips that character as already in hand. Releasing first
+  // means one whose previous evidence is due can resume on this same tick
+  // instead of waiting for the next one.
+  //
+  // Guarded, and not merely for tidiness: an unguarded throw here would
+  // skip the resume pass below on every tick, and the resume queue's
+  // `retryLimit` is 1, so the only symptom would be a log line that
+  // stopped appearing while no character was ever resumed again.
+  let released = 0;
+  let republished = 0;
+  try {
+    ({ released, republished } = await recoverAbandonedEvidenceRuns(
+      repositories.evidence,
+      queue,
+      {
+        startedBefore: new Date(
+          Date.now() - ABANDONED_EVIDENCE_RUN_RETENTION_MS
+        ),
+        reservedBefore: new Date(Date.now() - ORPHANED_EVIDENCE_RESERVATION_MS),
+        settleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
+        limit: ABANDONED_EVIDENCE_SCAN_LIMIT
+      }
+    ));
+  } catch (error) {
+    logger?.info({
+      event: "evidence_recovery_failed",
+      failure: error instanceof Error ? error.name : "unknown"
+    });
+  }
+  let resumed: number;
+  try {
+    resumed = await resumeWaitingEvidence(repositories.evidence, queue, {
+      freshnessCutoff: new Date(
+        Date.now() - config.evidenceFreshnessHours * 60 * 60 * 1000
+      ),
+      limit: config.evidenceResumeSweepLimit,
+      ...(logger ? { logger } : {})
+    });
+  } catch (error) {
+    // Still rethrown for the queue's one retry, but no longer silent.
+    logger?.info({
+      event: "evidence_resume_sweep",
+      released,
+      republished,
+      durationMs: elapsedMs(clock, sweepStartedAt),
+      errorName: errorName(error)
+    });
+    throw error;
+  }
+  // Counts only, never a character key -- recovery reads one now, to mark
+  // the tiers a republished stage earned, and it must not leak here. This
+  // says whether the sweep is doing anything, which is the thing that was
+  // impossible to tell before it existed.
+  logger?.info({
+    event: "evidence_resume_sweep",
+    resumed,
+    released,
+    republished,
+    durationMs: elapsedMs(clock, sweepStartedAt)
+  });
+}
+
+type ApplicantSheet = ReturnType<typeof createApplicantSheetClient>;
+
+function createApplicantSheet(config: WorkerConfig): ApplicantSheet | null {
+  if (!config.applicantWatcher.enabled) return null;
+  return config.applicantWatcher.apiKey
+    ? createApplicantSheetClient({
+        sheetId: config.applicantWatcher.sheetId!,
+        column: config.applicantWatcher.column,
+        apiKey: config.applicantWatcher.apiKey
+      })
+    : createApplicantSheetClient({
+        sheetId: config.applicantWatcher.sheetId!,
+        column: config.applicantWatcher.column,
+        email: config.applicantWatcher.serviceAccountEmail!,
+        privateKey: config.applicantWatcher.privateKey!
+      });
+}
+
+/**
+ * One applicant watcher tick: poll the Sheet when it is due, then drain the
+ * intents it has recorded. The returned tick keeps the poll's backoff and
+ * alert throttling between calls, and never throws: a failure anywhere is
+ * logged with how long the tick ran.
+ */
+function createApplicantSheetTick(
+  context: WorkerContext,
+  applicantSheet: ApplicantSheet,
+  handlers: Pick<
+    WorkerHandlers,
+    "gateway" | "evidenceGateway" | "fingerprintAlertNotifier"
+  >
+): () => Promise<void> {
+  const { config, pool, repositories, queue, clock, logger } = context;
+  const { gateway, evidenceGateway, fingerprintAlertNotifier } = handlers;
+  let applicantPollFailures = 0;
+  let applicantNextPollAttempt = 0;
+  let applicantAlertedAt = 0;
+
+  async function pollSheet(): Promise<void> {
+    const pollStartedAt = clock();
+    try {
+      let numericChecks = 0;
+      let numericAllowance: boolean | undefined;
+      const resolvedDossiers = new Map<string, string>();
+      const poll = await pollApplicantSheet({
+        pool: pool as Pool,
+        readRows: () => applicantSheet.readRows(),
+        resolveDossierPath: (identity) => resolvedDossiers.get(identity),
+        isSuppressed: async (identity, observedAt) => {
+          const decoded = decodeApplicantIdentity(identity);
+          if (decoded.kind === "warcraftlogs_id") {
+            if (++numericChecks > 4 || !evidenceGateway.resolveCharacterById)
+              return "defer";
+            try {
+              if (numericAllowance === undefined) {
+                const allowance = await evidenceGateway.getRateLimit();
+                numericAllowance =
+                  allowance.kind === "rate_limit" &&
+                  allowance.limitPerHour - allowance.pointsSpentThisHour >=
+                    config.applicantWatcher.minimumPoints;
+              }
+              if (!numericAllowance) return "defer";
+              const resolved = await evidenceGateway.resolveCharacterById(
+                decoded.id
+              );
+              if (resolved.kind !== "identity") return "defer";
+              resolvedDossiers.set(
+                identity,
+                `/dossiers/${resolved.key.region}/${resolved.key.realm}/${encodeURIComponent(resolved.key.name)}`
+              );
+              return wasSuppressedAt(pool as Pool, resolved.key, observedAt);
+            } catch {
+              return "defer";
+            }
+          }
+          return wasSuppressedAt(pool as Pool, decoded.key, observedAt);
+        },
+        backlogLimit: config.applicantWatcher.backlog
+      });
+      applicantPollFailures = 0;
+      applicantNextPollAttempt = 0;
+      logger?.info({
+        event: "applicant_sheet_poll",
+        baseline: poll.baseline,
+        rebaselined: poll.rebaselined,
+        created: poll.created,
+        backlog: poll.backlog,
+        invalid: poll.invalid,
+        truncated: poll.truncated,
+        durationMs: elapsedMs(clock, pollStartedAt)
+      });
+      await announceNewApplicantIntents(
+        poll,
+        fingerprintAlertNotifier,
+        logger,
+        config.applicantWatcher.dossierBaseUrl
+      );
+      if (poll.truncated > 0 && Date.now() - applicantAlertedAt > 3_600_000) {
+        applicantAlertedAt = Date.now();
+        await fingerprintAlertNotifier?.notify({
+          event: "applicant_input_truncated",
+          details: { cells: poll.truncated }
+        });
+      }
+      if (
+        poll.backlog >= Math.ceil(config.applicantWatcher.backlog * 0.8) &&
+        Date.now() - applicantAlertedAt > 3_600_000
+      ) {
+        applicantAlertedAt = Date.now();
+        await fingerprintAlertNotifier?.notify({
+          event: "applicant_backlog_pressure",
+          details: {
+            backlog: poll.backlog,
+            limit: config.applicantWatcher.backlog
+          }
+        });
+      }
+    } catch (error) {
+      applicantPollFailures++;
+      applicantNextPollAttempt =
+        Date.now() +
+        Math.min(
+          3_600_000,
+          config.applicantWatcher.cadenceMs *
+            2 ** Math.min(applicantPollFailures, 4)
+        );
+      logger?.info({
+        event: "applicant_sheet_poll_failed",
+        failures: applicantPollFailures,
+        durationMs: elapsedMs(clock, pollStartedAt),
+        errorName: errorName(error)
+      });
+      if (
+        applicantPollFailures >= 3 &&
+        Date.now() - applicantAlertedAt > 3_600_000
+      ) {
+        applicantAlertedAt = Date.now();
+        await fingerprintAlertNotifier?.notify({
+          event: "applicant_poll_failed",
+          details: { failures: applicantPollFailures }
+        });
+      }
+    }
+  }
+
+  return async () => {
+    // Outside the try, so a tick that fails anywhere -- the due check, the
+    // poll's alerts or the drain -- still reports how long it ran.
+    const tickStartedAt = clock();
+    try {
+      const due = await pool.query(
+        "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
+        ["applicant_sheet"]
+      );
+      const last = due.rows[0]?.last_polled_at;
+      if (
+        (Date.now() >= applicantNextPollAttempt && !last) ||
+        (Date.now() >= applicantNextPollAttempt &&
+          Date.now() - new Date(last as string).getTime() >=
+            config.applicantWatcher.cadenceMs)
+      ) {
+        await pollSheet();
+      }
+      const drainStartedAt = clock();
+      const wcl = evidenceGateway;
+      if (!wcl.resolveCharacterById)
+        throw new Error("applicant_resolver_unavailable");
+      const drained = await drainApplicantIntents({
+        pool: pool as Pool,
+        config,
+        repositories,
+        queue,
+        raiderio: gateway,
+        warcraftlogs: {
+          getRateLimit: wcl.getRateLimit,
+          resolveCharacterById: wcl.resolveCharacterById
+        }
+      });
+      logger?.info({
+        event: "applicant_sheet_drain",
+        ...drained,
+        durationMs: elapsedMs(clock, drainStartedAt)
+      });
+    } catch (error) {
+      logger?.info({
+        event: "applicant_sheet_tick_failed",
+        durationMs: elapsedMs(clock, tickStartedAt),
+        errorName: errorName(error)
+      });
+    }
+  };
+}
+
+/** The hourly cleanup of expired caches, stale credentials and old costs. */
+async function maintenanceCleanup(context: WorkerContext): Promise<void> {
+  const { repositories, queue, clock, logger } = context;
+  const startedAt = clock();
+  let removedEvidenceRuns: number | undefined;
+  let removedCollectionStages: number | undefined;
+  let removedRunCosts: number | undefined;
+  // On the injected logger rather than console.info: this record passes
+  // through the worker's redaction like every other one. It carries counts
+  // only — never a credential, a run id or a character key. It is written
+  // once the whole cycle has run, so its duration covers the search
+  // recovery too, and a failed cycle still reports what it had removed.
+  const record = (failure?: unknown) =>
+    logger?.info({
+      event: "evidence_cache_cleanup",
+      removedEvidenceRuns,
+      removedCollectionStages,
+      removedRunCosts,
+      durationMs: elapsedMs(clock, startedAt),
+      ...(failure === undefined ? {} : { errorName: errorName(failure) })
+    });
+  try {
+    await cleanupExpired(repositories);
+    removedEvidenceRuns = await repositories.evidence.clearStaleCredentials({
+      settled: new Date(Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS),
+      active: new Date(
+        Date.now() - STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS
+      )
+    });
+    // A stage belongs to an attempt in flight. One whose run has settled
+    // is work nothing will ever republish, so it is dropped rather than
+    // left to hold a copy of the evidence indefinitely.
+    removedCollectionStages =
+      await repositories.evidence.clearSettledCollectionStages();
+    removedRunCosts = await repositories.evidence.clearExpiredRunCosts(
+      new Date(Date.now() - EVIDENCE_RUN_COST_RETENTION_MS)
+    );
+    await recoverPendingSearches(repositories, queue);
+  } catch (error) {
+    record(error);
+    throw error;
+  }
+  record();
+}
+
 export async function createWorkerRuntime(
   config: WorkerConfig,
   dependencies: WorkerRuntimeDependencies = defaultDependencies,
@@ -647,527 +1007,45 @@ export async function createWorkerRuntime(
   let mailWorker: ReturnType<typeof startAccountMailWorker> | undefined;
 
   try {
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        await pool.query("SELECT 1");
-        break;
-      } catch (error) {
-        if (attempt >= config.databaseStartupAttempts) throw error;
-        await dependencies.sleep(
-          config.databaseStartupRetryMs * 2 ** (attempt - 1)
-        );
-      }
-    }
-
+    await connectWithRetry(pool, config, dependencies.sleep);
     await dependencies.runMigrations(pool);
     const repositories = dependencies.createRepositories(pool);
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
-    const gateway = dependencies.createGateway(config, logger);
-    const applicantSheet = config.applicantWatcher.enabled
-      ? config.applicantWatcher.apiKey
-        ? createApplicantSheetClient({
-            sheetId: config.applicantWatcher.sheetId!,
-            column: config.applicantWatcher.column,
-            apiKey: config.applicantWatcher.apiKey
-          })
-        : createApplicantSheetClient({
-            sheetId: config.applicantWatcher.sheetId!,
-            column: config.applicantWatcher.column,
-            email: config.applicantWatcher.serviceAccountEmail!,
-            privateKey: config.applicantWatcher.privateKey!
-          })
-      : null;
-    let applicantPollFailures = 0;
-    let applicantNextPollAttempt = 0;
-    let applicantAlertedAt = 0;
-    const fingerprintIntegration = dependencies.createFingerprintIntegration?.(
+    const context: WorkerContext = {
       config,
-      logger
-    );
-    const fingerprintAlertNotifier =
-      dependencies.createFingerprintAlertNotifier?.(config, logger);
-    const discoveryRunNotifier = dependencies.createDiscoveryRunNotifier?.(
-      config,
-      logger
-    );
-    const handler = dependencies.createHandler({
+      pool,
       repositories,
-      gateway,
-      ...fingerprintIntegration,
-      ...(fingerprintAlertNotifier ? { fingerprintAlertNotifier } : {}),
-      ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
-      enqueueFingerprintAdmission: (runId) =>
-        initializedQueue.enqueueFingerprintAdmission(runId),
-      enqueueFullEvidence: async (key) => {
-        const at = new Date();
-        // A fingerprint admission is a genuinely new dossier connection, so
-        // use `at` as the cutoff and collect its complete public log history.
-        // `reserve` coalesces an already active collection instead of queuing
-        // duplicate work.
-        const reservation = await repositories.evidence.reserve({
-          key,
-          freshnessCutoff: at,
-          at,
-          phasePlan: fullEvidencePhasePlan()
-        });
-        if (reservation.kind !== "reserved") return;
-        const queueJobId = await initializedQueue.enqueueCharacterEvidence(
-          reservation.run.id,
-          { enqueuedAt: at.toISOString(), mode: "full" }
-        );
-        await repositories.evidence.markEnqueued(
-          reservation.run.id,
-          queueJobId
-        );
-      },
-      requestCap: config.discoveryRequestCap,
-      negativeCacheTtlMs: config.negativeCacheTtlMs,
-      ...(logger ? { logger } : {})
-    });
-    const evidence = (
-      repositories as Repositories & {
-        evidence: Parameters<
-          typeof createApplicantEvidenceJobHandler
-        >[0]["evidence"];
-      }
-    ).evidence;
-    if (!evidence) throw new Error("character_evidence_repository_unavailable");
-    const evidenceRunNotifier = dependencies.createEvidenceRunNotifier?.(
-      config,
+      queue: initializedQueue,
+      clock,
       logger
-    );
-    const evidenceGateway = dependencies.createEvidenceGateway(config, logger);
-    const evidenceHandler = dependencies.createEvidenceHandler({
-      evidence,
-      isSuppressed: (key) =>
-        repositories.suppressions.isActive(key, new Date()),
-      warcraftLogs: evidenceGateway,
-      resolveAccountWarcraftLogs: createAccountWarcraftLogsResolver(
-        repositories.accountCredentials,
-        config.accountCredentialEncryptionKey
-      ),
-      // These are collection dependencies too: the dossier reader only reads
-      // the facts this worker publishes, so progress and publication share
-      // one durable run.
-      raiderio: gateway,
-      ...(fingerprintIntegration?.blizzardGateway
-        ? { blizzard: fingerprintIntegration.blizzardGateway }
-        : {}),
-      // A run carrying a visitor's own credentials gets its own client, and it
-      // reports throttling exactly as the shared one does: the record names the
-      // provider and the delay only, never whose key was in use.
-      createWarcraftLogsGateway: (credentials) =>
-        createWarcraftLogsClient({
-          fetch: globalThis.fetch,
-          clientId: credentials.clientId,
-          clientSecret: credentials.clientSecret,
-          onThrottle: (event) =>
-            logger?.info(upstreamThrottleRecord("warcraftlogs", event))
-        }),
-      decryptionKey: config.evidenceJobCredentialEncryptionKey,
-      requestCap: config.evidenceRequestCap,
-      parseRequestCap: config.evidenceParseRequestCap,
-      tierSearchRequestCap: config.evidenceTierSearchRequestCap,
-      capRetryMs: config.evidenceCapRetryMs,
-      transientRetryMs: config.evidenceTransientRetryMs,
-      pointsReserve: config.evidencePointsReserve,
-      killSettleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
-      retryCostCeiling: config.evidenceRetryCostCeiling,
-      failureCooldownMs: config.evidenceFailureCooldownMs,
-      ...(evidenceRunNotifier ? { evidenceRunNotifier } : {}),
-      ...(logger ? { logger } : {})
-    });
+    };
+    const applicantSheet = createApplicantSheet(config);
+    const handlers = buildHandlers(context, dependencies);
+    const applicantSheetTick = applicantSheet
+      ? createApplicantSheetTick(context, applicantSheet, handlers)
+      : null;
+
     await initializedQueue.start();
     await recoverPendingSearches(repositories, initializedQueue);
-    const dispatchAdmittedFingerprintRun = async (runId: string) => {
-      const run = await repositories.runs.find(runId);
-      if (!run) return;
-      const resume = await repositories.fingerprintSweeps.getResumeState(
-        run.rootKey
-      );
-      // The root having a cursor is not enough: the cursor belongs to whichever
-      // run published the snapshot it points at. A fresh refresh for the same
-      // root is a different run, and dispatching it as a continuation would
-      // skip its own discovery entirely and amend someone else's snapshot
-      // without ever completing itself. It goes out as an ordinary job.
-      const continues = resume !== null && resume.runId === runId;
-      // No correlationId is available here: this dispatch is a background
-      // fingerprint-admission follow-up, not the continuation of an HTTP
-      // request, so it stays absent rather than being invented.
-      await initializedQueue.enqueue({
-        runId,
-        key: run.rootKey,
-        enqueuedAt: new Date().toISOString(),
-        ...(continues ? { continuation: true as const } : {})
-      });
-      await repositories.fingerprintSweeps.markDispatched(runId, new Date());
-    };
-    for (let offset = 0; ;) {
-      const waitingFingerprintRuns =
-        await repositories.fingerprintSweeps.listWaiting(100, offset);
-      for (const runId of waitingFingerprintRuns) {
-        await initializedQueue.enqueueFingerprintAdmission(runId);
-      }
-      if (waitingFingerprintRuns.length < 100) break;
-      offset += waitingFingerprintRuns.length;
-    }
-    for (;;) {
-      const admittedFingerprintRuns =
-        await repositories.fingerprintSweeps.listAdmittedUndispatched(100);
-      if (admittedFingerprintRuns.length === 0) break;
-      for (const runId of admittedFingerprintRuns) {
-        await dispatchAdmittedFingerprintRun(runId);
-      }
-    }
-    await initializedQueue.workFingerprintAdmissions(async (runId) => {
-      // One record per admission attempt, whatever it decided. The run id
-      // stays out: the outcome and the time taken are what show a slow cycle.
-      const startedAt = clock();
-      let outcome: string | undefined;
-      let failure: string | undefined;
-      try {
-        const admission = await repositories.fingerprintSweeps.admitWaiting(
-          runId,
-          new Date()
-        );
-        outcome = admission.kind;
-        if (admission.kind === "waiting") {
-          const blockedForMs = admission.blockedSince
-            ? Math.max(0, Date.now() - admission.blockedSince.getTime())
-            : 0;
-          if (blockedForMs >= 15 * 60_000) {
-            logger?.info({
-              event: "fingerprint_admission_blocked",
-              blockedForMs
-            });
-          }
-          throw fingerprintAdmissionRetry(admission.retryAt);
-        }
-        if (admission.kind !== "admitted") return;
-        await dispatchAdmittedFingerprintRun(runId);
-      } catch (error) {
-        // A waiting run throws only to ask the queue for a later retry; that
-        // is the outcome working, not a failure.
-        if (outcome !== "waiting") failure = errorName(error);
-        throw error;
-      } finally {
-        logger?.info({
-          event: "fingerprint_admission",
-          ...(outcome === undefined ? {} : { outcome }),
-          durationMs: elapsedMs(clock, startedAt),
-          ...(failure === undefined ? {} : { errorName: failure })
-        });
-      }
-    });
-    // What actually drives a waiting run. `reserve` is otherwise reached only
-    // from a dossier read or the refresh endpoint, so a run that deferred
-    // itself resumed only when somebody happened to load the page — which made
-    // the dossier nobody was watching the one that quietly never finished.
-    //
-    // It only reserves and enqueues. The evidence queue still collects one run
-    // at a time and the points gate still refuses a run it cannot afford, so
-    // this cannot spend more per hour than a reader already could.
+    const dispatchAdmittedFingerprintRun = fingerprintRunDispatcher(context);
+    await drainFingerprintBacklog(context, dispatchAdmittedFingerprintRun);
+    await initializedQueue.workFingerprintAdmissions(
+      fingerprintAdmissionWork(context, dispatchAdmittedFingerprintRun)
+    );
     await initializedQueue.scheduleEvidenceResume(async () => {
-      const sweepStartedAt = clock();
-      // The backlog over time (#509). It rides this five-minute tick because
-      // the cadence is modest and the tick already runs on every worker, and
-      // it samples before the sweep enqueues anything of its own. Guarded like
-      // recovery below: a failed read must never cost the sweep.
-      try {
-        logger?.info({
-          event: "queue_depth",
-          queues: await readQueueDepths(pool)
-        });
-      } catch (error) {
-        logger?.info({
-          event: "queue_depth_failed",
-          failure: error instanceof Error ? error.name : "unknown"
-        });
-      }
-      // Recovery runs first, and shares this five-minute schedule rather than
-      // the hourly cleanup, because an abandoned run is precisely what hides a
-      // character from the pass below: `reserve` counts it as active, so the
-      // resume sweep skips that character as already in hand. Releasing first
-      // means one whose previous evidence is due can resume on this same tick
-      // instead of waiting for the next one.
-      //
-      // Guarded, and not merely for tidiness: an unguarded throw here would
-      // skip the resume pass below on every tick, and the resume queue's
-      // `retryLimit` is 1, so the only symptom would be a log line that
-      // stopped appearing while no character was ever resumed again.
-      let released = 0;
-      let republished = 0;
-      try {
-        ({ released, republished } = await recoverAbandonedEvidenceRuns(
-          repositories.evidence,
-          initializedQueue,
-          {
-            startedBefore: new Date(
-              Date.now() - ABANDONED_EVIDENCE_RUN_RETENTION_MS
-            ),
-            reservedBefore: new Date(
-              Date.now() - ORPHANED_EVIDENCE_RESERVATION_MS
-            ),
-            settleMs: config.evidenceKillSettleDays * 24 * 60 * 60 * 1000,
-            limit: ABANDONED_EVIDENCE_SCAN_LIMIT
-          }
-        ));
-      } catch (error) {
-        logger?.info({
-          event: "evidence_recovery_failed",
-          failure: error instanceof Error ? error.name : "unknown"
-        });
-      }
-      let resumed: number;
-      try {
-        resumed = await resumeWaitingEvidence(
-          repositories.evidence,
-          initializedQueue,
-          {
-            freshnessCutoff: new Date(
-              Date.now() - config.evidenceFreshnessHours * 60 * 60 * 1000
-            ),
-            limit: config.evidenceResumeSweepLimit,
-            ...(logger ? { logger } : {})
-          }
-        );
-      } catch (error) {
-        // Still rethrown for the queue's one retry, but no longer silent.
-        logger?.info({
-          event: "evidence_resume_sweep",
-          released,
-          republished,
-          durationMs: elapsedMs(clock, sweepStartedAt),
-          errorName: errorName(error)
-        });
-        throw error;
-      }
-      // Counts only, never a character key -- recovery reads one now, to mark
-      // the tiers a republished stage earned, and it must not leak here. This
-      // says whether the sweep is doing anything, which is the thing that was
-      // impossible to tell before it existed.
-      logger?.info({
-        event: "evidence_resume_sweep",
-        resumed,
-        released,
-        republished,
-        durationMs: elapsedMs(clock, sweepStartedAt)
-      });
-      if (applicantSheet) {
-        // Outside the try, so a tick that fails anywhere -- the due check, the
-        // poll's alerts or the drain -- still reports how long it ran.
-        const tickStartedAt = clock();
-        try {
-          const due = await pool.query(
-            "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
-            ["applicant_sheet"]
-          );
-          const last = due.rows[0]?.last_polled_at;
-          if (
-            (Date.now() >= applicantNextPollAttempt && !last) ||
-            (Date.now() >= applicantNextPollAttempt &&
-              Date.now() - new Date(last as string).getTime() >=
-                config.applicantWatcher.cadenceMs)
-          ) {
-            const pollStartedAt = clock();
-            try {
-              let numericChecks = 0;
-              let numericAllowance: boolean | undefined;
-              const resolvedDossiers = new Map<string, string>();
-              const poll = await pollApplicantSheet({
-                pool: pool as Pool,
-                readRows: () => applicantSheet.readRows(),
-                resolveDossierPath: (identity) =>
-                  resolvedDossiers.get(identity),
-                isSuppressed: async (identity, observedAt) => {
-                  const decoded = decodeApplicantIdentity(identity);
-                  if (decoded.kind === "warcraftlogs_id") {
-                    if (
-                      ++numericChecks > 4 ||
-                      !evidenceGateway.resolveCharacterById
-                    )
-                      return "defer";
-                    try {
-                      if (numericAllowance === undefined) {
-                        const allowance = await evidenceGateway.getRateLimit();
-                        numericAllowance =
-                          allowance.kind === "rate_limit" &&
-                          allowance.limitPerHour -
-                            allowance.pointsSpentThisHour >=
-                            config.applicantWatcher.minimumPoints;
-                      }
-                      if (!numericAllowance) return "defer";
-                      const resolved =
-                        await evidenceGateway.resolveCharacterById(decoded.id);
-                      if (resolved.kind !== "identity") return "defer";
-                      resolvedDossiers.set(
-                        identity,
-                        `/dossiers/${resolved.key.region}/${resolved.key.realm}/${encodeURIComponent(resolved.key.name)}`
-                      );
-                      return wasSuppressedAt(
-                        pool as Pool,
-                        resolved.key,
-                        observedAt
-                      );
-                    } catch {
-                      return "defer";
-                    }
-                  }
-                  return wasSuppressedAt(pool as Pool, decoded.key, observedAt);
-                },
-                backlogLimit: config.applicantWatcher.backlog
-              });
-              applicantPollFailures = 0;
-              applicantNextPollAttempt = 0;
-              logger?.info({
-                event: "applicant_sheet_poll",
-                baseline: poll.baseline,
-                rebaselined: poll.rebaselined,
-                created: poll.created,
-                backlog: poll.backlog,
-                invalid: poll.invalid,
-                truncated: poll.truncated,
-                durationMs: elapsedMs(clock, pollStartedAt)
-              });
-              await announceNewApplicantIntents(
-                poll,
-                fingerprintAlertNotifier,
-                logger,
-                config.applicantWatcher.dossierBaseUrl
-              );
-              if (
-                poll.truncated > 0 &&
-                Date.now() - applicantAlertedAt > 3_600_000
-              ) {
-                applicantAlertedAt = Date.now();
-                await fingerprintAlertNotifier?.notify({
-                  event: "applicant_input_truncated",
-                  details: { cells: poll.truncated }
-                });
-              }
-              if (
-                poll.backlog >=
-                  Math.ceil(config.applicantWatcher.backlog * 0.8) &&
-                Date.now() - applicantAlertedAt > 3_600_000
-              ) {
-                applicantAlertedAt = Date.now();
-                await fingerprintAlertNotifier?.notify({
-                  event: "applicant_backlog_pressure",
-                  details: {
-                    backlog: poll.backlog,
-                    limit: config.applicantWatcher.backlog
-                  }
-                });
-              }
-            } catch (error) {
-              applicantPollFailures++;
-              applicantNextPollAttempt =
-                Date.now() +
-                Math.min(
-                  3_600_000,
-                  config.applicantWatcher.cadenceMs *
-                    2 ** Math.min(applicantPollFailures, 4)
-                );
-              logger?.info({
-                event: "applicant_sheet_poll_failed",
-                failures: applicantPollFailures,
-                durationMs: elapsedMs(clock, pollStartedAt),
-                errorName: errorName(error)
-              });
-              if (
-                applicantPollFailures >= 3 &&
-                Date.now() - applicantAlertedAt > 3_600_000
-              ) {
-                applicantAlertedAt = Date.now();
-                await fingerprintAlertNotifier?.notify({
-                  event: "applicant_poll_failed",
-                  details: { failures: applicantPollFailures }
-                });
-              }
-            }
-          }
-          const drainStartedAt = clock();
-          const wcl = evidenceGateway;
-          if (!wcl.resolveCharacterById)
-            throw new Error("applicant_resolver_unavailable");
-          const drained = await drainApplicantIntents({
-            pool: pool as Pool,
-            config,
-            repositories,
-            queue: initializedQueue,
-            raiderio: gateway,
-            warcraftlogs: {
-              getRateLimit: wcl.getRateLimit,
-              resolveCharacterById: wcl.resolveCharacterById
-            }
-          });
-          logger?.info({
-            event: "applicant_sheet_drain",
-            ...drained,
-            durationMs: elapsedMs(clock, drainStartedAt)
-          });
-        } catch (error) {
-          logger?.info({
-            event: "applicant_sheet_tick_failed",
-            durationMs: elapsedMs(clock, tickStartedAt),
-            errorName: errorName(error)
-          });
-        }
-      }
+      await evidenceResumeSweep(context);
+      await applicantSheetTick?.();
     });
-    await initializedQueue.scheduleMaintenanceCleanup(async () => {
-      const startedAt = clock();
-      let removedEvidenceRuns: number | undefined;
-      let removedCollectionStages: number | undefined;
-      let removedRunCosts: number | undefined;
-      // On the injected logger rather than console.info: this record passes
-      // through the worker's redaction like every other one. It carries counts
-      // only — never a credential, a run id or a character key. It is written
-      // once the whole cycle has run, so its duration covers the search
-      // recovery too, and a failed cycle still reports what it had removed.
-      const record = (failure?: unknown) =>
-        logger?.info({
-          event: "evidence_cache_cleanup",
-          removedEvidenceRuns,
-          removedCollectionStages,
-          removedRunCosts,
-          durationMs: elapsedMs(clock, startedAt),
-          ...(failure === undefined ? {} : { errorName: errorName(failure) })
-        });
-      try {
-        await cleanupExpired(repositories);
-        removedEvidenceRuns = await repositories.evidence.clearStaleCredentials(
-          {
-            settled: new Date(
-              Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS
-            ),
-            active: new Date(
-              Date.now() - STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS
-            )
-          }
-        );
-        // A stage belongs to an attempt in flight. One whose run has settled
-        // is work nothing will ever republish, so it is dropped rather than
-        // left to hold a copy of the evidence indefinitely.
-        removedCollectionStages =
-          await repositories.evidence.clearSettledCollectionStages();
-        removedRunCosts = await repositories.evidence.clearExpiredRunCosts(
-          new Date(Date.now() - EVIDENCE_RUN_COST_RETENTION_MS)
-        );
-        await recoverPendingSearches(repositories, initializedQueue);
-      } catch (error) {
-        record(error);
-        throw error;
-      }
-      record();
-    });
-    await initializedQueue.work(async (payload, context) => {
+    await initializedQueue.scheduleMaintenanceCleanup(() =>
+      maintenanceCleanup(context)
+    );
+    await initializedQueue.work(async (payload, workContext) => {
       await attributeThrottlesTo({ runId: payload.runId }, () =>
-        handler.execute(
+        handlers.handler.execute(
           payload.runId,
           {
-            ...context,
+            ...workContext,
             correlationId: payload.correlationId,
             enqueuedAt: payload.enqueuedAt
           },
@@ -1175,11 +1053,13 @@ export async function createWorkerRuntime(
         )
       );
     });
-    await initializedQueue.workCharacterEvidence(async (payload, context) => {
-      await attributeThrottlesTo({ runId: payload.runId }, () =>
-        evidenceHandler.execute(payload, context)
-      );
-    });
+    await initializedQueue.workCharacterEvidence(
+      async (payload, workContext) => {
+        await attributeThrottlesTo({ runId: payload.runId }, () =>
+          handlers.evidenceHandler.execute(payload, workContext)
+        );
+      }
+    );
     if (config.accountMail) {
       mailWorker = (
         dependencies.startAccountMailWorker ?? startAccountMailWorker

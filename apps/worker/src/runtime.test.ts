@@ -27,14 +27,16 @@ import { describe, expect, it, vi } from "vitest";
 import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import {
+  announceNewApplicantIntents,
   createDiscoveryRunNotifier,
   createEvidenceRunNotifier,
-  createFingerprintAlertNotifier,
+  createFingerprintAlertNotifier
+} from "./notifiers";
+import {
   createFingerprintIntegration,
   createRaiderIoGateway,
   createWorkerRuntime,
-  createAccountWarcraftLogsResolver,
-  announceNewApplicantIntents
+  createAccountWarcraftLogsResolver
 } from "./runtime";
 
 // The applicant watcher builds its Sheet client itself rather than taking it
