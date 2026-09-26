@@ -122,6 +122,47 @@ describe("createRequestLimiter", () => {
     expect(ran).not.toHaveBeenCalled();
   });
 
+  it("frees a failed request's slot for the next one", async () => {
+    // Break caught: a request that throws keeping its slot, so every upstream
+    // failure permanently narrows the client until it admits nothing.
+    const limiter = createRequestLimiter({
+      maxConcurrent: 1,
+      maxPerSecond: 20
+    });
+
+    await expect(
+      limiter.run(async () => {
+        throw new Error("upstream");
+      })
+    ).rejects.toThrow("upstream");
+    await expect(limiter.run(async () => "next")).resolves.toBe("next");
+  });
+
+  it("frees an acquired slot once however often it is released", async () => {
+    // Break caught: a double release opening a second slot that was never
+    // taken, letting more than the limit into flight.
+    const limiter = createRequestLimiter({
+      maxConcurrent: 1,
+      maxPerSecond: 20
+    });
+    const release = await limiter.acquire();
+    release();
+    release();
+
+    const held = await limiter.acquire();
+    let admitted = false;
+    const waiting = limiter.acquire().then((next) => {
+      admitted = true;
+      return next;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(admitted).toBe(false);
+
+    held();
+    (await waiting)();
+    expect(admitted).toBe(true);
+  });
+
   it("rejects limits that would admit nothing", () => {
     expect(() =>
       createRequestLimiter({ maxConcurrent: 0, maxPerSecond: 20 })
@@ -133,6 +174,59 @@ describe("createRequestLimiter", () => {
 });
 
 describe("a Blizzard client with request limits", () => {
+  it("hands a caller its wait for a slot, apart from the request itself", async () => {
+    // Break caught: time queued behind other callers of the shared client
+    // reaching a caller's timing as if it were Blizzard's latency.
+    let release!: () => void;
+    const fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/token")) {
+        return Response.json({ access_token: "token", expires_in: 3600 });
+      }
+      await new Promise<void>((resolve) => (release = resolve));
+      return Response.json({ achievements: [] });
+    }) as typeof globalThis.fetch;
+    const client = createBlizzardClient({
+      fetch,
+      clientId: "id",
+      clientSecret: "secret",
+      requestLimits: { maxConcurrent: 1, maxPerSecond: 20 }
+    });
+    const key: CharacterKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "first"
+    };
+    const waits: number[] = [];
+    const waitForSlot = async <R>(wait: () => Promise<R>): Promise<R> => {
+      const queuedAt = Date.now();
+      const slot = await wait();
+      waits.push(Date.now() - queuedAt);
+      return slot;
+    };
+
+    const first = client.getCompletedAchievements(
+      key,
+      undefined,
+      undefined,
+      waitForSlot
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const second = client.getCompletedAchievements(
+      { ...key, name: "second" },
+      undefined,
+      undefined,
+      waitForSlot
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    release();
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    await second;
+
+    expect(waits).toEqual([0, 300]);
+  });
+
   it("holds a concurrent sweep and an evidence run sharing it to 6 in flight and 20 a second", async () => {
     // Break caught: limits applied per caller, or inside the sweep loop, so a
     // sweep and an evidence run on the same credentials could together exceed

@@ -6,6 +6,11 @@ export type RequestLimits = Readonly<{
 }>;
 
 export type RequestLimiter = {
+  /**
+   * Waits for a slot and resolves with its release. The caller must release
+   * the slot exactly once, however its request ends; a second call is a no-op.
+   */
+  acquire(signal?: AbortSignal): Promise<() => void>;
   run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 };
 
@@ -66,39 +71,49 @@ export function createRequestLimiter(limits: RequestLimits): RequestLimiter {
     }
   }
 
-  return {
-    run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-      return new Promise<T>((resolve, reject) => {
-        if (signal?.aborted) {
-          reject(signal.reason);
-          return;
+  function acquire(signal?: AbortSignal): Promise<() => void> {
+    return new Promise<() => void>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const onAbort = () => {
+        const index = queue.indexOf(waiter);
+        if (index === -1) return;
+        queue.splice(index, 1);
+        waiter.cancel(signal!.reason);
+      };
+      const waiter: Waiter = {
+        start() {
+          signal?.removeEventListener("abort", onAbort);
+          let released = false;
+          resolve(() => {
+            if (released) return;
+            released = true;
+            active -= 1;
+            drain();
+          });
+        },
+        cancel(reason) {
+          signal?.removeEventListener("abort", onAbort);
+          reject(reason);
         }
-        const onAbort = () => {
-          const index = queue.indexOf(waiter);
-          if (index === -1) return;
-          queue.splice(index, 1);
-          waiter.cancel(signal!.reason);
-        };
-        const waiter: Waiter = {
-          start() {
-            signal?.removeEventListener("abort", onAbort);
-            Promise.resolve()
-              .then(work)
-              .then(resolve, reject)
-              .finally(() => {
-                active -= 1;
-                drain();
-              });
-          },
-          cancel(reason) {
-            signal?.removeEventListener("abort", onAbort);
-            reject(reason);
-          }
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-        queue.push(waiter);
-        drain();
-      });
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      queue.push(waiter);
+      drain();
+    });
+  }
+
+  return {
+    acquire,
+    async run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      const release = await acquire(signal);
+      try {
+        return await work();
+      } finally {
+        release();
+      }
     }
   };
 }

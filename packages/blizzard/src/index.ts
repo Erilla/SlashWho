@@ -9,5 +9,6 @@ export type {
   BlizzardFailure,
   BlizzardGateway,
   BlizzardProfileRequestObserver,
+  BlizzardSlotWait,
   BlizzardRosterCharacter
 } from "./types";

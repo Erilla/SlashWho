@@ -171,4 +171,114 @@ describe("createMeasurementScope", () => {
     await scope.time("db", async () => undefined);
     expect(scope.totals().dbMs).toBe(0);
   });
+  describe("with overlapping calls shared", () => {
+    function controlledClock() {
+      let now = 0;
+      return {
+        monotonic: () => now,
+        set(value: number) {
+          now = value;
+        }
+      };
+    }
+
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => (resolve = done));
+      return { promise, resolve };
+    }
+
+    it("splits overlapping time between the calls in progress", async () => {
+      // Break caught: overlapping calls each charging their whole duration,
+      // so the buckets add up to more wall time than the scope spanned.
+      const clock = controlledClock();
+      const scope = createMeasurementScope(clock.monotonic, {
+        overlapping: "shared"
+      });
+      const first = deferred();
+      const second = deferred();
+
+      const a = scope.time("blizzard", () => first.promise);
+      clock.set(10);
+      const b = scope.time("db", () => second.promise);
+      clock.set(30);
+      first.resolve();
+      await a;
+      clock.set(40);
+      second.resolve();
+      await b;
+
+      // 0-10 blizzard alone, 10-30 shared, 30-40 db alone.
+      expect(scope.totals()).toMatchObject({
+        blizzardMs: 20,
+        blizzardCallMs: 30,
+        blizzardCalls: 1,
+        blizzardMaxCallMs: 30,
+        dbMs: 20,
+        dbCallMs: 30,
+        dbCalls: 1
+      });
+    });
+
+    it("charges an excluded region to whatever else is in progress, not the enclosing call", async () => {
+      // Break caught: a budget write nested in a provider call counted in both
+      // buckets, or left uncharged while the call it paused was still open.
+      const clock = controlledClock();
+      const scope = createMeasurementScope(clock.monotonic, {
+        overlapping: "shared"
+      });
+
+      await scope.time("blizzard", async (excluded) => {
+        clock.set(10);
+        await excluded(async () => {
+          await scope.time("db", async () => {
+            clock.set(25);
+          });
+        });
+        clock.set(30);
+      });
+
+      expect(scope.totals()).toMatchObject({
+        blizzardMs: 15,
+        blizzardCallMs: 15,
+        dbMs: 15
+      });
+    });
+
+    it("never reports more than the wall time, whatever the rounding", async () => {
+      // Break caught: rounding each fractional share up letting many small
+      // overlapping calls add up past the time they were split from.
+      const clock = controlledClock();
+      const scope = createMeasurementScope(clock.monotonic, {
+        overlapping: "shared"
+      });
+      const gates = Array.from({ length: 3 }, deferred);
+      const calls = gates.map((gate) =>
+        scope.time("blizzard", () => gate.promise)
+      );
+      clock.set(1);
+      for (const gate of gates) gate.resolve();
+      await Promise.all(calls);
+
+      expect(scope.totals().blizzardMs).toBeLessThanOrEqual(1);
+    });
+
+    it("reads the same as the summed default when calls never overlap", async () => {
+      const summed = createMeasurementScope(fakeClock([0, 10, 10, 40]));
+      const shared = createMeasurementScope(fakeClock([0, 10, 10, 40]), {
+        overlapping: "shared"
+      });
+
+      for (const scope of [summed, shared]) {
+        await scope.time("raiderIo", async () => "first");
+        await scope.time("raiderIo", async () => "second");
+      }
+
+      expect(shared.totals()).toMatchObject({
+        raiderIoMs: summed.totals().raiderIoMs,
+        raiderIoCalls: 2,
+        raiderIoMaxCallMs: 30
+      });
+    });
+  });
 });
