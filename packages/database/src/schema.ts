@@ -843,6 +843,11 @@ export const characterEvidenceRuns = pgTable(
     // a run that raised none; a pre-#349 row is null and means "not recorded",
     // which is not the same thing.
     parseLimitationCodesSeen: text("parse_limitation_codes_seen").array(),
+    // A manual refresh inside the cooldown reads one page of history and
+    // leaves the bookmark where it was (#526). The queue payload carries this
+    // for the worker; the run carries it so a reader can tell the run will
+    // not re-read what the last full run fell short on.
+    lightRefresh: boolean("light_refresh").default(false).notNull(),
     omittedInvalidTimestamp: boolean("omitted_invalid_timestamp")
       .default(false)
       .notNull(),

@@ -262497,6 +262497,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:26:13.603Z",
       "retryAt": "2026-09-22T11:46:13.603Z"
     },
@@ -262509,6 +262511,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:39:33.162Z",
       "retryAt": "2026-09-22T11:59:33.162Z"
     },
@@ -262521,6 +262525,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:28:40.712Z",
       "retryAt": "2026-09-22T11:48:40.712Z"
     },
@@ -262533,6 +262539,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:37:03.217Z",
       "retryAt": "2026-09-22T11:57:03.217Z"
     },
@@ -262545,6 +262553,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:34:42.530Z",
       "retryAt": "2026-09-22T11:54:42.530Z"
     },
@@ -262557,6 +262567,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:33:14.235Z",
       "retryAt": "2026-09-22T11:53:14.235Z"
     },
@@ -262569,6 +262581,8 @@
       },
       "code": "request_cap",
       "message": "Warcraft Logs history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.",
+      "affects": "kill_history",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:21:39.182Z",
       "retryAt": "2026-09-22T11:41:39.182Z"
     },
@@ -262577,6 +262591,8 @@
       "character": null,
       "code": "unavailable",
       "message": "Some historic boss world ranks could not be checked because of a lookup failure from Raider.IO. Verified kill evidence is still shown.",
+      "affects": "world_ranks",
+      "recovery": "automatic",
       "observedAt": "2026-09-22T11:38:55.502Z"
     },
     {
@@ -262588,6 +262604,8 @@
       },
       "code": "current_content_evidence_withheld",
       "message": "Warcraft Logs evidence outside this raid's current-content window is not shown.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262599,6 +262617,8 @@
       },
       "code": "unmatched_encounter",
       "message": "Warcraft Logs reported Mythic kills this dossier could not match to a known raid boss, so they are not shown. Other kills may exist.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262610,6 +262630,8 @@
       },
       "code": "current_content_evidence_withheld",
       "message": "Warcraft Logs evidence outside this raid's current-content window is not shown.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262621,6 +262643,8 @@
       },
       "code": "unmatched_encounter",
       "message": "Warcraft Logs reported Mythic kills this dossier could not match to a known raid boss, so they are not shown. Other kills may exist.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262632,6 +262656,8 @@
       },
       "code": "unmatched_encounter",
       "message": "Warcraft Logs reported Mythic kills this dossier could not match to a known raid boss, so they are not shown. Other kills may exist.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262643,6 +262669,8 @@
       },
       "code": "current_content_evidence_withheld",
       "message": "Warcraft Logs evidence outside this raid's current-content window is not shown.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262654,6 +262682,8 @@
       },
       "code": "unmatched_encounter",
       "message": "Warcraft Logs reported Mythic kills this dossier could not match to a known raid boss, so they are not shown. Other kills may exist.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262665,6 +262695,8 @@
       },
       "code": "current_content_evidence_withheld",
       "message": "Warcraft Logs evidence outside this raid's current-content window is not shown.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262676,6 +262708,8 @@
       },
       "code": "current_content_evidence_withheld",
       "message": "Warcraft Logs evidence outside this raid's current-content window is not shown.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     },
     {
@@ -262687,6 +262721,8 @@
       },
       "code": "current_content_evidence_withheld",
       "message": "Warcraft Logs evidence outside this raid's current-content window is not shown.",
+      "affects": "hidden_kills",
+      "recovery": "none",
       "observedAt": "2026-09-22T11:42:03.886Z"
     }
   ],

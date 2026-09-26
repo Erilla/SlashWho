@@ -59,9 +59,16 @@ schema drift get no retry, because none of those is resolved by waiting —
 drift needs a code fix and the rebuild that follows it. Where upstream sent its
 own `Retry-After`, that is kept in preference to either default.
 
-A code with no retry is genuinely settled rather than merely quiet, but it
-still reads on the dossier as an unfinished run. Making that distinction
-visible is outstanding work, not something this classification achieves.
+A code with no retry is genuinely settled rather than merely quiet. Each
+dossier limitation carries that classification as `recovery` (#526):
+`automatic` where collection clears it on its own, at `retryAt` when one is
+known, and `none` where waiting changes nothing. The Data limitations section
+shows it beside what the shortfall `affects` and, where it can name them, the
+raids and bosses it covers. A completed run's limitations stop being listed
+once a newer full collection for that character is in flight, because that
+collection is re-reading exactly what they describe. A light refresh (one page
+of history, the bookmark untouched) and a tier search re-read none of it, so
+they leave the limitations listed.
 
 Such a run carries its shortfall in `parse_limitation_code` alone:
 `limitation_code` reports the history scan, which finished, and the negative

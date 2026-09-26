@@ -5067,6 +5067,43 @@ describe("PostgreSQL repositories", () => {
     expect(found?.wclClientSecretEncrypted).toBe("encrypted-secret");
   });
 
+  it("records a light refresh on the run it reserves, and on no other", async () => {
+    // Break caught (#541 review): the light/full distinction lived only in
+    // the queue payload, so a reader could not tell a one-page refresh from a
+    // collection that re-reads the last full run's shortfalls.
+    const light = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Testcharacterlight1"
+    } as const;
+    const full = { ...light, name: "Testcharacterlight2" } as const;
+    const lightRun = await repositories.evidence.reserve({
+      key: light,
+      freshnessCutoff: new Date(0),
+      at: new Date(),
+      lightRefresh: true
+    });
+    const fullRun = await repositories.evidence.reserve({
+      key: full,
+      freshnessCutoff: new Date(0),
+      at: new Date()
+    });
+
+    expect(lightRun.run.lightRefresh).toBe(true);
+    expect(
+      (await repositories.evidence.find(lightRun.run.id))?.lightRefresh
+    ).toBe(true);
+    expect(fullRun.run.lightRefresh).toBeUndefined();
+    // Joining the run in flight neither upgrades nor downgrades it.
+    const joined = await repositories.evidence.reserve({
+      key: light,
+      freshnessCutoff: new Date(0),
+      at: new Date()
+    });
+    expect(joined.kind).toBe("active");
+    expect(joined.active?.lightRefresh).toBe(true);
+  });
+
   it("records a limitation on an active run and clears it on the next claim", async () => {
     // Break caught: a refusal publishes nothing, so this is the only way a
     // deferral reaches a reader. Left uncleared it would outlive the attempt

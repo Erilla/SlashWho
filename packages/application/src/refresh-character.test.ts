@@ -91,7 +91,11 @@ describe("refreshCharacter", () => {
     // A cutoff of `at` leaves nothing fresh, which is what forces a new run
     // without touching the shared freshness window.
     expect(h.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key, freshnessCutoff: at })
+      expect.objectContaining({
+        key,
+        freshnessCutoff: at,
+        lightRefresh: false
+      })
     );
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
@@ -107,6 +111,11 @@ describe("refreshCharacter", () => {
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
       expect.objectContaining({ mode: "light" })
+    );
+    // The run records it too, so the dossier does not take a one-page read
+    // for a collection that re-reads the last full run's shortfalls (#526).
+    expect(h.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ lightRefresh: true })
     );
   });
 
