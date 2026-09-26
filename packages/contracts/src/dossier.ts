@@ -308,7 +308,13 @@ export const dossierLimitationSchema = z
 
 export const dossierResearchSchema = z
   .object({
-    state: z.enum(["initial", "gathering", "complete", "partial"]),
+    state: z.enum([
+      "initial",
+      "provisional",
+      "gathering",
+      "complete",
+      "partial"
+    ]),
     message: z.string().min(1)
   })
   .strict();

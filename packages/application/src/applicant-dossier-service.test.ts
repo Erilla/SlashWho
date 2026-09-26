@@ -154,7 +154,7 @@ function fixture(
         .mockResolvedValue(
           "snapshot" in options ? options.snapshot : storedSnapshot()
         ),
-      getCurrentContainingCharacter: vi
+      getCurrentDeclaringCharacter: vi
         .fn()
         .mockResolvedValue(
           "containingSnapshot" in options ? options.containingSnapshot : null
@@ -2120,23 +2120,112 @@ describe("applicant dossier service", () => {
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
   });
 
-  it("reads the current snapshot containing a linked character", async () => {
+  it("shows a declared member the snapshot it belongs to, rooted at itself", async () => {
+    // Break caught: searching a character already claimed in another root's
+    // snapshot showed it alone for the whole of its own discovery run (#549's
+    // investigation measured 105 seconds for a ten-character account).
     const snapshot = storedSnapshot();
+    snapshot.characters[1] = { ...snapshot.characters[1]!, source: "claimed" };
     const { dossiers, repositories } = fixture({
       snapshot: null,
       containingSnapshot: snapshot
     });
 
     const result = await dossiers.read(alt);
-    expect(result).toMatchObject({ kind: "ready", dossier: { root } });
-    expect(result.kind === "ready" ? result.dossier.characters : []).toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: alt })])
-    );
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: {
+        root: alt,
+        research: {
+          state: "provisional",
+          message:
+            "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
+        }
+      }
+    });
+    expect(
+      result.kind === "ready"
+        ? result.dossier.characters.map((character) => character.key)
+        : []
+    ).toEqual([alt, root]);
     expect(repositories.snapshots.getCurrent).toHaveBeenCalledWith(alt);
     expect(
-      repositories.snapshots.getCurrentContainingCharacter
+      repositories.snapshots.getCurrentDeclaringCharacter
     ).toHaveBeenCalledWith(alt);
-    expect(repositories.manualConnections.list).toHaveBeenCalledWith(root);
+  });
+
+  it("keeps a provisional view provisional while evidence gathers", async () => {
+    // Break caught: the evidence-gathering note replaced the dossier-level
+    // research, so the page lost its signal to research the character itself.
+    const snapshot = storedSnapshot();
+    snapshot.characters[1] = { ...snapshot.characters[1]!, source: "claimed" };
+    const { dossiers } = fixture({
+      snapshot: null,
+      containingSnapshot: snapshot,
+      gatheringCharacter: alt
+    });
+
+    await expect(dossiers.read(alt)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: { research: { state: "provisional" } }
+    });
+  });
+
+  it("reads manual connections for the searched character, not the borrowed root", async () => {
+    // Break caught: an exclusion is scoped to the dossier it was made in, so
+    // the borrowed root's connections and exclusions must not follow its list.
+    const snapshot = storedSnapshot();
+    snapshot.characters[1] = {
+      ...snapshot.characters[1]!,
+      source: "declared_main"
+    };
+    const { dossiers, repositories } = fixture({
+      snapshot: null,
+      containingSnapshot: snapshot
+    });
+
+    await dossiers.read(alt);
+
+    expect(repositories.manualConnections.list).toHaveBeenCalledWith(alt);
+    expect(repositories.manualConnections.list).not.toHaveBeenCalledWith(root);
+    expect(
+      repositories.manualConnections.listDiscoveredExclusions
+    ).toHaveBeenCalledWith(alt);
+  });
+
+  it("does not borrow a fingerprint-derived membership", async () => {
+    // Break caught: an inferred link is not strong enough to present another
+    // root's whole alt list under the searched character's name.
+    const { dossiers } = fixture({
+      snapshot: null,
+      containingSnapshot: storedSnapshot()
+    });
+
+    const result = await dossiers.read(alt);
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: {
+        root: alt,
+        characters: [{ key: alt, source: "submitted" }],
+        research: { state: "initial" }
+      }
+    });
+  });
+
+  it("prefers a character's own snapshot to one it is a member of", async () => {
+    const { dossiers, repositories } = fixture({
+      containingSnapshot: storedSnapshot()
+    });
+
+    await expect(dossiers.read(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: { root, research: { state: "complete" } }
+    });
+    expect(
+      repositories.snapshots.getCurrentDeclaringCharacter
+    ).not.toHaveBeenCalled();
   });
 
   it("reads cached root-only evidence without contacting snapshot repositories", async () => {

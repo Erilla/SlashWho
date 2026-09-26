@@ -248,7 +248,31 @@ function DossierPageState({
       }
     }
 
-    if (!initialDossier && activeJobId)
+    // A character new to discovery may already be claimed in another root's
+    // snapshot, and a stale root still has its previous one; either is more
+    // than the root-only view, so read it while the job runs. Discovery not
+    // being ready yet is the expected answer otherwise, and leaves the
+    // initial view in place.
+    async function readKnownDossier() {
+      const sequence = ++requestSequence.current;
+      const response = await fetch(dossierPath, {
+        cache: "no-store",
+        signal: controller.signal,
+        headers: await credentialHeadersForRequest()
+      });
+      if (!response.ok) return;
+      const body = await readJson(response);
+      if (controller.signal.aborted || sequence < appliedSequence.current)
+        return;
+      const parsed = applicantDossierSchema.safeParse(body);
+      if (!parsed.success) return;
+      appliedSequence.current = sequence;
+      hasExpandedDossier.current = true;
+      setDossier(parsed.data);
+      setInitialError(null);
+    }
+
+    if (!initialDossier && activeJobId) {
       void readInitialDossier().catch((caught) => {
         if (caught instanceof Error && caught.name === "AbortError") return;
         if (controller.signal.aborted || hasExpandedDossier.current) return;
@@ -256,6 +280,10 @@ function DossierPageState({
           "The dossier could not be loaded. Please check your connection."
         );
       });
+      // A direct visit reached its job through a full read already.
+      if (!hasExpandedDossier.current)
+        void readKnownDossier().catch(() => undefined);
+    }
 
     return () => controller.abort();
   }, [activeJobId, dossierPath, initialDossier]);
@@ -366,7 +394,9 @@ function DossierPageState({
               await startResearch(parsed.data.root);
               return;
             }
-            if (rootOnly) {
+            // A provisional list is another root's account shown under this
+            // character, so its own discovery still has to run.
+            if (rootOnly || parsed.data.research.state === "provisional") {
               await startResearch();
               return;
             }
