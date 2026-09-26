@@ -441,6 +441,11 @@ a {
   transition: background-color 140ms ease;
 }
 
+.search-button-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
 .search-button:hover:not(:disabled) {
   background: #7dd3fc;
 }
