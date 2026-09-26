@@ -452,38 +452,43 @@ function responseLimitation(
   return { kind: "limitation", code: "unavailable" };
 }
 
+function firstGraphQlError(
+  value: unknown
+): { message: string | null; code: string | null } | null {
+  const envelope = record(value);
+  const errors = envelope && envelope.errors;
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+
+  const error = record(errors[0]);
+  const extensions = error && record(error.extensions);
+  return {
+    message:
+      (error && nonEmptyString(error.message)?.toLocaleLowerCase("en-US")) ??
+      null,
+    code:
+      (extensions &&
+        nonEmptyString(extensions.code)?.toLocaleUpperCase("en-US")) ??
+      null
+  };
+}
+
 /**
  * Whether a GraphQL envelope refuses our token rather than the thing asked
  * for. `UNAUTHORIZED` was read as a private character until #563, which made
  * a revoked token look like every player it touched choosing privacy.
  */
 function graphQlAuthRejected(value: unknown): boolean {
-  const envelope = record(value);
-  const errors = envelope && envelope.errors;
-  if (!Array.isArray(errors) || errors.length === 0) return false;
-  const error = record(errors[0]);
-  const message =
-    error && nonEmptyString(error.message)?.toLocaleLowerCase("en-US");
-  const extensions = error && record(error.extensions);
-  const code =
-    extensions && nonEmptyString(extensions.code)?.toLocaleUpperCase("en-US");
+  const error = firstGraphQlError(value);
   return (
-    (code === "UNAUTHORIZED" || code === "UNAUTHENTICATED") &&
-    !message?.includes("private")
+    (error?.code === "UNAUTHORIZED" || error?.code === "UNAUTHENTICATED") &&
+    !error.message?.includes("private")
   );
 }
 
 function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
-  const envelope = record(value);
-  const errors = envelope && envelope.errors;
-  if (!Array.isArray(errors) || errors.length === 0) return null;
-
-  const error = record(errors[0]);
-  const message =
-    error && nonEmptyString(error.message)?.toLocaleLowerCase("en-US");
-  const extensions = error && record(error.extensions);
-  const code =
-    extensions && nonEmptyString(extensions.code)?.toLocaleUpperCase("en-US");
+  const error = firstGraphQlError(value);
+  if (!error) return null;
+  const { message, code } = error;
   // "This report does not exist." is what Warcraft Logs answers for a missing
   // report code (recorded 2026-09-23), with `report: null` beside it. Read as
   // `unavailable`, a deleted report looked transient and held a run partial
