@@ -244,6 +244,9 @@ export function createBlizzardClient(
     return token;
   }
 
+  // The signal is the token request's own deadline, never a caller's: the
+  // request is shared, so its expiry is an upstream failure, not a
+  // cancellation, and is reported like any other.
   async function fetchAccessToken(signal?: AbortSignal): Promise<string> {
     if (cachedToken && cachedToken.expiresAt > Date.now()) {
       return cachedToken.value;
@@ -269,17 +272,16 @@ export function createBlizzardClient(
         }
       );
     } catch {
-      if (signal?.aborted) throw signal.reason;
       throw createBlizzardError({ kind: "transient" });
     }
 
-    signal?.throwIfAborted();
+    if (signal?.aborted) throw createBlizzardError({ kind: "transient" });
     if (!response.ok)
       throw createBlizzardError(responseFailure(response, options.onThrottle));
 
     try {
       const body = valueRecord(await response.json());
-      signal?.throwIfAborted();
+      if (signal?.aborted) throw new Error("token_deadline");
       const token = body && nonEmptyString(body.access_token);
       const expiresIn = body && finiteNumber(body.expires_in);
       if (!token || expiresIn === null || expiresIn <= 0) {
@@ -291,7 +293,7 @@ export function createBlizzardClient(
       };
       return token;
     } catch {
-      if (signal?.aborted) throw signal.reason;
+      if (signal?.aborted) throw createBlizzardError({ kind: "transient" });
       throw createBlizzardError({ kind: "schema_drift" });
     }
   }

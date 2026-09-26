@@ -474,6 +474,35 @@ describe("Blizzard gateway", () => {
     });
   });
 
+  it("reports a token endpoint that never responds as a transient failure", async () => {
+    // Break caught: the token request's own timeout escaped as a raw
+    // TimeoutError, which callers switching on BlizzardError.kind mishandle.
+    const tokenDeadline = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(tokenDeadline.signal);
+    try {
+      const { gateway } = clientFor((url, init) => {
+        if (url.hostname !== "oauth.battle.net")
+          return Response.json({ achievements: [] });
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason)
+          );
+          tokenDeadline.abort(
+            new DOMException("Token deadline", "TimeoutError")
+          );
+        });
+      });
+
+      await expect(gateway.getAchievementFingerprint(key)).rejects.toEqual(
+        expect.objectContaining({ kind: "transient" })
+      );
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("passes the abort signal and never includes an upstream body in its error", async () => {
     // Break caught: cancellation could be omitted, or an upstream error body
     // could enter a typed failure and be logged later.
