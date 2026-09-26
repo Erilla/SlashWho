@@ -11,9 +11,9 @@ function unauthorized(): Response {
 }
 
 export async function GET(request: Request): Promise<Response> {
-  return withHttpRequest("collection_monitor", async () => {
+  return withHttpRequest("collection_monitor", async (scope) => {
     const { collectionMonitor, accountAuth } = await getContainer();
-    const authentication = await accountAuth.authenticate(request);
+    const authentication = await accountAuth.authenticate(request, scope);
     if (
       authentication.principal?.kind === "account" &&
       !authorizes(authentication.principal, "admin")

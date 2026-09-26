@@ -1,5 +1,10 @@
 import { hkdfSync } from "node:crypto";
-import { decryptCredential, encryptCredential } from "@slashwho/application";
+import {
+  decryptCredential,
+  encryptCredential,
+  measuredRepositories,
+  type MeasurementScope
+} from "@slashwho/application";
 import type {
   AccountCredentialProvider,
   AccountCredentialRepository
@@ -98,11 +103,17 @@ export function createAccountCredentials(
         expectedVersion
       );
     },
+    /** `scope` charges the lookup to the request's `db*` totals. */
     async resolve(
       accountId: string,
-      provider: AccountCredentialProvider
+      provider: AccountCredentialProvider,
+      scope?: MeasurementScope
     ): Promise<{ values: ProviderCredentials; version: number } | null> {
-      const row = await repository.get(accountId, provider);
+      const credentials = scope
+        ? measuredRepositories({ accountCredentials: repository }, scope)
+            .accountCredentials
+        : repository;
+      const row = await credentials.get(accountId, provider);
       if (!row?.encryptedPayload) return null;
       return {
         values: JSON.parse(

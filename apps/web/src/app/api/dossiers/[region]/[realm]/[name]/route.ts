@@ -37,17 +37,18 @@ export async function GET(
     const { dossiers, searches, accountAuth, accountCredentials } =
       await getContainer();
     const denied = publicReadAuthorizationResponse(
-      await searches.authorizePublicRead(request.headers)
+      await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
     const { principal } = accountAuth
-      ? await accountAuth.authenticate(request)
+      ? await accountAuth.authenticate(request, scope)
       : { principal: null };
     const overrides = await resolveCredentialOverrides(
       request,
       principal,
       accountCredentials,
-      loadWebConfig()
+      loadWebConfig(),
+      scope
     );
     const result =
       new URL(request.url).searchParams.get("scope") === "initial"

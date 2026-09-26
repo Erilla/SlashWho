@@ -1,6 +1,9 @@
 import { createBlizzardClient } from "@slashwho/blizzard";
 import { createRaiderIoClient } from "@slashwho/raiderio";
-import type { DossierGatewayOverrides } from "@slashwho/application";
+import type {
+  DossierGatewayOverrides,
+  MeasurementScope
+} from "@slashwho/application";
 
 import type { WebConfig } from "./config";
 import type { ProviderCredentials } from "./account-credentials";
@@ -76,21 +79,23 @@ export async function resolveCredentialOverrides(
     | {
         resolve(
           accountId: string,
-          provider: "blizzard" | "raiderio" | "warcraftlogs"
+          provider: "blizzard" | "raiderio" | "warcraftlogs",
+          scope?: MeasurementScope
         ): Promise<{ values: ProviderCredentials; version: number } | null>;
       }
     | null
     | undefined,
-  config: WebConfig
+  config: WebConfig,
+  scope?: MeasurementScope
 ): Promise<DossierGatewayOverrides> {
   if (principal?.kind !== "account")
     return readCredentialOverrides(request.headers, config);
   if (principal.passwordChangeRequired) return {};
   if (!accountCredentials) return {};
   const [blizzard, raiderio, wcl] = await Promise.all([
-    accountCredentials.resolve(principal.accountId, "blizzard"),
-    accountCredentials.resolve(principal.accountId, "raiderio"),
-    accountCredentials.resolve(principal.accountId, "warcraftlogs")
+    accountCredentials.resolve(principal.accountId, "blizzard", scope),
+    accountCredentials.resolve(principal.accountId, "raiderio", scope),
+    accountCredentials.resolve(principal.accountId, "warcraftlogs", scope)
   ]);
   const headers = new Headers();
   if (blizzard?.values && "clientId" in blizzard.values) {

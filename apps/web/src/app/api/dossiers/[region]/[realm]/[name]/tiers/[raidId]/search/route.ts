@@ -59,11 +59,11 @@ export async function POST(
     const { dossiers, searches, accountAuth, accountCredentials } =
       await getContainer();
     const denied = publicReadAuthorizationResponse(
-      await searches.authorizeTierSearch(request.headers)
+      await searches.authorizeTierSearch(request.headers, scope)
     );
     if (denied) return denied;
     const { principal } = accountAuth
-      ? await accountAuth.authenticate(request)
+      ? await accountAuth.authenticate(request, scope)
       : { principal: null };
     const overrides =
       principal?.kind === "account"
@@ -71,7 +71,8 @@ export async function POST(
             request,
             principal,
             accountCredentials,
-            loadWebConfig()
+            loadWebConfig(),
+            scope
           )
         : undefined;
     const result = await dossiers.searchTier(
