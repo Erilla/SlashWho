@@ -1243,7 +1243,6 @@ export const characterMythicKills = pgTable(
       table.evidenceRunId,
       table.sourceFightKey
     ),
-    index("character_mythic_kills_run_idx").on(table.evidenceRunId),
     check(
       "character_mythic_kills_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
@@ -1314,7 +1313,6 @@ export const characterTierBestParses = pgTable(
       table.raidId,
       table.bossId
     ),
-    index("character_tier_best_parses_run_idx").on(table.evidenceRunId),
     check(
       "character_tier_best_parses_damage_parse_check",
       sql`(${table.damageParseState} = 'available' AND ${table.damagePercentile} IS NOT NULL AND ${table.damagePercentile} >= 0 AND ${table.damagePercentile} <= 100) OR (${table.damageParseState} IN ('not_applicable', 'unavailable') AND ${table.damagePercentile} IS NULL)`
@@ -1355,7 +1353,6 @@ export const characterMythicWipes = pgTable(
       table.evidenceRunId,
       table.fightUrl
     ),
-    index("character_mythic_wipes_run_idx").on(table.evidenceRunId),
     check(
       "character_mythic_wipes_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`

@@ -266,8 +266,6 @@ export interface RateLimitRepository {
     expiresAt: Date,
     at?: Date
   ): Promise<{ allowed: boolean; retryAt: Date | null }>;
-  record(callerBucketHash: string, expiresAt: Date): Promise<void>;
-  countActive(callerBucketHash: string, at?: Date): Promise<number>;
   cleanupExpired(at?: Date): Promise<number>;
 }
 
@@ -1662,9 +1660,7 @@ export interface Repositories {
       caller: CallerClass
     ): Promise<DiscoveryRun>;
     claim(id: string, attempt: number): Promise<DiscoveryRun | null>;
-    markRunning(id: string): Promise<void>;
     markRetrying(id: string, attempt: number, nextRetryAt: Date): Promise<void>;
-    complete(id: string, snapshotId: string): Promise<void>;
     /**
      * Completes a run against the snapshot another run's live fingerprint
      * sweep cursor is extending for the same root, instead of one it published

@@ -338,29 +338,12 @@ function createMemoryRepositories(): Repositories {
         run.nextRetryAt = null;
         return run;
       },
-      async markRunning(id) {
-        const run = runs.get(id);
-        if (!run) throw new Error("discovery_run_not_found");
-        run.status = "running";
-        run.startedAt ??= new Date("2026-08-05T08:00:00.000Z");
-        run.nextRetryAt = null;
-      },
       async markRetrying(id, attempt, nextRetryAt) {
         const run = runs.get(id);
         if (!run) throw new Error("discovery_run_not_found");
         run.status = "retrying";
         run.attempt = attempt;
         run.nextRetryAt = nextRetryAt;
-      },
-      async complete(id, snapshotId) {
-        const run = runs.get(id);
-        // Mirrors the PostgreSQL guard: a run completes only against a
-        // snapshot it published itself.
-        if (!run || snapshots.get(snapshotId)?.runId !== id) {
-          throw new Error("discovery_run_not_found");
-        }
-        run.status = "complete";
-        run.snapshotId = snapshotId;
       },
       async completeWithLiveSweepSnapshot(id, snapshotId) {
         const run = runs.get(id);
@@ -511,10 +494,6 @@ function createMemoryRepositories(): Repositories {
     rateLimits: {
       async reserve() {
         return { allowed: true, retryAt: null };
-      },
-      async record() {},
-      async countActive() {
-        return 0;
       },
       async cleanupExpired() {
         return 0;

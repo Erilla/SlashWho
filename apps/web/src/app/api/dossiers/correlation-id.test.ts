@@ -77,9 +77,7 @@ const repositories = {
     async claim() {
       return null;
     },
-    async markRunning() {},
     async markRetrying() {},
-    async complete() {},
     async completeWithLiveSweepSnapshot() {},
     async fail() {},
     async find() {
@@ -104,10 +102,6 @@ const repositories = {
   rateLimits: {
     async reserve() {
       return { allowed: true, retryAt: null };
-    },
-    async record() {},
-    async countActive() {
-      return 0;
     },
     async cleanupExpired() {
       return 0;

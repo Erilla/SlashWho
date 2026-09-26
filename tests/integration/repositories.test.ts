@@ -11,7 +11,6 @@ import {
   createPostgresRepositories,
   createDiscoveryQueue,
   runMigrations,
-  type Repositories,
   type CharacterMythicKillInput,
   type CharacterMythicWipeInput,
   type EvidenceRunCost,
@@ -20,6 +19,10 @@ import {
 } from "../../packages/database/src";
 import type { WarcraftLogsGateway } from "../../packages/warcraftlogs/src";
 import { startPostgres } from "./postgres";
+import {
+  createTestRepositories,
+  type TestRepositories
+} from "./test-repositories";
 import { createAccountCredentials } from "../../apps/web/src/server/account-credentials";
 
 /**
@@ -115,7 +118,7 @@ function mythicWipe(
 }
 
 async function seedCompleteSnapshot(
-  repositories: Repositories,
+  repositories: TestRepositories,
   options: {
     refreshedAt?: Date;
     displayName?: string;
@@ -141,7 +144,7 @@ async function seedCompleteSnapshot(
 }
 
 async function admitSweep(
-  repositories: Repositories,
+  repositories: TestRepositories,
   runId: string,
   key: CharacterKey
 ): Promise<{
@@ -171,12 +174,12 @@ async function admitSweep(
 describe("PostgreSQL repositories", () => {
   let pool: Pool;
   let stop: () => Promise<void>;
-  let repositories: Repositories;
+  let repositories: TestRepositories;
 
   beforeAll(async () => {
     ({ pool, stop } = await startPostgres());
     await runMigrations(pool);
-    repositories = createPostgresRepositories(pool);
+    repositories = createTestRepositories(pool);
   });
 
   beforeEach(async () => {
@@ -2228,6 +2231,86 @@ describe("PostgreSQL repositories", () => {
       region: "eu",
       realm: "draenor"
     });
+  });
+
+  it("round-trips awkward text, nulls and a zero percentile through the batched publish", async () => {
+    // publish sends each column as one array. Array literals have their own
+    // quoting, so text that needs escaping and a legitimate numeric zero are
+    // what a mistake there would corrupt.
+    const awkward = 'Boss "Quoted", {braced} \\ back\\slash';
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [
+        mythicKill({
+          bossName: awkward,
+          journalBossId: null,
+          guild: null,
+          performance: {
+            spec: null,
+            damage: { state: "available", percentile: 0 },
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "available", percentile: 99.5 }
+          }
+        }),
+        mythicKill({
+          bossId: "1235",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=2"
+        })
+      ],
+      wipes: [mythicWipe({ bossName: awkward, journalBossId: null })],
+      tierBests: [
+        {
+          raidId: "42",
+          raidName: "NULL",
+          bossId: "1234",
+          bossName: awkward,
+          rankingsUrl: "https://www.warcraftlogs.com/character/eu/x#boss=1234",
+          performance: {
+            spec: { name: "Fire", iconUrl: "https://example.test/fire.jpg" },
+            damage: { state: "available", percentile: 0 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }
+      ],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    expect(completed?.kills).toHaveLength(2);
+    const kill = completed?.kills.find((stored) => stored.bossId === "1234");
+    expect(kill).toMatchObject({
+      bossName: awkward,
+      journalBossId: null,
+      guild: null,
+      performance: {
+        damage: { state: "available", percentile: 0 },
+        healing: { state: "not_applicable" },
+        bossDamage: { state: "available", percentile: 99.5 }
+      }
+    });
+    expect(completed?.wipes).toMatchObject([
+      { bossName: awkward, journalBossId: null }
+    ]);
+    expect(completed?.tierBests).toMatchObject([
+      {
+        raidName: "NULL",
+        bossName: awkward,
+        performance: {
+          spec: { name: "Fire" },
+          damage: { state: "available", percentile: 0 }
+        }
+      }
+    ]);
   });
 
   it("persists a rankless successful lookup and carries it into later publications", async () => {
@@ -5360,6 +5443,17 @@ describe("PostgreSQL repositories", () => {
       await expect(
         repositories.evidence.listResumable(25, at)
       ).resolves.toEqual([rootKey]);
+    });
+
+    it("reports a waiting run's deadline through listStatus", async () => {
+      // listStatus once carried its own copy of the run column list and
+      // dropped retry_after_at, so the deadline came back undefined.
+      const deadline = new Date("2026-09-18T12:40:00.000Z");
+      const runId = await publishWaiting(rootKey, deadline);
+
+      const [status] = await repositories.evidence.listStatus([rootKey]);
+      expect(status?.id).toBe(runId);
+      expect(status?.retryAfterAt).toEqual(deadline);
     });
 
     it("leaves a character whose deadline has not arrived", async () => {
