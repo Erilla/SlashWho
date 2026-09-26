@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
-import { createRaiderIoClient, raiderIoHistoricTierOrdinals } from "./index";
+import {
+  createRaiderIoClient,
+  raiderIoHistoricTierOrdinals,
+  raiderIoHistoricTiers
+} from "./index";
 import recordedRankings from "./fixtures/queen-ansurek-rankings.json";
 
 type FixtureName =
@@ -749,6 +753,32 @@ describe("Raider.IO gateway", () => {
     expect(raiderIoHistoricTierOrdinals).toEqual([
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
     ]);
+  });
+
+  it("names the raids each pinned tier answers for", () => {
+    // Pinned by name, not count: a raid filed one tier off passes any
+    // structural check, and would let a run skip the tier that holds it.
+    // Recorded from live responses on 2026-09-26.
+    const raids = new Map(
+      raiderIoHistoricTiers.map((tier) => [tier.ordinal, tier.raidSlugs])
+    );
+    expect(raids.get(19)).toEqual([
+      "the-emerald-nightmare",
+      "the-nighthold",
+      "trial-of-valor"
+    ]);
+    expect(raids.get(23)).toEqual([
+      "battle-of-dazaralor",
+      "crucible-of-storms"
+    ]);
+    expect(raids.get(24)).toEqual(["the-eternal-palace"]);
+    expect(raids.get(25)).toEqual(["nyalotha-the-waking-city"]);
+    expect(raids.get(29)).toEqual(["vault-of-the-incarnates"]);
+    expect(raids.get(32)).toEqual(["nerubar-palace"]);
+    expect(raids.get(35)).toEqual(["tier-mn-1"]);
+    expect(raiderIoHistoricTiers.map((tier) => tier.ordinal)).toEqual(
+      raiderIoHistoricTierOrdinals
+    );
   });
 
   it("keeps the earliest duplicate Mythic kill returned by overlapping tiers", async () => {

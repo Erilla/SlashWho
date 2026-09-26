@@ -11,6 +11,7 @@ import {
   raidOffersMythicRankings,
   raidTierConclusion,
   raidTiers,
+  raiderIoRaidContentWindowEnd,
   supportedRaidCatalogue
 } from "./raid-catalogue";
 import currentContentWindowSnapshot from "./raid-current-content-windows.generated.json";
@@ -484,4 +485,18 @@ it("judges a raid's Mythic difficulty by when its window closed", () => {
       source: "raiderio-raiding-static-data"
     })
   ).toBe(true);
+});
+
+it("closes a Raider.IO raid when the last raid filed under its slug closes", () => {
+  expect(raiderIoRaidContentWindowEnd("the-nighthold")).toBe(
+    "2017-06-14T23:00:00.000Z"
+  );
+  // Three Journal raids share Raider.IO's opening Midnight tier; each has a
+  // reviewed opening with no close, which yields to the snapshot's close.
+  expect(raiderIoRaidContentWindowEnd("tier-mn-1")).toBe(
+    "2026-08-19T23:00:00.000Z"
+  );
+  // Still open, and a slug nothing is filed under: neither has closed.
+  expect(raiderIoRaidContentWindowEnd("the-venomous-abyss")).toBeNull();
+  expect(raiderIoRaidContentWindowEnd("awakened-amirdrassil")).toBeNull();
 });

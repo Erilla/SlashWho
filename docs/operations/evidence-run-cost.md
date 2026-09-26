@@ -478,7 +478,10 @@ answers for concluded tiers is worth doing. That turns on what they cost, so
 since #298 each attempt counts its physical requests to them:
 
 - `raiderio_historic_requests` — Raider.IO `raid-progress`, one per tier
-  asked. It runs only when the history scan does in earnest.
+  asked. It runs only when the history scan does in earnest. A character with
+  a scan floor is asked only for the tiers whose raids were still current at
+  or after it, and always for the newest pinned tier, so this falls from 17
+  towards 1 as their history settles.
 - `raiderio_rankings_requests` — Raider.IO boss rankings for the run's kills.
   A guild query costs two requests, the world rankings one.
 - `blizzard_achievements_requests` — the Blizzard achievements profile, for
@@ -518,6 +521,16 @@ ORDER BY attempts DESC;
 
 `mean_warcraft_logs` is taken over the same counted rows, so the three
 providers are compared per run on the same sample.
+
+What it showed on 2026-09-26, the first day it counted (37 full runs on
+`test`): Raider.IO `raid-progress` was 17 requests on every run that asked it
+(mean 13.6, as some runs skip it), against 13.3 Warcraft Logs requests, and
+its lookup's median time (`raiderio_historic_ms`) was 4.7 s of a 17.4 s median
+run. Raider.IO rankings averaged 3.4 requests and Blizzard exactly 1; even the
+busiest hour on record, 56 attempts, is 0.2% of
+`BLIZZARD_HOURLY_REQUEST_BUDGET`. So retention was worth doing for
+`raid-progress` alone, and #298 did it by asking only the tiers above the
+character's scan floor.
 
 Two things these counts do not cover. The web process reads Blizzard
 achievements and Raider.IO boss rankings for the dossier too, behind its own

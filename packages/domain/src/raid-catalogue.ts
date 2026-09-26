@@ -536,6 +536,28 @@ export function lookupRaidCurrentContentWindow(
 }
 
 /**
+ * When a Raider.IO raid slug stopped being current content: the latest close
+ * among the catalogued raids filed under it, since one slug can carry several
+ * (`tier-mn-1`). `null` when any of them is still open or cannot be placed in
+ * time, and when nothing is filed under the slug -- never a close we do not
+ * have.
+ */
+export function raiderIoRaidContentWindowEnd(raidSlug: string): string | null {
+  const ends = [...raiderIoRaidSlugs]
+    .filter(([, slug]) => slug === raidSlug)
+    .map(([journalRaidId]) => currentContentWindows.get(journalRaidId)?.endsAt);
+  if (ends.length === 0) return null;
+  let latest: string | null = null;
+  for (const endsAt of ends) {
+    if (!endsAt || Number.isNaN(Date.parse(endsAt))) return null;
+    if (latest === null || Date.parse(endsAt) > Date.parse(latest)) {
+      latest = endsAt;
+    }
+  }
+  return latest;
+}
+
+/**
  * Whether any catalogued raid's current-content window opened after `since`
  * and by `at`.
  *
