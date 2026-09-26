@@ -30,3 +30,13 @@ it("finds supported links after sixteen unrelated or duplicate URLs", () => {
   ]);
   expect(result.truncated).toBe(false);
 });
+
+it("accepts an accented Raider.IO realm as the character on Blizzard's slug", () => {
+  const result = parseApplicantCandidates(
+    "https://raider.io/characters/eu/aggra-portugu%C3%AAs/Aria https://www.warcraftlogs.com/character/eu/aggra-portugues/aria"
+  );
+  expect(result.candidates.map((candidate) => candidate.identity)).toEqual([
+    'character:["eu","aggra-portugues","aria"]'
+  ]);
+  expect(result.invalid).toBe(0);
+});
