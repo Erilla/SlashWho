@@ -1,0 +1,28 @@
+name: Set up workspace
+description: >-
+  Installs Node from .node-version and pnpm from packageManager, restores the
+  pnpm store, and installs the workspace.
+
+# Neither version is written here. setup-node reads `.node-version`, and
+# Corepack reads `packageManager` in package.json, which is also what every
+# `corepack pnpm` command in the repository uses. pnpm/action-setup was a third
+# copy of the pnpm version, so it is gone; setup-node's own `cache: pnpm` needs
+# pnpm on the path before setup-node runs, so the store is cached here instead.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: .node-version
+    - shell: bash
+      run: corepack enable
+    - id: pnpm-store
+      shell: bash
+      run: echo "path=$(corepack pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: pnpm-store-${{ runner.os }}-
+    - shell: bash
+      run: corepack pnpm install --frozen-lockfile

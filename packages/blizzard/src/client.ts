@@ -10,9 +10,11 @@ import type {
   BlizzardFailure,
   BlizzardGateway,
   BlizzardProfileRequestObserver,
+  BlizzardSlotWait,
   BlizzardRosterCharacter,
   CompletedAchievement
 } from "./types";
+import { createRequestLimiter, type RequestLimits } from "./request-limiter";
 
 export type CreateBlizzardClientOptions = Readonly<{
   fetch: typeof globalThis.fetch;
@@ -21,6 +23,12 @@ export type CreateBlizzardClientOptions = Readonly<{
   /** Overrides both Blizzard hosts for deterministic local integration tests. */
   baseUrl?: string;
   onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  /**
+   * Bounds every API read this client makes, across all of its callers. A
+   * process that shares one client between several consumers of the same
+   * credentials shares these limits too; the OAuth token fetch is exempt.
+   */
+  requestLimits?: RequestLimits;
 }>;
 
 type AccessToken = Readonly<{
@@ -231,6 +239,9 @@ export function createBlizzardClient(
     CharacterKey["region"],
     CachedPlayableClassNames
   >();
+  const limiter = options.requestLimits
+    ? createRequestLimiter(options.requestLimits)
+    : undefined;
 
   async function accessToken(signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
@@ -302,10 +313,30 @@ export function createBlizzardClient(
     url: URL,
     normalize: (value: unknown) => T | null,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<T> {
     const token = await accessToken(signal);
     await onProfileRequest?.();
+    signal?.throwIfAborted();
+    if (!limiter) return send(url, token, normalize, signal);
+    const acquire = () => limiter.acquire(signal);
+    const release = await (waitForSlot ? waitForSlot(acquire) : acquire());
+    // The slot is held until the body is read, so a slow body still counts
+    // against the requests in flight.
+    try {
+      return await send(url, token, normalize, signal);
+    } finally {
+      release();
+    }
+  }
+
+  async function send<T>(
+    url: URL,
+    token: string,
+    normalize: (value: unknown) => T | null,
+    signal?: AbortSignal
+  ): Promise<T> {
     signal?.throwIfAborted();
     let response: Response;
     try {
@@ -365,7 +396,8 @@ export function createBlizzardClient(
   async function playableClassNames(
     region: CharacterKey["region"],
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<ReadonlyMap<number, string>> {
     const cached = cachedClassNames.get(region);
     if (cached && cached.expiresAt > Date.now()) return cached.names;
@@ -388,7 +420,8 @@ export function createBlizzardClient(
         return names.size > 0 ? names : null;
       },
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
     cachedClassNames.set(region, {
       names,
@@ -414,14 +447,16 @@ export function createBlizzardClient(
   async function getGuildRoster(
     root: CharacterKey,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<readonly BlizzardRosterCharacter[]> {
     const key = validCharacterKey(root);
     const profile = await request(
       profileUrl(key),
       (value) => valueRecord(value),
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
     if (!("guild" in profile) || profile.guild === null) return [];
 
@@ -435,20 +470,23 @@ export function createBlizzardClient(
     return getGuildRosterByIdentity(
       { name, region: key.region, realm: realmSlug },
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
   }
 
   async function getGuildRosterByIdentity(
     guild: CharacterGuild,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<readonly BlizzardRosterCharacter[]> {
     const validGuildIdentity = validGuild(guild);
     const classNames = await playableClassNames(
       validGuildIdentity.region,
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
 
     return request(
@@ -477,35 +515,40 @@ export function createBlizzardClient(
           );
       },
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
   }
 
   async function getAchievementFingerprint(
     key: CharacterKey,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<AchievementFingerprint> {
     const validKey = validCharacterKey(key);
     return request(
       achievementsUrl(validKey),
       fingerprintFromResponse,
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
   }
 
   async function getCompletedAchievements(
     key: CharacterKey,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<readonly CompletedAchievement[]> {
     const validKey = validCharacterKey(key);
     return request(
       achievementsUrl(validKey),
       completedAchievementsFromResponse,
       signal,
-      onProfileRequest
+      onProfileRequest,
+      waitForSlot
     );
   }
 

@@ -6,24 +6,22 @@ import { resolveCredentialOverrides } from "../../../../../../server/credential-
 import { getContainer } from "../../../../../../server/container";
 import {
   apiError,
-  parseCharacterRoute,
+  jsonNoStore,
   publicReadAuthorizationResponse,
+  resolveCharacterRoute,
   withHttpRequest
 } from "../../../../../../server/http";
 
-type CharacterParams = { region: string; realm: string; name: string };
-
 export async function GET(
   request: Request,
-  context: { params: Promise<CharacterParams> }
+  context: RouteContext<"/api/dossiers/[region]/[realm]/[name]">
 ): Promise<Response> {
   return withHttpRequest("dossier", async (scope) => {
-    let parsed: ReturnType<typeof parseCharacterRoute>;
-    try {
-      parsed = parseCharacterRoute(await context.params);
-    } catch {
-      return apiError("invalid_character_url");
-    }
+    // A non-canonical spelling redirects rather than being refused.
+    const parsed = await resolveCharacterRoute(context, {
+      requireCanonical: false
+    });
+    if ("refusal" in parsed) return parsed.refusal;
     if (!parsed.canonical) {
       const initialScope =
         new URL(request.url).searchParams.get("scope") === "initial";
@@ -61,11 +59,9 @@ export async function GET(
           )
         : await dossiers.read(parsed.key, request.signal, overrides, scope);
     if (result.kind === "not_ready") return apiError("discovery_not_ready");
-    return Response.json(
-      applicantDossierSchema.parse(compactDossierWipes(result.dossier)),
-      {
-        headers: { "cache-control": "no-store" }
-      }
+    return jsonNoStore(
+      applicantDossierSchema,
+      compactDossierWipes(result.dossier)
     );
   });
 }

@@ -44,7 +44,7 @@ jobs:
     outputs:
       run_full: ${{ steps.scope.outputs.run_full }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Decides whether this change can affect the build. Anything unrecognised
       # runs the full suite: the failure mode of running too often is a slow
@@ -109,16 +109,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.20.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.15.0
-          cache: pnpm
-      - run: corepack pnpm install --frozen-lockfile
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-workspace
       - run: corepack pnpm format:check
       - run: corepack pnpm lint
       - run: corepack pnpm typecheck
@@ -129,16 +121,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.20.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.15.0
-          cache: pnpm
-      - run: corepack pnpm install --frozen-lockfile
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-workspace
       # The unit suite was first given a 6 GB heap and then, when that was
       # still not enough, split into one vitest process per workspace
       # (d4739580, 209f11c9). apps/web is the heavy half — two thirds of the
@@ -164,16 +148,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.20.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.15.0
-          cache: pnpm
-      - run: corepack pnpm install --frozen-lockfile
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-workspace
       - run: corepack pnpm test:integration
 
   # The only job that needs a browser, so the only one that installs one.
@@ -198,17 +174,9 @@ jobs:
       matrix:
         shard: [1, 2]
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.20.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.15.0
-          cache: pnpm
-      - run: corepack pnpm install --frozen-lockfile
-      - uses: actions/cache@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-workspace
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-1.62.1-chromium
@@ -233,9 +201,9 @@ jobs:
       matrix:
         image: [web, worker]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.${{ matrix.image }}

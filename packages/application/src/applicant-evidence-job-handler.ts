@@ -1172,12 +1172,12 @@ export function createApplicantEvidenceJobHandler(
         // frozen at whatever it showed on the night.
         const settledBefore = new Date(now().getTime() - options.killSettleMs);
         const hydratedFightUrls = new Set(
-          await options.evidence.hydratedFightUrls(run.key, settledBefore)
+          await evidence.hydratedFightUrls(run.key, settledBefore)
         );
         const collectedTierZones = new Map(
-          await options.evidence.collectedTierZones(run.key)
+          await evidence.collectedTierZones(run.key)
         );
-        const storedTerminal = await options.evidence.terminalTiers(run.key);
+        const storedTerminal = await evidence.terminalTiers(run.key);
         const terminalRaidIds = {
           kills: new Set(
             storedTerminal
@@ -1197,7 +1197,7 @@ export function createApplicantEvidenceJobHandler(
         };
         // How far back the report scan still has to page. Pages below this can
         // only re-find evidence already stored, so the scan stops there.
-        const storedEvidence = await options.evidence.storedEvidenceTiers(
+        const storedEvidence = await evidence.storedEvidenceTiers(
           run.key,
           tierSearchRaidId
         );
@@ -1249,7 +1249,7 @@ export function createApplicantEvidenceJobHandler(
             new Date(storedEvidence.lastCleanKillScanAt).getTime() <
             KILL_SCAN_FRESHNESS_MS;
         const historicAliases =
-          (await options.evidence.historicAliases?.(run.key)) ?? [];
+          (await evidence.historicAliases?.(run.key)) ?? [];
         // Freshness alone is not evidence that this run is a parse resume. A
         // recent complete collection followed by a manual refresh still has
         // to look for new kills. The previous publication must also say that
