@@ -5,8 +5,8 @@ export type GuildTimelineBar = GuildTimelineSpan &
     x: number;
     width: number;
     lane: number;
-    /** Whether the guild's name fits on the bar, or sits just to its right. */
-    labelInside: boolean;
+    /** The guild's name as drawn on the bar, shortened to fit it. */
+    label: string;
   }>;
 
 export type GuildTimelineLayout = Readonly<{
@@ -78,12 +78,33 @@ function dayMs(date: string): number {
 }
 
 /**
+ * The guild's name as it fits on its bar: whole, shortened with an ellipsis,
+ * or empty when not even a letter and the ellipsis fit. The tooltip always
+ * carries the whole name.
+ */
+export function fitLabel(
+  name: string,
+  room: number,
+  labelWidth: (text: string) => number
+): string {
+  if (labelWidth(name) <= room) return name;
+  const letters = [...name];
+  for (let length = letters.length - 1; length > 0; length -= 1) {
+    const shortened = `${letters.slice(0, length).join("").trimEnd()}…`;
+    if (labelWidth(shortened) <= room) return shortened;
+  }
+  return "";
+}
+
+/**
  * Where each stretch is drawn. The axis starts on 1 January of the first
  * year with a night and ends today, so the latest bar sits against the
  * right edge. It is stretched to fill `fitWidth` when that is wider than
  * `minimumPixelsPerYear` allows, and scrolls when it is not. Each bar takes
- * the highest row with room for it and its label, so overlapping guilds get
- * rows of their own while a guild that follows another shares its row.
+ * the highest row with room for it, so overlapping guilds get rows of their
+ * own while a guild that follows another shares its row. Labels sit inside
+ * their bars and never claim room of their own: a label beside a short bar
+ * once pushed a long one down a row.
  */
 export function layoutGuildTimeline(
   spans: readonly GuildTimelineSpan[],
@@ -115,11 +136,7 @@ export function layoutGuildTimeline(
       MINIMUM_BAR_WIDTH,
       x(span.lastNight) + pixelsPerYear / 365.25 - start
     );
-    const labelWidth = options.labelWidth(span.guild.name);
-    const labelInside = width >= labelWidth + LABEL_INSET * 2;
-    const end =
-      (labelInside ? start + width : start + width + LABEL_INSET + labelWidth) +
-      LANE_GAP;
+    const end = start + width + LANE_GAP;
     let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
     if (lane === -1) {
       lane = laneEnds.length;
@@ -127,7 +144,17 @@ export function layoutGuildTimeline(
     } else {
       laneEnds[lane] = end;
     }
-    return { ...span, x: start, width, lane, labelInside };
+    return {
+      ...span,
+      x: start,
+      width,
+      lane,
+      label: fitLabel(
+        span.guild.name,
+        width - LABEL_INSET * 2,
+        options.labelWidth
+      )
+    };
   });
   return {
     bars,
