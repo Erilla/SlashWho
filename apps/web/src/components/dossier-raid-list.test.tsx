@@ -13,6 +13,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 import type { ReactElement } from "react";
 
+import { compactDossierWipes } from "../lib/dossier-wipes";
 import { DossierCharacterProvider } from "./dossier-character-name";
 import { DossierRaidList } from "./dossier-raid-list";
 
@@ -102,6 +103,7 @@ it("shows the grouped rank and keeps distinct reports in a click-only menu", asy
     />
   );
   expect(screen.getByText("World #48")).toBeVisible();
+  fireEvent.click(screen.getByText("View kill evidence"));
   const trigger = screen.getByRole("button", {
     name: "Choose from 2 kill reports"
   });
@@ -173,6 +175,7 @@ it("opens duplicate kill reports on hover with guild and uploader labels", () =>
   ] as unknown as ApplicantDossier["raids"];
 
   renderWithDossierCharacters(<DossierRaidList raids={raids} />);
+  fireEvent.click(screen.getByText("View kill evidence"));
 
   const trigger = screen.getByRole("button", {
     name: "Choose from 3 kill reports"
@@ -1472,7 +1475,7 @@ it("shows first-kill and best parse summaries before evidence details are opened
   expect(
     screen.getByText("View kill evidence").closest("details")
   ).not.toHaveAttribute("open");
-  screen.getByText("View kill evidence").click();
+  fireEvent.click(screen.getByText("View kill evidence"));
   const eventParses = within(
     screen.getByRole("region", { name: "Kill evidence" })
   ).getByRole("region", { name: "First kill parses" });
@@ -1517,4 +1520,130 @@ it("lists bosses within a raid last-to-first, with the raid order untouched", ()
     "The Bloodbound Horror evidence",
     "Ulgrax the Devourer evidence"
   ]);
+});
+
+function evidenceSeenFor(
+  raids: ApplicantDossier["raids"],
+  summary: string,
+  region: string
+): string {
+  renderWithDossierCharacters(<DossierRaidList raids={raids} />);
+  fireEvent.click(screen.getByText(summary));
+  // React's generated ids differ between renders; nothing else may.
+  const html = screen
+    .getByRole("region", { name: region })
+    .innerHTML.replace(/_r_[0-9a-z]+_/g, "_r_id_");
+  cleanup();
+  return html;
+}
+
+function compacted(raids: ApplicantDossier["raids"]) {
+  return compactDossierWipes({ raids } as ApplicantDossier).raids;
+}
+
+const pulls = (
+  report: string,
+  night: string,
+  times: readonly string[],
+  characters: readonly CharacterKey[]
+) =>
+  times.map((time, index) => ({
+    attemptedAt: `${night}T${time}:00.000Z`,
+    reportUrl: `https://www.warcraftlogs.com/reports/${report}#fight=${index + 1}`,
+    source: "guild_log" as const,
+    uploader: "Abradix",
+    guild: { name: "Rancour", region: "eu" as const, realm: "draenor" },
+    characters: [...characters]
+  }));
+
+it("shows the same wipe evidence from compacted pulls as from every pull", () => {
+  // Break caught: the dossier route folds each night's pulls before sending
+  // them, so any difference here is evidence the page stops showing.
+  const wipes = [
+    ...pulls("night-one", "2025-02-11", ["20:10", "20:40", "21:15"], [ryii]),
+    ...pulls("night-one-alt", "2025-02-11", ["21:30"], [ryalts]),
+    ...pulls("night-two", "2025-02-12", ["19:50", "22:05"], [ryii, ryalts])
+  ];
+  const raids = [
+    {
+      raidId: "1320",
+      raidName: "The Venomous Abyss",
+      imageUrl: null,
+      cuttingEdge: null,
+      bosses: [
+        {
+          bossId: boss.bossId,
+          bossName: boss.bossName,
+          bossOrder: boss.bossOrder,
+          imageUrl: boss.imageUrl,
+          state: "wipe" as const,
+          wipe: wipes[0]!,
+          wipes
+        }
+      ]
+    }
+  ] satisfies ApplicantDossier["raids"];
+
+  expect(
+    evidenceSeenFor(compacted(raids), "View wipe evidence", "Wipe evidence")
+  ).toBe(evidenceSeenFor(raids, "View wipe evidence", "Wipe evidence"));
+});
+
+it("files compacted pulls under the same kills as every pull", () => {
+  const kill = (killedAt: string, report: string) => ({
+    ...boss.firstKill,
+    killedAt,
+    reportUrl: `https://www.warcraftlogs.com/reports/${report}#fight=9`
+  });
+  const wipes = [
+    ...pulls("main", "2025-02-11", ["20:10", "20:40", "21:45"], [ryii]),
+    ...pulls("main-2", "2025-02-18", ["20:05", "20:30"], [ryii])
+  ];
+  const raids = [
+    {
+      raidId: "1320",
+      raidName: "The Venomous Abyss",
+      imageUrl: null,
+      cuttingEdge: null,
+      bosses: [
+        {
+          ...boss,
+          firstKill: kill("2025-02-11T21:00:00.000Z", "alt"),
+          firstKills: [
+            kill("2025-02-11T21:00:00.000Z", "alt"),
+            kill("2025-02-18T21:00:00.000Z", "main-3")
+          ],
+          wipes
+        }
+      ]
+    }
+  ] satisfies ApplicantDossier["raids"];
+
+  expect(
+    evidenceSeenFor(compacted(raids), "View kill evidence", "Kill evidence")
+  ).toBe(evidenceSeenFor(raids, "View kill evidence", "Kill evidence"));
+});
+
+it("builds a boss's evidence only once its panel is opened", () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "1320",
+          raidName: "The Venomous Abyss",
+          imageUrl: null,
+          cuttingEdge: null,
+          bosses: [boss]
+        }
+      ]}
+    />
+  );
+
+  expect(
+    screen.queryByRole("region", { hidden: true, name: "Kill evidence" })
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("View kill evidence"));
+  expect(
+    screen.getByRole("region", { name: "Kill evidence" })
+  ).toBeInTheDocument();
 });
