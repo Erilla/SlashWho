@@ -175,3 +175,26 @@ it("rejects forced-change sessions and invalid provider pairs", async () => {
       .status
   ).toBe(401);
 });
+
+it("authenticates under each handler's request scope", async () => {
+  // Break caught: an unscoped authenticate leaves the session lookup out of
+  // dbMs, so an auth-only request logs no database time at all.
+  await GET(new Request("https://slashwho.example/api/account/credentials"));
+  await DELETE(
+    operatorMutation(
+      {
+        provider: "warcraftlogs",
+        expectedVersion: 1,
+        expectedAccountEmail: "a@example.test"
+      },
+      {},
+      "DELETE"
+    )
+  );
+  expect(state.authenticate).toHaveBeenCalledTimes(2);
+  for (const call of state.authenticate.mock.calls) {
+    expect(call[1]).toEqual(
+      expect.objectContaining({ time: expect.any(Function) })
+    );
+  }
+});

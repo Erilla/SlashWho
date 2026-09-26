@@ -468,9 +468,12 @@ describe("ranked Mythic backfill", () => {
     expect(result.cursor).toBeUndefined();
     expect(reportReads).toBe(1);
 
+    // The zone catalogue is kept from the first walk, so three requests
+    // reach the same point: the zone's rankings, the damage ranking and the
+    // report, stopping short of the healing ranking.
     const capped = await client.getRankedKillReports(key, {
       journalRaidId: "946",
-      requestCap: 4
+      requestCap: 3
     });
     if (capped.kind !== "evidence" || !capped.cursor)
       throw new Error("expected_capped_cursor");

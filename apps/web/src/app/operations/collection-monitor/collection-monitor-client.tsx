@@ -1,10 +1,12 @@
 "use client";
 
 import {
+  collectionMonitorCompletedLimitMax,
+  collectionMonitorCompletedPageSize,
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type PollReadResult,
@@ -13,8 +15,6 @@ import {
 } from "../../../lib/use-authoritative-poll";
 
 import { CollectionProgress } from "../../../components/collection-progress";
-
-import { OperatorLogoutButton } from "./operator-logout-button";
 
 function characterText(character: {
   region: string;
@@ -62,12 +62,13 @@ function code(value: string | null): React.ReactNode {
 }
 
 async function readMonitor(
-  signal: AbortSignal
+  signal: AbortSignal,
+  completedLimit: number
 ): Promise<PollReadResult<CollectionMonitorResponse>> {
-  const response = await fetch("/api/operations/collection-monitor", {
-    cache: "no-store",
-    signal
-  });
+  const response = await fetch(
+    `/api/operations/collection-monitor?completedLimit=${completedLimit}`,
+    { cache: "no-store", signal }
+  );
 
   if (!response.ok) {
     if (response.status === 429) {
@@ -83,6 +84,12 @@ async function readMonitor(
     ? { kind: "snapshot", value: parsed.data }
     : { kind: "terminal", response };
 }
+
+/** A polled snapshot and the completed-run depth it was read at. */
+type PolledMonitor = Readonly<{
+  monitor: CollectionMonitorResponse;
+  completedLimit: number;
+}>;
 
 type TerminalState = "complete" | "partial" | "failed";
 
@@ -130,9 +137,59 @@ function terminalErrorMessage(response: Response): string {
   return "The collection monitor returned an unexpected response.";
 }
 
+/**
+ * Presses "Load more" once it scrolls within reach of the bottom of the capped
+ * Completed table, so scrolling alone pages in older runs. The button stays a
+ * real control for keyboard users and for browsers without the observer.
+ */
+function useLoadMoreWhenVisible(
+  root: React.RefObject<HTMLElement | null>,
+  target: React.RefObject<HTMLElement | null>,
+  onVisible: (() => void) | undefined
+): void {
+  const onVisibleRef = useRef(onVisible);
+  onVisibleRef.current = onVisible;
+  const enabled = onVisible !== undefined;
+
+  useEffect(() => {
+    const element = target.current;
+    if (!enabled || !element || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) onVisibleRef.current?.();
+      },
+      { root: root.current, rootMargin: "0px 0px 200px 0px" }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [enabled, root, target]);
+}
+
 export function CollectionMonitorView({
-  monitor
-}: Readonly<{ monitor: CollectionMonitorResponse }>) {
+  monitor,
+  loadingMoreCompleted = false,
+  autoLoadMoreCompleted = true,
+  onLoadMoreCompleted
+}: Readonly<{
+  monitor: CollectionMonitorResponse;
+  loadingMoreCompleted?: boolean;
+  /** False after a failed page, so only a deliberate press retries it. */
+  autoLoadMoreCompleted?: boolean;
+  /** Absent when no older completed runs can be loaded. */
+  onLoadMoreCompleted?: () => void;
+}>) {
+  const completedScrollRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLButtonElement>(null);
+  useLoadMoreWhenVisible(
+    completedScrollRef,
+    loadMoreRef,
+    autoLoadMoreCompleted && !loadingMoreCompleted
+      ? onLoadMoreCompleted
+      : undefined
+  );
+
   return (
     <main className="page-shell collection-monitor-page">
       <div className="collection-monitor-heading">
@@ -144,7 +201,6 @@ export function CollectionMonitorView({
           Updated <span className="visually-hidden">at </span>
           {dateTime(monitor.generatedAt)}
         </p>
-        <OperatorLogoutButton />
       </div>
 
       <section className="collection-monitor-section">
@@ -201,7 +257,13 @@ export function CollectionMonitorView({
 
       <section className="collection-monitor-section">
         <h2 id="collection-monitor-completed">Completed</h2>
-        <div className="collection-monitor-table-scroll">
+        <div
+          aria-labelledby="collection-monitor-completed"
+          className="collection-monitor-table-scroll collection-monitor-table-scroll--capped"
+          ref={completedScrollRef}
+          role="region"
+          tabIndex={0}
+        >
           <table aria-labelledby="collection-monitor-completed">
             <thead>
               <tr>
@@ -238,6 +300,29 @@ export function CollectionMonitorView({
               )}
             </tbody>
           </table>
+          {monitor.hasMoreCompleted ? (
+            <div className="collection-monitor-load-more">
+              {onLoadMoreCompleted ? (
+                <button
+                  className="secondary-button"
+                  disabled={loadingMoreCompleted}
+                  onClick={onLoadMoreCompleted}
+                  ref={loadMoreRef}
+                  type="button"
+                >
+                  {loadingMoreCompleted
+                    ? "Loading older runs…"
+                    : "Load older runs"}
+                </button>
+              ) : (
+                <p>
+                  Showing the latest{" "}
+                  {monitor.completed.length.toLocaleString("en-GB")} completed
+                  runs.
+                </p>
+              )}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -283,6 +368,12 @@ export function CollectionMonitorClient({
   const [announcement, setAnnouncement] = useState("");
   const [error, setError] = useState<string | null>(null);
   const monitorRef = useRef(initialMonitor);
+  const [completedLimit, setCompletedLimit] = useState(
+    collectionMonitorCompletedPageSize
+  );
+  const completedLimitRef = useRef(completedLimit);
+  const [loadingMoreCompleted, setLoadingMoreCompleted] = useState(false);
+  const [autoLoadMoreCompleted, setAutoLoadMoreCompleted] = useState(true);
 
   const onSnapshot = useCallback((snapshot: CollectionMonitorResponse) => {
     const nextAnnouncement = publicationAnnouncement(
@@ -299,12 +390,65 @@ export function CollectionMonitorClient({
     setError(terminalErrorMessage(response));
   }, []);
 
+  // Each poll carries the depth it asked for: a poll already in flight when
+  // "Load older runs" lands was read shallower, and must not undo that page.
+  const readCurrentMonitor = useCallback(
+    async (signal: AbortSignal): Promise<PollReadResult<PolledMonitor>> => {
+      const completedLimit = completedLimitRef.current;
+      const result = await readMonitor(signal, completedLimit);
+      return result.kind === "snapshot"
+        ? { kind: "snapshot", value: { monitor: result.value, completedLimit } }
+        : result;
+    },
+    []
+  );
+
+  const onPolledSnapshot = useCallback(
+    ({ monitor: snapshot, completedLimit }: PolledMonitor) => {
+      if (completedLimit < completedLimitRef.current) return;
+      onSnapshot(snapshot);
+    },
+    [onSnapshot]
+  );
+
   useAuthoritativePoll({
     active: monitor.hasActiveRuns,
-    read: readMonitor,
-    onSnapshot,
+    read: readCurrentMonitor,
+    onSnapshot: onPolledSnapshot,
     onTerminalError
   });
+
+  const loadMoreCompleted = useCallback(async () => {
+    const nextLimit = Math.min(
+      collectionMonitorCompletedLimitMax,
+      completedLimitRef.current + collectionMonitorCompletedPageSize
+    );
+    setLoadingMoreCompleted(true);
+    setAutoLoadMoreCompleted(true);
+    let loaded = false;
+    try {
+      const result = await readMonitor(new AbortController().signal, nextLimit);
+      if (result.kind === "snapshot") {
+        loaded = true;
+        completedLimitRef.current = nextLimit;
+        setCompletedLimit(nextLimit);
+        onSnapshot(result.value);
+      } else if (result.kind === "terminal") {
+        onTerminalError(result.response);
+      }
+    } catch {
+      // Handled below: the button stays for a deliberate retry.
+    } finally {
+      // Without this, a failing page would be re-requested the moment the
+      // still-visible button re-arms the observer.
+      if (!loaded) setAutoLoadMoreCompleted(false);
+      setLoadingMoreCompleted(false);
+    }
+  }, [onSnapshot, onTerminalError]);
+
+  const canLoadMoreCompleted =
+    monitor.hasMoreCompleted &&
+    completedLimit < collectionMonitorCompletedLimitMax;
 
   return (
     <>
@@ -316,7 +460,14 @@ export function CollectionMonitorClient({
           {error}
         </p>
       ) : null}
-      <CollectionMonitorView monitor={monitor} />
+      <CollectionMonitorView
+        autoLoadMoreCompleted={autoLoadMoreCompleted}
+        loadingMoreCompleted={loadingMoreCompleted}
+        monitor={monitor}
+        onLoadMoreCompleted={
+          canLoadMoreCompleted ? () => void loadMoreCompleted() : undefined
+        }
+      />
     </>
   );
 }

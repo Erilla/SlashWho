@@ -572,7 +572,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 run.rootKey
               );
               if (live && live.runId !== runId) {
-                await repositories.runs.complete(runId, live.snapshotId);
+                // The snapshot belongs to the run that owns the cursor, so the
+                // ordinary `complete` would refuse it as not this run's own.
+                await repositories.runs.completeWithLiveSweepSnapshot(
+                  runId,
+                  live.snapshotId
+                );
                 record.outcome = "fingerprint_continuation_pending";
                 return;
               }

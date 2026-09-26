@@ -3222,6 +3222,35 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
       },
 
+      async completeWithLiveSweepSnapshot(id, snapshotId) {
+        // The snapshot must be the one this root's sweep cursor is still
+        // extending, mirroring what `getResumeState` treats as a live chain.
+        await requireUpdated(
+          pool,
+          `UPDATE discovery_runs
+           SET status = 'complete', snapshot_id = $2,
+               completed_at = COALESCE(completed_at, now()),
+               next_retry_at = NULL, error_code = NULL
+           WHERE id = $1
+             AND (
+               (status = 'complete' AND snapshot_id = $2)
+               OR (
+                 status IN ${activeRunSql}
+                 AND EXISTS (
+                   SELECT 1 FROM fingerprint_sweep_states state
+                   WHERE state.region = discovery_runs.root_region
+                     AND state.realm_slug = discovery_runs.root_realm_slug
+                     AND state.normalized_name =
+                       discovery_runs.root_normalized_name
+                     AND state.resume_after IS NOT NULL
+                     AND state.resume_snapshot_id = $2
+                 )
+               )
+             )`,
+          [id, snapshotId]
+        );
+      },
+
       async fail(id, code) {
         await requireUpdated(
           pool,
@@ -6259,7 +6288,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rowCount ?? 0;
       },
 
-      async listForMonitor() {
+      async listForMonitor({ completedLimit }) {
         const result = await pool.query<{
           region: CharacterKey["region"];
           realm_slug: string;
@@ -6277,12 +6306,31 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }>(
           // One query rather than one per run: a large dossier queues hundreds.
           // The run id stays inside the join and never reaches the projection.
-          `SELECT runs.region, runs.realm_slug, runs.normalized_name,
+          // Completed runs are the only set that grows without bound, so only
+          // they are limited, newest first to match the outer ordering.
+          `WITH runs AS (
+             (SELECT id, region, realm_slug, normalized_name, status,
+                     evidence_version, attempt, limitation_code,
+                     parse_limitation_code, retry_after_at, error_code,
+                     created_at, started_at, completed_at
+                FROM character_evidence_runs
+               WHERE status NOT IN ('complete', 'partial'))
+             UNION ALL
+             (SELECT id, region, realm_slug, normalized_name, status,
+                     evidence_version, attempt, limitation_code,
+                     parse_limitation_code, retry_after_at, error_code,
+                     created_at, started_at, completed_at
+                FROM character_evidence_runs
+               WHERE status IN ('complete', 'partial')
+               ORDER BY completed_at DESC NULLS LAST, id DESC
+               LIMIT $1)
+           )
+           SELECT runs.region, runs.realm_slug, runs.normalized_name,
                   runs.status, runs.evidence_version, runs.attempt,
                   runs.limitation_code, runs.parse_limitation_code,
                   runs.retry_after_at, runs.error_code, runs.started_at,
                   runs.completed_at, steps.phases
-             FROM character_evidence_runs runs
+             FROM runs
              CROSS JOIN LATERAL (
                SELECT COALESCE(
                         json_agg(
@@ -6307,7 +6355,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                        THEN COALESCE(runs.started_at, runs.created_at)
                      END ASC NULLS LAST,
                      runs.completed_at DESC NULLS LAST,
-                     runs.id DESC`
+                     runs.id DESC`,
+          [completedLimit]
         );
         return result.rows.map((row) => ({
           key: {

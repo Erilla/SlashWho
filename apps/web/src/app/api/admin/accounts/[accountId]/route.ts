@@ -10,9 +10,9 @@ export async function POST(
   request: Request,
   context: Context
 ): Promise<Response> {
-  return withHttpRequest("admin_account_mutation", async () => {
+  return withHttpRequest("admin_account_mutation", async (scope) => {
     const { accountAuth, accountAdmin, accountOrigin } = await getContainer();
-    const authentication = await accountAuth.authenticate(request);
+    const authentication = await accountAuth.authenticate(request, scope);
     const headers = new Headers({ "cache-control": "no-store" });
     if (authentication.cookie)
       headers.set("set-cookie", authentication.cookie.header);

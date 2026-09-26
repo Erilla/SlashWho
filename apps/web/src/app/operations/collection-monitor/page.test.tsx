@@ -19,8 +19,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/headers", () => ({ headers: mocks.headers }));
 vi.mock("next/navigation", () => ({
-  redirect: mocks.redirect,
-  useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() })
+  redirect: mocks.redirect
 }));
 vi.mock("../../../server/container", () => ({
   getContainer: async () => ({
@@ -70,6 +69,7 @@ const monitor: CollectionMonitorResponse = {
       evidenceVersion: 13
     }
   ],
+  hasMoreCompleted: false,
   failed: [
     {
       character: { region: "eu", realm: "draenor", name: "broken" },
