@@ -6,10 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionMonitorResponse } from "@slashwho/contracts";
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() })
-}));
-
 import { CollectionMonitorClient } from "./collection-monitor-client";
 
 const inFlightMonitor: CollectionMonitorResponse = {
