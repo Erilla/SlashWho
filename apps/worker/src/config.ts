@@ -407,6 +407,18 @@ export function loadWorkerConfig(
     // dossier in hours rather than days while the per-run budget still bounds
     // load.
     //
+    // A shorter delay buys cadence only while the hourly points allowance has
+    // room, because the reserve gate refuses any re-entry that arrives before
+    // it does. Measured on `test` from 2026-09-19 to 2026-09-25, under a
+    // temporary 20-minute override (#345): on the two saturated days (about
+    // 260k points a day, against the 216k ceiling of 9,000 an hour) the gate
+    // refused 234 of 310 cap retries (75%). Once the backlog had drained, on
+    // 2026-09-24 and 25, all 16 went through. So 20 minutes saves ten minutes
+    // per capped step when load is light. Under load it mostly creates
+    // refusals, each costing a probe point, a queue attempt and another wait.
+    // It is not the default because light load is also when the extra
+    // cadence matters least.
+    //
     // EVIDENCE_PARSE_CAP_RETRY_MS is the name this was deployed under while it
     // governed the parse cap alone. It is still read, because renaming a
     // variable an operator may have set on Railway would silently revert their
@@ -568,7 +580,7 @@ export function loadWorkerConfig(
     // another. `failed` is invisible to `reserve` -- neither active nor
     // completed -- so without this a stopped run is re-reserved by the next
     // page read and a retry storm becomes a reservation storm. Half an hour
-    // matches EVIDENCE_PARSE_CAP_RETRY_MS, and for the same reason: long
+    // matches EVIDENCE_CAP_RETRY_MS, and for the same reason: long
     // enough that a persistently broken character is not re-collected on every
     // read, short enough that it recovers without intervention.
     evidenceFailureCooldownMs: positiveInteger(
