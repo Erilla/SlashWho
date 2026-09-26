@@ -11,6 +11,12 @@ type RankableKill = Readonly<{
   guild: { name: string; realm: string } | null;
 }>;
 
+/**
+ * How far a guild's Raider.IO first-defeat time may sit from the kill the
+ * dossier holds and still be taken as that kill.
+ */
+export const HISTORIC_RANK_MATCH_TOLERANCE_MS = 120_000;
+
 function normalizedIdentity(value: string): string {
   return value
     .normalize("NFKD")
@@ -39,7 +45,8 @@ export function historicWorldRankForKill(
       normalizedRealm(ranking.guildRealm) ===
         normalizedRealm(kill.guild!.realm) &&
       normalizedIdentity(ranking.guildRegion) === normalizedIdentity(region) &&
-      Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <= 120_000
+      Math.abs(Date.parse(ranking.firstDefeated) - killedAt) <=
+        HISTORIC_RANK_MATCH_TOLERANCE_MS
   );
   return matches.length === 1 ? matches[0]!.rank : null;
 }
