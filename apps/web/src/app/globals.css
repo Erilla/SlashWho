@@ -786,7 +786,8 @@ a {
   background: var(--surface-raised);
 }
 
-.dossier-section-navigation a[aria-current="location"] {
+.dossier-section-navigation
+  a:is([aria-current="location"], [data-current-raid]) {
   border-left-color: var(--accent);
   background: var(--surface-raised);
   font-weight: 700;
@@ -961,14 +962,16 @@ a {
     width: 1.125rem;
   }
 
-  .dossier-section-navigation a[aria-current="location"] {
+  .dossier-section-navigation
+    a:is([aria-current="location"], [data-current-raid]) {
     border: 0;
     background: transparent;
     color: var(--text);
     font-weight: 400;
   }
 
-  .dossier-section-navigation a[aria-current="location"]::after {
+  .dossier-section-navigation
+    a:is([aria-current="location"], [data-current-raid])::after {
     width: 1.25rem;
     height: 3px;
   }
@@ -1038,7 +1041,7 @@ a {
   .dossier-section-navigation a:hover .dossier-section-navigation-label,
   .dossier-section-navigation a:focus-visible .dossier-section-navigation-label,
   .dossier-section-navigation
-    a[aria-current="location"]
+    a:is([aria-current="location"], [data-current-raid])
     .dossier-section-navigation-label {
     color: var(--text);
   }

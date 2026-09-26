@@ -4,6 +4,10 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 
+// The raids are subsections of this heading, so it stays lit while one of
+// them is current.
+const MYTHIC_EVIDENCE_ID = "historic-mythic-evidence-heading";
+
 export function dossierRaidTargetId(raidId: string) {
   return `dossier-raid-${raidId}`;
 }
@@ -97,7 +101,7 @@ export function DossierSectionNavigation({
           ]
         : []),
       {
-        id: "historic-mythic-evidence-heading",
+        id: MYTHIC_EVIDENCE_ID,
         label: "Historic Mythic boss evidence",
         shortLabel: "Mythic evidence"
       },
@@ -120,6 +124,9 @@ export function DossierSectionNavigation({
     [raids, hasGuildHistory, hasLimitations]
   );
   const [activeId, setActiveId] = useState(sections[0]?.id);
+  const raidIsCurrent = sections.some(
+    (section) => section.evidence && section.id === activeId
+  );
   const sectionIds = sections.map((section) => section.id).join("|");
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const suppressClickRef = useRef(false);
@@ -330,6 +337,11 @@ export function DossierSectionNavigation({
               }
               aria-label={section.label}
               aria-description={section.evidence?.label}
+              data-current-raid={
+                section.id === MYTHIC_EVIDENCE_ID && raidIsCurrent
+                  ? "true"
+                  : undefined
+              }
               data-evidence={section.evidence?.state}
               draggable={false}
               href={`#${section.id}`}
