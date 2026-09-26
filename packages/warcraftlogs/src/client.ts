@@ -2038,6 +2038,9 @@ export function createWarcraftLogsClient(
     return token;
   }
 
+  // The signal is the token request's own deadline, never a caller's: the
+  // request is shared, so its expiry is an upstream failure, not a
+  // cancellation, and is reported like any other.
   async function fetchAccessToken(
     signal?: AbortSignal
   ): Promise<string | WarcraftLogsLimitation> {
@@ -2059,15 +2062,14 @@ export function createWarcraftLogsClient(
         signal
       });
     } catch {
-      if (signal?.aborted) throw signal.reason;
       return { kind: "limitation", code: "unavailable" };
     }
 
-    signal?.throwIfAborted();
+    if (signal?.aborted) return { kind: "limitation", code: "unavailable" };
     if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = record(await response.json());
-      signal?.throwIfAborted();
+      if (signal?.aborted) return { kind: "limitation", code: "unavailable" };
       const value = body && nonEmptyString(body.access_token);
       const expiresIn = body && nonNegativeFiniteNumber(body.expires_in);
       if (!value || expiresIn === null || expiresIn <= 0) {
@@ -2079,7 +2081,7 @@ export function createWarcraftLogsClient(
       };
       return value;
     } catch {
-      if (signal?.aborted) throw signal.reason;
+      if (signal?.aborted) return { kind: "limitation", code: "unavailable" };
       return { kind: "limitation", code: "schema_drift" };
     }
   }
