@@ -1981,3 +1981,92 @@ describe("DossierPageClient connected-character exclusions", () => {
     ).toBeVisible();
   });
 });
+
+describe("DossierPageClient character visibility", () => {
+  const ryalts = linkedCharacters[1]!.key;
+  const ryaltsOnly: ApplicantDossier = {
+    ...expanded,
+    characters: linkedCharacters,
+    raids: expanded.raids.map((raid) => ({
+      ...raid,
+      bosses: raid.bosses.map((boss) =>
+        boss.state === "kill"
+          ? { ...boss, firstKill: { ...boss.firstKill, characters: [ryalts] } }
+          : boss
+      )
+    }))
+  };
+
+  afterEach(() => window.localStorage.clear());
+
+  it("hides a character's evidence from the eye, keeps it across a reload, and shows it again", async () => {
+    const view = render(
+      <DossierPageClient
+        canAddCharacters={false}
+        identity={identity}
+        initialDossier={ryaltsOnly}
+        jobId={null}
+      />
+    );
+    const bossEvidence = () =>
+      screen.getByRole("group", { name: "Expanded evidence boss evidence" });
+    expect(bossEvidence()).toHaveTextContent(/First kill:.*Ryalts/);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show Ryalts in the evidence" })
+    );
+
+    expect(bossEvidence()).toHaveTextContent(
+      "Evidence found only for hidden characters"
+    );
+    expect(
+      screen.getByText("Showing evidence for 1 of 2 characters.")
+    ).toBeInTheDocument();
+
+    view.unmount();
+    render(
+      <DossierPageClient
+        canAddCharacters={false}
+        identity={identity}
+        initialDossier={ryaltsOnly}
+        jobId={null}
+      />
+    );
+    expect(bossEvidence()).toHaveTextContent(
+      "Evidence found only for hidden characters"
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+
+    expect(bossEvidence()).toHaveTextContent(/First kill:.*Ryalts/);
+    expect(screen.queryByText(/Showing evidence for/)).not.toBeInTheDocument();
+  });
+
+  it("shows only one character from the eye's context menu", async () => {
+    render(
+      <DossierPageClient
+        canAddCharacters={false}
+        identity={identity}
+        initialDossier={ryaltsOnly}
+        jobId={null}
+      />
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Show Ryii in the evidence" })
+    );
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Show only Ryii" })
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Show Ryalts in the evidence" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Show Ryii in the evidence" })
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("group", { name: "Expanded evidence boss evidence" })
+    ).toHaveTextContent("Evidence found only for hidden characters");
+  });
+});

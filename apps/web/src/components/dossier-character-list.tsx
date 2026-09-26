@@ -1,6 +1,8 @@
 import type { DossierCharacter } from "@slashwho/contracts";
 import { useEffect, useRef, useState } from "react";
 
+import type { CharacterVisibilityControls } from "../lib/use-character-visibility";
+
 import { CollectionProgress } from "./collection-progress";
 import {
   AddConnectedCharacterDialog,
@@ -12,6 +14,7 @@ import {
   type ConnectedCharacterChange
 } from "./dossier-character-menu";
 import { DossierCharacterName } from "./dossier-character-name";
+import { DossierCharacterVisibilityToggle } from "./dossier-character-visibility-toggle";
 import { CharacterProfileLinks } from "./profile-links";
 
 type DossierCharacterListProps = Readonly<{
@@ -23,6 +26,8 @@ type DossierCharacterListProps = Readonly<{
   onCharactersChanged?: (change: ConnectedCharacterChange) => void;
   /** Read-only views, such as the demo dossier, hide the add and row actions. */
   canAddCharacters?: boolean;
+  /** The viewer's own filter over the evidence; absent, no row offers it. */
+  visibility?: CharacterVisibilityControls;
 }>;
 
 function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
@@ -53,7 +58,8 @@ export function DossierCharacterList({
   onCharacterAdded,
   onCharactersChanged,
   root,
-  canAddCharacters = true
+  canAddCharacters = true,
+  visibility
 }: DossierCharacterListProps) {
   const listRef = useRef<HTMLUListElement>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -108,36 +114,53 @@ export function DossierCharacterList({
           <li
             className={`dossier-character-row${
               character.excluded ? " dossier-character-row--excluded" : ""
+            }${
+              !character.excluded && visibility?.isHidden(character.key)
+                ? " dossier-character-row--hidden"
+                : ""
             }`}
             key={`${character.key.region}/${character.key.realm}/${character.key.name}`}
           >
-            <div className="dossier-character-identity">
-              <div className="dossier-character-name-line">
-                <DossierCharacterName character={character} showGuild />
-                {!character.collectionProgress &&
-                !character.evidenceState &&
-                character.researchState === "gathering" ? (
-                  <svg
-                    aria-label={`Research gathering for ${character.displayName}`}
-                    className="dossier-loading-spinner dossier-character-spinner"
-                    role="status"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle cx="12" cy="12" r="8" />
-                  </svg>
-                ) : null}
-              </div>
-              <span className="dossier-location">
-                {character.key.region.toUpperCase()} · {character.key.realm}
-              </span>
-              {/* The steps replace both bare indicators: they say what the
-                  spinner said, and then what the run is actually doing. */}
-              {character.collectionProgress ? (
-                <CollectionProgress
-                  phases={character.collectionProgress}
-                  subject={character.displayName}
+            <div className="dossier-character-lead">
+              {visibility ? (
+                <DossierCharacterVisibilityToggle
+                  anyHidden={visibility.anyHidden}
+                  character={character}
+                  hidden={visibility.isHidden(character.key)}
+                  onHideOnly={() => visibility.hideOnly(character.key)}
+                  onShowAll={visibility.showAll}
+                  onShowOnly={() => visibility.showOnly(character.key)}
+                  onToggle={() => visibility.toggle(character.key)}
                 />
               ) : null}
+              <div className="dossier-character-identity">
+                <div className="dossier-character-name-line">
+                  <DossierCharacterName character={character} showGuild />
+                  {!character.collectionProgress &&
+                  !character.evidenceState &&
+                  character.researchState === "gathering" ? (
+                    <svg
+                      aria-label={`Research gathering for ${character.displayName}`}
+                      className="dossier-loading-spinner dossier-character-spinner"
+                      role="status"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle cx="12" cy="12" r="8" />
+                    </svg>
+                  ) : null}
+                </div>
+                <span className="dossier-location">
+                  {character.key.region.toUpperCase()} · {character.key.realm}
+                </span>
+                {/* The steps replace both bare indicators: they say what the
+                  spinner said, and then what the run is actually doing. */}
+                {character.collectionProgress ? (
+                  <CollectionProgress
+                    phases={character.collectionProgress}
+                    subject={character.displayName}
+                  />
+                ) : null}
+              </div>
             </div>
             <div className="dossier-character-actions">
               {isRoot(character, root) ? null : (

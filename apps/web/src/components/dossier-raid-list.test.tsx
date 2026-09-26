@@ -1647,3 +1647,73 @@ it("builds a boss's evidence only once its panel is opened", () => {
     screen.getByRole("region", { name: "Kill evidence" })
   ).toBeInTheDocument();
 });
+
+it("shows only the visible characters' evidence and says the view is filtered", async () => {
+  const onShowAllCharacters = vi.fn();
+  const raid = {
+    raidId: "nerubar-palace",
+    raidName: "Nerub-ar Palace",
+    imageUrl: null,
+    cuttingEdge: null,
+    bosses: [
+      {
+        ...boss,
+        firstKill: {
+          ...boss.firstKill,
+          characters: [ryii, ryalts],
+          parses: ["Ryii", "Ryalts"].map((character) => ({
+            character,
+            damage: {
+              state: "available" as const,
+              percentile: 90,
+              reportUrl: "https://www.warcraftlogs.com/reports/one#fight=1"
+            },
+            healing: { state: "not_applicable" as const },
+            bossDamage: { state: "unavailable" as const }
+          }))
+        }
+      },
+      {
+        ...boss,
+        bossId: "2601",
+        bossName: "Silken Court",
+        bossOrder: 7,
+        firstKill: { ...boss.firstKill, characters: [ryalts] }
+      }
+    ]
+  };
+  renderWithDossierCharacters(
+    <DossierRaidList
+      filter={{
+        isCharacterVisible: (key) => key.name !== "ryalts",
+        isParseVisible: (name) => name !== "Ryalts",
+        visibleCount: 1,
+        totalCount: 2
+      }}
+      onShowAllCharacters={onShowAllCharacters}
+      raids={[raid]}
+    />
+  );
+
+  expect(
+    screen.getByText("Showing evidence for 1 of 2 characters.")
+  ).toBeInTheDocument();
+
+  const ansurek = screen.getByRole("group", {
+    name: "Queen Ansurek evidence"
+  });
+  expect(within(ansurek).getByText(/First kill:/)).toHaveTextContent(
+    /First kill: .* · Ryii$/
+  );
+  expect(within(ansurek).getAllByLabelText("Ryii parses")).not.toHaveLength(0);
+  expect(
+    within(ansurek).queryByLabelText("Ryalts parses")
+  ).not.toBeInTheDocument();
+
+  const court = screen.getByRole("group", { name: "Silken Court evidence" });
+  expect(court).toHaveTextContent("Evidence found only for hidden characters");
+  expect(court).not.toHaveTextContent("No qualifying public logs found");
+
+  await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+  expect(onShowAllCharacters).toHaveBeenCalledOnce();
+});
