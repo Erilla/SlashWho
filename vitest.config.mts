@@ -19,7 +19,9 @@ export default defineConfig({
       },
       {
         test: {
-          fileParallelism: false,
+          // Files run in parallel: each starts its own PostgreSQL container in
+          // beforeAll and each runs in its own process, so they share neither
+          // a database nor process.env. Tests within a file still run in order.
           include: ["tests/integration/**/*.test.ts"],
           name: "integration",
           testTimeout: 30_000,

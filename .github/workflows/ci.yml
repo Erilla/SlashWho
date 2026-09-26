@@ -13,13 +13,18 @@ on:
 # suite's jobs, not by skipping the workflow.
 #
 # The suite runs as parallel jobs, so the wall clock is set by the slowest one
-# (e2e) rather than by the sum of all of them:
+# rather than by the sum of all of them. The heavier suites are split so that
+# no single job holds much more than a minute and a half of work:
 #
-#   scope ──┬── static        format, lint, typecheck, unit tests
+#   scope ──┬── checks        format, lint, typecheck
+#           ├── unit          unit tests
 #           ├── integration
-#           ├── e2e           build, then Playwright
-#           └── docker
-#   all five ───> ci          the required check
+#           ├── e2e (×2)      Playwright, one shard of the spec files each
+#           └── docker (×2)   one image each
+#   all of them ───> ci       the required check
+#
+# The repository is public, so standard runners cost nothing extra: another
+# parallel job is worth adding whenever it shortens the slowest one.
 #
 # Only the final job is named `ci`, and it is the only one branch protection
 # needs to know about. The others report under their own names and can be
@@ -94,8 +99,11 @@ jobs:
           echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
 
   # Everything that needs only an installed workspace: no build, no browser,
-  # no database. Typecheck does not depend on a build, so it belongs here.
-  static:
+  # no database. Typecheck does not depend on a build, so it belongs here, and
+  # it is the only place the workspace is typechecked: e2e and docker build the
+  # web app, but neither needs the other packages' `build` scripts, which are
+  # `tsc --noEmit` and nothing more.
+  checks:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
     runs-on: ubuntu-latest
@@ -114,6 +122,23 @@ jobs:
       - run: corepack pnpm format:check
       - run: corepack pnpm lint
       - run: corepack pnpm typecheck
+
+  unit:
+    needs: scope
+    if: needs.scope.outputs.run_full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.15.0
+          cache: pnpm
+      - run: corepack pnpm install --frozen-lockfile
       # The unit suite was first given a 6 GB heap and then, when that was
       # still not enough, split into one vitest process per workspace
       # (d4739580, 209f11c9). apps/web is the heavy half — two thirds of the
@@ -151,15 +176,27 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:integration
 
-  # The slowest job, and so the one that sets the wall clock. It is the only
-  # job that needs a browser, so it is the only one that installs one. The
-  # build shares its install, so it runs here rather than in a job of its own,
-  # where it would be one more install and not one fewer minute.
+  # The only job that needs a browser, so the only one that installs one.
+  #
+  # There is no build step. Playwright's global setup builds the web app when
+  # apps/web/.next is missing, which it always is on a fresh runner, and it
+  # overlaps that build with the PostgreSQL and fixture start-up. It builds only
+  # the web app: `pnpm build` would also run every other package's `build`,
+  # which is a `tsc --noEmit` that checks already does.
+  #
+  # The suite runs on one worker against one database (see
+  # playwright.config.ts), so it is split into shards instead. Each shard is a
+  # separate runner with its own global setup, database and servers; every spec
+  # seeds what it needs, so no file depends on another having run first.
   e2e:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -176,37 +213,36 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-1.62.1-chromium
       - run: corepack pnpm playwright install --with-deps chromium
-      - run: corepack pnpm build
-      - run: corepack pnpm playwright test tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts tests/e2e/dossier-navigation.spec.ts
+      - run: >-
+          corepack pnpm playwright test --shard=${{ matrix.shard }}/2
+          tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts
+          tests/e2e/dossier-navigation.spec.ts
 
   # The images are built only to prove they still build; nothing is pushed or
-  # loaded. The layer cache lives in the Actions cache, one scope per image so
-  # the two do not overwrite each other, and mode=max keeps the intermediate
-  # build stage that holds the dependency install.
+  # loaded. Each image builds on its own runner. The layer cache lives in the
+  # Actions cache, one scope per image so the two do not overwrite each other,
+  # and mode=max keeps the intermediate build stage that holds the dependency
+  # install.
   docker:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [web, worker]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.web
-          tags: slashwho-web:ci
+          file: Dockerfile.${{ matrix.image }}
+          tags: slashwho-${{ matrix.image }}:ci
           push: false
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,scope=web,mode=max
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.worker
-          tags: slashwho-worker:ci
-          push: false
-          cache-from: type=gha,scope=worker
-          cache-to: type=gha,scope=worker,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
 
   # The required check. It must report on every run, so it runs even when a
   # job it needs failed or was skipped: without `always()`, a failure upstream
@@ -217,10 +253,13 @@ jobs:
   # - each suite job must have succeeded, or have been skipped because scope
   #   judged the change prose-only. A skip for any other reason is a failure.
   #
+  # A matrix job reports one result for all of its legs: success only when
+  # every leg succeeded.
+  #
   # A run superseded by a newer push is cancelled by the concurrency group, and
   # this job then fails that run's commit; the newer run reports for its own.
   ci:
-    needs: [scope, static, integration, e2e, docker]
+    needs: [scope, checks, unit, integration, e2e, docker]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -228,7 +267,8 @@ jobs:
       - env:
           RUN_FULL: ${{ needs.scope.outputs.run_full }}
           SCOPE: ${{ needs.scope.result }}
-          STATIC: ${{ needs.static.result }}
+          CHECKS: ${{ needs.checks.result }}
+          UNIT: ${{ needs.unit.result }}
           INTEGRATION: ${{ needs.integration.result }}
           E2E: ${{ needs.e2e.result }}
           DOCKER: ${{ needs.docker.result }}
@@ -239,8 +279,8 @@ jobs:
           fi
 
           failed=0
-          for pair in "static=$STATIC" "integration=$INTEGRATION" \
-            "e2e=$E2E" "docker=$DOCKER"; do
+          for pair in "checks=$CHECKS" "unit=$UNIT" \
+            "integration=$INTEGRATION" "e2e=$E2E" "docker=$DOCKER"; do
             job="${pair%%=*}"
             result="${pair#*=}"
             if [ "$result" = "success" ]; then
