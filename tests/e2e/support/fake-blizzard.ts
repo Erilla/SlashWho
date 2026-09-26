@@ -1,24 +1,11 @@
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
+
+import { listen } from "../../support/listen";
 
 type FakeBlizzard = Readonly<{
   baseUrl: string;
   close(): Promise<void>;
 }>;
-
-async function listen(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fake_blizzard_address_unavailable");
-  }
-  return address.port;
-}
 
 export async function startFakeBlizzard(): Promise<FakeBlizzard> {
   const server = createServer((request, response) => {
@@ -49,7 +36,7 @@ export async function startFakeBlizzard(): Promise<FakeBlizzard> {
     response.statusCode = 404;
     response.end(JSON.stringify({ status: 404 }));
   });
-  const port = await listen(server);
+  const port = await listen(server, "fake_blizzard_address_unavailable");
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     close: () =>

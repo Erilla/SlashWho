@@ -6,6 +6,7 @@ import type { CharacterKey } from "@slashwho/domain";
 
 import type { RankingIdentity } from "./decode/rankings";
 
+/** Warcraft Logs' difficulty id for Mythic, the only difficulty collected. */
 export const MYTHIC_DIFFICULTY = 5;
 // WCL's 50,000 query complexity ceiling is scored from the query's shape at
 // about 1,625 a report, so a page holds at most 30. Points are about 2.08 a

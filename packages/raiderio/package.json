@@ -4,7 +4,7 @@
   "exports": "./src/index.ts",
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "vitest run --root ../.. packages/raiderio/src/client.test.ts",
+    "test": "vitest run --root ../.. --project unit packages/raiderio/src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,11 +1,13 @@
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { Pool, type PoolClient } from "pg";
 
+import { postgresImage } from "../support/postgres-image";
+
 export async function startPostgres(): Promise<{
   pool: Pool;
   stop: () => Promise<void>;
 }> {
-  const container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  const container = await new PostgreSqlContainer(postgresImage).start();
   const pool = new Pool({ connectionString: container.getConnectionUri() });
 
   // pool.end() resolves once the pool has stopped tracking its clients, before
