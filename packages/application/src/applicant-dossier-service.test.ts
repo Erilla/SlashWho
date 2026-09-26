@@ -154,7 +154,7 @@ function fixture(
         .mockResolvedValue(
           "snapshot" in options ? options.snapshot : storedSnapshot()
         ),
-      getCurrentContainingCharacter: vi
+      getCurrentDeclaringCharacter: vi
         .fn()
         .mockResolvedValue(
           "containingSnapshot" in options ? options.containingSnapshot : null
@@ -2151,7 +2151,7 @@ describe("applicant dossier service", () => {
     ).toEqual([alt, root]);
     expect(repositories.snapshots.getCurrent).toHaveBeenCalledWith(alt);
     expect(
-      repositories.snapshots.getCurrentContainingCharacter
+      repositories.snapshots.getCurrentDeclaringCharacter
     ).toHaveBeenCalledWith(alt);
   });
 
@@ -2224,7 +2224,7 @@ describe("applicant dossier service", () => {
       dossier: { root, research: { state: "complete" } }
     });
     expect(
-      repositories.snapshots.getCurrentContainingCharacter
+      repositories.snapshots.getCurrentDeclaringCharacter
     ).not.toHaveBeenCalled();
   });
 

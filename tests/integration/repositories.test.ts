@@ -2054,6 +2054,78 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("borrows only a current snapshot that declares the character", async () => {
+    // Break caught: superseded snapshots are never deleted, so a claim a
+    // newer discovery had dropped could be borrowed; and a newer inferred
+    // membership elsewhere hid a declared one by winning the ordering.
+    const searchedKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "borrowed"
+    } as const;
+    const droppedRootKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "droppedroot"
+    } as const;
+    const declaringRootKey = {
+      region: "eu",
+      realm: "draenor",
+      name: "declaringroot"
+    } as const;
+    const inferringRootKey = {
+      region: "eu",
+      realm: "argent-dawn",
+      name: "inferringroot"
+    } as const;
+
+    const publish = async (
+      key: CharacterKey,
+      refreshedAt: Date,
+      characters: SnapshotCharacterInput[]
+    ) => {
+      const run = await repositories.runs.createOrReuse(key, "anonymous");
+      await repositories.runs.markRunning(run.id);
+      const snapshot = await repositories.snapshots.create({
+        runId: run.id,
+        rootKey: key,
+        state: "complete",
+        limitationCode: null,
+        refreshedAt,
+        characters
+      });
+      await repositories.runs.complete(run.id, snapshot.id);
+    };
+
+    await publish(droppedRootKey, new Date("2026-09-01T10:00:00.000Z"), [
+      observation(droppedRootKey, "Droppedroot"),
+      observation(searchedKey, "Borrowed", "claimed")
+    ]);
+    await publish(droppedRootKey, new Date("2026-09-20T10:00:00.000Z"), [
+      observation(droppedRootKey, "Droppedroot")
+    ]);
+
+    await expect(
+      repositories.snapshots.getCurrentDeclaringCharacter!(searchedKey)
+    ).resolves.toBeNull();
+
+    await publish(declaringRootKey, new Date("2026-09-19T10:00:00.000Z"), [
+      observation(declaringRootKey, "Declaringroot"),
+      observation(searchedKey, "Borrowed", "claimed")
+    ]);
+    await publish(inferringRootKey, new Date("2026-09-21T10:00:00.000Z"), [
+      observation(inferringRootKey, "Inferringroot"),
+      observation(searchedKey, "Borrowed", "fingerprint")
+    ]);
+
+    await expect(
+      repositories.snapshots.getCurrentDeclaringCharacter!(searchedKey)
+    ).resolves.toMatchObject({
+      rootKey: declaringRootKey,
+      refreshedAt: new Date("2026-09-19T10:00:00.000Z")
+    });
+  });
+
   it("lists each searched character once, newest search first", async () => {
     // Break caught: the landing page listed a character once per search, or a
     // slow request moved a newer search back behind an older one.

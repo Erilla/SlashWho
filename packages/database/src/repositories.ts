@@ -150,7 +150,14 @@ export interface SnapshotRepository {
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot | null>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
-  getCurrentContainingCharacter?(
+  /**
+   * The newest current snapshot of another root that lists this key as a
+   * Raider.IO-declared member (`claimed` or `declared_main`). Only each root's
+   * latest completed snapshot is considered, so a newer observation that drops
+   * the character retires the claim, and the source is filtered before the
+   * newest is chosen, so a newer inferred membership elsewhere cannot hide it.
+   */
+  getCurrentDeclaringCharacter?(
     key: CharacterKey
   ): Promise<StoredSnapshot | null>;
   /**

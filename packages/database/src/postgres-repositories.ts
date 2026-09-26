@@ -3695,19 +3695,31 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
       },
 
-      async getCurrentContainingCharacter(key) {
+      async getCurrentDeclaringCharacter(key) {
+        // Superseded snapshots are never deleted, so the latest per root is
+        // taken first; filtering the source before ordering keeps a newer
+        // inferred membership elsewhere from hiding a declared one.
         const result = await pool.query<{ id: string }>(
-          `SELECT snapshot.id
-           FROM snapshots snapshot
+          `WITH latest_snapshots AS (
+             SELECT DISTINCT ON (snapshot.root_character_id)
+               snapshot.id, snapshot.root_character_id, snapshot.refreshed_at
+             FROM snapshots snapshot
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE run.status = 'complete'
+             ORDER BY snapshot.root_character_id,
+                      snapshot.refreshed_at DESC,
+                      snapshot.id DESC
+           )
+           SELECT snapshot.id
+           FROM latest_snapshots snapshot
            JOIN snapshot_characters membership
              ON membership.snapshot_id = snapshot.id
+            AND membership.discovery_source IN ('claimed', 'declared_main')
            JOIN characters character ON character.id = membership.character_id
            JOIN characters root ON root.id = snapshot.root_character_id
-           JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
            WHERE character.region = $1
              AND character.realm_slug = $2
              AND character.normalized_name = $3
-             AND run.status = 'complete'
              AND NOT EXISTS (
                SELECT 1 FROM suppressed_characters suppression
                WHERE suppression.region = root.region

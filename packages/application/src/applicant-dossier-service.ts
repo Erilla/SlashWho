@@ -1687,7 +1687,7 @@ export function createApplicantDossierService(options: {
       own ??
       borrowSnapshot(
         key,
-        await repositories.snapshots.getCurrentContainingCharacter?.(key)
+        await repositories.snapshots.getCurrentDeclaringCharacter?.(key)
       );
     if (!snapshot) return null;
     const seen = new Set(

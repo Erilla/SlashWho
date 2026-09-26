@@ -17,8 +17,11 @@ root-only `?scope=initial` view while a job is active.
 ## Decision
 
 A searched character without a snapshot of its own is shown, straight away,
-with the membership of the newest completed snapshot that lists it as a
-Raider.IO-declared member (`claimed` or `declared_main`). The view is rooted at
+with the membership of the newest snapshot that lists it as a
+Raider.IO-declared member (`claimed` or `declared_main`), chosen only from each
+root's latest completed snapshot. Superseded snapshots are never deleted, so
+a claim a newer discovery dropped must not be borrowed, and the source is
+filtered before the newest is chosen. The view is rooted at
 the searched character, its research state is `provisional`, and the
 character's own discovery still runs and replaces the view when it publishes.
 Both entry points behave the same.
