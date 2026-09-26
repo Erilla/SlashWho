@@ -4,6 +4,7 @@ import {
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
+import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
 
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../../lib/use-authoritative-poll";
 
 import { CollectionProgress } from "../../../components/collection-progress";
+import { dossierPath } from "../../../lib/dossier-path";
 
 function characterText(character: {
   region: string;
@@ -20,6 +22,23 @@ function characterText(character: {
   name: string;
 }): string {
   return `${character.name} — ${character.realm} (${character.region.toUpperCase()})`;
+}
+
+function CharacterCell({
+  character
+}: Readonly<{
+  character: CollectionMonitorResponse["inFlight"][number]["character"];
+}>) {
+  return (
+    <th scope="row">
+      <Link
+        className="collection-monitor-character"
+        href={dossierPath(character)}
+      >
+        {characterText(character)}
+      </Link>
+    </th>
+  );
 }
 
 function characterKey(character: {
@@ -169,7 +188,7 @@ export function CollectionMonitorView({
               ) : (
                 monitor.inFlight.map((run) => (
                   <tr key={characterKey(run.character)}>
-                    <th scope="row">{characterText(run.character)}</th>
+                    <CharacterCell character={run.character} />
                     <td>
                       <span className="state-badge" data-state={run.status}>
                         {run.status}
@@ -220,7 +239,7 @@ export function CollectionMonitorView({
                   <tr
                     key={`${characterKey(run.character)}:${run.completedAt ?? index}`}
                   >
-                    <th scope="row">{characterText(run.character)}</th>
+                    <CharacterCell character={run.character} />
                     <td>
                       <span className="state-badge" data-state={run.state}>
                         {run.state}
@@ -259,7 +278,7 @@ export function CollectionMonitorView({
                   <tr
                     key={`${characterKey(run.character)}:${run.stoppedAt ?? index}`}
                   >
-                    <th scope="row">{characterText(run.character)}</th>
+                    <CharacterCell character={run.character} />
                     <td>{code(run.errorCode)}</td>
                     <td>{dateTime(run.stoppedAt)}</td>
                   </tr>

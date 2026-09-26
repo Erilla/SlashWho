@@ -2,6 +2,7 @@
 
 import type { CharacterKey, DossierCharacter } from "@slashwho/contracts";
 import { formatCharacterDisplayName } from "@slashwho/domain";
+import Link from "next/link";
 import {
   createContext,
   Fragment,
@@ -10,11 +11,15 @@ import {
   useId
 } from "react";
 
+import { dossierPath } from "../lib/dossier-path";
 import { CharacterProfileLinks } from "./profile-links";
 
 type CharacterReference = DossierCharacter | CharacterKey;
 
 const DossierCharactersContext = createContext<readonly DossierCharacter[]>([]);
+// The character whose dossier is on screen. Its name is not linked, because a
+// link to the page the reader is already on only reloads it.
+const CurrentCharacterContext = createContext<CharacterKey | null>(null);
 
 const classColourClass: Readonly<Record<string, string>> = {
   deathknight: "death-knight",
@@ -68,16 +73,24 @@ function colourClass(className: string | null): string | null {
   return normalized ? (classColourClass[normalized] ?? null) : null;
 }
 
+function characterKey(reference: CharacterReference): CharacterKey {
+  return "displayName" in reference ? reference.key : reference;
+}
+
 export function DossierCharacterProvider({
   characters,
+  current = null,
   children
 }: Readonly<{
   characters: readonly DossierCharacter[];
+  current?: CharacterKey | null;
   children: ReactNode;
 }>) {
   return (
     <DossierCharactersContext.Provider value={characters}>
-      {children}
+      <CurrentCharacterContext.Provider value={current}>
+        {children}
+      </CurrentCharacterContext.Provider>
     </DossierCharactersContext.Provider>
   );
 }
@@ -97,7 +110,10 @@ export function DossierCharacterName({
   showGuild?: boolean;
 }>) {
   const characters = useContext(DossierCharactersContext);
+  const current = useContext(CurrentCharacterContext);
   const resolved = resolveCharacter(character, characters);
+  const key = characterKey(character);
+  const href = current && sameCharacter(key, current) ? null : dossierPath(key);
   const tooltipId = useId();
   // A reviewer can declare a name Warcraft Logs has also verified, so the
   // two lists overlap; the tooltip names each former identity once.
@@ -127,13 +143,23 @@ export function DossierCharacterName({
           historicAliases.length ? "dossier-character-alias-anchor" : undefined
         }
       >
-        <span
-          aria-describedby={historicAliases.length ? tooltipId : undefined}
-          className={className}
-          tabIndex={historicAliases.length ? 0 : undefined}
-        >
-          {formatCharacterDisplayName(resolved.displayName)}
-        </span>
+        {href ? (
+          <Link
+            aria-describedby={historicAliases.length ? tooltipId : undefined}
+            className={className}
+            href={href}
+          >
+            {formatCharacterDisplayName(resolved.displayName)}
+          </Link>
+        ) : (
+          <span
+            aria-describedby={historicAliases.length ? tooltipId : undefined}
+            className={className}
+            tabIndex={historicAliases.length ? 0 : undefined}
+          >
+            {formatCharacterDisplayName(resolved.displayName)}
+          </span>
+        )}
         {historicAliases.length ? (
           <span
             className="dossier-character-alias-tooltip"

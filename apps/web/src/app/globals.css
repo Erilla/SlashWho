@@ -1206,6 +1206,16 @@ a {
   white-space: nowrap;
 }
 
+/* Names link to their dossiers. They keep their class colour, so the underline
+   is what says a name can be followed. */
+a.dossier-character-name:hover,
+a.dossier-character-name:focus-visible,
+.collection-monitor-character:hover,
+.collection-monitor-character:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
 .dossier-parse-character {
   display: inline-block;
   min-width: 4.5rem;
