@@ -266,9 +266,11 @@ describe("SearchForm", () => {
     );
     render(<SearchForm />);
 
-    expect(
-      screen.getByRole("button", { name: "Research applicant" })
-    ).toHaveTextContent("→");
+    const searchButton = screen.getByRole("button", {
+      name: "Research applicant"
+    });
+    expect(searchButton.querySelector("svg.search-button-icon")).not.toBeNull();
+    expect(searchButton.textContent).toBe("");
     await user.type(
       screen.getByRole("textbox", { name: "Character/URL" }),
       "Ryii"

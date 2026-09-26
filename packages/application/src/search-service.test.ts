@@ -283,6 +283,7 @@ function policyFixture(
       async markRunning() {},
       async markRetrying() {},
       async complete() {},
+      async completeWithLiveSweepSnapshot() {},
       async fail() {},
       async find(id) {
         return activeRun?.id === id ? activeRun : null;

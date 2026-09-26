@@ -14,8 +14,6 @@ import {
 
 import { CollectionProgress } from "../../../components/collection-progress";
 
-import { OperatorLogoutButton } from "./operator-logout-button";
-
 function characterText(character: {
   region: string;
   realm: string;
@@ -144,7 +142,6 @@ export function CollectionMonitorView({
           Updated <span className="visually-hidden">at </span>
           {dateTime(monitor.generatedAt)}
         </p>
-        <OperatorLogoutButton />
       </div>
 
       <section className="collection-monitor-section">
