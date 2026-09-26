@@ -535,6 +535,27 @@ export function lookupRaidCurrentContentWindow(
   return currentContentWindows.get(raidId) ?? null;
 }
 
+/**
+ * Whether any catalogued raid's current-content window opened after `since`
+ * and by `at`.
+ *
+ * A tier that has just opened has no terminal mark for anyone yet, so a
+ * collection that looked settled before it opened is not evidence about it.
+ * A start that cannot be read counts as opened: the caller is choosing the
+ * cheaper collection, and must never choose it on a window it cannot place.
+ */
+export function raidContentWindowOpenedBetween(since: Date, at: Date): boolean {
+  return [...currentContentWindows.values()].some((window) => {
+    const startsAt = Date.parse(window.startsAt);
+    return (
+      Number.isNaN(startsAt) ||
+      Number.isNaN(since.valueOf()) ||
+      Number.isNaN(at.valueOf()) ||
+      (startsAt > since.getTime() && startsAt <= at.getTime())
+    );
+  });
+}
+
 function raiderIoBossSlug(bossName: string): string {
   return bossName
     .normalize("NFKD")

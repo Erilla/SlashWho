@@ -15,6 +15,7 @@ export {
   lookupRaidCurrentContentWindow,
   lookupRaidForEvidence,
   lookupRaiderIoBoss,
+  raidContentWindowOpenedBetween,
   raidOffersMythicRankings,
   raidTierConclusion,
   raidTierConclusionForEvidence,

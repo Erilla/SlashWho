@@ -73,6 +73,7 @@ const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
 const MAX_LEGACY_RANK_FALLBACK_REQUESTS_PER_READ = 50;
 import { createConcurrencyLimiter } from "./concurrency";
 import { measuredRepositories } from "./measured-repositories";
+import { staleReadNeedsOnlyNewestPage } from "./settled-collection";
 import type { MeasurementScope } from "./measurement";
 import type {
   CreateSearchCommand,
@@ -483,9 +484,24 @@ async function gatherCharacterEvidence(
     phasePlan: fullEvidencePhasePlan()
   });
   if (reservation.kind === "reserved") {
+    // Stale evidence of a character with nothing left to collect needs only
+    // the newest page, for a raid night since its last run (#540). A ranked
+    // continuation is its own targeted run and keeps its mode.
+    const light =
+      reservation.run.mode !== "tier_search" &&
+      (await staleReadNeedsOnlyNewestPage({
+        key: character.key,
+        at: new Date(),
+        completed: reservation.completed,
+        completedVersionCurrent: reservation.completedVersionCurrent ?? false,
+        evidence: options.repositories.evidence
+      }));
     const queueJobId = await options.queue.enqueueCharacterEvidence(
       reservation.run.id,
-      { enqueuedAt: new Date().toISOString() }
+      {
+        enqueuedAt: new Date().toISOString(),
+        ...(light ? { mode: "light" as const } : {})
+      }
     );
     await options.repositories.evidence.markEnqueued(
       reservation.run.id,

@@ -488,6 +488,13 @@ export type EvidenceReservationResult =
       completed: CompletedCharacterEvidence | null;
       /** Always the run this call created -- the same value as `run`. */
       active: CharacterEvidenceRun;
+      /**
+       * Whether `completed` was collected by the current collector. A snapshot
+       * from an older one is re-collected in full whatever else it holds, so a
+       * caller deciding how much this run should read must not treat it as
+       * settled. Absent reads as false.
+       */
+      completedVersionCurrent?: boolean;
     };
 
 /**

@@ -4860,7 +4860,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             kind: "reserved",
             run: reservedRun,
             completed,
-            active: reservedRun
+            active: reservedRun,
+            completedVersionCurrent:
+              completed?.evidenceVersion !== undefined &&
+              completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
           } satisfies EvidenceReservationResult;
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
