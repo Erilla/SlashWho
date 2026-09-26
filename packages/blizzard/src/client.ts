@@ -13,6 +13,7 @@ import type {
   BlizzardRosterCharacter,
   CompletedAchievement
 } from "./types";
+import { createRequestLimiter, type RequestLimits } from "./request-limiter";
 
 export type CreateBlizzardClientOptions = Readonly<{
   fetch: typeof globalThis.fetch;
@@ -21,6 +22,12 @@ export type CreateBlizzardClientOptions = Readonly<{
   /** Overrides both Blizzard hosts for deterministic local integration tests. */
   baseUrl?: string;
   onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  /**
+   * Bounds every API read this client makes, across all of its callers. A
+   * process that shares one client between several consumers of the same
+   * credentials shares these limits too; the OAuth token fetch is exempt.
+   */
+  requestLimits?: RequestLimits;
 }>;
 
 type AccessToken = Readonly<{
@@ -231,6 +238,9 @@ export function createBlizzardClient(
     CharacterKey["region"],
     CachedPlayableClassNames
   >();
+  const limiter = options.requestLimits
+    ? createRequestLimiter(options.requestLimits)
+    : undefined;
 
   async function accessToken(signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
@@ -304,6 +314,20 @@ export function createBlizzardClient(
   ): Promise<T> {
     const token = await accessToken(signal);
     await onProfileRequest?.();
+    signal?.throwIfAborted();
+    // The slot is held until the body is read, so a slow body still counts
+    // against the requests in flight.
+    return limiter
+      ? limiter.run(() => send(url, token, normalize, signal), signal)
+      : send(url, token, normalize, signal);
+  }
+
+  async function send<T>(
+    url: URL,
+    token: string,
+    normalize: (value: unknown) => T | null,
+    signal?: AbortSignal
+  ): Promise<T> {
     signal?.throwIfAborted();
     let response: Response;
     try {

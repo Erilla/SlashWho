@@ -171,6 +171,11 @@ export type DiscoveryJobHandlerOptions = {
     cadenceMs: number;
     minimumCommon: number;
     minimumIdenticalPercent: number;
+    /**
+     * Candidate reads a sweep keeps outstanding at once. The Blizzard client
+     * enforces the process-wide limits; this only lets a sweep use them.
+     */
+    readConcurrency?: number;
   };
   enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
   /** Queues full WCL collection before a newly admitted fingerprint match is published. */
@@ -660,6 +665,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       repositories.suppressions.isActive(key),
                     signal: context.signal,
                     historicalGuilds,
+                    ...(fingerprint.readConcurrency === undefined
+                      ? {}
+                      : { readConcurrency: fingerprint.readConcurrency }),
                     ...(resume ? { resumeAfter: resume.resumeAfter } : {})
                   }
                 );

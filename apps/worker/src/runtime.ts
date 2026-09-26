@@ -259,6 +259,22 @@ export async function readQueueDepths(
   return queues;
 }
 
+/**
+ * Limits on the worker's single Blizzard client, which discovery sweeps and
+ * evidence runs share, so they bound the process rather than one caller.
+ * Blizzard allows the credentials 100 requests a second and the web service
+ * spends the same allowance, so the worker takes about a fifth of it. The rate
+ * limit, not the concurrency, is what bounds that share: 6 in flight at a
+ * pessimistic 100 ms would be 60 a second. At the measured 284 ms mean, 6 in
+ * flight is about 21 a second, so the rate limit rarely binds. Both are per
+ * process, which is per credential only while the worker runs one replica.
+ * See docs/research/2026-09-26-issue-549-blizzard-sweep-concurrency.md.
+ */
+export const BLIZZARD_WORKER_REQUEST_LIMITS = {
+  maxConcurrent: 6,
+  maxPerSecond: 20
+} as const;
+
 export function createFingerprintIntegration(
   config: WorkerConfig,
   logger?: DiscoveryLogger
@@ -270,10 +286,14 @@ export function createFingerprintIntegration(
       clientSecret: config.blizzardClientSecret,
       baseUrl: config.blizzardBaseUrl,
       onThrottle: (event) =>
-        logger?.info(upstreamThrottleRecord("blizzard", event))
+        logger?.info(upstreamThrottleRecord("blizzard", event)),
+      requestLimits: BLIZZARD_WORKER_REQUEST_LIMITS
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,
+      // The sweep offers as many reads as the client will run at once; the
+      // client, not the sweep, holds the line.
+      readConcurrency: BLIZZARD_WORKER_REQUEST_LIMITS.maxConcurrent,
       hourlyBudget: config.blizzardHourlyRequestBudget,
       cadenceMs: config.fingerprintSweepCadenceHours * 60 * 60 * 1_000,
       minimumCommon: config.fingerprintMinimumCommon,
