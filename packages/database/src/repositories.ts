@@ -289,8 +289,18 @@ export interface CharacterEvidenceRun {
   attempt: number;
   limitationCode: string | null;
   parseLimitationCode: string | null;
+  /**
+   * Every parse shortfall the run met, of which `parseLimitationCode` is the
+   * one it is judged by. Absent when there were none.
+   */
+  parseLimitationCodesSeen?: readonly string[];
   /** Finished collection omitted fights whose timestamps could not be used. */
   omittedInvalidTimestamp?: boolean;
+  /**
+   * Reserved as a light refresh: one page of history, bookmark untouched.
+   * Absent on every other run.
+   */
+  lightRefresh?: boolean;
   retryAfterAt: Date | null;
   errorCode: string | null;
   createdAt: Date;
@@ -816,6 +826,11 @@ export interface EvidenceRepository {
     at: Date;
     /** The ordered collection plan fixed when a new run is reserved. */
     phasePlan?: readonly string[];
+    /**
+     * Records a newly reserved run as a light refresh. A run already in
+     * flight is joined as it is.
+     */
+    lightRefresh?: boolean;
     credentials?:
       | {
           wclClientIdEncrypted: string;
@@ -1334,7 +1349,7 @@ export interface AccountAuthRepository {
     issuedAt: Date;
     lastUsedAt: Date;
     idleExpiresAt: Date;
-    absoluteExpiresAt: Date;
+    absoluteExpiresAt: Date | null;
   }): Promise<AccountSession | null>;
   useSession(input: {
     sessionId: string;
@@ -1404,7 +1419,8 @@ export type AccountSession = Readonly<{
   issuedAt: Date;
   lastUsedAt: Date;
   idleExpiresAt: Date;
-  absoluteExpiresAt: Date;
+  /** Null when the session has no absolute lifetime. */
+  absoluteExpiresAt: Date | null;
   revokedAt: Date | null;
 }>;
 export interface AccountMailRepository {
@@ -1633,6 +1649,8 @@ export interface Repositories {
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
+    /** The most recently requested runs, newest first, for the operator monitor. */
+    listRecent(limit: number): Promise<readonly DiscoveryRun[]>;
   };
   snapshots: SnapshotRepository;
   manualConnections: ManualConnectionRepository;

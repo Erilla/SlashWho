@@ -87,6 +87,9 @@ const repositories = {
     },
     async findActive() {
       return null;
+    },
+    async listRecent() {
+      return [];
     }
   },
   suppressions: {

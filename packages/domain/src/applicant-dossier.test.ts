@@ -1606,4 +1606,22 @@ it("reports one withheld-evidence limitation per character and reason", () => {
     ["ryii", "current_content_evidence_withheld"],
     ["ryalts", "current_content_evidence_withheld"]
   ]);
+  // Break caught (#526): the one row said evidence was withheld without
+  // saying which raid, boss or how much, so it could not be weighed.
+  expect(dossier.limitations.map((item) => item.encounters)).toEqual([
+    [
+      {
+        raidName: "Sepulcher of the First Ones",
+        bossName: "Vigilant Guardian",
+        kills: 3
+      }
+    ],
+    [
+      {
+        raidName: "Sepulcher of the First Ones",
+        bossName: "Vigilant Guardian",
+        kills: 1
+      }
+    ]
+  ]);
 });

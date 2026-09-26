@@ -88,6 +88,8 @@ const validDossier = {
       character: null,
       code: "rate_limited",
       message: "Warcraft Logs is temporarily rate limited.",
+      affects: "kill_history",
+      recovery: "automatic",
       observedAt: "2026-09-15T12:00:00.000Z"
     }
   ]
@@ -102,6 +104,8 @@ it("accepts a provider reset timestamp on a rate-limited limitation", () => {
         character: null,
         code: "rate_limited",
         message: "Raider.IO is temporarily rate limited.",
+        affects: "world_ranks",
+        recovery: "automatic",
         observedAt: "2026-09-15T12:00:00.000Z",
         retryAt: "2026-09-15T12:05:00.000Z"
       }
@@ -124,12 +128,54 @@ it("publishes the unmatched-encounter limitation the dossier can emit", () => {
         code: "unmatched_encounter",
         message:
           "Some Mythic kills could not be matched to a known raid boss, so they are not shown.",
+        affects: "hidden_kills",
+        recovery: "none",
+        encounters: [
+          {
+            raidName: "Liberation of Undermine",
+            bossName: "Gallywix",
+            kills: 2
+          }
+        ],
         observedAt: "2026-09-15T12:00:00.000Z"
       }
     ]
   });
 
   expect(result.success).toBe(true);
+});
+
+it("requires every limitation to say what it affects and how it recovers", () => {
+  // Break caught (#526): a limitation that only carries a sentence leaves the
+  // reviewer unable to tell a parse gap from a history gap, or a shortfall
+  // that clears itself from one that never will.
+  const limitation = validDossier.limitations[0]!;
+  const { affects, ...withoutAffects } = limitation;
+  const { recovery, ...withoutRecovery } = limitation;
+  void affects;
+  void recovery;
+
+  for (const candidate of [withoutAffects, withoutRecovery]) {
+    expect(
+      applicantDossierSchema.safeParse({
+        ...validDossier,
+        limitations: [candidate]
+      }).success
+    ).toBe(false);
+  }
+  expect(
+    applicantDossierSchema.safeParse({
+      ...validDossier,
+      limitations: [
+        {
+          ...limitation,
+          encounters: [
+            { raidName: "Nerub-ar Palace", bossName: null, kills: 0 }
+          ]
+        }
+      ]
+    }).success
+  ).toBe(false);
 });
 
 it("validates strict kill, wipe, no-log, and incomplete boss variants", () => {
@@ -564,6 +610,17 @@ it("defines a strict operator collection monitor without internal run fields", (
         errorCode: "warcraft_logs_unavailable",
         stoppedAt: "2026-09-20T10:00:00.000Z"
       }
+    ],
+    discoveryRuns: [
+      {
+        character: applicantCharacter,
+        status: "failed",
+        attempt: 3,
+        requestedAt: "2026-09-20T09:00:00.000Z",
+        startedAt: "2026-09-20T09:00:01.000Z",
+        completedAt: "2026-09-20T09:05:00.000Z",
+        errorCode: "upstream_unavailable"
+      }
     ]
   };
 
@@ -586,6 +643,17 @@ it("defines a strict operator collection monitor without internal run fields", (
         {
           ...response.completed[0],
           wclClientSecretEncrypted: "ciphertext"
+        }
+      ]
+    })
+  ).toThrow();
+  expect(() =>
+    collectionMonitorResponseSchema.parse({
+      ...response,
+      discoveryRuns: [
+        {
+          ...response.discoveryRuns[0],
+          snapshotId: "private-snapshot"
         }
       ]
     })

@@ -228,6 +228,8 @@ interface EvidenceRunRow {
   limitation_code: string | null;
   parse_limitation_code: string | null;
   omitted_invalid_timestamp: boolean;
+  parse_limitation_codes_seen?: string[] | null;
+  light_refresh?: boolean;
   retry_after_at: Date | null;
   error_code: string | null;
   created_at: Date;
@@ -573,7 +575,7 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
 // What a run was reserved to do. Selected everywhere a run is mapped, so a
 // re-claimed tier search is still a tier search.
 function evidenceRunModeSql(alias = "character_evidence_runs"): string {
-  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp`;
+  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh`;
 }
 
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
@@ -590,6 +592,10 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     limitationCode: row.limitation_code,
     parseLimitationCode: row.parse_limitation_code,
     omittedInvalidTimestamp: row.omitted_invalid_timestamp,
+    ...(row.parse_limitation_codes_seen?.length
+      ? { parseLimitationCodesSeen: row.parse_limitation_codes_seen }
+      : {}),
+    ...(row.light_refresh ? { lightRefresh: true } : {}),
     retryAfterAt: row.retry_after_at,
     errorCode: row.error_code,
     createdAt: row.created_at,
@@ -2354,7 +2360,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           issued_at: Date;
           last_used_at: Date;
           idle_expires_at: Date;
-          absolute_expires_at: Date;
+          absolute_expires_at: Date | null;
           revoked_at: Date | null;
         }>(
           `INSERT INTO account_sessions (id, secret_digest, account_id, credential_version, issued_at, last_used_at, idle_expires_at, absolute_expires_at)
@@ -2394,13 +2400,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             issued_at: Date;
             last_used_at: Date;
             idle_expires_at: Date;
-            absolute_expires_at: Date;
+            absolute_expires_at: Date | null;
             revoked_at: Date | null;
           }
         >(
           `UPDATE account_sessions s SET last_used_at = $3, idle_expires_at = LEAST($4, s.absolute_expires_at)
            FROM accounts a WHERE s.id = $1 AND s.secret_digest = $2 AND s.account_id = a.id
-             AND s.revoked_at IS NULL AND s.idle_expires_at > $3 AND s.absolute_expires_at > $3
+             AND s.revoked_at IS NULL AND s.idle_expires_at > $3 AND (s.absolute_expires_at IS NULL OR s.absolute_expires_at > $3)
              AND s.credential_version = a.credential_version AND a.active AND a.verified_at IS NOT NULL
            RETURNING a.*, s.id AS session_id, s.account_id AS session_account_id, s.credential_version AS session_credential_version,
              s.issued_at, s.last_used_at, s.idle_expires_at, s.absolute_expires_at, s.revoked_at`,
@@ -2437,7 +2443,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `UPDATE accounts SET password_hash = $5, password_salt = $6, scrypt_version = $7, scrypt_cost = $8,
                password_change_required = false, credential_version = credential_version + 1, updated_at = $9
              WHERE id = $1 AND credential_version = $3 AND password_hash = $4 AND active AND verified_at IS NOT NULL
-               AND EXISTS (SELECT 1 FROM account_sessions WHERE id = $2 AND account_id = $1 AND revoked_at IS NULL AND idle_expires_at > $9 AND absolute_expires_at > $9)
+               AND EXISTS (SELECT 1 FROM account_sessions WHERE id = $2 AND account_id = $1 AND revoked_at IS NULL AND idle_expires_at > $9 AND (absolute_expires_at IS NULL OR absolute_expires_at > $9))
              RETURNING id`,
             [
               input.accountId,
@@ -3280,6 +3286,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [key.region, key.realm, key.name]
         );
         return result.rows[0] ? mapRun(result.rows[0]) : null;
+      },
+
+      async listRecent(limit) {
+        const result = await pool.query<RunRow>(
+          `SELECT * FROM discovery_runs
+           ORDER BY created_at DESC, id DESC
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map(mapRun);
       }
     },
 
@@ -4693,7 +4709,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           client.release();
         }
       },
-      async reserve({ key, freshnessCutoff, at, credentials, phasePlan }) {
+      async reserve({
+        key,
+        freshnessCutoff,
+        at,
+        credentials,
+        phasePlan,
+        lightRefresh
+      }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -4817,10 +4840,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
               (region, realm_slug, normalized_name, mode, tier_search_raid_id,
-               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version)
+               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
+               light_refresh)
              VALUES ($1, $2, $3,
                      CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
-                     $4, $5, $6, $7, $8)
+                     $4, $5, $6, $7, $8, $9)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                        completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
@@ -4841,7 +4865,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 : null,
               credentials && "credentialVersion" in credentials
                 ? credentials.credentialVersion
-                : null
+                : null,
+              // A tier continuation is its own mode, never a light refresh.
+              continuationRaidId === null && lightRefresh === true
             ]
           );
           const reservedRun = mapEvidenceRun(inserted.rows[0]!);

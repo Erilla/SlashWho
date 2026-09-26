@@ -17,7 +17,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
 import { decryptCredential } from "./credential-encryption";
-import { createApplicantDossierService } from "./applicant-dossier-service";
+import {
+  createApplicantDossierService,
+  limitationRecovery
+} from "./applicant-dossier-service";
+import { retryDelayMsFor } from "./limitation-retry-policy";
 import { createMeasurementScope } from "./measurement";
 import { createSearchService } from "./search-service";
 
@@ -81,6 +85,7 @@ function fixture(
     wipeCapable?: boolean;
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
+    evidenceParseLimitationCodesSeen?: readonly string[];
     omittedInvalidTimestamp?: boolean;
     evidenceCompletedAt?: Date;
     storedEvidence?: boolean;
@@ -96,6 +101,10 @@ function fixture(
     activeLimitationCode?: string | null;
     /** Fresh stored evidence with a refresh collecting over it right now. */
     refreshingCharacter?: CharacterKey | null;
+    /** What the run collecting right now was reserved to do. */
+    activeMode?: "full" | "tier_search";
+    /** The run collecting right now was reserved as a light refresh. */
+    activeLightRefresh?: boolean;
     /** The phase ledger `listPhases` returns for the active run. */
     activePhases?: readonly EvidenceRunPhase[];
     onCacheEvent?: (source: string, event: string) => void;
@@ -200,6 +209,8 @@ function fixture(
                 attempt: 1,
                 limitationCode: options.activeLimitationCode ?? null,
                 parseLimitationCode: null,
+                mode: options.activeMode ?? "full",
+                ...(options.activeLightRefresh ? { lightRefresh: true } : {}),
                 errorCode: null,
                 createdAt: new Date("2026-09-11T12:00:00.000Z"),
                 startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -238,6 +249,12 @@ function fixture(
                   ? "request_cap"
                   : null,
             parseLimitationCode: options.evidenceParseLimitationCode ?? null,
+            ...(options.evidenceParseLimitationCodesSeen
+              ? {
+                  parseLimitationCodesSeen:
+                    options.evidenceParseLimitationCodesSeen
+                }
+              : {}),
             omittedInvalidTimestamp: options.omittedInvalidTimestamp ?? false,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -362,7 +379,7 @@ function fixture(
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
     ...(options.characterCap === undefined
       ? {}
-      : { DOSSIER_CHARACTER_CAP: options.characterCap }),
+      : { DOSSIER_CHARACTER_CEILING: options.characterCap }),
     ...(options.warcraftLogsRequestCap === undefined
       ? {}
       : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap }),
@@ -1047,6 +1064,9 @@ describe("applicant dossier service", () => {
         },
         async findActive() {
           return null;
+        },
+        async listRecent() {
+          return [];
         }
       },
       suppressions: {
@@ -1626,6 +1646,186 @@ describe("applicant dossier service", () => {
     );
   });
 
+  describe("current limitations only (#526)", () => {
+    const rootLimitations = <
+      T extends Readonly<{ source: string; character: unknown }>
+    >(
+      limitations: readonly T[]
+    ) =>
+      limitations.filter(
+        (item) =>
+          item.source === "warcraft_logs" &&
+          JSON.stringify(item.character) === JSON.stringify(root)
+      );
+
+    it("drops the last run's shortfalls once a newer full collection is re-reading them", async () => {
+      // Break caught: a schema-drift notice from four days earlier sat beside
+      // the row's own "collecting" spinner, read as today's state of a read
+      // that was already being redone.
+      const { dossiers } = fixture({
+        evidenceStatus: "partial",
+        evidenceLimitationCode: "schema_drift",
+        evidenceParseLimitationCode: "parse_request_cap",
+        omittedInvalidTimestamp: true,
+        refreshingCharacter: root
+      });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(rootLimitations(result.dossier.limitations)).toEqual([]);
+    });
+
+    it("keeps the collecting run's own shortfall while dropping the superseded one", async () => {
+      const { dossiers } = fixture({
+        evidenceStatus: "partial",
+        evidenceLimitationCode: "request_cap",
+        gatheringCharacter: root,
+        activeLimitationCode: "points_budget_low"
+      });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(
+        rootLimitations(result.dossier.limitations).map((item) => item.code)
+      ).toEqual(["points_budget_low"]);
+    });
+
+    it("keeps the last run's shortfalls while only a tier search is collecting", async () => {
+      // A tier search re-reads one tier's attendance, not the history scan or
+      // the parse budget, so the full run's shortfalls still stand.
+      const { dossiers } = fixture({
+        evidenceStatus: "partial",
+        evidenceLimitationCode: "request_cap",
+        refreshingCharacter: root,
+        activeMode: "tier_search"
+      });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(
+        rootLimitations(result.dossier.limitations).map((item) => item.code)
+      ).toEqual(["request_cap"]);
+    });
+
+    it("keeps the last run's shortfalls while only a light refresh is collecting", async () => {
+      // Break caught (#541 review): a manual refresh inside the cooldown reads
+      // one page and leaves the bookmark alone, yet it was treated as a full
+      // collection -- so pressing refresh made a deep-history gap vanish.
+      const { dossiers } = fixture({
+        evidenceStatus: "partial",
+        evidenceLimitationCode: "request_cap",
+        omittedInvalidTimestamp: true,
+        refreshingCharacter: root,
+        activeLightRefresh: true
+      });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(
+        rootLimitations(result.dossier.limitations).map((item) => item.code)
+      ).toEqual(["request_cap", "invalid_fight_timestamp"]);
+    });
+
+    it("keeps the last run's shortfalls when nothing newer is collecting", async () => {
+      const { dossiers } = fixture({
+        evidenceStatus: "partial",
+        evidenceLimitationCode: "request_cap"
+      });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(rootLimitations(result.dossier.limitations)).toEqual([
+        expect.objectContaining({
+          code: "request_cap",
+          affects: "kill_history",
+          recovery: "automatic"
+        })
+      ]);
+    });
+  });
+
+  it("lists every parse reason the run met, naming the kills missing parses", async () => {
+    // Break caught (#526): only the driving parse code reached the dossier,
+    // so a private report behind a capped run was never mentioned, and no
+    // entry said which kills the partial parses were on.
+    const { dossiers } = fixture({
+      evidenceStatus: "partial",
+      evidenceLimitationCode: null,
+      evidenceParseLimitationCode: "parse_request_cap",
+      evidenceParseLimitationCodesSeen: ["parse_private", "parse_request_cap"],
+      // A DPS kill with a good damage parse. Its healing and boss-damage
+      // metrics stay unavailable because nothing ranks them, and it must not
+      // be listed as missing parses (#541 review).
+      additionalKills: [
+        {
+          id: "10000000-0000-4000-8000-000000000099",
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1233",
+          bossName: "The Silken Court",
+          journalBossId: null,
+          bossOrder: 7,
+          killedAt: "2024-09-30T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/example",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=8",
+          guild: { name: "Example Guild", realm: "silvermoon" },
+          historicWorldRank: 2,
+          historicRankCheckedAt: null,
+          parsesReadAt: null,
+          performance: {
+            damage: { state: "available", percentile: 91 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }
+      ]
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    const parses = result.dossier.limitations.filter(
+      (item) => item.character?.name === root.name && item.affects === "parses"
+    );
+    expect(parses.map((item) => item.code)).toEqual([
+      "parse_request_cap",
+      "parse_private"
+    ]);
+    for (const item of parses) {
+      expect(item.encounters).toEqual([
+        { raidName: "Nerub-ar Palace", bossName: "Queen Ansurek", kills: 1 }
+      ]);
+    }
+    expect(parses.map((item) => item.recovery)).toEqual(["automatic", "none"]);
+  });
+
+  it("classifies Warcraft Logs recovery exactly as the retry policy does", () => {
+    // The dossier promising "retries automatically" for a code the run never
+    // reschedules, or the reverse, is the failure. `points_budget_low` and
+    // `collection_failed` resume outside `retryDelayMsFor` -- the queue and
+    // the failure cooldown -- so they are asserted on their own.
+    const delays = { transientRetryMs: 1, capRetryMs: 1 };
+    for (const [internal, contract] of [
+      ["not_found", "not_found"],
+      ["private", "private"],
+      ["rate_limited", "rate_limited"],
+      ["request_cap", "request_cap"],
+      ["unavailable", "unavailable"],
+      ["schema_drift", "schema_changed"],
+      ["parse_private", "parse_private"],
+      ["parse_rate_limited", "parse_rate_limited"],
+      ["parse_request_cap", "parse_request_cap"],
+      ["parse_unavailable", "parse_unavailable"],
+      ["parse_schema_drift", "parse_schema_drift"],
+      ["parse_identity_unmatched", "parse_identity_unmatched"]
+    ] as const) {
+      expect(limitationRecovery(contract), internal).toBe(
+        retryDelayMsFor(internal, delays) === null ? "none" : "automatic"
+      );
+    }
+    expect(limitationRecovery("points_budget_low")).toBe("automatic");
+    expect(limitationRecovery("collection_failed")).toBe("automatic");
+  });
+
   it("reads collected Cutting Edge rows without calling Blizzard again", async () => {
     const { dossiers, blizzard } = fixture({
       cuttingEdgesCollected: true,
@@ -1730,7 +1930,17 @@ describe("applicant dossier service", () => {
     expect(result).toMatchObject({
       dossier: {
         limitations: expect.arrayContaining([
-          expect.objectContaining({ source: "raiderio", code: "request_cap" })
+          expect.objectContaining({
+            source: "raiderio",
+            code: "request_cap",
+            // The kills behind the lookups the cap turned away.
+            encounters: [
+              expect.objectContaining({
+                raidName: "Nerub-ar Palace",
+                bossName: "Queen Ansurek"
+              })
+            ]
+          })
         ])
       }
     });
@@ -1790,7 +2000,20 @@ describe("applicant dossier service", () => {
           raidWithKill({ historicWorldRank: null })
         ]),
         limitations: expect.arrayContaining([
-          expect.objectContaining({ source: "raiderio", code: "unavailable" })
+          expect.objectContaining({
+            source: "raiderio",
+            code: "unavailable",
+            affects: "world_ranks",
+            // Break caught (#526): the notice said "some" ranks without
+            // naming the boss the reviewer would go looking for.
+            encounters: [
+              {
+                raidName: "Nerub-ar Palace",
+                bossName: "Queen Ansurek",
+                kills: 2
+              }
+            ]
+          })
         ])
       }
     });
@@ -2179,6 +2402,38 @@ describe("applicant dossier service", () => {
     }
   });
 
+  it("researches and lists every character of the largest real roster by default", async () => {
+    // Break caught (#555): the default cap of 12 researched only the first
+    // twelve characters and dropped the rest from the dossier, so six of the
+    // test environment's 35 rosters (the largest has 23) hid real characters.
+    const alts = Array.from({ length: 22 }, (_, index) => {
+      const name = `alt${String(index + 1).padStart(2, "0")}`;
+      return {
+        characterId: `10000000-0000-4000-8000-${String(index + 200).padStart(12, "0")}`,
+        key: { region: "eu" as const, realm: "silvermoon", name },
+        displayName: name,
+        className: "Priest",
+        level: 80,
+        guild: null,
+        raiderIoUrl: `https://raider.io/characters/eu/silvermoon/${name}`,
+        source: "claimed" as const,
+        displayOrder: index + 1
+      };
+    });
+    const { dossiers, repositories } = fixture({
+      snapshot: storedSnapshot([storedSnapshot().characters[0]!, ...alts])
+    });
+
+    const result = await dossiers.read(root);
+
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    expect(result.dossier.characters).toHaveLength(23);
+    expect(repositories.evidence.reserve).toHaveBeenCalledTimes(23);
+    expect(
+      result.dossier.limitations.filter((item) => item.code === "request_cap")
+    ).toEqual([]);
+  });
+
   it("reports every evidence stream skipped by the character cap", async () => {
     // Break caught: a cap could silently omit evidence.
     const { dossiers, repositories, warcraftLogs } = fixture({
@@ -2224,7 +2479,9 @@ describe("applicant dossier service", () => {
           {
             source: "warcraft_logs",
             character: third,
-            code: "request_cap"
+            code: "request_cap",
+            // Nothing was requested for it, and no retry will request it.
+            recovery: "none"
           }
         ]
       }

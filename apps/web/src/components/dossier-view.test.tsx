@@ -113,6 +113,8 @@ const dossier: ApplicantDossier = {
       code: "unavailable",
       message:
         "Warcraft Logs evidence is incomplete because the source is temporarily unavailable.",
+      affects: "kill_history",
+      recovery: "automatic",
       observedAt: "2026-09-15T12:00:00.000Z"
     }
   ]
@@ -232,7 +234,7 @@ describe("DossierPageClient", () => {
       .getAllByRole("listitem")
       .find((item) => item.textContent?.includes("Warcraft Logs evidence"));
     expect(limitation).toHaveTextContent(
-      /Warcraft Logs evidence is incomplete.*Affected character: Ryalts\./i
+      /Warcraft Logs evidence is incomplete.*Affects.*Kill and wipe history.*Ryalts/i
     );
 
     const evidence = screen.getByRole("group", {

@@ -1,5 +1,6 @@
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
+import { upstreamThrottleRecord } from "@slashwho/application";
 import { describe, expect, it } from "vitest";
 
 import { parseCharacterRoute, withHttpRequest } from "./http";
@@ -39,6 +40,36 @@ describe("withHttpRequest", () => {
     expect(records[0]).toMatchObject({
       cacheHits: 1,
       blizzardCalls: 1
+    });
+  });
+
+  it("charges an upstream throttle to the request that hit it", async () => {
+    // Break caught: the shared clients' onThrottle hook runs with no scope in
+    // hand, so without the request's attribution the throttle would reach
+    // only the standalone line and never this record (#508).
+    const records: Record<string, unknown>[] = [];
+    const logger = {
+      info: (value: Record<string, unknown>) => records.push(value)
+    };
+    let throttleLine: Record<string, unknown> | undefined;
+
+    await withHttpRequest(
+      "dossier",
+      async () => {
+        throttleLine = upstreamThrottleRecord("blizzard", {
+          retryAfterMs: 1_500
+        });
+        return Response.json({ ok: true });
+      },
+      logger
+    );
+
+    expect(records[0]).toMatchObject({
+      blizzardThrottles: 1,
+      blizzardRetryAfterMaxMs: 1_500
+    });
+    expect(throttleLine).toMatchObject({
+      correlationId: records[0]!.correlationId
     });
   });
 

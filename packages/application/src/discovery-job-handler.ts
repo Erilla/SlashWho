@@ -27,6 +27,7 @@ import {
   type MeasurementScope
 } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+import { bindThrottleScope } from "./throttle-attribution";
 
 /**
  * Provider timing belongs on the gateway, not on the orchestrating domain
@@ -351,6 +352,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       // measured call and the buckets stay within it.
       const observedAt = monotonic();
       const scope = createMeasurementScope(monotonic);
+      bindThrottleScope(scope);
       const repositories = measuredRepositories(options.repositories, scope);
 
       let context = workContext;
