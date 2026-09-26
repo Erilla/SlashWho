@@ -124,7 +124,7 @@ export function DossierCharacterList({
             <div className="dossier-character-lead">
               {visibility ? (
                 <DossierCharacterVisibilityToggle
-                  anyHidden={visibility.hidden.size > 0}
+                  anyHidden={visibility.anyHidden}
                   character={character}
                   hidden={visibility.isHidden(character.key)}
                   onHideOnly={() => visibility.hideOnly(character.key)}

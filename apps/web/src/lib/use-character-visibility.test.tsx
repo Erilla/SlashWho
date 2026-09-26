@@ -104,3 +104,34 @@ it("still filters for the visit when storage refuses", () => {
 
   expect(result.current.isHidden(ryalts)).toBe(true);
 });
+
+it("does not count a stored character the list no longer holds as hidden", () => {
+  window.localStorage.setItem(
+    storageKey,
+    JSON.stringify(["eu/draenor/unlinked"])
+  );
+  const { result } = renderHook(() => useCharacterVisibility(root, characters));
+  expect(result.current.hidden.size).toBe(1);
+  expect(result.current.anyHidden).toBe(false);
+});
+
+it("forgets a character once it is excluded, so it comes back visible", () => {
+  window.localStorage.setItem(
+    storageKey,
+    JSON.stringify(["eu/draenor/ryalts", "eu/draenor/benched"])
+  );
+  const { result, rerender } = renderHook(
+    ({ rows }) => useCharacterVisibility(root, rows),
+    { initialProps: { rows: characters } }
+  );
+  expect([...result.current.hidden]).toEqual(["eu/draenor/ryalts"]);
+  expect(result.current.anyHidden).toBe(true);
+
+  rerender({ rows: [row(root), row(ryalts, true), row(benched, true)] });
+  expect(result.current.hidden.size).toBe(0);
+  expect(result.current.anyHidden).toBe(false);
+  expect(window.localStorage.getItem(storageKey)).toBeNull();
+
+  rerender({ rows: [row(root), row(ryalts), row(benched, true)] });
+  expect(result.current.isHidden(ryalts)).toBe(false);
+});

@@ -45,6 +45,11 @@ function writeHidden(rootId: string, hidden: ReadonlySet<string>) {
 
 export type CharacterVisibilityControls = Readonly<{
   hidden: ReadonlySet<string>;
+  /**
+   * Whether a listed character with evidence is hidden. The stored set can
+   * outlive a character, so its size alone says nothing about the page.
+   */
+  anyHidden: boolean;
   isHidden: (key: CharacterKey) => boolean;
   toggle: (key: CharacterKey) => void;
   showOnly: (key: CharacterKey) => void;
@@ -79,6 +84,23 @@ export function useCharacterVisibility(
     [rootId]
   );
 
+  // An excluded character has no evidence to hide, and one the reviewer
+  // includes again should come back visible, so exclusion clears its entry.
+  useEffect(() => {
+    const excluded = characters
+      .filter((character) => character.excluded)
+      .map((character) => characterId(character.key))
+      .filter((id) => hidden.has(id));
+    if (excluded.length === 0) return;
+    const next = new Set(hidden);
+    for (const id of excluded) next.delete(id);
+    update(next);
+  }, [characters, hidden, update]);
+
+  const anyHidden = characters.some(
+    (character) => !character.excluded && hidden.has(characterId(character.key))
+  );
+
   const others = useCallback(
     (key: CharacterKey) =>
       characters
@@ -91,6 +113,7 @@ export function useCharacterVisibility(
   return useMemo(
     () => ({
       hidden,
+      anyHidden,
       isHidden: (key) => hidden.has(characterId(key)),
       toggle: (key) => {
         const next = new Set(hidden);
@@ -102,6 +125,6 @@ export function useCharacterVisibility(
       hideOnly: (key) => update(new Set([characterId(key)])),
       showAll: () => update(new Set())
     }),
-    [hidden, others, update]
+    [anyHidden, hidden, others, update]
   );
 }

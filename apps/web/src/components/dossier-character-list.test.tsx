@@ -495,6 +495,7 @@ it("leads each row with the viewer's eye and dims a hidden character", () => {
       root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
       visibility={{
         hidden: new Set(["eu/draenor/ryalts"]),
+        anyHidden: true,
         isHidden: (key) => key.name === "ryalts",
         toggle: vi.fn(),
         showOnly: vi.fn(),
