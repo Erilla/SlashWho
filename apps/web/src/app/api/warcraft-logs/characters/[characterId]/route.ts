@@ -26,7 +26,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<CharacterIdParams> }
 ): Promise<Response> {
-  return withHttpRequest("warcraft_logs_character", async () => {
+  return withHttpRequest("warcraft_logs_character", async (scope) => {
     const characterId = parseCharacterId((await context.params).characterId);
     if (characterId === undefined) return apiError("invalid_character_url");
     const { characterIds, searches, accountAuth, accountCredentials } =
@@ -44,10 +44,12 @@ export async function GET(
       accountCredentials,
       loadWebConfig()
     );
-    const result = await characterIds.resolve(
-      characterId,
-      wclCredentials ?? undefined,
-      request.signal
+    const result = await scope.time("warcraftLogs", () =>
+      characterIds.resolve(
+        characterId,
+        wclCredentials ?? undefined,
+        request.signal
+      )
     );
     if (result.kind === "not_found") return apiError("character_not_found");
     if (result.kind === "unavailable") return apiError("upstream_unavailable");
