@@ -34,14 +34,23 @@ import type {
   WarcraftLogsRateLimit,
   WarcraftLogsTierSearchOutcome
 } from "@slashwho/warcraftlogs";
+import { MYTHIC_DIFFICULTY } from "@slashwho/warcraftlogs";
 
+import { bestEffort } from "./best-effort";
 import { createConcurrencyLimiter } from "./concurrency";
 import { decryptCredential } from "./credential-encryption";
 import { errorFields } from "./error-fields";
 import {
   classifyEvidenceFailure,
-  evidenceRetryDecision
+  evidenceRetryDecision,
+  type EvidenceRetryDecision
 } from "./evidence-retry-policy";
+import {
+  belowReserve,
+  evidenceRunBudget,
+  parseOnlyRequestCap,
+  remainingPoints
+} from "./evidence-run-budget";
 import {
   drivingParseLimitation,
   retryDelayMsFor
@@ -531,160 +540,6 @@ function isPointsBudgetRefusal(error: unknown): error is PointsBudgetRefusal {
   );
 }
 
-function remainingPoints(budget: WarcraftLogsRateLimit): number {
-  return budget.limitPerHour - budget.pointsSpentThisHour;
-}
-
-/**
- * The configured reserve is sized for the worker's own allowance, but a run may
- * carry a visitor's credentials, and their account's limit is its own -- 3600
- * by default against the worker's 18000. Applied flat, a worker-sized reserve
- * fences off a visitor's entire budget and refuses every run they could make.
- * Capping it at a share of the *reported* allowance keeps the intent -- leave
- * room for roughly one more run -- at any account size, and can only lower the
- * configured value, never raise it.
- *
- * The share is 0.3 because 0.1 was quietly deciding the reserve. At the
- * worker's 18000 it clipped any configured value to 1800, and #295 measured a
- * real collection at up to 2906 points: a 1800 ceiling cannot express "leave
- * room for one more run" when one more run costs that much. 0.3 of 18000 is
- * 5400, so the measured 3500 default reaches the gate intact, and a visitor's
- * 3600 account keeps a 1080 reserve -- which the same measurement says is
- * about the least a collection can cost.
- */
-const MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE = 0.3;
-
-function effectiveReserve(limitPerHour: number, configured: number): number {
-  return Math.min(
-    configured,
-    limitPerHour * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE
-  );
-}
-
-/**
- * The history scan is what a run mostly spends its points on, and the request
- * cap is a flat page count applied to whichever account the run carries -- the
- * gap `effectiveReserve` already closes for the reserve, left open on the knob
- * that decides what a *started* run costs (#320).
- *
- * The scan's share of a run was measured on 2026-09-18: 58-89% of spend, and
- * all of the variance, since fight parses sit at a near-constant 33-43 requests
- * against their own cap while the scan ranges from 32 to 190 pages. A visitor's
- * 3600 allowance against a flat 500 means one run may plan a scan several times
- * their whole hourly budget.
- *
- * A BACKSTOP, NOT A GUARANTEE. It bounds one run's share of an allowance; it
- * does not promise the run finishes.
- *
- * That is worth the arithmetic, because this constant and
- * MAXIMUM_RESERVE_SHARE_OF_ALLOWANCE are the two halves of a run's budget and
- * they used to combine only in a reader's head. Admission guarantees a run
- * starts with at least `effectiveReserve` points left. A run may then spend
- * `cap * pointsPerPage` on the scan plus a flat parse term -- the parse cap in
- * requests at ~13 points each, which does not scale with the allowance at all.
- * At EVIDENCE_PARSE_REQUEST_CAP's default of 24 that term is ~317:
- *
- *   worker, 18000:  admission guarantees >=3500; cap 300 pages
- *                   worst run 300*20 + 317 = 6317, and 9317 at 30 a page
- *   visitor, 3600:  admission guarantees >=1080; cap  18 pages
- *                   worst run  18*20 + 317 =  677, and  857 at 30 a page
- *
- * The worker's does not close, by a wide margin. The visitor's does, at both
- * page costs -- but read that as an accident of the current numbers rather
- * than a property anything maintains. The parse term is flat, so it eats the
- * margin directly: at a parse cap of 48, which Railway ran as an override
- * until 2026-09-18, the visitor's worst run is 1174 against the same 1080 and
- * stops closing.
- *
- * Making the worker's close would mean 145 pages, below the deepest scan
- * already observed (190), truncating collections that currently finish. And
- * the reason is not arithmetic that can be rebalanced:
- * a deep character's history is ~3800 points of scan before a single parse,
- * which does not fit a 3600 allowance at any cap whatsoever. That case takes
- * more than one window by nature. An overrun already publishes partial, sets a
- * retry deadline and resumes, so it pays a deferral rather than losing work --
- * which is why bounding the share is the job here and completing the run is
- * not.
- *
- * These four lines are not the guard, only its explanation. The guard is
- * `evidence-run-budget.test.ts` in the worker, which computes the same
- * arithmetic from the real configured defaults and fails the build when any of
- * it moves -- the two shares, the page costs, or the parse cap, which is what
- * actually drifted first. If that test fails, fix the numbers here as well as
- * there: a comment nobody has to update is a comment that goes stale, which is
- * how this one came to describe a parse cap of 48 that had stopped being
- * deployed.
- */
-const MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE = 0.5;
-
-/**
- * The same bound on a visitor's allowance, which is theirs and not ours.
- *
- * This is a product decision, not a tuning constant. Spending the worker's
- * whole quota is a throughput choice we are entitled to make. Spending a
- * visitor's, repeatedly across windows until their character converges, is
- * spending someone else's resource -- and they supplied those credentials to
- * see one dossier, not to have their Warcraft Logs quota drained every hour.
- * So the slice is modest: 18 pages a run against a 3600 allowance, where our
- * own would take 60.
- *
- * THIS DOES NOT MERELY SLOW A VISITOR'S DOSSIER DOWN. Above the cap it does
- * not converge at all. A truncated scan raises a `request_cap` scan
- * limitation; `terminalTiersFrom` settles nothing when a scan limitation is
- * present; with nothing terminal `killScanFloorFrom` returns undefined; and
- * with no floor the next run starts at the newest report again and pages back
- * over the same 18 pages. At 10 reports a page that is the same 180 reports
- * forever, for any character with more than that.
- *
- * It is still an improvement on what it replaces -- a flat 500-page cap
- * exhausted a visitor's allowance around page 180 and was rate limited
- * mid-scan, so this trades failing expensively for failing cheaply -- but it
- * is not convergence, and the fix is not here. It is to narrow "a truncated
- * scan settles nothing" to "settles nothing below its stopping point": paging
- * is newest-first, so a raid whose kills all sit above the truncation point
- * was completely seen and is safe to mark. Tracked in #334.
- *
- * Keyed off whose credentials the run carries, never off how large the
- * allowance is. A small allowance only correlates with a visitor: the worker's
- * own tier moved from 9000 to 18000 inside a day on 2026-09-17, and a visitor
- * may hold a large account.
- */
-const MAXIMUM_SCAN_SHARE_OF_VISITOR_ALLOWANCE = 0.15;
-
-/**
- * Points per history-scan page, for converting that share into a page count.
- *
- * 30 is deliberately above the measurement, not equal to it. Two runs on
- * 2026-09-18 with identical zone and fight counts differed only in scan depth
- * -- 134 pages against 66, 2894 points against 1531 -- which solves directly to
- * about 20 a page with no model assumed. Dividing by the measured value would
- * make the share a floor rather than a ceiling: the cap is `share * limit / s`,
- * so the run spends `share * limit * (actual / assumed)`, and any page dearer
- * than the estimate spends *more* than the share, not less. A third run the
- * same evening does not fit a constant-cost model at all -- it implies a
- * negative fight cost -- so per-request costs are not uniform across
- * characters, and the divisor carries headroom for that.
- */
-const HISTORY_SCAN_POINTS_PER_REQUEST = 30;
-
-function effectiveRequestCap(
-  limitPerHour: number,
-  configured: number,
-  credentials: "own" | "visitor"
-): number {
-  const share =
-    credentials === "visitor"
-      ? MAXIMUM_SCAN_SHARE_OF_VISITOR_ALLOWANCE
-      : MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE;
-  return Math.max(
-    1,
-    Math.min(
-      configured,
-      Math.floor((limitPerHour * share) / HISTORY_SCAN_POINTS_PER_REQUEST)
-    )
-  );
-}
-
 function storedKillForParse(
   kill: NonNullable<StoredEvidenceTiers["parseOnlyKills"]>[number],
   region: CharacterKey["region"]
@@ -704,7 +559,7 @@ function storedKillForParse(
     fightId: Number(fightId),
     // character_mythic_kills contains Mythic-only evidence, so the gateway's
     // Mythic difficulty constant is the only difficulty value available here.
-    difficulty: 5,
+    difficulty: MYTHIC_DIFFICULTY,
     performance: kill.performance,
     reportUrl: kill.reportUrl,
     fightUrl: kill.fightUrl,
@@ -713,112 +568,7 @@ function storedKillForParse(
   };
 }
 
-/**
- * What a page of report history actually cost, as opposed to what the cap
- * assumes. Solved directly from a matched pair on 2026-09-18: two runs with
- * identical zone and fight counts, 134 pages against 66, 2894 points against
- * 1531. Used for the optimistic end of a worst-case estimate; nothing sizes a
- * budget from it, for the reason on HISTORY_SCAN_POINTS_PER_REQUEST.
- */
-const MEASURED_HISTORY_SCAN_POINTS_PER_REQUEST = 20;
-
-/**
- * Points a fight-parse request costs, fitted across the runs that carry
- * per-query-type counters. Only the flat parse term uses it.
- */
-const FIGHT_PARSE_POINTS_PER_REQUEST = 13.2;
-/** Conservative upper estimate used when deriving a new parse-only cap. */
-const FIGHT_PARSE_POINT_BOUND = 14;
 const KILL_SCAN_FRESHNESS_MS = 24 * 60 * 60 * 1000;
-
-export type EvidenceRunBudget = Readonly<{
-  /** Pages of report history this run may scan. */
-  scanPages: number;
-  /** Points admission guarantees are still unspent when the run starts. */
-  reservedPoints: number;
-  /** The parse term, which does not scale with the allowance. */
-  parsePoints: number;
-  /** Worst-case run cost at the measured page cost, and at the assumed one. */
-  worstCaseAtMeasuredCost: number;
-  worstCaseAtAssumedCost: number;
-  /**
-   * Whether the worst case fits inside what admission guarantees, judged at
-   * the assumed page cost. False is not a fault: see
-   * MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE, which explains why closing the
-   * worker's budget would truncate collections that currently finish.
-   */
-  closes: boolean;
-}>;
-
-/**
- * The whole of a run's points budget in one place, so the relationship between
- * the scan share, the reserve share and the flat parse term can be evaluated
- * rather than recited.
- *
- * On the handler's own path, not beside it: the scan cap a production run gets
- * comes from here. That is deliberate -- a model kept only for a test drifts
- * from the thing it models, which is the failure being guarded against -- but
- * it means a bug here is a production bug, so it takes the same parameters the
- * calculation actually uses and fabricates nothing. An earlier version built a
- * synthetic `WarcraftLogsRateLimit` to pass along, with `pointsSpentThisHour`
- * and `pointsResetInSeconds` invented as zero. Harmless while both helpers read
- * only `limitPerHour`, and a trap the moment either starts reading a field that
- * was never real.
- *
- * This exists because the arithmetic in MAXIMUM_SCAN_SHARE_OF_OWN_ALLOWANCE
- * went stale within a day of being written: it named a parse cap of 48 that
- * Railway stopped overriding, and nothing failed. A comment can only ask a
- * human to remember to redo it. `evidence-run-budget.test.ts` in the worker
- * evaluates this against the real configured defaults instead, so a constant
- * moving anywhere breaks the build.
- */
-export function evidenceRunBudget(
-  input: Readonly<{
-    limitPerHour: number;
-    credentials: "own" | "visitor";
-    requestCap: number;
-    parseRequestCap: number;
-    pointsReserve: number;
-    scanPages?: number;
-  }>
-): EvidenceRunBudget {
-  const scanPages =
-    input.scanPages ??
-    effectiveRequestCap(
-      input.limitPerHour,
-      input.requestCap,
-      input.credentials
-    );
-  const reservedPoints = effectiveReserve(
-    input.limitPerHour,
-    input.pointsReserve
-  );
-  const parsePoints = input.parseRequestCap * FIGHT_PARSE_POINTS_PER_REQUEST;
-  const worstCaseAtAssumedCost =
-    scanPages * HISTORY_SCAN_POINTS_PER_REQUEST + parsePoints;
-  return {
-    scanPages,
-    reservedPoints,
-    parsePoints,
-    worstCaseAtMeasuredCost:
-      scanPages * MEASURED_HISTORY_SCAN_POINTS_PER_REQUEST + parsePoints,
-    worstCaseAtAssumedCost,
-    closes: worstCaseAtAssumedCost <= reservedPoints
-  };
-}
-
-export function parseOnlyRequestCap(
-  input: Readonly<{
-    limitPerHour: number;
-    pointsReserve: number;
-  }>
-): number {
-  const reservedPoints = effectiveReserve(
-    input.limitPerHour,
-    input.pointsReserve
-  );
-  return Math.max(1, Math.floor(reservedPoints / FIGHT_PARSE_POINT_BOUND));
-}
 
 /**
  * Collects one character's complete public Warcraft Logs history outside the
@@ -828,13 +578,8 @@ type PhaseLedger = ReturnType<typeof createEvidencePhaseLedger>;
 
 /** Progress is observational; its storage failure cannot change collection. */
 function bestEffortPhaseLedger(ledger: PhaseLedger): PhaseLedger {
-  const attempt = async (work: () => Promise<void>): Promise<void> => {
-    try {
-      await work();
-    } catch {
-      // The evidence publication remains the source of truth for the run.
-    }
-  };
+  // The evidence publication remains the source of truth for the run.
+  const attempt = (work: () => Promise<void>) => bestEffort(work);
   return {
     seed: () => attempt(() => ledger.seed()),
     transition: (...args) => attempt(() => ledger.transition(...args)),
@@ -846,6 +591,115 @@ function bestEffortPhaseLedger(ledger: PhaseLedger): PhaseLedger {
       attempt(() => ledger.skipPendingBefore(...args))
   };
 }
+
+type EvidenceJobOutcome =
+  | "unknown"
+  | "not_claimed"
+  | "suppressed"
+  | "republished"
+  | "points_budget_low"
+  | "limitation"
+  | "partial"
+  | "complete"
+  | "cancelled"
+  | "unexpected_error";
+
+/**
+ * The `evidence_job` log line, and the source of the cost row and the finished
+ * announcement. Every field is listed here, so nothing unlisted -- a
+ * credential, a character name, an upstream payload -- can be added to it
+ * without the compiler objecting.
+ */
+type EvidenceJobRecord = {
+  event: "evidence_job";
+  runId: string;
+  correlationId: string | null;
+  queueWaitMs: number | null;
+  attempt: number;
+  outcome: EvidenceJobOutcome;
+  limitationCode: string | null;
+  parseLimitationCode: string | null;
+  killCount: number;
+  raiderIoHistoricOutcome: string | null;
+  verifiedKillsSearched: number | null;
+  verifiedKillsSkippedEmpty: number | null;
+  attendanceRecoveredKills: number | null;
+  tierSearchRaidId: string | null;
+  tierSearchOutcome: WarcraftLogsTierSearchOutcome["outcome"] | null;
+  tierSearchRecoveredKills: number | null;
+  tierSearchRecoveredWipes: number | null;
+  terminalTierCount: number;
+  requestCapUsed: number;
+  parseRequestCapUsed: number;
+  pointsLimitPerHour: number | null;
+  pointsRemainingBefore: number | null;
+  pointsSpentByRun: number | null;
+  pointsRemainingAfter: number | null;
+  errorName: string | null;
+  errorCode: string | null;
+  retryDecision: EvidenceRetryDecision["action"] | null;
+  retryReason: EvidenceRetryDecision["reason"] | null;
+  stopDisposition: "published" | "failed" | null;
+  limitationQuery: WarcraftLogsQueryType | null;
+  durationMs: number;
+};
+
+/**
+ * What one attempt has learned about itself so far. The phases of `execute`
+ * each read and advance it, and the `catch` and `finally` read it to decide
+ * how the attempt ends and what it cost.
+ */
+type AttemptState = {
+  readonly job: Exclude<ApplicantEvidenceJobInput, string>;
+  readonly context: DiscoveryWorkContext;
+  readonly scope: MeasurementScope;
+  /** The store wrapped in the attempt's measurement scope. */
+  readonly evidence: ApplicantEvidenceStore;
+  readonly record: EvidenceJobRecord;
+  /**
+   * Set once the run is claimed, and the sole gate on announcing: a run this
+   * execution never owned is neither started nor finished.
+   */
+  announced?: CharacterKey;
+  /** Which run this attempt owns, so the catch has something to publish onto. */
+  claimedRunId?: string;
+  /**
+   * The tier this run was reserved to search, read off the run itself so a
+   * re-claimed attempt is still a search. Undefined on every other run.
+   */
+  tierSearchRaidId?: string;
+  tierSearchResult?: WarcraftLogsTierSearchOutcome;
+  tierSearchStarved: boolean;
+  /** Whether the attempt got as far as spending the allowance. */
+  collectionBegan: boolean;
+  /**
+   * Whose allowance this attempt spent. Read by the cost row as well as by the
+   * budget, so it outlives the phase that decides it.
+   */
+  credentials: "own" | "visitor";
+  /** How to find out what the attempt spent, once there is a gateway to ask. */
+  sampleSpend?: () => Promise<void>;
+};
+
+/** How much of the allowance a run may spend, and on what. */
+type CapPlan = Readonly<{
+  parseOnlyResume: boolean;
+  targeted: boolean;
+  tierWindow: ReturnType<typeof tierSearchWindow> | null;
+  tierCaps: ReturnType<typeof tierSearchRequestCaps> | null;
+  requestCap: number;
+  parseRequestCap: number;
+  tierSearchAsked: boolean;
+  /**
+   * The guild attendance a tier search reads, and what it may spend reading
+   * it. Null when the run asks for none.
+   */
+  attendanceSearch: Readonly<{
+    window: NonNullable<ReturnType<typeof tierSearchWindow>>;
+    requestCap: number;
+  }> | null;
+  continuationRankedCap: number;
+}>;
 
 export function createApplicantEvidenceJobHandler(
   options: ApplicantEvidenceJobHandlerOptions
@@ -873,6 +727,508 @@ export function createApplicantEvidenceJobHandler(
     );
   }
 
+  function newRecord(
+    job: AttemptState["job"],
+    attempt: number
+  ): EvidenceJobRecord {
+    return {
+      event: "evidence_job",
+      runId: job.runId,
+      correlationId: job.correlationId ?? null,
+      queueWaitMs: queueWaitMs(job.enqueuedAt, now()),
+      attempt,
+      outcome: "unknown",
+      limitationCode: null,
+      parseLimitationCode: null,
+      killCount: 0,
+      raiderIoHistoricOutcome: null,
+      verifiedKillsSearched: null,
+      verifiedKillsSkippedEmpty: null,
+      attendanceRecoveredKills: null,
+      // Null on a run that searched no tier, like every recovery field.
+      tierSearchRaidId: null,
+      tierSearchOutcome: null,
+      tierSearchRecoveredKills: null,
+      tierSearchRecoveredWipes: null,
+      terminalTierCount: 0,
+      // Overwritten with the effective cap once the allowance is read; this
+      // is the value for a run that never got that far.
+      requestCapUsed: options.requestCap,
+      // Unlike the scan cap, this one does not scale with the reported
+      // allowance, so configured and effective are the same number. It is
+      // recorded anyway: it is the other half of what the run was given, and
+      // the half whose divergence between code and Railway caused #295.
+      parseRequestCapUsed: options.parseRequestCap,
+      pointsLimitPerHour: null,
+      pointsRemainingBefore: null,
+      pointsSpentByRun: null,
+      pointsRemainingAfter: null,
+      // Present on every record so the shape does not change with the
+      // outcome, and filled from whatever `execute` catches.
+      errorName: null,
+      errorCode: null,
+      // Whether this attempt earned another one, and why. A closed
+      // enumeration authored in source, like every other field here.
+      retryDecision: null,
+      retryReason: null,
+      // How a stopped attempt left the run: published as partial, or failed
+      // because the publication was itself what broke. `outcome` keeps
+      // naming the fault, so neither answer displaces the other.
+      stopDisposition: null,
+      limitationQuery: null,
+      durationMs: 0
+    };
+  }
+
+  /**
+   * A previous attempt already paid for this collection upstream and failed
+   * on the way to storage. Republishing it is the whole point of the stage, so
+   * it happens before the admission gate: it spends nothing, and refusing it
+   * for a low allowance would throw away work already bought.
+   *
+   * Returns whether there was a stage to republish.
+   */
+  async function republishStaged(
+    state: AttemptState,
+    run: ApplicantEvidenceRun
+  ): Promise<boolean> {
+    const { evidence, record } = state;
+    const staged = await evidence.stagedCollection(run.id);
+    if (!staged) return false;
+    record.outcome = "republished";
+    record.limitationCode = staged.limitationCode;
+    record.parseLimitationCode = staged.parseLimitationCode;
+    record.killCount = staged.kills.length;
+    await evidence.publish(run.id, fromStagedCollection(staged));
+    // Marked here too, and for the same reason the collect path marks: a
+    // republication that stored evidence and settled nothing left the
+    // character re-paying for zones and scan pages the original run had
+    // already earned the right to stop re-querying. Timed from the stage's
+    // own `completedAt`, which is the instant the run that collected it would
+    // have used.
+    const stagedMarks = terminalTiersFromStage(staged, options.killSettleMs);
+    record.terminalTierCount = stagedMarks.length;
+    if (stagedMarks.length > 0) {
+      await evidence.markTerminalTiers(
+        run.key,
+        stagedMarks,
+        new Date(staged.completedAt)
+      );
+    }
+    return true;
+  }
+
+  /**
+   * The run's own Warcraft Logs credentials when the enqueuing visitor, or
+   * their account, supplied them, the worker's shared gateway otherwise. The
+   * decrypted values are used to build the gateway and never leave this
+   * function: nothing derived from them reaches the record.
+   *
+   * Also says whose allowance the run spends. The scan share differs by this
+   * and not by how big the allowance turns out to be.
+   */
+  async function gatewayFor(run: ApplicantEvidenceRun): Promise<{
+    gateway: ApplicantEvidenceJobHandlerOptions["warcraftLogs"];
+    credentials: "own" | "visitor";
+  }> {
+    const create = options.createWarcraftLogsGateway;
+    const accountCredential =
+      run.accountCredentialOwnerId &&
+      run.accountCredentialVersion !== null &&
+      run.accountCredentialVersion !== undefined
+        ? await options.resolveAccountWarcraftLogs?.(
+            run.accountCredentialOwnerId,
+            run.accountCredentialVersion
+          )
+        : null;
+    const currentAccountCredential =
+      accountCredential &&
+      accountCredential.version === run.accountCredentialVersion
+        ? accountCredential.values
+        : null;
+    if (currentAccountCredential) {
+      return {
+        gateway: create
+          ? create(currentAccountCredential)
+          : options.warcraftLogs,
+        credentials: "visitor"
+      };
+    }
+    if (
+      run.wclClientIdEncrypted &&
+      run.wclClientSecretEncrypted &&
+      create &&
+      options.decryptionKey
+    ) {
+      return {
+        gateway: create({
+          clientId: decryptCredential(
+            run.wclClientIdEncrypted,
+            options.decryptionKey
+          ),
+          clientSecret: decryptCredential(
+            run.wclClientSecretEncrypted,
+            options.decryptionKey
+          )
+        }),
+        credentials: "visitor"
+      };
+    }
+    return { gateway: options.warcraftLogs, credentials: "own" };
+  }
+
+  /**
+   * Reads the allowance the run's gateway reports and refuses the run when too
+   * little of it is left, by throwing. Returns the opening reading, or `null`
+   * when it could not be read.
+   *
+   * Read from the run's gateway, not `options.warcraftLogs`: a run carrying a
+   * visitor's own credentials spends *their* allowance, and the worker's
+   * shared allowance says nothing about it.
+   *
+   * A limitation here does not refuse the run. We are no worse off than
+   * before this gate existed, and a gate that fails closed on its own
+   * transport errors could stop all collection permanently.
+   */
+  async function admitOrRefuse(
+    state: AttemptState,
+    run: ApplicantEvidenceRun,
+    gateway: ApplicantEvidenceJobHandlerOptions["warcraftLogs"]
+  ): Promise<WarcraftLogsRateLimit | null> {
+    const { context, evidence, record } = state;
+    const budgetBefore = await gateway.getRateLimit(context.signal);
+    if (budgetBefore.kind !== "rate_limit") return null;
+    record.pointsLimitPerHour = budgetBefore.limitPerHour;
+    record.pointsRemainingBefore = remainingPoints(budgetBefore);
+    if (!belowReserve(budgetBefore, options.pointsReserve)) return budgetBefore;
+    // The run stays claimed and nothing is published. Leaving it unclaimed
+    // instead would be a bug: `reserve` counts ('queued','running','retrying')
+    // as active, so the character would join a run that is never processed
+    // and never collect again. Publishing instead risks the destructive merge
+    // of #250.
+    record.outcome = "points_budget_low";
+    record.limitationCode = "points_budget_low";
+    // Nothing is published, so the run row is the only place a reader can
+    // learn why the dossier is waiting rather than collecting.
+    await evidence.recordLimitation(run.id, "points_budget_low");
+    if (context.attempt >= context.maxAttempts) {
+      // The queue is about to give up, and a run abandoned in `running` is
+      // never collected again: `reserve` counts ('queued','running',
+      // 'retrying') as active with no staleness cutoff, so it would block
+      // every later reservation for this character. `failed` is in neither
+      // that set nor `loadCompletedEvidence`'s ('complete','partial'), so the
+      // character falls back to its previous evidence and a later read
+      // reserves a fresh run.
+      await evidence.fail(run.id, "points_budget_low");
+      throw terminalPointsBudgetRefusal();
+    }
+    throw pointsBudgetRefusal(budgetBefore.pointsResetInSeconds);
+  }
+
+  /**
+   * Sampled by the success path and by the catch alike: what a failed attempt
+   * cost is exactly what decides whether another one is affordable (#292).
+   * Never at the cost of the collection it measures -- a failure to measure
+   * leaves the record null, which is what happened.
+   */
+  function spendSampler(
+    state: AttemptState,
+    gateway: ApplicantEvidenceJobHandlerOptions["warcraftLogs"],
+    openingBudget: WarcraftLogsRateLimit | null
+  ): () => Promise<void> {
+    const { context, record } = state;
+    return () =>
+      bestEffort(async () => {
+        const budgetAfter = await gateway.getRateLimit(context.signal);
+        if (budgetAfter.kind === "rate_limit") {
+          record.pointsRemainingAfter = remainingPoints(budgetAfter);
+          if (openingBudget) {
+            record.pointsSpentByRun =
+              budgetAfter.pointsSpentThisHour -
+              openingBudget.pointsSpentThisHour;
+          }
+        }
+      });
+  }
+
+  /**
+   * Divides the allowance between the history scan, a tier search and fight
+   * parses, and records what the run was actually given.
+   */
+  function planCaps(
+    state: AttemptState,
+    input: Readonly<{
+      storedEvidence: StoredEvidenceTiers;
+      historicAliasCount: number;
+      openingBudget: WarcraftLogsRateLimit | null;
+    }>
+  ): CapPlan {
+    const { job, record, tierSearchRaidId } = state;
+    const { storedEvidence, openingBudget } = input;
+    // A light refresh reads one page of reports. The gateway marks a
+    // page-capped scan as a request-cap limitation, so the run publishes as
+    // partial and the kills it did not revisit are preserved.
+    // Scaled to the allowance the run's own credentials report, so a
+    // visitor's account is not handed a page budget sized for the worker's.
+    // A budget that could not be read falls back to the configured cap: the
+    // admission gate is allowed to fail open, and this has to inherit that
+    // rather than scale off a limit it never saw.
+    const scanFresh =
+      storedEvidence.lastCleanKillScanAt !== undefined &&
+      now().getTime() - new Date(storedEvidence.lastCleanKillScanAt).getTime() <
+        KILL_SCAN_FRESHNESS_MS;
+    // Freshness alone is not evidence that this run is a parse resume. A
+    // recent complete collection followed by a manual refresh still has to
+    // look for new kills. The previous publication must also say that parses
+    // were the only unfinished domain.
+    // A tier search is never a parse resume: it parses only what it finds in
+    // its own tier, and the ordinary run keeps its parse work.
+    const parseOnlyResume =
+      tierSearchRaidId === undefined &&
+      input.historicAliasCount === 0 &&
+      scanFresh &&
+      storedEvidence.parseWorkOutstanding === true;
+    const scanCap = parseOnlyResume
+      ? 0
+      : openingBudget
+        ? evidenceRunBudget({
+            limitPerHour: openingBudget.limitPerHour,
+            credentials: state.credentials,
+            requestCap: options.requestCap,
+            parseRequestCap: options.parseRequestCap,
+            pointsReserve: options.pointsReserve
+          }).scanPages
+        : options.requestCap;
+    // A tier search spends part of the scan cap rather than adding to it. A
+    // raid with no catalogued window has no nights to search, so the run
+    // publishes that and collects nothing.
+    const tierWindow =
+      tierSearchRaidId === undefined
+        ? null
+        : tierSearchWindow(tierSearchRaidId, now());
+    const tierCaps = tierWindow
+      ? tierSearchRequestCaps(
+          scanCap,
+          options.tierSearchRequestCap ?? DEFAULT_TIER_SEARCH_REQUEST_CAP
+        )
+      : null;
+    // Preserve the existing attendance allowance. Ranked discovery draws a
+    // bounded share from history, and all three still fit the scan cap.
+    const rankedCap = tierCaps
+      ? Math.min(tierCaps.history, Math.max(1, Math.floor(tierCaps.tier / 2)))
+      : 0;
+    // A tier search is targeted (#450): it reads no history at all, and what
+    // the split sets aside for history goes unspent rather than to the
+    // search, so the search's own caps are unchanged.
+    const targeted = tierSearchRaidId !== undefined;
+    const requestCap = targeted
+      ? 0
+      : job.mode === "light"
+        ? 1
+        : tierCaps
+          ? tierCaps.history - rankedCap
+          : scanCap;
+    const tierSearchAsked =
+      tierWindow !== null && tierCaps !== null && tierCaps.tier > 0;
+    // A ranked cursor alone does not prove attendance finished. Skip its
+    // costly guild pages only when a published run recorded completion.
+    const tierSearchAttendanceAsked =
+      tierSearchAsked &&
+      !(
+        storedEvidence.rankedBackfillCursor &&
+        storedEvidence.tierSearchAttendanceComplete
+      );
+    const continuationRankedCap =
+      rankedCap + (tierCaps && !tierSearchAttendanceAsked ? tierCaps.tier : 0);
+    // Asked for, with a tier to search, and no budget to search it with.
+    // Recorded as such rather than as a search that never ran.
+    state.tierSearchStarved = tierWindow !== null && !tierSearchAsked;
+    const parseRequestCap =
+      parseOnlyResume && openingBudget
+        ? parseOnlyRequestCap({
+            limitPerHour: openingBudget.limitPerHour,
+            pointsReserve: options.pointsReserve
+          })
+        : options.parseRequestCap;
+    // What the run was actually given, not what was configured. The two were
+    // the same field until #320, and every record for a day named a 500 that
+    // a run may never have been allowed to reach.
+    record.requestCapUsed = requestCap;
+    record.parseRequestCapUsed = parseRequestCap;
+    return {
+      parseOnlyResume,
+      targeted,
+      tierWindow,
+      tierCaps,
+      requestCap,
+      parseRequestCap,
+      tierSearchAsked,
+      attendanceSearch:
+        tierSearchAttendanceAsked && tierWindow && tierCaps
+          ? { window: tierWindow, requestCap: tierCaps.tier }
+          : null,
+      continuationRankedCap
+    };
+  }
+
+  /**
+   * Stopping means publishing what there is rather than abandoning the run:
+   * `publish` carries a partial's previous kills, wipes and parses forward, so
+   * this can only add. `retryAfterAt` is what keeps the next page read from
+   * reserving straight over the top of it.
+   */
+  async function publishStopped(
+    state: AttemptState,
+    runId: string
+  ): Promise<void> {
+    const stopped: EvidencePublication = {
+      state: "partial",
+      limitationCode: "collection_failed",
+      parseLimitationCode: null,
+      parseLimitationCodesSeen: [],
+      retryAfterAt: new Date(now().getTime() + options.failureCooldownMs),
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      cuttingEdges: [],
+      // Whatever this attempt read is lost with the error that stopped it:
+      // the fights it answered are not in hand to be recorded, so they stay
+      // eligible and the next attempt asks again.
+      parsedFightUrls: [],
+      completedAt: now()
+    };
+    try {
+      await state.evidence.publish(runId, stopped);
+      state.record.stopDisposition = "published";
+    } catch {
+      // Publication is itself what is broken -- #290's case, where the guard
+      // threw before any query. The run still has to leave the active set, or
+      // `reserve` counts it forever and the character never collects again.
+      state.record.stopDisposition = "failed";
+      await state.evidence.fail(runId, "collection_failed");
+    }
+  }
+
+  /**
+   * Stores what this attempt spent and the configuration it spent it under,
+   * so the points budget can be re-derived by query (#342).
+   */
+  async function recordCost(state: AttemptState, runId: string): Promise<void> {
+    const { record, tierSearchRaidId, tierSearchResult } = state;
+    const totals = state.scope.totals();
+    const requests = (field: string) => {
+      const value = totals[`${field}Requests`];
+      return typeof value === "number" ? value : 0;
+    };
+    // Absent from the totals is a bucket never timed, which stays null rather
+    // than reading as time the attempt did not spend.
+    const measured = (field: string) => {
+      const value = totals[field];
+      return typeof value === "number" ? value : null;
+    };
+    await bestEffort(
+      () =>
+        // `options.evidence`, not the measured wrapper: the totals this would
+        // add to have already been logged.
+        options.evidence.recordRunCost({
+          runId,
+          attempt: state.context.attempt,
+          outcome: record.outcome,
+          credentials: state.credentials,
+          limitationCode: record.limitationCode,
+          parseLimitationCode: record.parseLimitationCode,
+          // Carried across as they are, nulls included: a null is an
+          // allowance that could not be read, and a zero is a run that spent
+          // nothing. Collapsing the two would report a cost no run ever had.
+          pointsSpent: record.pointsSpentByRun,
+          pointsLimitPerHour: record.pointsLimitPerHour,
+          pointsRemainingBefore: record.pointsRemainingBefore,
+          pointsRemainingAfter: record.pointsRemainingAfter,
+          requestCapUsed: record.requestCapUsed,
+          parseRequestCapUsed: record.parseRequestCapUsed,
+          mode: tierSearchRaidId === undefined ? "full" : "tier_search",
+          tierSearch:
+            tierSearchRaidId === undefined
+              ? null
+              : {
+                  raidId: tierSearchRaidId,
+                  outcome:
+                    tierSearchResult?.outcome ??
+                    (state.tierSearchStarved ? "request_cap" : null),
+                  requests:
+                    tierSearchResult?.requests ??
+                    (state.tierSearchStarved ? 0 : null),
+                  guilds: tierSearchResult?.guildsSearched ?? null,
+                  reportsHydrated: tierSearchResult?.reportsHydrated ?? null,
+                  recoveredKills: tierSearchResult?.recoveredKills ?? null,
+                  recoveredWipes: tierSearchResult?.recoveredWipes ?? null
+                },
+          requests: {
+            historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
+            characterGuilds: requests(REQUEST_COUNTER_PREFIX.character_guilds),
+            guildAttendance: requests(REQUEST_COUNTER_PREFIX.guild_attendance),
+            reportHydration: requests(REQUEST_COUNTER_PREFIX.report_hydration),
+            zoneRankings: requests(REQUEST_COUNTER_PREFIX.zone_rankings),
+            fightParses: requests(REQUEST_COUNTER_PREFIX.fight_parses),
+            rankingIdentities: requests(
+              REQUEST_COUNTER_PREFIX.ranking_identities
+            ),
+            // The other two upstreams, counted so their cost can be weighed
+            // before any of it is retained (#298).
+            raiderIoHistoric: requests("raiderIoHistoric"),
+            raiderIoRankings: requests("raiderIoRankings"),
+            blizzardAchievements: requests("blizzardAchievements")
+          },
+          recovery: {
+            raiderIoOutcome: record.raiderIoHistoricOutcome,
+            raiderIoMs:
+              typeof totals.raiderIoHistoricKillsMs === "number"
+                ? Math.round(totals.raiderIoHistoricKillsMs)
+                : null,
+            verifiedKillsSearched: record.verifiedKillsSearched,
+            recoveredKills: record.attendanceRecoveredKills,
+            verifiedKillsSkippedEmpty: record.verifiedKillsSkippedEmpty
+          },
+          // The same totals the log line carries, so historical latency
+          // survives the log rotation (#502).
+          timings: {
+            durationMs: record.durationMs,
+            queueWaitMs: record.queueWaitMs,
+            warcraftLogsMs: measured("warcraftLogsMs"),
+            warcraftLogsHistoricAliasMs: measured(
+              "warcraftLogsHistoricAliasMs"
+            ),
+            dbMs: measured("dbMs"),
+            dbMaxCallName:
+              typeof totals.dbMaxCallName === "string"
+                ? totals.dbMaxCallName
+                : null
+          }
+        }),
+      // A measurement that could not be stored is not a run that failed. The
+      // `evidence_job` line still carries the same numbers; only the ability
+      // to query them is lost.
+      () =>
+        options.logger?.info({
+          event: "evidence_run_cost_record_failed",
+          runId: state.job.runId
+        })
+    );
+  }
+
+  /** Announcing is best effort: a notifier that throws is logged and ignored. */
+  function announcementFailed(
+    state: AttemptState,
+    phase: "started" | "finished"
+  ): () => void {
+    return () =>
+      options.logger?.info({
+        event: "evidence_run_announcement_failed",
+        runId: state.job.runId,
+        phase
+      });
+  }
+
   return {
     async execute(
       input: ApplicantEvidenceJobInput,
@@ -892,70 +1248,18 @@ export function createApplicantEvidenceJobHandler(
         { evidence: options.evidence },
         scope
       ).evidence;
-      const record: Record<string, unknown> = {
-        event: "evidence_job",
-        runId: job.runId,
-        correlationId: job.correlationId ?? null,
-        queueWaitMs: queueWaitMs(job.enqueuedAt, now()),
-        attempt: activeContext.attempt,
-        outcome: "unknown",
-        limitationCode: null,
-        parseLimitationCode: null,
-        killCount: 0,
-        raiderIoHistoricOutcome: null,
-        verifiedKillsSearched: null,
-        verifiedKillsSkippedEmpty: null,
-        attendanceRecoveredKills: null,
-        // Null on a run that searched no tier, like every recovery field.
-        tierSearchRaidId: null,
-        tierSearchOutcome: null,
-        tierSearchRecoveredKills: null,
-        tierSearchRecoveredWipes: null,
-        terminalTierCount: 0,
-        // Overwritten with the effective cap once the allowance is read; this
-        // is the value for a run that never got that far.
-        requestCapUsed: options.requestCap,
-        // Unlike the scan cap, this one does not scale with the reported
-        // allowance, so configured and effective are the same number. It is
-        // recorded anyway: it is the other half of what the run was given, and
-        // the half whose divergence between code and Railway caused #295.
-        parseRequestCapUsed: options.parseRequestCap,
-        pointsLimitPerHour: null,
-        pointsRemainingBefore: null,
-        pointsSpentByRun: null,
-        pointsRemainingAfter: null,
-        // Present on every record so the shape does not change with the
-        // outcome, and filled from whatever is caught below.
-        errorName: null,
-        errorCode: null,
-        // Whether this attempt earned another one, and why. A closed
-        // enumeration authored in source, like every other field here.
-        retryDecision: null,
-        retryReason: null,
-        // How a stopped attempt left the run: published as partial, or failed
-        // because the publication was itself what broke. `outcome` keeps
-        // naming the fault, so neither answer displaces the other.
-        stopDisposition: null,
-        limitationQuery: null,
-        durationMs: 0
+      const record = newRecord(job, activeContext.attempt);
+      const state: AttemptState = {
+        job,
+        context: activeContext,
+        scope,
+        evidence,
+        record,
+        tierSearchStarved: false,
+        collectionBegan: false,
+        credentials: "own"
       };
-      // Set once the run is claimed, and the sole gate on announcing: a run
-      // this execution never owned is neither started nor finished.
-      let announced: CharacterKey | undefined;
-      // The catch needs all three: which run this attempt owns, whether it got
-      // as far as spending the allowance, and how to find out what it spent.
-      let claimedRunId: string | undefined;
-      // The tier this run was reserved to search, read off the run itself so a
-      // re-claimed attempt is still a search. Undefined on every other run.
-      let tierSearchRaidId: string | undefined;
-      let tierSearchResult: WarcraftLogsTierSearchOutcome | undefined;
-      let tierSearchStarved = false;
-      let collectionBegan = false;
-      // Whose allowance this attempt spent. Read in the `finally` as well as
-      // by the budget, so it outlives the `try` that decides it.
-      let usesVisitorCredentials = false;
-      let sampleSpend: (() => Promise<void>) | undefined;
-      let phaseLedger: ReturnType<typeof createEvidencePhaseLedger> | undefined;
+      let phaseLedger: PhaseLedger | undefined;
       let phaseWrites = Promise.resolve();
 
       try {
@@ -972,159 +1276,31 @@ export function createApplicantEvidenceJobHandler(
         // Announcing only once the claim succeeds keeps one run to one pair of
         // announcements however many workers race for it, and is the first
         // point at which there is a character to name.
-        announced = run.key;
-        claimedRunId = run.id;
-        tierSearchRaidId =
+        state.announced = run.key;
+        state.claimedRunId = run.id;
+        const tierSearchRaidId =
           run.mode === "tier_search" && run.tierSearchRaidId
             ? run.tierSearchRaidId
             : undefined;
+        state.tierSearchRaidId = tierSearchRaidId;
         record.tierSearchRaidId = tierSearchRaidId ?? null;
-        try {
-          await options.evidenceRunNotifier?.started({
-            runId: job.runId,
-            region: run.key.region,
-            realm: run.key.realm,
-            name: run.key.name,
-            attempt: activeContext.attempt
-          });
-        } catch {
-          options.logger?.info({
-            event: "evidence_run_announcement_failed",
-            runId: job.runId,
-            phase: "started"
-          });
-        }
+        await bestEffort(
+          () =>
+            options.evidenceRunNotifier?.started({
+              runId: job.runId,
+              region: run.key.region,
+              realm: run.key.realm,
+              name: run.key.name,
+              attempt: activeContext.attempt
+            }),
+          announcementFailed(state, "started")
+        );
 
-        // A previous attempt already paid for this collection upstream and
-        // failed on the way to storage. Republishing it is the whole point of
-        // the stage, so it happens before the admission gate: it spends
-        // nothing, and refusing it for a low allowance would throw away work
-        // already bought.
-        const staged = await evidence.stagedCollection(run.id);
-        if (staged) {
-          record.outcome = "republished";
-          record.limitationCode = staged.limitationCode;
-          record.parseLimitationCode = staged.parseLimitationCode;
-          record.killCount = staged.kills.length;
-          await evidence.publish(run.id, fromStagedCollection(staged));
-          // Marked here too, and for the same reason the collect path marks:
-          // a republication that stored evidence and settled nothing left the
-          // character re-paying for zones and scan pages the original run had
-          // already earned the right to stop re-querying. Timed from the
-          // stage's own `completedAt`, which is the instant the run that
-          // collected it would have used.
-          const stagedMarks = terminalTiersFromStage(
-            staged,
-            options.killSettleMs
-          );
-          record.terminalTierCount = stagedMarks.length;
-          if (stagedMarks.length > 0) {
-            await evidence.markTerminalTiers(
-              run.key,
-              stagedMarks,
-              new Date(staged.completedAt)
-            );
-          }
-          return;
-        }
+        if (await republishStaged(state, run)) return;
 
-        // The run's own Warcraft Logs credentials when the enqueuing visitor
-        // supplied them, the worker's shared gateway otherwise. The decrypted
-        // values are used to build the gateway and never leave this scope:
-        // nothing derived from them reaches `record`.
-        // Whose allowance this run spends. The scan share differs by this and
-        // not by how big the allowance turns out to be.
-        const accountCredential =
-          run.accountCredentialOwnerId &&
-          run.accountCredentialVersion !== null &&
-          run.accountCredentialVersion !== undefined
-            ? await options.resolveAccountWarcraftLogs?.(
-                run.accountCredentialOwnerId,
-                run.accountCredentialVersion
-              )
-            : null;
-        const currentAccountCredential =
-          accountCredential &&
-          accountCredential.version === run.accountCredentialVersion
-            ? accountCredential.values
-            : null;
-        usesVisitorCredentials =
-          Boolean(currentAccountCredential) ||
-          Boolean(
-            run.wclClientIdEncrypted &&
-            run.wclClientSecretEncrypted &&
-            options.createWarcraftLogsGateway &&
-            options.decryptionKey
-          );
-        const gateway =
-          currentAccountCredential && options.createWarcraftLogsGateway
-            ? options.createWarcraftLogsGateway(currentAccountCredential)
-            : run.wclClientIdEncrypted &&
-                run.wclClientSecretEncrypted &&
-                options.createWarcraftLogsGateway &&
-                options.decryptionKey
-              ? options.createWarcraftLogsGateway({
-                  clientId: decryptCredential(
-                    run.wclClientIdEncrypted,
-                    options.decryptionKey
-                  ),
-                  clientSecret: decryptCredential(
-                    run.wclClientSecretEncrypted,
-                    options.decryptionKey
-                  )
-                })
-              : options.warcraftLogs;
-
-        // Read from `gateway`, not `options.warcraftLogs`: a run carrying a
-        // visitor's own credentials spends *their* allowance, and the worker's
-        // shared allowance says nothing about it.
-        //
-        // A limitation here does not refuse the run. We are no worse off than
-        // before this gate existed, and a gate that fails closed on its own
-        // transport errors could stop all collection permanently.
-        const budgetBefore = await gateway.getRateLimit(activeContext.signal);
-        const openingBudget =
-          budgetBefore.kind === "rate_limit" ? budgetBefore : null;
-        if (openingBudget) {
-          record.pointsLimitPerHour = openingBudget.limitPerHour;
-          record.pointsRemainingBefore = remainingPoints(openingBudget);
-          // A reserve of 0 is off, not "refuse once nothing remains": spend
-          // overruns the limit (9058.65 against 9000 was observed), so the
-          // remaining-points reading goes negative and a bare comparison would
-          // gate hardest exactly when it was asked to stop.
-          if (
-            options.pointsReserve > 0 &&
-            remainingPoints(openingBudget) <
-              effectiveReserve(
-                openingBudget.limitPerHour,
-                options.pointsReserve
-              )
-          ) {
-            // The run stays claimed and nothing is published. Leaving it
-            // unclaimed instead would be a bug: `reserve` counts
-            // ('queued','running','retrying') as active, so the character
-            // would join a run that is never processed and never collect
-            // again. Publishing instead risks the destructive merge of #250.
-            record.outcome = "points_budget_low";
-            record.limitationCode = "points_budget_low";
-            // Nothing is published, so the run row is the only place a reader
-            // can learn why the dossier is waiting rather than collecting.
-            await evidence.recordLimitation(run.id, "points_budget_low");
-            if (activeContext.attempt >= activeContext.maxAttempts) {
-              // The queue is about to give up, and a run abandoned in
-              // `running` is never collected again: `reserve` counts
-              // ('queued','running','retrying') as active with no staleness
-              // cutoff, so it would block every later reservation for this
-              // character. `failed` is in neither that set nor
-              // `loadCompletedEvidence`'s ('complete','partial'), so the
-              // character falls back to its previous evidence and a later
-              // read reserves a fresh run.
-              await evidence.fail(run.id, "points_budget_low");
-              throw terminalPointsBudgetRefusal();
-            }
-            throw pointsBudgetRefusal(openingBudget.pointsResetInSeconds);
-          }
-        }
+        const { gateway, credentials } = await gatewayFor(run);
+        state.credentials = credentials;
+        const openingBudget = await admitOrRefuse(state, run, gateway);
 
         // Storage happens in two steps on purpose: the stage records that the
         // scan has been paid for, so a publication that fails transiently is
@@ -1145,27 +1321,8 @@ export function createApplicantEvidenceJobHandler(
           await evidence.publish(run.id, publication);
         };
 
-        // Sampled by the success path and by the catch alike: what a failed
-        // attempt cost is exactly what decides whether another one is
-        // affordable (#292). Never at the cost of the collection it measures --
-        // a failure to measure leaves the record null, which is what happened.
-        sampleSpend = async () => {
-          try {
-            const budgetAfter = await gateway.getRateLimit(
-              activeContext.signal
-            );
-            if (budgetAfter.kind === "rate_limit") {
-              record.pointsRemainingAfter = remainingPoints(budgetAfter);
-              if (openingBudget) {
-                record.pointsSpentByRun =
-                  budgetAfter.pointsSpentThisHour -
-                  openingBudget.pointsSpentThisHour;
-              }
-            }
-          } catch {
-            // Left as null on the record: unmeasured, which is what happened.
-          }
-        };
+        const sampleSpend = spendSampler(state, gateway, openingBudget);
+        state.sampleSpend = sampleSpend;
 
         activeContext.signal.throwIfAborted();
         // A fight whose rankings have not settled is re-read rather than left
@@ -1235,88 +1392,23 @@ export function createApplicantEvidenceJobHandler(
           storedEvidence.wipes
         );
         activeContext.signal.throwIfAborted();
-        // A light refresh reads one page of reports. The gateway marks a
-        // page-capped scan as a request-cap limitation, so the run publishes
-        // as partial and the kills it did not revisit are preserved.
-        // Scaled to the allowance the run's own credentials report, so a
-        // visitor's account is not handed a page budget sized for the worker's.
-        // A budget that could not be read falls back to the configured cap:
-        // the gate above is allowed to fail open, and this has to inherit that
-        // rather than scale off a limit it never saw.
-        const scanFresh =
-          storedEvidence.lastCleanKillScanAt !== undefined &&
-          now().getTime() -
-            new Date(storedEvidence.lastCleanKillScanAt).getTime() <
-            KILL_SCAN_FRESHNESS_MS;
         const historicAliases =
           (await evidence.historicAliases?.(run.key)) ?? [];
-        // Freshness alone is not evidence that this run is a parse resume. A
-        // recent complete collection followed by a manual refresh still has
-        // to look for new kills. The previous publication must also say that
-        // parses were the only unfinished domain.
-        // A tier search is never a parse resume: it parses only what it finds
-        // in its own tier, and the ordinary run keeps its parse work.
-        const parseOnlyResume =
-          tierSearchRaidId === undefined &&
-          historicAliases.length === 0 &&
-          scanFresh &&
-          storedEvidence.parseWorkOutstanding === true;
-        const scanCap = parseOnlyResume
-          ? 0
-          : openingBudget
-            ? evidenceRunBudget({
-                limitPerHour: openingBudget.limitPerHour,
-                credentials: usesVisitorCredentials ? "visitor" : "own",
-                requestCap: options.requestCap,
-                parseRequestCap: options.parseRequestCap,
-                pointsReserve: options.pointsReserve
-              }).scanPages
-            : options.requestCap;
-        // A tier search spends part of the scan cap rather than adding to it.
-        // A raid with no catalogued window has no nights to search, so the run
-        // publishes that and collects nothing.
-        const tierWindow =
-          tierSearchRaidId === undefined
-            ? null
-            : tierSearchWindow(tierSearchRaidId, now());
-        const tierCaps = tierWindow
-          ? tierSearchRequestCaps(
-              scanCap,
-              options.tierSearchRequestCap ?? DEFAULT_TIER_SEARCH_REQUEST_CAP
-            )
-          : null;
-        // Preserve the existing attendance allowance. Ranked discovery draws
-        // a bounded share from history, and all three still fit the scan cap.
-        const rankedCap = tierCaps
-          ? Math.min(
-              tierCaps.history,
-              Math.max(1, Math.floor(tierCaps.tier / 2))
-            )
-          : 0;
-        // A tier search is targeted (#450): it reads no history at all, and
-        // what the split sets aside for history goes unspent rather than to
-        // the search, so the search's own caps are unchanged.
-        const targeted = tierSearchRaidId !== undefined;
-        const requestCap = targeted
-          ? 0
-          : job.mode === "light"
-            ? 1
-            : tierCaps
-              ? tierCaps.history - rankedCap
-              : scanCap;
-        const tierSearchAsked =
-          tierWindow !== null && tierCaps !== null && tierCaps.tier > 0;
-        // A ranked cursor alone does not prove attendance finished. Skip its
-        // costly guild pages only when a published run recorded completion.
-        const tierSearchAttendanceAsked =
-          tierSearchAsked &&
-          !(savedRankedCursor && storedEvidence.tierSearchAttendanceComplete);
-        const continuationRankedCap =
-          rankedCap +
-          (tierCaps && !tierSearchAttendanceAsked ? tierCaps.tier : 0);
-        // Asked for, with a tier to search, and no budget to search it with.
-        // Recorded as such rather than as a search that never ran.
-        tierSearchStarved = tierWindow !== null && !tierSearchAsked;
+        const {
+          parseOnlyResume,
+          targeted,
+          tierWindow,
+          tierCaps,
+          requestCap,
+          parseRequestCap,
+          tierSearchAsked,
+          attendanceSearch,
+          continuationRankedCap
+        } = planCaps(state, {
+          storedEvidence,
+          historicAliasCount: historicAliases.length,
+          openingBudget
+        });
         // The search ignores the tier's parse marks for its one run, so a kill
         // it recovers there is parsed and the tier's bests re-read. Only the
         // run's view changes: the stored marks, the kill marks among them,
@@ -1330,19 +1422,7 @@ export function createApplicantEvidenceJobHandler(
             terminalRaidIds.tierBests.delete(zone);
           }
         }
-        const parseRequestCap =
-          parseOnlyResume && openingBudget
-            ? parseOnlyRequestCap({
-                limitPerHour: openingBudget.limitPerHour,
-                pointsReserve: options.pointsReserve
-              })
-            : options.parseRequestCap;
-        // What the run was actually given, not what was configured. The two
-        // were the same field until #320, and every record for a day named a
-        // 500 that a run may never have been allowed to reach.
-        record.requestCapUsed = requestCap;
-        record.parseRequestCapUsed = parseRequestCap;
-        collectionBegan = true;
+        state.collectionBegan = true;
         // This must match reservation exactly. Rebuilding only the WCL subset
         // makes real provider ids unknown to the ledger that owns them.
         const phasePlan = fullEvidencePhasePlan();
@@ -1681,15 +1761,15 @@ export function createApplicantEvidenceJobHandler(
                       )
                     }
                   : {}),
-                ...(tierSearchAttendanceAsked
+                ...(attendanceSearch
                   ? {
                       tierSearch: {
-                        ...tierWindow,
+                        ...attendanceSearch.window,
                         guilds: tierSearchGuilds(
                           verified?.guilds ?? [],
                           storedEvidence.guilds ?? []
                         ),
-                        requestCap: tierCaps.tier,
+                        requestCap: attendanceSearch.requestCap,
                         // Every stored kill's report: one in a terminal raid is
                         // carried by the publish, and one outside it is re-read.
                         skipReportCodes: storedKillReportCodes(
@@ -1869,11 +1949,11 @@ export function createApplicantEvidenceJobHandler(
         await phaseWrites;
         // Only a search this run asked for is the run's to record.
         if (
-          tierSearchAttendanceAsked &&
+          attendanceSearch &&
           response.kind === "evidence" &&
           response.tierSearch
         ) {
-          tierSearchResult = response.tierSearch;
+          state.tierSearchResult = response.tierSearch;
           record.tierSearchOutcome = response.tierSearch.outcome;
           record.tierSearchRecoveredKills = response.tierSearch.recoveredKills;
           record.tierSearchRecoveredWipes = response.tierSearch.recoveredWipes;
@@ -2268,26 +2348,28 @@ export function createApplicantEvidenceJobHandler(
         // outcome says which branch was taken, and this says what was thrown
         // to get there. Bounded to an error class and a code-authored
         // identifier -- see `errorFields` -- so no message text reaches a log.
-        Object.assign(record, errorFields(error));
+        const { errorName, errorCode } = errorFields(error);
+        record.errorName = errorName;
+        record.errorCode = errorCode;
 
         // What this attempt cost is half the decision, so measure it before
         // deciding -- unless the run was cancelled, where the abort would only
         // reject this call too.
         if (
           !aborted &&
-          collectionBegan &&
+          state.collectionBegan &&
           record.pointsSpentByRun === null &&
-          sampleSpend
+          state.sampleSpend
         ) {
-          await sampleSpend();
+          await state.sampleSpend();
         }
 
         const decision = evidenceRetryDecision({
           classification: classifyEvidenceFailure(error, { aborted }),
           attempt: activeContext.attempt,
           maxAttempts: activeContext.maxAttempts,
-          pointsSpent: record.pointsSpentByRun as number | null,
-          collectionBegan,
+          pointsSpent: record.pointsSpentByRun,
+          collectionBegan: state.collectionBegan,
           costCeiling: options.retryCostCeiling
         });
         record.retryDecision = decision.action;
@@ -2298,41 +2380,10 @@ export function createApplicantEvidenceJobHandler(
 
         // Rethrowing is what schedules the retry. A run this attempt never
         // claimed has nothing to publish onto either way.
-        if (decision.action === "retry" || claimedRunId === undefined) {
+        if (decision.action === "retry" || state.claimedRunId === undefined) {
           throw error;
         }
-
-        // Stopping means publishing what there is rather than abandoning the
-        // run: `publish` carries a partial's previous kills, wipes and parses
-        // forward, so this can only add. `retryAfterAt` is what keeps the next
-        // page read from reserving straight over the top of it.
-        const stopped: EvidencePublication = {
-          state: "partial",
-          limitationCode: "collection_failed",
-          parseLimitationCode: null,
-          parseLimitationCodesSeen: [],
-          retryAfterAt: new Date(now().getTime() + options.failureCooldownMs),
-          kills: [],
-          wipes: [],
-          tierBests: [],
-          cuttingEdges: [],
-          // Whatever this attempt read is lost with the error that stopped
-          // it: the fights it answered are not in hand to be recorded, so
-          // they stay eligible and the next attempt asks again.
-          parsedFightUrls: [],
-          completedAt: now()
-        };
-        try {
-          await evidence.publish(claimedRunId, stopped);
-          record.stopDisposition = "published";
-        } catch {
-          // Publication is itself what is broken -- #290's case, where the
-          // guard threw before any query. The run still has to leave the
-          // active set, or `reserve` counts it forever and the character never
-          // collects again.
-          record.stopDisposition = "failed";
-          await evidence.fail(claimedRunId, "collection_failed");
-        }
+        await publishStopped(state, state.claimedRunId);
       } finally {
         // Outside the logger guard: the cost row stores it too, and a handler
         // built without a logger still ran for as long as it ran.
@@ -2340,151 +2391,37 @@ export function createApplicantEvidenceJobHandler(
         if (options.logger) {
           options.logger.info({ ...record, ...scope.totals() });
         }
+        const announced = state.announced;
         if (announced) {
           // Read from `record`, so the announcement and the log can never
           // disagree about how the run ended.
-          try {
-            await options.evidenceRunNotifier?.finished({
-              runId: job.runId,
-              region: announced.region,
-              realm: announced.realm,
-              name: announced.name,
-              attempt: activeContext.attempt,
-              outcome: record.outcome as string,
-              limitationCode: record.limitationCode as string | null,
-              parseLimitationCode: record.parseLimitationCode as string | null,
-              pointsSpent: record.pointsSpentByRun as number | null,
-              ...(record.retryDecision
-                ? { retryDecision: record.retryDecision as string }
-                : {}),
-              retryReason: record.retryReason as string | null
-            });
-          } catch {
-            options.logger?.info({
-              event: "evidence_run_announcement_failed",
-              runId: job.runId,
-              phase: "finished"
-            });
-          }
+          await bestEffort(
+            () =>
+              options.evidenceRunNotifier?.finished({
+                runId: job.runId,
+                region: announced.region,
+                realm: announced.realm,
+                name: announced.name,
+                attempt: activeContext.attempt,
+                outcome: record.outcome,
+                limitationCode: record.limitationCode,
+                parseLimitationCode: record.parseLimitationCode,
+                pointsSpent: record.pointsSpentByRun,
+                ...(record.retryDecision
+                  ? { retryDecision: record.retryDecision }
+                  : {}),
+                retryReason: record.retryReason
+              }),
+            announcementFailed(state, "finished")
+          );
         }
         // Last on every path, and skipped outright on an abort. #309 gives a
         // cancelled run a deliberately tight budget to record its outcome
         // before the container goes, and the catch above already spends one
         // database write inside it. A lost cost row costs a sample; a lost
         // outcome costs the run, so this never competes for that window.
-        if (claimedRunId !== undefined && !activeContext.signal.aborted) {
-          const totals = scope.totals();
-          const requests = (field: string) => {
-            const value = totals[`${field}Requests`];
-            return typeof value === "number" ? value : 0;
-          };
-          // Absent from the totals is a bucket never timed, which stays null
-          // rather than reading as time the attempt did not spend.
-          const measured = (field: string) => {
-            const value = totals[field];
-            return typeof value === "number" ? value : null;
-          };
-          try {
-            // `options.evidence`, not the measured wrapper: the totals this
-            // would add to have already been logged.
-            await options.evidence.recordRunCost({
-              runId: claimedRunId,
-              attempt: activeContext.attempt,
-              outcome: record.outcome as string,
-              credentials: usesVisitorCredentials ? "visitor" : "own",
-              limitationCode: record.limitationCode as string | null,
-              parseLimitationCode: record.parseLimitationCode as string | null,
-              // Carried across as they are, nulls included: a null is an
-              // allowance that could not be read, and a zero is a run that
-              // spent nothing. Collapsing the two would report a cost no run
-              // ever had.
-              pointsSpent: record.pointsSpentByRun as number | null,
-              pointsLimitPerHour: record.pointsLimitPerHour as number | null,
-              pointsRemainingBefore: record.pointsRemainingBefore as
-                number | null,
-              pointsRemainingAfter: record.pointsRemainingAfter as
-                number | null,
-              requestCapUsed: record.requestCapUsed as number,
-              parseRequestCapUsed: record.parseRequestCapUsed as number,
-              mode: tierSearchRaidId === undefined ? "full" : "tier_search",
-              tierSearch:
-                tierSearchRaidId === undefined
-                  ? null
-                  : {
-                      raidId: tierSearchRaidId,
-                      outcome:
-                        tierSearchResult?.outcome ??
-                        (tierSearchStarved ? "request_cap" : null),
-                      requests:
-                        tierSearchResult?.requests ??
-                        (tierSearchStarved ? 0 : null),
-                      guilds: tierSearchResult?.guildsSearched ?? null,
-                      reportsHydrated:
-                        tierSearchResult?.reportsHydrated ?? null,
-                      recoveredKills: tierSearchResult?.recoveredKills ?? null,
-                      recoveredWipes: tierSearchResult?.recoveredWipes ?? null
-                    },
-              requests: {
-                historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
-                characterGuilds: requests(
-                  REQUEST_COUNTER_PREFIX.character_guilds
-                ),
-                guildAttendance: requests(
-                  REQUEST_COUNTER_PREFIX.guild_attendance
-                ),
-                reportHydration: requests(
-                  REQUEST_COUNTER_PREFIX.report_hydration
-                ),
-                zoneRankings: requests(REQUEST_COUNTER_PREFIX.zone_rankings),
-                fightParses: requests(REQUEST_COUNTER_PREFIX.fight_parses),
-                rankingIdentities: requests(
-                  REQUEST_COUNTER_PREFIX.ranking_identities
-                ),
-                // The other two upstreams, counted so their cost can be
-                // weighed before any of it is retained (#298).
-                raiderIoHistoric: requests("raiderIoHistoric"),
-                raiderIoRankings: requests("raiderIoRankings"),
-                blizzardAchievements: requests("blizzardAchievements")
-              },
-              recovery: {
-                raiderIoOutcome: record.raiderIoHistoricOutcome as
-                  string | null,
-                raiderIoMs:
-                  typeof totals.raiderIoHistoricKillsMs === "number"
-                    ? Math.round(totals.raiderIoHistoricKillsMs)
-                    : null,
-                verifiedKillsSearched: record.verifiedKillsSearched as
-                  number | null,
-                recoveredKills: record.attendanceRecoveredKills as
-                  number | null,
-                verifiedKillsSkippedEmpty: record.verifiedKillsSkippedEmpty as
-                  number | null
-              },
-              // The same totals the log line carries, so historical latency
-              // survives the log rotation (#502).
-              timings: {
-                durationMs: record.durationMs as number,
-                queueWaitMs: record.queueWaitMs as number | null,
-                warcraftLogsMs: measured("warcraftLogsMs"),
-                warcraftLogsHistoricAliasMs: measured(
-                  "warcraftLogsHistoricAliasMs"
-                ),
-                dbMs: measured("dbMs"),
-                dbMaxCallName:
-                  typeof totals.dbMaxCallName === "string"
-                    ? totals.dbMaxCallName
-                    : null
-              }
-            });
-          } catch {
-            // A measurement that could not be stored is not a run that
-            // failed. The `evidence_job` line above still carries the same
-            // numbers; only the ability to query them is lost.
-            options.logger?.info({
-              event: "evidence_run_cost_record_failed",
-              runId: job.runId
-            });
-          }
+        if (state.claimedRunId !== undefined && !activeContext.signal.aborted) {
+          await recordCost(state, state.claimedRunId);
         }
       }
     }

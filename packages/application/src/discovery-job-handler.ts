@@ -20,6 +20,7 @@ import {
   type RaiderIoGateway
 } from "@slashwho/domain";
 
+import { bestEffort } from "./best-effort";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
 import {
@@ -415,20 +416,21 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       // Announcing a run is an operational side effect, so a notifier that
       // throws is recorded and stepped over rather than costing the run it was
       // announcing.
-      try {
-        await options.discoveryRunNotifier?.started({
-          runId,
-          region: run.rootKey.region,
-          realm: run.rootKey.realm,
-          name: run.rootKey.name,
-          attempt: context.attempt
-        });
-      } catch {
-        options.logger?.info({
-          event: "discovery_run_announcement_failed",
-          runId
-        });
-      }
+      await bestEffort(
+        () =>
+          options.discoveryRunNotifier?.started({
+            runId,
+            region: run.rootKey.region,
+            realm: run.rootKey.realm,
+            name: run.rootKey.name,
+            attempt: context.attempt
+          }),
+        () =>
+          options.logger?.info({
+            event: "discovery_run_announcement_failed",
+            runId
+          })
+      );
       const record: DiscoveryRunRecord = {
         event: "discovery_run",
         runId,

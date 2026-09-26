@@ -30,7 +30,8 @@ import type {
   WarcraftLogsWipeEvidence
 } from "./types";
 
-const MYTHIC_DIFFICULTY = 5;
+/** Warcraft Logs' difficulty id for Mythic, the only difficulty collected. */
+export const MYTHIC_DIFFICULTY = 5;
 // WCL's 50,000 query complexity ceiling is scored from the query's shape at
 // about 1,625 a report, so a page holds at most 30. Points are about 2.08 a
 // report, so a bigger page saves no points. It would move every stored history
