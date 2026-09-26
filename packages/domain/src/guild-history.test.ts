@@ -111,6 +111,24 @@ describe("guildIdentity", () => {
       guildIdentity({ ...casual, realm: "Silvermoon" })
     );
   });
+
+  it("matches a realm's slug to its display name", () => {
+    expect(guildIdentity({ ...rancour, realm: "kiljaeden" })).toBe(
+      guildIdentity({ ...rancour, realm: "Kil'jaeden" })
+    );
+    expect(guildIdentity({ ...rancour, realm: "azjolnerub" })).toBe(
+      guildIdentity({ ...rancour, realm: "Azjol-Nerub" })
+    );
+  });
+
+  it("keeps names differing by an apostrophe or hyphen apart", () => {
+    expect(guildIdentity({ ...rancour, name: "Kin'Raid" })).not.toBe(
+      guildIdentity({ ...rancour, name: "KinRaid" })
+    );
+    expect(guildIdentity({ ...rancour, name: "Night-Watch" })).not.toBe(
+      guildIdentity({ ...rancour, name: "Night Watch" })
+    );
+  });
 });
 
 describe("guildTimelineSpans", () => {
