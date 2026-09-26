@@ -136,6 +136,35 @@ it("rejects missing Blizzard credentials and invalid sweep bounds", () => {
   ).toThrow("invalid_blizzard_sweep_request_cap");
 });
 
+it.each([undefined, ""])(
+  "reports an unset sweep cap (%j) as required, not invalid",
+  (value) => {
+    // Break caught (#569): a fallback of 0 failed the cap's own positive
+    // check, so a deploy that forgot the variable was told it was invalid.
+    expect(() =>
+      loadWorkerConfig({ ...environment, BLIZZARD_SWEEP_REQUEST_CAP: value })
+    ).toThrow("blizzard_sweep_request_cap_required");
+  }
+);
+
+it("accepts the fractional FRESHNESS_HOURS the web accepts", () => {
+  // Break caught (#569): FRESHNESS_HOURS=1.5 booted the web and crashed the
+  // worker, whose comment promised the two read it alike.
+  expect(
+    loadWorkerConfig({ ...environment, FRESHNESS_HOURS: "1.5" })
+      .evidenceFreshnessHours
+  ).toBe(1.5);
+  expect(() =>
+    loadWorkerConfig({ ...environment, FRESHNESS_HOURS: "0" })
+  ).toThrow("invalid_freshness_hours");
+});
+
+it("rejects a DATABASE_URL that is not PostgreSQL, as the web does", () => {
+  expect(() =>
+    loadWorkerConfig({ ...environment, DATABASE_URL: "mysql://db/slashwho" })
+  ).toThrow("invalid_database_url");
+});
+
 it("loads private Blizzard sweep defaults only for the worker", () => {
   // Break caught: an omitted operational limit could silently become unbounded
   // or make the planned seven-day sweep cadence depend on another process.
