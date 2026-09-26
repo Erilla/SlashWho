@@ -54,6 +54,12 @@ export type Recording = Readonly<{
   recordedOn: string;
   status: number;
   body: unknown;
+  /**
+   * The root of every subtree the upstream sent that the allow-list drops:
+   * paths only, never values. It is the baseline the drift check compares the
+   * fields we ignore against. Absent from recordings made before it existed.
+   */
+  ignored?: readonly string[];
 }>;
 
 export const playableClassNames = [
@@ -341,6 +347,44 @@ function leafAt(
   return entries.find((entry) => entry.path === path)?.leaf;
 }
 
+const identifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ignoredPathPattern =
+  /^(?:[A-Za-z_][A-Za-z0-9_]*|<key>)(?:\[\])*(?:\.(?:[A-Za-z_][A-Za-z0-9_]*|<key>)(?:\[\])*)*$/;
+
+/**
+ * The root of every subtree in `body` that the allow-list does not name, with
+ * arrays folded to `[]`. A key that is not a plain identifier -- a realm slug,
+ * a number, anything that could be data rather than a field name -- is folded
+ * to `<key>`, so a path records structure and never a value.
+ */
+export function unreadPaths(
+  body: unknown,
+  endpoint: Endpoint,
+  status: number
+): readonly string[] {
+  const entries = entriesFor(endpoint, status);
+  const unread = new Set<string>();
+  const visit = (value: unknown, path: string, shown: string) => {
+    if (leafAt(entries, path)) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, `${path}[]`, `${shown}[]`);
+      return;
+    }
+    if (!isRecord(value)) return;
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = join(path, key);
+      const childShown = join(
+        shown,
+        identifierPattern.test(key) ? key : "<key>"
+      );
+      if (allowsBranch(entries, childPath)) visit(child, childPath, childShown);
+      else unread.add(childShown);
+    }
+  };
+  visit(body, "", "");
+  return [...unread].sort();
+}
+
 // --- Recording -------------------------------------------------------------
 
 export class RecordingRefused extends Error {
@@ -509,7 +553,8 @@ export function recordPayload(
     endpoint: options.endpoint,
     recordedOn: options.recordedOn,
     status: options.status,
-    body: recordValue(recorder, body, "")
+    body: recordValue(recorder, body, ""),
+    ignored: unreadPaths(body, options.endpoint, options.status)
   };
 }
 
@@ -617,7 +662,47 @@ function verifyValue(
   violations.push({ path, problem: "leaf at a branch path" });
 }
 
-const envelopeKeys = ["provider", "endpoint", "recordedOn", "status", "body"];
+const envelopeKeys = [
+  "provider",
+  "endpoint",
+  "recordedOn",
+  "status",
+  "body",
+  "ignored"
+];
+
+function verifyIgnored(
+  entries: readonly PolicyEntry[],
+  ignored: unknown
+): readonly Violation[] {
+  if (ignored === undefined) return [];
+  if (
+    !Array.isArray(ignored) ||
+    ignored.some((path) => typeof path !== "string")
+  )
+    return [{ path: "ignored", problem: "not a list of paths" }];
+  const paths = ignored as string[];
+  const violations: Violation[] = [];
+  const sorted = [...new Set(paths)].sort();
+  if (
+    sorted.length !== paths.length ||
+    sorted.some((path, i) => path !== paths[i])
+  )
+    violations.push({ path: "ignored", problem: "not sorted and unique" });
+  for (const path of paths) {
+    if (!ignoredPathPattern.test(path))
+      violations.push({
+        path: "ignored",
+        problem: "entry is not a field path"
+      });
+    else if (allowsBranch(entries, path))
+      violations.push({
+        path: "ignored",
+        problem: "entry is on the allow-list"
+      });
+  }
+  return violations;
+}
 
 /**
  * Proves a committed recording carries only what the allow-list names, in the
@@ -645,6 +730,7 @@ export function verifyRecording(value: unknown): readonly Violation[] {
   verifyValue(entriesFor(endpoint, status), body, "", bodyViolations);
   return [
     ...violations,
+    ...verifyIgnored(entriesFor(endpoint, status), value.ignored),
     ...bodyViolations.map((violation) => ({
       ...violation,
       path: violation.path === "" ? "body" : `body.${violation.path}`

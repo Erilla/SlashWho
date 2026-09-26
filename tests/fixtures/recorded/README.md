@@ -24,9 +24,16 @@ Each file is one response in an envelope:
   "endpoint": "raiderio.character",
   "recordedOn": "2026-09-26",
   "status": 200,
-  "body": { "…": "…" }
+  "body": { "…": "…" },
+  "ignored": ["characterDetails.character.gear", "…"]
 }
 ```
+
+`ignored` lists the root of every subtree the upstream sent that the
+allow-list drops: field paths only, arrays folded to `[]`, and any key that is
+not a plain identifier folded to `<key>`. It is the baseline the drift check
+compares the fields we ignore against. Recordings made before it existed don't
+have it; re-recording adds it.
 
 There is no URL, header or target in the envelope. The label describes the
 scenario (`claimed`, `declared-main`, `unknown-name`) and **never** the
@@ -154,9 +161,67 @@ exist with **400** "Could not find requested character", not the 404 that
 The client classifies it as transient; a test pins that until it's changed
 deliberately.
 
+## Drift check
+
+`.github/workflows/provider-drift.yml` runs `scripts/provider-drift.mts` every
+Monday, and on demand. It re-reads each configured target live, projects the
+response through the same allow-list and redaction as a recording, and compares
+it with the recording of the same `<endpoint>-<label>`. It is scheduled only;
+it never runs in the pull-request gate.
+
+| Change                                                                                     | Result                                                 |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| The status differs from the recording's                                                    | fails, and opens or updates the `upstream-drift` issue |
+| A value at an allow-listed path can't be classified (new type, enum value or message)      | fails, and opens or updates the issue                  |
+| A `path: kind` no recording of the endpoint shows (a new `""` or `null`, a changed type)   | fails, and opens or updates the issue                  |
+| A `path: kind` the probe's own recording shows is missing                                  | fails, and opens or updates the issue                  |
+| An `ignored` root appears or disappears                                                    | warning in the job summary only                        |
+| No recording for the endpoint or label, or no `ignored` baseline                           | warning; record the scenario                           |
+| A 429, a 5xx or a failed request (after one retry), unless the recording holds that status | inconclusive: the run fails without filing an issue    |
+
+The report carries endpoints, scenario labels, statuses, field paths and value
+kinds. It never carries a value, a target or a request URL, and an unread
+field name matching an identity the probe's redaction replaced is folded to
+`<key>`.
+
+A read-field failure can also mean the probe's own character changed: it left
+its guild, or its owner removed a Discord handle. Then the fix is to re-record
+that scenario, not to change a parser.
+
+### Configuration
+
+Repository secrets, not variables: targets name real characters, and the
+repository is public, so they must be masked in the logs.
+
+| Secret                                  | Holds                                                 |
+| --------------------------------------- | ----------------------------------------------------- |
+| `PROVIDER_DRIFT_RAIDERIO_TARGETS`       | whitespace-separated targets in the recorder's syntax |
+| `PROVIDER_DRIFT_BLIZZARD_TARGETS`       | the same, for Blizzard                                |
+| `PROVIDER_DRIFT_BLIZZARD_CLIENT_ID`     | a Battle.net client for the check                     |
+| `PROVIDER_DRIFT_BLIZZARD_CLIENT_SECRET` | its secret                                            |
+
+Each label must match a committed recording to be fully compared, so a target
+is normally the same one its recording was made from. The intended set is a
+claimed character and its owner's list, a character that doesn't exist, and a
+private owner (#36) for Raider.IO; and a character's profile, achievements and
+roster, the class index and a character that doesn't exist for Blizzard. With
+no targets configured, the run fails as a configuration error.
+
+### What a run spends
+
+One request per target, two for `view-characters` addressed with `owner-of:`
+and for `guild-roster`, plus one Blizzard token. With the set above that's
+about 6 Raider.IO requests and 7 Blizzard requests a week, doubled at worst by
+retries. No Warcraft Logs points. If the Blizzard client is shared with
+production, its requests come out of `BLIZZARD_HOURLY_REQUEST_BUDGET`'s hour,
+which they don't dent.
+
 ## Gaps
 
-- No Blizzard recording yet: none has been made with real credentials.
+- No Blizzard recording yet: none has been made with real credentials. Until
+  one is, the drift check can only catch a Blizzard value it cannot classify.
+- No committed recording has an `ignored` baseline yet; each gains one when
+  it is next re-recorded.
 - Raider.IO: no 403 `profile_is_private`, no guildless character, no
   `discord_profile: null`, no 429 or 5xx, and `raid-progress` and the guild
   rankings endpoints are not recorded endpoints yet.

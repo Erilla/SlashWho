@@ -1,0 +1,64 @@
+name: provider-drift
+
+# Compares live Blizzard and Raider.IO response shapes with the committed
+# recordings in tests/fixtures/recorded/ (#599). Scheduled only: live provider
+# traffic never belongs in the pull-request gate. See the drift-check section
+# of tests/fixtures/recorded/README.md.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 5 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: slashwho-provider-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-workspace
+      # Targets name real characters, so they are secrets (masked in logs) and
+      # reach the script only through the environment. The report it writes
+      # carries paths, kinds and statuses, never a value or a target.
+      - id: drift
+        shell: bash
+        run: |
+          set +e
+          corepack pnpm exec tsx scripts/provider-drift.mts
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+        env:
+          PROVIDER_DRIFT_RAIDERIO_TARGETS: ${{ secrets.PROVIDER_DRIFT_RAIDERIO_TARGETS }}
+          PROVIDER_DRIFT_BLIZZARD_TARGETS: ${{ secrets.PROVIDER_DRIFT_BLIZZARD_TARGETS }}
+          BLIZZARD_CLIENT_ID: ${{ secrets.PROVIDER_DRIFT_BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.PROVIDER_DRIFT_BLIZZARD_CLIENT_SECRET }}
+          PROVIDER_DRIFT_REPORT: ${{ runner.temp }}/provider-drift.md
+      # Only drift in a field we read opens or updates the issue. A change to a
+      # field we ignore stays a warning in the job summary, and an inconclusive
+      # probe fails the run without filing anything.
+      - name: Open or update the upstream-drift issue
+        if: steps.drift.outputs.code == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ runner.temp }}/provider-drift.md
+        run: |
+          gh label create upstream-drift --color B60205 \
+            --description "A provider's response shape no longer matches its recording" 2>/dev/null || true
+          number=$(gh issue list --label upstream-drift --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$REPORT"
+          else
+            gh issue create --title "Upstream response shape drifted" --label upstream-drift --body-file "$REPORT"
+          fi
+      - name: Fail on drift, an inconclusive probe or a configuration error
+        if: steps.drift.outputs.code != '0'
+        shell: bash
+        run: exit "${{ steps.drift.outputs.code }}"
