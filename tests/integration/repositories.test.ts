@@ -11,7 +11,6 @@ import {
   createPostgresRepositories,
   createDiscoveryQueue,
   runMigrations,
-  type Repositories,
   type CharacterMythicKillInput,
   type CharacterMythicWipeInput,
   type EvidenceRunCost,
@@ -20,6 +19,10 @@ import {
 } from "../../packages/database/src";
 import type { WarcraftLogsGateway } from "../../packages/warcraftlogs/src";
 import { startPostgres } from "./postgres";
+import {
+  createTestRepositories,
+  type TestRepositories
+} from "./test-repositories";
 import { createAccountCredentials } from "../../apps/web/src/server/account-credentials";
 
 /**
@@ -115,7 +118,7 @@ function mythicWipe(
 }
 
 async function seedCompleteSnapshot(
-  repositories: Repositories,
+  repositories: TestRepositories,
   options: {
     refreshedAt?: Date;
     displayName?: string;
@@ -141,7 +144,7 @@ async function seedCompleteSnapshot(
 }
 
 async function admitSweep(
-  repositories: Repositories,
+  repositories: TestRepositories,
   runId: string,
   key: CharacterKey
 ): Promise<{
@@ -171,12 +174,12 @@ async function admitSweep(
 describe("PostgreSQL repositories", () => {
   let pool: Pool;
   let stop: () => Promise<void>;
-  let repositories: Repositories;
+  let repositories: TestRepositories;
 
   beforeAll(async () => {
     ({ pool, stop } = await startPostgres());
     await runMigrations(pool);
-    repositories = createPostgresRepositories(pool);
+    repositories = createTestRepositories(pool);
   });
 
   beforeEach(async () => {

@@ -3137,17 +3137,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? mapRun(result.rows[0]) : null;
       },
 
-      async markRunning(id) {
-        await requireUpdated(
-          pool,
-          `UPDATE discovery_runs
-           SET status = 'running', started_at = COALESCE(started_at, now()),
-               next_retry_at = NULL
-           WHERE id = $1 AND status IN ${activeRunSql}`,
-          [id]
-        );
-      },
-
       async markRetrying(id, attempt, nextRetryAt) {
         await requireUpdated(
           pool,
@@ -3155,29 +3144,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            SET status = 'retrying', attempt = $2, next_retry_at = $3
            WHERE id = $1 AND status IN ${activeRunSql}`,
           [id, attempt, nextRetryAt]
-        );
-      },
-
-      async complete(id, snapshotId) {
-        await requireUpdated(
-          pool,
-          `UPDATE discovery_runs
-           SET status = 'complete', snapshot_id = $2,
-               completed_at = COALESCE(completed_at, now()),
-               next_retry_at = NULL, error_code = NULL
-           WHERE id = $1
-             AND (
-               (status = 'complete' AND snapshot_id = $2)
-               OR (
-                 status IN ${activeRunSql}
-                 AND EXISTS (
-                   SELECT 1 FROM snapshots
-                   WHERE snapshots.id = $2
-                     AND snapshots.discovery_run_id = discovery_runs.id
-                 )
-               )
-             )`,
-          [id, snapshotId]
         );
       },
 
@@ -3904,23 +3870,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           );
           return { allowed: true, retryAt: null };
         });
-      },
-
-      async record(callerBucketHash, expiresAt) {
-        await pool.query(
-          `INSERT INTO rate_limit_events (caller_bucket_hash, expires_at)
-           VALUES ($1, $2)`,
-          [callerBucketHash, expiresAt]
-        );
-      },
-
-      async countActive(callerBucketHash, at = new Date()) {
-        const result = await pool.query<{ count: string }>(
-          `SELECT count(*)::text AS count FROM rate_limit_events
-           WHERE caller_bucket_hash = $1 AND expires_at > $2`,
-          [callerBucketHash, at]
-        );
-        return Number(one(result).count);
       },
 
       async cleanupExpired(at = new Date()) {

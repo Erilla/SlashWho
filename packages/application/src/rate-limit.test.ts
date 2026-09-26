@@ -17,10 +17,6 @@ function fakeRepository(decision: { allowed: boolean; retryAt: Date | null }) {
       calls.push(args);
       return decision;
     },
-    async record() {},
-    async countActive() {
-      return 0;
-    },
     async cleanupExpired() {
       return 0;
     }

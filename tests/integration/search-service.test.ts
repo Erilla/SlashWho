@@ -8,12 +8,12 @@ import {
   createSearchService,
   recoverPendingSearches
 } from "../../packages/application/src";
-import {
-  createPostgresRepositories,
-  runMigrations,
-  type Repositories
-} from "../../packages/database/src";
+import { runMigrations } from "../../packages/database/src";
 import { startPostgres } from "./postgres";
+import {
+  createTestRepositories,
+  type TestRepositories
+} from "./test-repositories";
 
 const anonymousIp = "203.0.113.81";
 const botApiKey = "bot-secret-that-is-at-least-32-characters";
@@ -50,7 +50,7 @@ function command(name: string, authorization?: string) {
 }
 
 async function seedSnapshot(
-  repositories: Repositories,
+  repositories: TestRepositories,
   key: CharacterKey,
   refreshedAt: Date
 ) {
@@ -93,7 +93,7 @@ async function holdRootLock(
 describe("PostgreSQL search policy", () => {
   let pool: Pool;
   let stop: () => Promise<void>;
-  let repositories: Repositories;
+  let repositories: TestRepositories;
   let enqueued: string[];
   let queue: Pick<DiscoveryQueue, "enqueue">;
 
@@ -112,7 +112,7 @@ describe("PostgreSQL search policy", () => {
       suppressed_characters,
       negative_character_cache
       CASCADE`);
-    repositories = createPostgresRepositories(pool);
+    repositories = createTestRepositories(pool);
     enqueued = [];
     queue = {
       async enqueue(payload) {

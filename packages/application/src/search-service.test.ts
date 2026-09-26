@@ -280,9 +280,7 @@ function policyFixture(
       async claim() {
         return null;
       },
-      async markRunning() {},
       async markRetrying() {},
-      async complete() {},
       async completeWithLiveSweepSnapshot() {},
       async fail() {},
       async find(id) {
@@ -344,10 +342,6 @@ function policyFixture(
     rateLimits: {
       async reserve(bucket, limit, expiresAt, at = now) {
         return reserveRate(bucket, options.readLimit ?? limit, expiresAt, at);
-      },
-      async record() {},
-      async countActive() {
-        return 0;
       },
       async cleanupExpired() {
         return 0;
