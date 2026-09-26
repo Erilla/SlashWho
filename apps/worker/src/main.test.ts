@@ -1,9 +1,11 @@
+import { EventEmitter } from "node:events";
+
 import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkerConfig } from "./config";
 import { startHealthServer } from "./health-server";
-import { main } from "./main";
+import { main, startWorker } from "./main";
 
 const config: WorkerConfig = {
   applicantWatcher: {
@@ -174,5 +176,64 @@ describe("worker main", () => {
       process.removeListener("SIGTERM", listener!);
       process.removeListener("unhandledRejection", onUnhandled);
     }
+  });
+
+  it("logs a startup failure by error class and exits non-zero", async () => {
+    // Break caught: a crash-looping deploy logged no reason for the failure.
+    class DatabaseStartupError extends Error {}
+    const info = vi.fn();
+    const target = Object.assign(new EventEmitter(), {
+      exitCode: undefined as number | undefined
+    });
+
+    await startWorker(
+      {
+        loadConfig: () => config,
+        createLogger: () => ({ info }),
+        createRuntime: async () => {
+          throw new DatabaseStartupError("postgres://user:secret@host/db");
+        },
+        startHealthServer,
+        terminate() {}
+      },
+      target
+    );
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      event: "worker_start_failed",
+      errorName: "DatabaseStartupError"
+    });
+    expect(target.exitCode).toBe(1);
+    expect(target.listenerCount("uncaughtException")).toBe(1);
+    expect(target.listenerCount("unhandledRejection")).toBe(1);
+  });
+
+  it("logs a config failure, which happens before the runtime exists", async () => {
+    // Break caught: a logger created after loadConfig cannot report its failure.
+    const info = vi.fn();
+    const target = Object.assign(new EventEmitter(), {
+      exitCode: undefined as number | undefined
+    });
+
+    await startWorker(
+      {
+        loadConfig: () => {
+          throw new TypeError("DATABASE_URL is missing");
+        },
+        createLogger: () => ({ info }),
+        createRuntime: async () => {
+          throw new Error("unreachable");
+        },
+        startHealthServer,
+        terminate() {}
+      },
+      target
+    );
+
+    expect(info).toHaveBeenCalledExactlyOnceWith({
+      event: "worker_start_failed",
+      errorName: "TypeError"
+    });
+    expect(target.exitCode).toBe(1);
   });
 });
