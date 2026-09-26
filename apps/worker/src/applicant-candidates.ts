@@ -15,6 +15,13 @@ export type CandidateParse = {
   truncated: boolean;
 };
 
+/**
+ * Bump whenever what `parseApplicantCandidates` accepts changes. The watcher
+ * re-baselines on a new version, so responses a new parser can read for the
+ * first time are not announced as new applicants.
+ */
+export const applicantParserVersion = 2;
+
 const maxCellLength = 4096;
 const urlPattern = /https:\/\/[^\s<>"'`]+/gi;
 

@@ -3,7 +3,10 @@ import type { DiscoveryQueue, Repositories } from "@slashwho/database";
 import { startApplicantCollection } from "@slashwho/application";
 import type { CharacterKey, RaiderIoGateway } from "@slashwho/domain";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
-import { parseApplicantCandidates } from "./applicant-candidates";
+import {
+  applicantParserVersion,
+  parseApplicantCandidates
+} from "./applicant-candidates";
 import {
   characterIdentity,
   decodeApplicantIdentity
@@ -56,7 +59,12 @@ type IntentRow = {
   attempts: number;
 };
 
-/** Reconciliation commits all count changes and their intents together. */
+/**
+ * Reconciliation commits all count changes and their intents together. Under a
+ * new parser version it re-baselines: a count may rise only because the parser
+ * now reads a response that was already there, so rises become the new counts,
+ * and only submissions already deferred before the change are still admitted.
+ */
 export async function reconcileApplicantCounts(
   pool: Pool,
   counts: ReadonlyMap<string, number>,
@@ -65,9 +73,11 @@ export async function reconcileApplicantCounts(
   isSuppressed?: (
     identity: string,
     observedAt: Date
-  ) => Promise<boolean | "defer">
+  ) => Promise<boolean | "defer">,
+  parserVersion = applicantParserVersion
 ): Promise<{
   baseline: boolean;
+  rebaselined: boolean;
   created: number;
   backlog: number;
   newOccurrences: { identity: string; index: number }[];
@@ -79,14 +89,14 @@ export async function reconcileApplicantCounts(
       "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
       [source]
     );
-    const state = await client.query(
-      "SELECT 1 FROM applicant_source_state WHERE source = $1",
+    const state = await client.query<{ parser_version: number }>(
+      "SELECT parser_version FROM applicant_source_state WHERE source = $1",
       [source]
     );
     if (state.rowCount === 0) {
       await client.query(
-        "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at) VALUES ($1, $2, $2)",
-        [source, at]
+        "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version) VALUES ($1, $2, $2, $3)",
+        [source, at, parserVersion]
       );
       for (const [identity, count] of counts)
         await client.query(
@@ -94,8 +104,15 @@ export async function reconcileApplicantCounts(
           [source, identity, count]
         );
       await client.query("COMMIT");
-      return { baseline: true, created: 0, backlog: 0, newOccurrences: [] };
+      return {
+        baseline: true,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        newOccurrences: []
+      };
     }
+    const rebaselined = state.rows[0]?.parser_version !== parserVersion;
     const existing = await client.query<CountRow>(
       "SELECT identity, occurrence_count, deferred_observed_ats FROM applicant_source_counts WHERE source = $1",
       [source]
@@ -114,16 +131,24 @@ export async function reconcileApplicantCounts(
     let created = 0;
     const newOccurrences: { identity: string; index: number }[] = [];
     for (const identity of new Set([...previous.keys(), ...counts.keys()])) {
-      const before = previous.get(identity) ?? 0;
       const current = counts.get(identity) ?? 0;
+      const deferred = deferredAt.get(identity) ?? [];
+      const before = rebaselined
+        ? Math.max(previous.get(identity) ?? 0, current - deferred.length)
+        : (previous.get(identity) ?? 0);
       const pendingTimes =
         current < before
           ? []
-          : (deferredAt.get(identity) ?? [])
+          : deferred
               .slice(0, current - before)
               .map((value, index): DeferredObservation =>
-                typeof value === "string"
-                  ? { at: new Date(value), index: before + index }
+                typeof value === "string" || rebaselined
+                  ? {
+                      at: new Date(
+                        typeof value === "string" ? value : value.at
+                      ),
+                      index: before + index
+                    }
                   : { at: new Date(value.at), index: value.index }
               );
       while (pendingTimes.length < current - before)
@@ -170,11 +195,11 @@ export async function reconcileApplicantCounts(
       created += admitted;
     }
     await client.query(
-      "UPDATE applicant_source_state SET last_polled_at = $2 WHERE source = $1",
-      [source, at]
+      "UPDATE applicant_source_state SET last_polled_at = $2, parser_version = $3 WHERE source = $1",
+      [source, at, parserVersion]
     );
     await client.query("COMMIT");
-    return { baseline: false, created, backlog, newOccurrences };
+    return { baseline: false, rebaselined, created, backlog, newOccurrences };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -194,8 +219,10 @@ export async function pollApplicantSheet(input: {
     identity: string,
     observedAt: Date
   ) => Promise<boolean | "defer">;
+  parserVersion?: number;
 }): Promise<{
   baseline: boolean;
+  rebaselined: boolean;
   created: number;
   backlog: number;
   invalid: number;
@@ -243,7 +270,8 @@ export async function pollApplicantSheet(input: {
     counts,
     input.backlogLimit,
     input.now?.(),
-    input.isSuppressed
+    input.isSuppressed,
+    input.parserVersion
   );
   const { newOccurrences, ...state } = reconciliation;
   return {

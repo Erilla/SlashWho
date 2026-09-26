@@ -518,3 +518,59 @@ it("keeps each duplicate response's details when an earlier occurrence is deferr
     "First#111"
   ]);
 });
+
+it("re-baselines instead of announcing links a new parser version reads for the first time", async () => {
+  const known = "https://raider.io/characters/eu/example/quinn";
+  const unreadable = "https://raider.io/characters/eu/example/rhea";
+  const later = "https://raider.io/characters/eu/example/sage";
+  const pollAt = (cells: unknown[], parserVersion: number) =>
+    pollApplicantSheet({
+      pool,
+      readColumn: async () => cells,
+      backlogLimit: 1000,
+      parserVersion
+    });
+  await pollAt([known], 1_000);
+  // The new version reads a response that was already on the Sheet.
+  expect(await pollAt([known, unreadable, known], 1_001)).toMatchObject({
+    rebaselined: true,
+    created: 0
+  });
+  expect(await pollAt([known, unreadable, known], 1_001)).toMatchObject({
+    rebaselined: false,
+    created: 0
+  });
+  expect(await pollAt([known, unreadable, known, later], 1_001)).toMatchObject({
+    rebaselined: false,
+    created: 1
+  });
+  await poll([known, unreadable, known, later]);
+});
+
+it("keeps a deferred submission when the parser version changes", async () => {
+  const deferred = "https://raider.io/characters/eu/example/tove";
+  const readColumn = async () => [deferred, deferred];
+  await pollApplicantSheet({
+    pool,
+    readColumn: async () => [deferred],
+    backlogLimit: 1000,
+    parserVersion: 2_000
+  });
+  const first = await pollApplicantSheet({
+    pool,
+    readColumn,
+    isSuppressed: async () => "defer",
+    backlogLimit: 1000,
+    parserVersion: 2_000
+  });
+  expect(first.created).toBe(0);
+  const second = await pollApplicantSheet({
+    pool,
+    readColumn,
+    isSuppressed: async () => false,
+    backlogLimit: 1000,
+    parserVersion: 2_001
+  });
+  expect(second).toMatchObject({ rebaselined: true, created: 1 });
+  await poll([deferred, deferred]);
+});
