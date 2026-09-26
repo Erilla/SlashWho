@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "body": {
+    "achievements": [
+      { "id": 1, "completed_timestamp": 100 },
+      { "id": "2", "completed_timestamp": 200 },
+      { "id": 3, "completed_timestamp": "300" }
+    ]
+  }
+}

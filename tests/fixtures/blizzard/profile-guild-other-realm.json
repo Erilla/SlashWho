@@ -1,0 +1,4 @@
+{
+  "status": 200,
+  "body": { "guild": { "name": "Rancour", "realm": { "slug": "draenor" } } }
+}

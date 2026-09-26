@@ -1,7 +1,110 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import { createBlizzardClient } from "./index";
+
+type FixtureName =
+  | "token-valid"
+  | "token-empty-access-token"
+  | "token-forbidden"
+  | "profile-guild"
+  | "profile-guild-other-realm"
+  | "profile-guild-empty-name"
+  | "profile-guild-empty-realm-slug"
+  | "profile-without-guild"
+  | "profile-forbidden"
+  | "profile-missing"
+  | "playable-class-index"
+  | "playable-class-index-renamed"
+  | "playable-class-index-empty-name"
+  | "playable-class-index-forbidden"
+  | "guild-roster"
+  | "guild-roster-member-empty-name"
+  | "guild-roster-member-empty-realm-slug"
+  | "guild-roster-member-without-playable-class"
+  | "guild-roster-without-members"
+  | "guild-roster-forbidden"
+  | "guild-roster-missing"
+  | "achievements-completed"
+  | "achievements-empty"
+  | "achievements-with-unfinished"
+  | "achievements-non-numeric-pairs"
+  | "achievements-malformed-timestamp"
+  | "achievements-without-achievements"
+  | "achievements-forbidden"
+  | "achievements-missing"
+  | "achievements-rate-limited"
+  | "achievements-rate-limited-no-retry-after";
+
+type Fixture = {
+  status: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+};
+
+const fixtureDirectory = fileURLToPath(
+  new URL("../../../tests/fixtures/blizzard/", import.meta.url)
+);
+
+function readFixture(name: FixtureName): Fixture {
+  return JSON.parse(
+    readFileSync(resolve(fixtureDirectory, `${name}.json`), "utf8")
+  ) as Fixture;
+}
+
+/**
+ * Builds a fresh response from a fixture. `bodyText` replaces the fixture's
+ * body with a test marker, which is a test input rather than a Blizzard shape.
+ */
+function fixtureResponse(
+  name: FixtureName,
+  options: { bodyText?: string } = {}
+): Response {
+  const fixture = readFixture(name);
+  const body =
+    options.bodyText ??
+    (fixture.body === undefined ? null : JSON.stringify(fixture.body));
+  return new Response(body, {
+    status: fixture.status,
+    headers: {
+      ...(fixture.body === undefined
+        ? {}
+        : { "Content-Type": "application/json" }),
+      ...fixture.headers
+    }
+  });
+}
+
+type Endpoint = "token" | "profile" | "classIndex" | "roster" | "achievements";
+
+function endpointOf(url: URL): Endpoint {
+  if (url.hostname === "oauth.battle.net" || url.pathname === "/token")
+    return "token";
+  if (url.pathname === "/data/wow/playable-class/index") return "classIndex";
+  if (url.pathname.startsWith("/data/wow/guild/")) return "roster";
+  if (url.pathname.endsWith("/achievements")) return "achievements";
+  if (url.pathname.startsWith("/profile/wow/character/")) return "profile";
+  throw new Error(`unexpected endpoint: ${url.pathname}`);
+}
+
+type Route = FixtureName | ((url: URL) => FixtureName | Response);
+type Routes = Partial<Record<Endpoint, Route>>;
+
+/** Answers each endpoint from its routed fixture; the token defaults to valid. */
+function fixtureResponder(routes: Routes): (url: URL) => Response {
+  return (url) => {
+    const endpoint = endpointOf(url);
+    const route =
+      routes[endpoint] ?? (endpoint === "token" ? "token-valid" : undefined);
+    if (route === undefined) throw new Error(`unrouted endpoint: ${endpoint}`);
+    const answer = typeof route === "function" ? route(url) : route;
+    return typeof answer === "string" ? fixtureResponse(answer) : answer;
+  };
+}
 
 const key: CharacterKey = {
   region: "eu",
@@ -9,8 +112,13 @@ const key: CharacterKey = {
   name: "sentinel"
 };
 
+const aGuild = { name: "A Guild", region: "eu", realm: "silvermoon" } as const;
+
 function clientFor(
-  responder: (url: URL, init?: RequestInit) => Response | Promise<Response>
+  responder: (url: URL, init?: RequestInit) => Response | Promise<Response>,
+  options: {
+    onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  } = {}
 ) {
   const fetchSpy = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
@@ -26,27 +134,50 @@ function clientFor(
     gateway: createBlizzardClient({
       fetch: fetchSpy as unknown as typeof globalThis.fetch,
       clientId: "id",
-      clientSecret: "secret"
+      clientSecret: "secret",
+      ...options
     })
   };
 }
 
-function tokenResponse(): Response {
-  return Response.json({
-    access_token: "private-access-token",
-    expires_in: 3600
-  });
+function fixtureClient(
+  routes: Routes,
+  options: Parameters<typeof clientFor>[1] = {}
+) {
+  return clientFor(fixtureResponder(routes), options);
 }
+
+const guildedRoster: Routes = {
+  profile: "profile-guild",
+  classIndex: "playable-class-index",
+  roster: "guild-roster"
+};
+
+const alt = {
+  key: { region: "eu", realm: "silvermoon", name: "alt" },
+  displayName: "Alt",
+  className: "Mage",
+  level: 80,
+  guild: aGuild
+};
+
+const keeper = {
+  key: { region: "eu", realm: "silvermoon", name: "keeper" },
+  displayName: "Keeper",
+  className: "Paladin",
+  level: 70,
+  guild: aGuild
+};
 
 describe("Blizzard gateway", () => {
   it("shares OAuth refresh across concurrent character reads", async () => {
     let tokens = 0;
-    const { gateway } = clientFor((url) => {
-      if (url.pathname === "/token") {
+    const { gateway } = fixtureClient({
+      token: () => {
         tokens++;
-        return tokenResponse();
-      }
-      return Response.json({ achievements: [] });
+        return "token-valid";
+      },
+      achievements: "achievements-empty"
     });
     await Promise.all([
       gateway.getCompletedAchievements(key),
@@ -60,13 +191,12 @@ describe("Blizzard gateway", () => {
     // Break caught: e2e sweeps could send test credentials to the public
     // Blizzard endpoints even when the test suite provides a local fixture.
     const endpoints: string[] = [];
+    const respond = fixtureResponder({ achievements: "achievements-empty" });
     const gateway = createBlizzardClient({
       fetch: (async (input: RequestInfo | URL) => {
         const url = new URL(String(input));
         endpoints.push(url.toString());
-        return url.pathname === "/token"
-          ? tokenResponse()
-          : Response.json({ achievements: [] });
+        return respond(url);
       }) as typeof globalThis.fetch,
       clientId: "id",
       clientSecret: "secret",
@@ -85,101 +215,49 @@ describe("Blizzard gateway", () => {
   it("uses the root region profile API and normalizes the current guild roster", async () => {
     // Break caught: roster requests could cross regions or leak upstream member
     // shapes into discovery snapshots.
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      if (url.pathname.endsWith("/character/silvermoon/sentinel")) {
-        return Response.json({
-          guild: { name: "A Guild", realm: { slug: "silvermoon" } }
-        });
+    const { gateway } = fixtureClient({
+      profile: (url) => {
+        expect(url.pathname).toBe("/profile/wow/character/silvermoon/sentinel");
+        return "profile-guild";
+      },
+      classIndex: "playable-class-index",
+      roster: (url) => {
+        expect(url.pathname).toBe("/data/wow/guild/silvermoon/a-guild/roster");
+        return "guild-roster";
       }
-      if (url.pathname === "/data/wow/playable-class/index") {
-        return Response.json({
-          classes: [
-            { id: 8, name: "Mage" },
-            { id: 2, name: "Paladin" }
-          ]
-        });
-      }
-      if (url.pathname.endsWith("/guild/silvermoon/a-guild/roster")) {
-        return Response.json({
-          members: [
-            {
-              character: {
-                name: "Alt",
-                realm: { slug: "Silvermoon" },
-                playable_class: { id: 8 },
-                level: 80
-              }
-            }
-          ]
-        });
-      }
-      throw new Error(`unexpected endpoint: ${url.pathname}`);
     });
 
     const onProfileRequest = vi.fn();
     await expect(
       gateway.getGuildRoster(key, undefined, onProfileRequest)
-    ).resolves.toEqual([
-      {
-        key: { region: "eu", realm: "silvermoon", name: "alt" },
-        displayName: "Alt",
-        className: "Mage",
-        level: 80,
-        guild: { name: "A Guild", region: "eu", realm: "silvermoon" }
-      }
-    ]);
+    ).resolves.toEqual([alt, keeper]);
     expect(onProfileRequest).toHaveBeenCalledTimes(3);
   });
 
   it("keeps normalized playable-class names isolated by region and accounts for each initial read", async () => {
     const usKey: CharacterKey = { ...key, region: "us", realm: "illidan" };
     const classIndexReads: string[] = [];
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      if (url.pathname === "/data/wow/playable-class/index") {
-        classIndexReads.push(url.searchParams.get("namespace") ?? "");
-        return Response.json({
-          classes: [
-            {
-              id: 8,
-              name:
-                url.searchParams.get("namespace") === "static-eu"
-                  ? "Mage"
-                  : "Magus"
-            }
-          ]
-        });
+    const { gateway } = fixtureClient({
+      ...guildedRoster,
+      classIndex: (url) => {
+        const namespace = url.searchParams.get("namespace") ?? "";
+        classIndexReads.push(namespace);
+        return namespace === "static-eu"
+          ? "playable-class-index"
+          : "playable-class-index-renamed";
       }
-      if (url.pathname.includes("/character/")) {
-        return Response.json({
-          guild: { name: "A Guild", realm: { slug: "shared-realm" } }
-        });
-      }
-      if (url.pathname.includes("/guild/")) {
-        return Response.json({
-          members: [
-            {
-              character: {
-                name: "Alt",
-                realm: { slug: "shared-realm" },
-                playable_class: { id: 8 },
-                level: 80
-              }
-            }
-          ]
-        });
-      }
-      throw new Error(`unexpected endpoint: ${url.pathname}`);
     });
     const observed = vi.fn();
 
     await expect(
       gateway.getGuildRoster(key, undefined, observed)
-    ).resolves.toMatchObject([{ className: "Mage" }]);
+    ).resolves.toMatchObject([{ className: "Mage" }, { className: "Paladin" }]);
     await expect(
       gateway.getGuildRoster(usKey, undefined, observed)
-    ).resolves.toMatchObject([{ className: "Magus" }]);
+    ).resolves.toMatchObject([
+      { className: "Magus" },
+      { className: "Paladin" }
+    ]);
     await gateway.getGuildRoster(key, undefined, observed);
 
     expect(classIndexReads).toEqual(["static-eu", "static-us"]);
@@ -192,121 +270,74 @@ describe("Blizzard gateway", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-21T00:00:00.000Z"));
     let classIndexReads = 0;
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      if (url.pathname === "/data/wow/playable-class/index") {
-        classIndexReads++;
-        return Response.json({
-          classes: [{ id: 8, name: classIndexReads === 1 ? "Mage" : "Magus" }]
-        });
-      }
-      if (url.pathname.includes("/character/")) {
-        return Response.json({
-          guild: { name: "A Guild", realm: { slug: "silvermoon" } }
-        });
-      }
-      if (url.pathname.includes("/guild/")) {
-        return Response.json({
-          members: [
-            {
-              character: {
-                name: "Alt",
-                realm: { slug: "silvermoon" },
-                playable_class: { id: 8 },
-                level: 80
-              }
-            }
-          ]
-        });
-      }
-      throw new Error(`unexpected endpoint: ${url.pathname}`);
+    const { gateway } = fixtureClient({
+      ...guildedRoster,
+      classIndex: () =>
+        ++classIndexReads === 1
+          ? "playable-class-index"
+          : "playable-class-index-renamed"
     });
 
     await expect(gateway.getGuildRoster(key)).resolves.toMatchObject([
-      { className: "Mage" }
+      { className: "Mage" },
+      { className: "Paladin" }
     ]);
     await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1_000);
     await expect(gateway.getGuildRoster(key)).resolves.toMatchObject([
-      { className: "Magus" }
+      { className: "Magus" },
+      { className: "Paladin" }
     ]);
 
     expect(classIndexReads).toBe(2);
     vi.useRealTimers();
   });
 
-  it("skips an unusable roster member instead of failing the sweep", async () => {
-    // Break caught: one member the key space cannot represent made every member
-    // null, which raised schema_drift and abandoned the whole sweep.
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      if (url.pathname === "/data/wow/playable-class/index") {
-        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
-      }
-      if (url.pathname.endsWith("/character/silvermoon/sentinel")) {
-        return Response.json({
-          guild: { name: "A Guild", realm: { slug: "silvermoon" } }
-        });
-      }
-      if (url.pathname.endsWith("/guild/silvermoon/a-guild/roster")) {
-        return Response.json({
-          members: [
-            {
-              character: { name: "", realm: { slug: "silvermoon" }, level: 80 }
-            },
-            {
-              character: {
-                name: "Keeper",
-                realm: { slug: "Silvermoon" },
-                playable_class: { id: 8 },
-                level: 70
-              }
-            }
-          ]
-        });
-      }
-      throw new Error(`unexpected endpoint: ${url.pathname}`);
+  it.each([
+    ["an empty character name", "guild-roster-member-empty-name"],
+    ["an empty realm slug", "guild-roster-member-empty-realm-slug"],
+    ["no playable_class object", "guild-roster-member-without-playable-class"]
+  ] as const)(
+    "skips a roster member with %s instead of failing the sweep",
+    async (_description, roster) => {
+      // Break caught: one member the key space cannot represent made every
+      // member null, which raised schema_drift and abandoned the whole sweep.
+      const { gateway } = fixtureClient({ ...guildedRoster, roster });
+
+      await expect(gateway.getGuildRoster(key)).resolves.toEqual([keeper]);
+    }
+  );
+
+  it("skips a roster member whose class the static index names with an empty string", async () => {
+    const { gateway } = fixtureClient({
+      ...guildedRoster,
+      classIndex: "playable-class-index-empty-name"
     });
 
-    await expect(gateway.getGuildRoster(key)).resolves.toEqual([
-      {
-        key: { region: "eu", realm: "silvermoon", name: "keeper" },
-        displayName: "Keeper",
-        className: "Mage",
-        level: 70,
-        guild: { name: "A Guild", region: "eu", realm: "silvermoon" }
-      }
-    ]);
+    await expect(gateway.getGuildRoster(key)).resolves.toEqual([keeper]);
+  });
+
+  it("reports a roster without a members array as schema drift", async () => {
+    const { gateway } = fixtureClient({
+      ...guildedRoster,
+      roster: "guild-roster-without-members"
+    });
+
+    await expect(gateway.getGuildRoster(key)).rejects.toMatchObject({
+      kind: "schema_drift"
+    });
   });
 
   it("names the guild each roster member was read from", async () => {
     // The roster is fetched for one guild, so every member is in it. The guild
     // is already read to build the roster URL; carrying it costs no request.
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      if (url.pathname === "/data/wow/playable-class/index") {
-        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
+    const { gateway } = fixtureClient({
+      ...guildedRoster,
+      // A guild need not sit on its members' realm.
+      profile: "profile-guild-other-realm",
+      roster: (url) => {
+        expect(url.pathname).toBe("/data/wow/guild/draenor/rancour/roster");
+        return "guild-roster";
       }
-      if (url.pathname.endsWith("/character/silvermoon/sentinel")) {
-        // A guild need not sit on its members' realm.
-        return Response.json({
-          guild: { name: "Rancour", realm: { slug: "draenor" } }
-        });
-      }
-      if (url.pathname.endsWith("/guild/draenor/rancour/roster")) {
-        return Response.json({
-          members: [
-            {
-              character: {
-                name: "Keeper",
-                realm: { slug: "Silvermoon" },
-                playable_class: { id: 8 },
-                level: 70
-              }
-            }
-          ]
-        });
-      }
-      throw new Error(`unexpected endpoint: ${url.pathname}`);
     });
 
     const roster = await gateway.getGuildRoster(key);
@@ -321,66 +352,55 @@ describe("Blizzard gateway", () => {
   it("reads a known historical guild directly without first resolving a member profile", async () => {
     // Historical WCL observations already carry a guild identity. Requiring a
     // current member profile would make an old or departed guild undiscoverable.
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      if (url.pathname === "/data/wow/playable-class/index") {
-        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
+    const rancour = {
+      name: "Rancour",
+      region: "eu",
+      realm: "draenor"
+    } as const;
+    const { gateway } = fixtureClient({
+      classIndex: "playable-class-index",
+      roster: (url) => {
+        expect(url.pathname).toBe("/data/wow/guild/draenor/rancour/roster");
+        return "guild-roster";
       }
-      if (url.pathname.endsWith("/guild/draenor/rancour/roster")) {
-        return Response.json({
-          members: [
-            {
-              character: {
-                name: "Mistakinus",
-                realm: { slug: "Draenor" },
-                playable_class: { id: 8 },
-                level: 80
-              }
-            }
-          ]
-        });
-      }
-      throw new Error(`unexpected endpoint: ${url.pathname}`);
     });
 
-    await expect(
-      gateway.getGuildRosterByIdentity({
-        name: "Rancour",
-        region: "eu",
-        realm: "draenor"
-      })
-    ).resolves.toEqual([
-      {
-        key: { region: "eu", realm: "draenor", name: "mistakinus" },
-        displayName: "Mistakinus",
-        className: "Mage",
-        level: 80,
-        guild: { name: "Rancour", region: "eu", realm: "draenor" }
-      }
+    await expect(gateway.getGuildRosterByIdentity(rancour)).resolves.toEqual([
+      { ...alt, guild: rancour },
+      { ...keeper, guild: rancour }
     ]);
   });
 
   it("returns an empty roster when the root has no guild", async () => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({});
+    const { fetchSpy, gateway } = fixtureClient({
+      profile: "profile-without-guild"
     });
 
     await expect(gateway.getGuildRoster(key)).resolves.toEqual([]);
+    // Token and profile only: no class index or roster read for no guild.
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ["an empty guild name", "profile-guild-empty-name"],
+    ["an empty guild realm slug", "profile-guild-empty-realm-slug"]
+  ] as const)(
+    "reports a root profile with %s as schema drift",
+    async (_description, profile) => {
+      const { fetchSpy, gateway } = fixtureClient({ profile });
+
+      await expect(gateway.getGuildRoster(key)).rejects.toMatchObject({
+        kind: "schema_drift"
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it("extracts only numeric achievement pairs and caches the process token", async () => {
     // Break caught: malformed achievement entries could reach comparison, or a
     // token request could be made per character.
-    const { fetchSpy, gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({
-        achievements: [
-          { id: 1, completed_timestamp: 100 },
-          { id: "2", completed_timestamp: 200 },
-          { id: 3, completed_timestamp: "300" }
-        ]
-      });
+    const { fetchSpy, gateway } = fixtureClient({
+      achievements: "achievements-non-numeric-pairs"
     });
 
     await expect(gateway.getAchievementFingerprint(key)).resolves.toEqual(
@@ -397,17 +417,8 @@ describe("Blizzard gateway", () => {
   });
 
   it("returns completed achievements from timestamps without consulting criteria", async () => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({
-        achievements: [
-          {
-            id: 40254,
-            completed_timestamp: 1_737_232_200_000,
-            criteria: { is_completed: false }
-          }
-        ]
-      });
+    const { gateway } = fixtureClient({
+      achievements: "achievements-completed"
     });
 
     await expect(gateway.getCompletedAchievements(key)).resolves.toEqual([
@@ -419,14 +430,8 @@ describe("Blizzard gateway", () => {
   });
 
   it("keeps completed achievements when other achievements are unfinished", async () => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({
-        achievements: [
-          { id: 40254, completed_timestamp: 1_737_232_200_000 },
-          { id: 41297 }
-        ]
-      });
+    const { gateway } = fixtureClient({
+      achievements: "achievements-with-unfinished"
     });
 
     await expect(gateway.getCompletedAchievements(key)).resolves.toEqual([
@@ -438,15 +443,8 @@ describe("Blizzard gateway", () => {
   });
 
   it("reports schema drift when any completed achievement row is malformed", async () => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({
-        achievements: [
-          { id: 40254, completed_timestamp: 1_737_232_200_000 },
-          { id: 41297, completed_timestamp: "malformed" },
-          { id: 41625, completed_timestamp: 1_760_473_800_000 }
-        ]
-      });
+    const { gateway } = fixtureClient({
+      achievements: "achievements-malformed-timestamp"
     });
 
     await expect(gateway.getCompletedAchievements(key)).rejects.toMatchObject({
@@ -455,22 +453,168 @@ describe("Blizzard gateway", () => {
   });
 
   it.each([
-    ["zero achievement ID", { id: 0, completed_timestamp: 1_737_232_200_000 }],
-    [
-      "negative achievement ID",
-      { id: -1, completed_timestamp: 1_737_232_200_000 }
-    ],
-    ["zero completion timestamp", { id: 40254, completed_timestamp: 0 }],
-    ["negative completion timestamp", { id: 40254, completed_timestamp: -1 }],
-    ["fractional completion timestamp", { id: 40254, completed_timestamp: 1.5 }]
-  ])("reports schema drift for a %s", async (_description, achievement) => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({ achievements: [achievement] });
+    ["zero achievement ID", { id: 0 }],
+    ["negative achievement ID", { id: -1 }],
+    ["zero completion timestamp", { completed_timestamp: 0 }],
+    ["negative completion timestamp", { completed_timestamp: -1 }],
+    ["fractional completion timestamp", { completed_timestamp: 1.5 }]
+  ])("reports schema drift for a %s", async (_description, override) => {
+    // A value variant of the recorded-shape entry: no field is added.
+    const completed = readFixture("achievements-completed").body as {
+      achievements: Record<string, unknown>[];
+    };
+    const { gateway } = fixtureClient({
+      achievements: () =>
+        Response.json({
+          achievements: [{ ...completed.achievements[0], ...override }]
+        })
     });
 
     await expect(gateway.getCompletedAchievements(key)).rejects.toMatchObject({
       kind: "schema_drift"
+    });
+  });
+
+  it.each(["getAchievementFingerprint", "getCompletedAchievements"] as const)(
+    "reports an achievements payload without an achievements array as schema drift from %s",
+    async (method) => {
+      const { gateway } = fixtureClient({
+        achievements: "achievements-without-achievements"
+      });
+
+      await expect(gateway[method](key)).rejects.toMatchObject({
+        kind: "schema_drift"
+      });
+    }
+  );
+
+  it("reports a token response with an empty access token as schema drift", async () => {
+    const { gateway } = fixtureClient({
+      token: "token-empty-access-token",
+      achievements: "achievements-empty"
+    });
+
+    await expect(gateway.getAchievementFingerprint(key)).rejects.toMatchObject({
+      kind: "schema_drift"
+    });
+  });
+
+  describe("403 responses are currently classified as transient", () => {
+    // Pinned, not endorsed: a 403 is retried as if Blizzard were down, the
+    // same class of fault as #36 on the Raider.IO side. Changing it must be a
+    // deliberate decision that updates these tests.
+    it.each(["getAchievementFingerprint", "getCompletedAchievements"] as const)(
+      "from the token endpoint via %s",
+      async (method) => {
+        const { gateway } = fixtureClient({
+          token: "token-forbidden",
+          achievements: "achievements-empty"
+        });
+
+        await expect(gateway[method](key)).rejects.toMatchObject({
+          kind: "transient",
+          status: 403
+        });
+      }
+    );
+
+    it.each(["getAchievementFingerprint", "getCompletedAchievements"] as const)(
+      "from character achievements via %s",
+      async (method) => {
+        const { gateway } = fixtureClient({
+          achievements: "achievements-forbidden"
+        });
+
+        await expect(gateway[method](key)).rejects.toMatchObject({
+          kind: "transient",
+          status: 403
+        });
+      }
+    );
+
+    it.each([
+      ["the character profile", { profile: "profile-forbidden" }],
+      [
+        "the playable-class index",
+        { classIndex: "playable-class-index-forbidden" }
+      ],
+      ["the guild roster", { roster: "guild-roster-forbidden" }]
+    ] as const)("from %s", async (_description, override) => {
+      const { gateway } = fixtureClient({ ...guildedRoster, ...override });
+
+      await expect(gateway.getGuildRoster(key)).rejects.toMatchObject({
+        kind: "transient",
+        status: 403
+      });
+    });
+  });
+
+  describe("a 404 partway through a roster sweep", () => {
+    it("fails only the missing member's achievements read", async () => {
+      // Break caught: one member's 404 poisoning the shared token or the
+      // siblings' reads, as #32 did on the Raider.IO side.
+      const { fetchSpy, gateway } = fixtureClient({
+        ...guildedRoster,
+        achievements: (url) =>
+          url.pathname.includes("/character/silvermoon/alt/")
+            ? "achievements-missing"
+            : "achievements-completed"
+      });
+
+      const members = await gateway.getGuildRoster(key);
+      const reads = await Promise.allSettled(
+        members.map((member) => gateway.getAchievementFingerprint(member.key))
+      );
+
+      expect(reads).toEqual([
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ kind: "not_found" })
+        },
+        {
+          status: "fulfilled",
+          value: new Map([[40254, 1_737_232_200_000]])
+        }
+      ]);
+      expect(
+        fetchSpy.mock.calls.filter(
+          ([input]) => new URL(String(input)).hostname === "oauth.battle.net"
+        )
+      ).toHaveLength(1);
+    });
+
+    it("fails only the missing member's profile read", async () => {
+      const { gateway } = fixtureClient({
+        ...guildedRoster,
+        profile: (url) =>
+          url.pathname.endsWith("/character/silvermoon/alt")
+            ? "profile-missing"
+            : "profile-guild"
+      });
+
+      const members = await gateway.getGuildRoster(key);
+      const reads = await Promise.allSettled(
+        members.map((member) => gateway.getGuildRoster(member.key))
+      );
+
+      expect(reads).toEqual([
+        {
+          status: "rejected",
+          reason: expect.objectContaining({ kind: "not_found" })
+        },
+        { status: "fulfilled", value: [alt, keeper] }
+      ]);
+    });
+
+    it("classifies a missing guild roster as not found", async () => {
+      const { gateway } = fixtureClient({
+        classIndex: "playable-class-index",
+        roster: "guild-roster-missing"
+      });
+
+      await expect(
+        gateway.getGuildRosterByIdentity(aGuild)
+      ).rejects.toMatchObject({ kind: "not_found" });
     });
   });
 
@@ -484,7 +628,7 @@ describe("Blizzard gateway", () => {
     try {
       const { gateway } = clientFor((url, init) => {
         if (url.hostname !== "oauth.battle.net")
-          return Response.json({ achievements: [] });
+          return fixtureResponse("achievements-empty");
         return new Promise<Response>((_, reject) => {
           init?.signal?.addEventListener("abort", () =>
             reject(init.signal?.reason)
@@ -507,12 +651,11 @@ describe("Blizzard gateway", () => {
     // Break caught: cancellation could be omitted, or an upstream error body
     // could enter a typed failure and be logged later.
     const controller = new AbortController();
-    const { fetchSpy, gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return new Response("upstream-private-body-marker", {
-        status: 429,
-        headers: { "Retry-After": "60" }
-      });
+    const { fetchSpy, gateway } = fixtureClient({
+      achievements: () =>
+        fixtureResponse("achievements-rate-limited", {
+          bodyText: "upstream-private-body-marker"
+        })
     });
 
     const request = gateway.getAchievementFingerprint(key, controller.signal);
@@ -530,21 +673,12 @@ describe("Blizzard gateway", () => {
     );
   });
 
-  it("classifies unexpected success payloads as schema drift", async () => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return Response.json({ unexpected: true });
-    });
-
-    await expect(gateway.getAchievementFingerprint(key)).rejects.toMatchObject({
-      kind: "schema_drift"
-    });
-  });
-
   it("classifies missing Blizzard resources without exposing their body", async () => {
-    const { gateway } = clientFor((url) => {
-      if (url.hostname === "oauth.battle.net") return tokenResponse();
-      return new Response("missing-private-body-marker", { status: 404 });
+    const { gateway } = fixtureClient({
+      achievements: () =>
+        fixtureResponse("achievements-missing", {
+          bodyText: "missing-private-body-marker"
+        })
     });
 
     const request = gateway.getAchievementFingerprint(key);
@@ -554,23 +688,16 @@ describe("Blizzard gateway", () => {
 
   it("reports a throttled response through onThrottle", async () => {
     const throttles: Array<{ retryAfterMs: number | undefined }> = [];
-    const gateway = createBlizzardClient({
-      fetch: (async (input: RequestInfo | URL) => {
-        const url = new URL(String(input));
-        return url.hostname === "oauth.battle.net"
-          ? tokenResponse()
-          : new Response("", { status: 429, headers: { "Retry-After": "2" } });
-      }) as typeof globalThis.fetch,
-      clientId: "id",
-      clientSecret: "secret",
-      onThrottle: (event) => throttles.push(event)
-    });
+    const { gateway } = fixtureClient(
+      { achievements: "achievements-rate-limited" },
+      { onThrottle: (event) => throttles.push(event) }
+    );
 
     await gateway
       .getCompletedAchievements(key, AbortSignal.timeout(1_000))
       .catch(() => undefined);
 
-    expect(throttles).toEqual([{ retryAfterMs: 2_000 }]);
+    expect(throttles).toEqual([{ retryAfterMs: 60_000 }]);
   });
 
   it("keeps a throwing onThrottle from changing the thrown failure", async () => {
@@ -578,19 +705,14 @@ describe("Blizzard gateway", () => {
     // with whatever the logger threw, turning a genuine rate limit into an
     // unrecognisable failure. A reporting callback must never be able to change
     // what the client returns.
-    const gateway = createBlizzardClient({
-      fetch: (async (input: RequestInfo | URL) => {
-        const url = new URL(String(input));
-        return url.hostname === "oauth.battle.net"
-          ? tokenResponse()
-          : new Response("", { status: 429, headers: { "Retry-After": "2" } });
-      }) as typeof globalThis.fetch,
-      clientId: "id",
-      clientSecret: "secret",
-      onThrottle: () => {
-        throw new Error("logger-exploded-marker");
+    const { gateway } = fixtureClient(
+      { achievements: "achievements-rate-limited" },
+      {
+        onThrottle: () => {
+          throw new Error("logger-exploded-marker");
+        }
       }
-    });
+    );
 
     const request = gateway.getCompletedAchievements(
       key,
@@ -599,27 +721,25 @@ describe("Blizzard gateway", () => {
     await expect(request).rejects.toMatchObject({
       kind: "transient",
       status: 429,
-      retryAfterMs: 2_000
+      retryAfterMs: 60_000
     });
     await expect(request).rejects.not.toThrow(/logger-exploded-marker/);
   });
 
   it("does not require onThrottle", async () => {
-    const { gateway } = clientFor((url) =>
-      url.hostname === "oauth.battle.net"
-        ? tokenResponse()
-        : new Response("", { status: 429 })
-    );
+    const { gateway } = fixtureClient({
+      achievements: "achievements-rate-limited-no-retry-after"
+    });
 
     await expect(
       gateway.getCompletedAchievements(key, AbortSignal.timeout(1_000))
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ kind: "transient", status: 429 });
   });
 
   it("rejects regions outside the supported same-region profile boundary", async () => {
     // Break caught: a forged key could send fingerprint data to the unsupported
     // China API rather than keeping every request in the domain's region set.
-    const { fetchSpy, gateway } = clientFor(() => tokenResponse());
+    const { fetchSpy, gateway } = fixtureClient({});
     const unsupportedKey = { ...key, region: "cn" } as unknown as CharacterKey;
 
     await expect(
