@@ -1,3 +1,5 @@
+import { nonEmptyString, positiveInteger, record } from "./lib/json.mts";
+
 type JournalEncounter = Readonly<{
   id: unknown;
   name: unknown;
@@ -10,16 +12,6 @@ type JournalRaid = Readonly<{
   modes: unknown;
   encounters: unknown;
 }>;
-
-export function isDirectExecution(
-  moduleUrl: string,
-  invokedPath: string
-): boolean {
-  return (
-    new URL(moduleUrl).pathname.replace(/^\//, "") ===
-    invokedPath.replace(/\\/g, "/")
-  );
-}
 
 export type GeneratedJournalRaid = Readonly<{
   journalRaidId: string;
@@ -44,24 +36,6 @@ export type FetchJournalRaidsOptions = Readonly<{
   region?: string;
   locale?: string;
 }>;
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function positiveInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-    ? value
-    : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
-}
 
 export function normalizeJournalRaid(
   value: unknown

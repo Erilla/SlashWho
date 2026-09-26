@@ -319,7 +319,13 @@ function limitationMessage(
       return `${label} evidence could not be shown because this raid's current-content window has not been reviewed.`;
     case "current_content_evidence_withheld":
       return `${label} evidence outside this raid's current-content window is not shown.`;
-    default:
+    // Parse codes are answered above, before the source is looked at.
+    case "parse_private":
+    case "parse_rate_limited":
+    case "parse_request_cap":
+    case "parse_unavailable":
+    case "parse_identity_unmatched":
+    case "parse_schema_drift":
       return `${label} parse availability is partial. Verified kill evidence is still shown.`;
   }
 }
@@ -1203,8 +1209,10 @@ async function assembleDossier(options: {
   );
   const aliases = await Promise.all(
     [...options.subjects, ...options.excludedSubjects].map(
-      (character) =>
-        options.repositories.evidence.historicAliases?.(character.key) ?? []
+      async (character) =>
+        (await options.repositories.evidence.historicAliases?.(
+          character.key
+        )) ?? []
     )
   );
   const [cuttingEdgeEvidence, ranked] = await Promise.all([

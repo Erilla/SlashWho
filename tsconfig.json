@@ -1,0 +1,7 @@
+// Lets ESLint's project service find the root-level scripts, tests and
+// configs: it looks for the nearest tsconfig.json, and each workspace package
+// has its own. Type-checking still runs through `tsc -p tsconfig.tools.json`.
+{
+  "files": [],
+  "references": [{ "path": "./tsconfig.tools.json" }]
+}
