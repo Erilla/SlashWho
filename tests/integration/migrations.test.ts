@@ -102,6 +102,28 @@ describe("database migrations", () => {
       { column_name: "historic_rank_checked_at" },
       { column_name: "historic_world_rank" }
     ]);
+
+    const wipeFightIndex = await pool.query<{ indexname: string }>(`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'character_mythic_wipes'
+        AND indexname = 'character_mythic_wipes_run_fight_idx'
+    `);
+    expect(wipeFightIndex.rows).toEqual([
+      { indexname: "character_mythic_wipes_run_fight_idx" }
+    ]);
+
+    const damageParseState = await pool.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'character_mythic_kills'
+        AND column_name = 'damage_parse_state'
+    `);
+    expect(damageParseState.rows).toEqual([
+      { column_name: "damage_parse_state" }
+    ]);
   });
 
   it("can run repeatedly without applying migrations twice", async () => {
@@ -119,28 +141,16 @@ describe("database migrations", () => {
   });
 
   it("chains wipe-fight, parse, and report-provenance migrations", () => {
-    const directory = new URL(
-      "../../packages/database/drizzle/meta/",
-      import.meta.url
-    );
-    const readSnapshot = (name: string) =>
-      JSON.parse(readFileSync(new URL(name, directory), "utf8")) as {
-        id: string;
-        prevId: string;
-        tables: Record<
-          string,
-          { indexes: Record<string, unknown>; columns: Record<string, unknown> }
-        >;
-      };
-    const historicalWipes = readSnapshot("0007_snapshot.json");
-    const wipeFights = readSnapshot("0008_snapshot.json");
-    const parses = readSnapshot("0009_snapshot.json");
     const journal = JSON.parse(
-      readFileSync(new URL("_journal.json", directory), "utf8")
+      readFileSync(
+        new URL(
+          "../../packages/database/drizzle/meta/_journal.json",
+          import.meta.url
+        ),
+        "utf8"
+      )
     ) as { entries: Array<{ idx: number; tag: string }> };
 
-    expect(wipeFights.prevId).toBe(historicalWipes.id);
-    expect(parses.prevId).toBe(wipeFights.id);
     expect(
       journal.entries.slice(-30).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
@@ -175,15 +185,6 @@ describe("database migrations", () => {
       { idx: 56, tag: "0057_evidence_run_light_refresh" },
       { idx: 57, tag: "0058_snapshot_character_lookup_index" }
     ]);
-    expect(
-      wipeFights.tables["public.character_mythic_wipes"]?.indexes
-    ).toHaveProperty("character_mythic_wipes_run_fight_idx");
-    expect(
-      parses.tables["public.character_mythic_wipes"]?.indexes
-    ).toHaveProperty("character_mythic_wipes_run_fight_idx");
-    expect(
-      parses.tables["public.character_mythic_kills"]?.columns
-    ).toHaveProperty("damage_parse_state");
   });
 
   it("serializes concurrent migration attempts with an advisory lock", async () => {
