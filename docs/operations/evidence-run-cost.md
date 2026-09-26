@@ -192,6 +192,47 @@ Settle the reserve from a window whose `window_moved` is zero and whose
 `unaccounted_spend` is clean. A sample that fails either check describes
 something other than what one run costs.
 
+## What one request costs
+
+Warcraft Logs publishes no price per field, so the per-request figures come
+from measuring one request at a time: read the allowance, send the request,
+read it again, and take the delta less the one point of the second read.
+Measured on 2026-09-26 (#538) with the worker's credentials. Each figure was
+repeated three times and matched to the hundredth of a point, so nothing else
+spent in between.
+
+| Request                                | Every actor | `actors(type: "Player")` |
+| -------------------------------------- | ----------- | ------------------------ |
+| History page (`RecentReports`, 10)     | 20.81       | 20.81                    |
+| Hydrated report (`ReportByCode`)       | 2.07        | 2.07                     |
+| History page complexity, at 50 reports | 81,254      | 81,254                   |
+
+**Asking only for players saves nothing.** #525 made that change; the report
+used lost 1,040 of its 2,829 actors and cost the same. The saving is response
+size, not points.
+
+Points are charged per report, not per response size. A hydrated report cost
+2.07 across six reports of 31 to 77 fights and 32 to 1,789 player actors (one
+read 2.10). A history page is linear in its page size: 2.09 for one report,
+10.41 for five, 20.81 for ten, 41.73 for twenty and 52.19 for twenty-five,
+which is about 2.08 a report. An earlier figure of about 6 a hydrated report
+does not reproduce; the 2026-09-23 research note had about 2.2.
+
+Query complexity is scored from the query's shape, not its data. It is about
+1,625 a report, identical with either actor selection, so the 50,000 ceiling
+admits at most 30 reports a page. A query over the ceiling is rejected and
+still costs one point.
+
+`REPORTS_PER_PAGE` therefore stays at 10. A larger page would fit, but it
+saves no points because they scale by report. It would also:
+
+- move every stored history cursor, because the cursor is a page number;
+- make a light refresh, which reads one page, cost more;
+- change what a request is worth against `EVIDENCE_REQUEST_CAP`, which is
+  counted in requests and was sized at 30 points a page.
+
+The one thing it would save is round trips.
+
 ## What attendance recovery costs, and what it finds
 
 Guild attendance is searched only for Mythic kills Raider.IO attributes to the
@@ -245,6 +286,14 @@ the run after that back to page one, so every light refresh on an active
 character paid for its history twice. A light run's `request_cap` is its
 one-page budget, not a cursor to follow.
 
+The same holds for a former name's cursor in `historic_alias_progress`. A
+light refresh scans no former name: its one request goes to the newest page of
+the current name, and it republishes each alias's stored progress unchanged.
+Before, the alias whose turn it was took the request, and its capped page one
+saved "resume at page 2" for that alias. Because the former name goes unread,
+such a run always publishes partial, so it never drops kills only that name
+holds.
+
 A kill whose first defeat was never logged can never be held, so it would be
 searched for on every full run until its tier settles. For a character with no
 stored Warcraft Logs evidence at all, that is never, because nothing gives it a
@@ -281,8 +330,9 @@ distinguishes, and a query must not merge them:
   spent. `0` is a search that found nothing.
 
 Points are not split by class, so weigh cost with the per-request figures
-measured one request at a time on 2026-09-23: about 28 points an attendance
-page and about 6 a hydrated report.
+measured one request at a time: about 28 points an attendance page
+(2026-09-23) and about 2 a hydrated report (2026-09-26, see
+[What one request costs](#what-one-request-costs)).
 
 ```sql
 SELECT raiderio_historic_outcome,
@@ -354,6 +404,16 @@ share the split leaves for history goes unspent, so a search never spends more
 than the ordinary run's budget allowed. It gallops through a guild's attendance to find
 the window, then walks it page by page, so an old tier behind years of newer
 reports costs a few requests a guild instead of one for every page in between.
+
+One press searches every dossier character (#494), one run after another, and
+alts share guilds. A guild's walk across a window that finished is kept by the
+worker for 30 minutes and replayed for the next character, which judges each
+report by its own name and still pays for its own hydrations. So within one
+press, the first character's row carries the attendance pages and later rows
+read lower: that is what they spent, not an undercount. A walk the budget cut
+short, or one with an unreadable page, is never kept. Runs on a visitor's own
+key use a client of their own and share nothing. The ranked walk's zone
+catalogue is kept the same way, for six hours.
 
 Its rows carry `mode = 'tier_search'`, and these columns, all null on a run that
 searched no tier:

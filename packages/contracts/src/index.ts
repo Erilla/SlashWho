@@ -27,6 +27,7 @@ export {
   dossierTierSearchResponseSchema,
   dossierTierSearchSchema,
   dossierStartResponseSchema,
+  recentDossierSearchesResponseSchema,
   dossierBossSchema,
   dossierCharacterSchema,
   dossierEvidenceStateSchema,
@@ -54,6 +55,7 @@ export type {
   DossierTierSearchOutcome,
   DossierTierSearchResponse,
   DossierStartResponse,
+  RecentDossierSearchesResponse,
   DossierCharacter,
   DossierEvidenceState,
   DossierCuttingEdge,
@@ -79,6 +81,8 @@ export {
 } from "./history";
 export type { HistoricalSnapshot, HistoryItem, HistoryPage } from "./history";
 export {
+  collectionMonitorCompletedLimitMax,
+  collectionMonitorCompletedPageSize,
   collectionMonitorCompletedRunSchema,
   collectionMonitorFailedRunSchema,
   collectionMonitorInFlightRunSchema,

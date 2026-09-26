@@ -80,6 +80,7 @@ const repositories = {
     async markRunning() {},
     async markRetrying() {},
     async complete() {},
+    async completeWithLiveSweepSnapshot() {},
     async fail() {},
     async find() {
       return null;

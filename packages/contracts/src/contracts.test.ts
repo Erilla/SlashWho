@@ -603,6 +603,7 @@ it("defines a strict operator collection monitor without internal run fields", (
         evidenceVersion: 13
       }
     ],
+    hasMoreCompleted: false,
     failed: [
       {
         character: applicantCharacter,

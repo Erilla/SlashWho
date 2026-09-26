@@ -3226,6 +3226,35 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
       },
 
+      async completeWithLiveSweepSnapshot(id, snapshotId) {
+        // The snapshot must be the one this root's sweep cursor is still
+        // extending, mirroring what `getResumeState` treats as a live chain.
+        await requireUpdated(
+          pool,
+          `UPDATE discovery_runs
+           SET status = 'complete', snapshot_id = $2,
+               completed_at = COALESCE(completed_at, now()),
+               next_retry_at = NULL, error_code = NULL
+           WHERE id = $1
+             AND (
+               (status = 'complete' AND snapshot_id = $2)
+               OR (
+                 status IN ${activeRunSql}
+                 AND EXISTS (
+                   SELECT 1 FROM fingerprint_sweep_states state
+                   WHERE state.region = discovery_runs.root_region
+                     AND state.realm_slug = discovery_runs.root_realm_slug
+                     AND state.normalized_name =
+                       discovery_runs.root_normalized_name
+                     AND state.resume_after IS NOT NULL
+                     AND state.resume_snapshot_id = $2
+                 )
+               )
+             )`,
+          [id, snapshotId]
+        );
+      },
+
       async fail(id, code) {
         await requireUpdated(
           pool,
@@ -6263,7 +6292,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rowCount ?? 0;
       },
 
-      async listForMonitor() {
+      async listForMonitor({ completedLimit }) {
         const result = await pool.query<{
           region: CharacterKey["region"];
           realm_slug: string;
@@ -6281,12 +6310,31 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }>(
           // One query rather than one per run: a large dossier queues hundreds.
           // The run id stays inside the join and never reaches the projection.
-          `SELECT runs.region, runs.realm_slug, runs.normalized_name,
+          // Completed runs are the only set that grows without bound, so only
+          // they are limited, newest first to match the outer ordering.
+          `WITH runs AS (
+             (SELECT id, region, realm_slug, normalized_name, status,
+                     evidence_version, attempt, limitation_code,
+                     parse_limitation_code, retry_after_at, error_code,
+                     created_at, started_at, completed_at
+                FROM character_evidence_runs
+               WHERE status NOT IN ('complete', 'partial'))
+             UNION ALL
+             (SELECT id, region, realm_slug, normalized_name, status,
+                     evidence_version, attempt, limitation_code,
+                     parse_limitation_code, retry_after_at, error_code,
+                     created_at, started_at, completed_at
+                FROM character_evidence_runs
+               WHERE status IN ('complete', 'partial')
+               ORDER BY completed_at DESC NULLS LAST, id DESC
+               LIMIT $1)
+           )
+           SELECT runs.region, runs.realm_slug, runs.normalized_name,
                   runs.status, runs.evidence_version, runs.attempt,
                   runs.limitation_code, runs.parse_limitation_code,
                   runs.retry_after_at, runs.error_code, runs.started_at,
                   runs.completed_at, steps.phases
-             FROM character_evidence_runs runs
+             FROM runs
              CROSS JOIN LATERAL (
                SELECT COALESCE(
                         json_agg(
@@ -6311,7 +6359,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                        THEN COALESCE(runs.started_at, runs.created_at)
                      END ASC NULLS LAST,
                      runs.completed_at DESC NULLS LAST,
-                     runs.id DESC`
+                     runs.id DESC`,
+          [completedLimit]
         );
         return result.rows.map((row) => ({
           key: {
@@ -6515,6 +6564,101 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [runIds]
         );
         return result.rowCount ?? 0;
+      }
+    },
+
+    recentSearches: {
+      async record(key, at = new Date()) {
+        // GREATEST keeps a slow request from moving a newer search backwards.
+        await pool.query(
+          `INSERT INTO dossier_searches
+            (region, realm_slug, normalized_name, searched_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (region, realm_slug, normalized_name)
+           DO UPDATE SET searched_at =
+             GREATEST(dossier_searches.searched_at, EXCLUDED.searched_at)`,
+          [key.region, key.realm, key.name, at]
+        );
+      },
+
+      async listRecent(limit) {
+        // The current snapshot is chosen as getCurrent chooses it: the newest
+        // one published by a completed run, so a snapshot whose membership is
+        // still being written is never read.
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+          display_name: string | null;
+          searched_at: Date;
+          in_progress: boolean;
+        }>(
+          `SELECT search.region, search.realm_slug, search.normalized_name,
+                  root.display_name, search.searched_at,
+                  (
+                    EXISTS (
+                      SELECT 1 FROM discovery_runs run
+                      WHERE run.root_region = search.region
+                        AND run.root_realm_slug = search.realm_slug
+                        AND run.root_normalized_name = search.normalized_name
+                        AND run.status IN ${activeRunSql}
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM character_evidence_runs evidence
+                      WHERE evidence.status IN ${activeRunSql}
+                        AND (
+                          (evidence.region = search.region
+                            AND evidence.realm_slug = search.realm_slug
+                            AND evidence.normalized_name = search.normalized_name)
+                          OR EXISTS (
+                            SELECT 1
+                            FROM snapshot_characters membership
+                            JOIN characters member
+                              ON member.id = membership.character_id
+                            WHERE membership.snapshot_id = current_snapshot.id
+                              AND member.region = evidence.region
+                              AND member.realm_slug = evidence.realm_slug
+                              AND member.normalized_name = evidence.normalized_name
+                          )
+                        )
+                    )
+                  ) AS in_progress
+           FROM dossier_searches search
+           LEFT JOIN characters root
+             ON root.region = search.region
+            AND root.realm_slug = search.realm_slug
+            AND root.normalized_name = search.normalized_name
+           LEFT JOIN LATERAL (
+             SELECT snapshot.id
+             FROM snapshots snapshot
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE snapshot.root_character_id = root.id
+               AND run.status = 'complete'
+             ORDER BY snapshot.refreshed_at DESC, snapshot.id DESC
+             LIMIT 1
+           ) current_snapshot ON true
+           WHERE NOT EXISTS (
+             SELECT 1 FROM suppressed_characters suppression
+             WHERE suppression.region = search.region
+               AND suppression.realm_slug = search.realm_slug
+               AND suppression.normalized_name = search.normalized_name
+               AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+           )
+           ORDER BY search.searched_at DESC, search.region, search.realm_slug,
+                    search.normalized_name
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map((row) => ({
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
+          displayName: row.display_name,
+          searchedAt: row.searched_at,
+          inProgress: row.in_progress
+        }));
       }
     },
 

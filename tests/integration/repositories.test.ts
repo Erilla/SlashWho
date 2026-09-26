@@ -190,6 +190,7 @@ describe("PostgreSQL repositories", () => {
       character_terminal_tiers,
       character_historic_aliases,
       dossier_character_exclusions,
+      dossier_searches,
       character_attendance_searches,
       snapshot_characters,
       snapshots,
@@ -1947,6 +1948,77 @@ describe("PostgreSQL repositories", () => {
     ]);
   });
 
+  it("lists each searched character once, newest search first", async () => {
+    // Break caught: the landing page listed a character once per search, or a
+    // slow request moved a newer search back behind an older one.
+    const recent = repositories.recentSearches!;
+    await seedCompleteSnapshot(repositories);
+    await recent.record(rootKey, new Date("2026-09-26T10:00:00Z"));
+    await recent.record(altKey, new Date("2026-09-26T11:00:00Z"));
+    await recent.record(rootKey, new Date("2026-09-26T12:00:00Z"));
+    await recent.record(rootKey, new Date("2026-09-26T09:00:00Z"));
+
+    expect(await recent.listRecent(10)).toEqual([
+      {
+        key: rootKey,
+        displayName: "Ryii",
+        searchedAt: new Date("2026-09-26T12:00:00Z"),
+        inProgress: false
+      },
+      {
+        // Searched, but not yet created by discovery.
+        key: altKey,
+        displayName: null,
+        searchedAt: new Date("2026-09-26T11:00:00Z"),
+        inProgress: false
+      }
+    ]);
+    expect(await recent.listRecent(1)).toHaveLength(1);
+  });
+
+  it("reports a recent search in progress while its discovery or any member's evidence is collecting", async () => {
+    // Break caught: the spinner followed only the searched character's own
+    // runs, so a dossier still gathering an alt's evidence read as complete.
+    const recent = repositories.recentSearches!;
+    await seedCompleteSnapshot(repositories, {
+      characters: [
+        observation(rootKey, "Ryii"),
+        observation(altKey, "Other", "claimed")
+      ]
+    });
+    await recent.record(rootKey);
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+
+    const discovery = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(true);
+    await repositories.runs.fail(discovery.id, "search_failed");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+
+    const evidence = await repositories.evidence.reserve({
+      key: altKey,
+      freshnessCutoff: new Date(),
+      at: new Date()
+    });
+    if (evidence.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(true);
+    await repositories.evidence.fail(evidence.run.id, "collection_failed");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+  });
+
+  it("leaves suppressed characters off the recent searches", async () => {
+    const recent = repositories.recentSearches!;
+    await recent.record(rootKey);
+    await recent.record(altKey);
+    await repositories.suppressions.suppress(rootKey, "removal_request", null);
+
+    expect((await recent.listRecent(10)).map(({ key }) => key)).toEqual([
+      altKey
+    ]);
+  });
+
   it("round-trips a Mythic kill's Warcraft Logs guild region", async () => {
     // Historical-guild traversal can only safely call Blizzard when the
     // region was observed with the public report; a realm alone is ambiguous.
@@ -3481,7 +3553,9 @@ describe("PostgreSQL repositories", () => {
         WHERE normalized_name IN ('running', 'complete')`
     );
 
-    const rows = await repositories.evidence.listForMonitor();
+    const rows = await repositories.evidence.listForMonitor({
+      completedLimit: 10
+    });
 
     expect(rows.find((row) => row.status === "running")?.phases).toEqual([
       {
@@ -3518,6 +3592,42 @@ describe("PostgreSQL repositories", () => {
     expect(rows.every((row) => !("id" in row) && !("queueJobId" in row))).toBe(
       true
     );
+  });
+
+  it("limits only completed runs in the monitor projection, newest first", async () => {
+    // Break caught: completed runs accumulate forever, so the monitor must page
+    // them; limiting the whole read instead would hide in-flight or failed runs.
+    await pool.query(
+      `INSERT INTO character_evidence_runs
+         (region, realm_slug, normalized_name, status, evidence_version,
+          attempt, created_at, started_at, completed_at, error_code)
+       VALUES
+         ('eu', 'silvermoon', 'queued', 'queued', 13, 0,
+          '2026-09-20T09:00:00Z', NULL, NULL, NULL),
+         ('eu', 'silvermoon', 'oldest', 'complete', 13, 1,
+          '2026-09-20T06:00:00Z', '2026-09-20T06:05:00Z',
+          '2026-09-20T07:00:00Z', NULL),
+         ('eu', 'silvermoon', 'newest', 'complete', 13, 1,
+          '2026-09-20T08:00:00Z', '2026-09-20T08:05:00Z',
+          '2026-09-20T09:00:00Z', NULL),
+         ('eu', 'silvermoon', 'middle', 'complete', 13, 1,
+          '2026-09-20T07:00:00Z', '2026-09-20T07:05:00Z',
+          '2026-09-20T08:00:00Z', NULL),
+         ('eu', 'silvermoon', 'failed', 'failed', 13, 3,
+          '2026-09-20T05:00:00Z', '2026-09-20T05:05:00Z',
+          '2026-09-20T05:30:00Z', 'warcraft_logs_unavailable')`
+    );
+
+    const rows = await repositories.evidence.listForMonitor({
+      completedLimit: 2
+    });
+
+    expect(rows.map((row) => row.key.name)).toEqual([
+      "queued",
+      "newest",
+      "middle",
+      "failed"
+    ]);
   });
 
   it("carries terminal-tier kills and wipes through a complete publish", async () => {
@@ -7703,6 +7813,57 @@ describe("PostgreSQL repositories", () => {
     expect((await stored()).historyScanResumePage).toBeUndefined();
   });
 
+  it("keeps a former name's bookmark when a later light run carries it forward", async () => {
+    // A light refresh scans no former name and republishes each alias's
+    // stored progress on its own row. The progress is read from the newest
+    // published run that holds any, so what that run carries is what stands.
+    await seedCompleteSnapshot(repositories);
+    const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+    const progress = {
+      key: alias,
+      pendingParseFightUrls: [],
+      historyScanResumePage: 7,
+      historyScanResumeBoundaryReportCode: "alias-boundary",
+      historyComplete: false,
+      parseWorkOutstanding: false
+    };
+    const publishRun = async (
+      minute: number,
+      historicAliasProgress: (typeof progress)[]
+    ) => {
+      const reservation = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date(`2026-09-20T12:${minute}:00.000Z`),
+        at: new Date(`2026-09-20T12:${minute + 1}:00.000Z`)
+      });
+      if (reservation.kind !== "reserved") throw new Error("run_not_reserved");
+      await repositories.evidence.publish(reservation.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        historicAliasProgress,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: new Date(`2026-09-20T12:${minute + 2}:00.000Z`)
+      });
+    };
+    const stored = async () =>
+      (
+        await createPostgresRepositories(pool).evidence.storedEvidenceTiers(
+          rootKey
+        )
+      ).historicAliasProgress;
+
+    await publishRun(10, [progress]);
+    await publishRun(20, [progress]);
+    await expect(stored()).resolves.toEqual([progress]);
+
+    // An empty list is a statement, not an omission: it clears the bookmark.
+    await publishRun(30, []);
+    await expect(stored()).resolves.toEqual([]);
+  });
+
   it("persists historic aliases and invalidates only kill completion and scan cursors", async () => {
     await seedCompleteSnapshot(repositories);
     const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
@@ -8273,6 +8434,76 @@ describe("PostgreSQL repositories", () => {
       characterCount: 2,
       limitationCode: "privacy_hidden"
     });
+  });
+
+  it("completes a cadence-gated fresh run against the live sweep snapshot", async () => {
+    // Break caught: `complete` accepts only a snapshot the run itself
+    // published, so a fresh run deferring to another run's live cursor threw
+    // `discovery_run_not_found` on every attempt and failed as `search_failed`.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const key = {
+      region: "eu",
+      realm: "draenor",
+      name: "livecursor"
+    } as const;
+    const at = new Date("2026-09-26T10:00:00.000Z");
+    const owner = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(owner.id);
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: owner.id,
+      key,
+      requestCap: 10,
+      hourlyBudget: 100,
+      cadenceCutoff: new Date(at.getTime() - 60_000),
+      at
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+    const live = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: owner.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: at,
+        characters: [observation(key, "Livecursor")]
+      },
+      {
+        reservationId: admission.reservationId,
+        finishedAt: at,
+        limitationCode: "fingerprint_sweep_capped"
+      },
+      {
+        resumeAfter: "eu/draenor/tail",
+        limitationCode: null,
+        advanced: true
+      }
+    );
+    const unrelated = await seedCompleteSnapshot(repositories);
+
+    const fresh = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(fresh.id);
+
+    await expect(
+      repositories.runs.completeWithLiveSweepSnapshot(fresh.id, unrelated.id)
+    ).rejects.toThrow("discovery_run_not_found");
+    await repositories.runs.completeWithLiveSweepSnapshot(fresh.id, live.id);
+    // A redelivery after the write landed must settle, not throw.
+    await repositories.runs.completeWithLiveSweepSnapshot(fresh.id, live.id);
+
+    await expect(repositories.runs.find(fresh.id)).resolves.toMatchObject({
+      status: "complete",
+      snapshotId: live.id
+    });
+    await expect(repositories.snapshots.getCurrent(key)).resolves.toMatchObject(
+      { id: live.id }
+    );
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toMatchObject({ runId: owner.id, snapshotId: live.id });
   });
 
   it("returns no resume state when the cursor was never set", async () => {

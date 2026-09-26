@@ -149,6 +149,7 @@ describe("operator collection monitor", () => {
           evidenceVersion: 12
         }
       ],
+      hasMoreCompleted: false,
       failed: [
         {
           character: { region: "eu", realm: "silvermoon", name: "failed" },
@@ -213,5 +214,62 @@ describe("operator collection monitor", () => {
     await expect(service.list()).resolves.toMatchObject({
       hasActiveRuns: false
     });
+  });
+
+  it("returns only the requested completed runs and says whether more remain", async () => {
+    // Break caught: completed runs accumulate forever, so an unlimited read
+    // grows the monitor without bound; a missing flag hides the older ones.
+    const completedRun = (
+      name: string,
+      minute: number
+    ): EvidenceMonitorRun => ({
+      key: { region: "eu", realm: "silvermoon", name },
+      status: "complete",
+      evidenceVersion: 13,
+      attempt: 1,
+      limitationCode: null,
+      parseLimitationCode: null,
+      retryAfterAt: null,
+      errorCode: null,
+      startedAt: new Date("2026-09-20T09:00:00Z"),
+      completedAt: new Date(`2026-09-20T10:${minute}:00Z`),
+      phases: []
+    });
+    const requests: { completedLimit: number }[] = [];
+    let rows: EvidenceMonitorRun[] = [];
+    const service = createCollectionMonitorService({
+      evidence: {
+        async listForMonitor(options) {
+          requests.push(options);
+          return rows;
+        }
+      },
+      clock: () => new Date("2026-09-20T12:00:00Z")
+    });
+
+    rows = [
+      completedRun("newest", 30),
+      completedRun("middle", 20),
+      completedRun("oldest", 10)
+    ];
+    const limited = await service.list({ completedLimit: 2 });
+    expect(limited.completed.map((run) => run.character.name)).toEqual([
+      "newest",
+      "middle"
+    ]);
+    expect(limited.hasMoreCompleted).toBe(true);
+
+    rows = rows.slice(0, 2);
+    const exact = await service.list({ completedLimit: 2 });
+    expect(exact.completed).toHaveLength(2);
+    expect(exact.hasMoreCompleted).toBe(false);
+
+    await service.list();
+    // One past the limit is how the service learns older runs remain.
+    expect(requests).toEqual([
+      { completedLimit: 3 },
+      { completedLimit: 3 },
+      { completedLimit: 51 }
+    ]);
   });
 });

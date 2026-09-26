@@ -7,7 +7,7 @@ import { AdminAccountClient } from "./admin-account-client";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
-  title: "Admin settings",
+  title: "Account Management",
   robots: { index: false, follow: false }
 };
 

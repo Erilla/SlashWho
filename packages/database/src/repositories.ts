@@ -227,6 +227,31 @@ export interface SuppressionRepository {
   cleanupExpired(at?: Date): Promise<number>;
 }
 
+/** One character on the landing page's list of recent dossier searches. */
+export interface RecentDossierSearch {
+  key: CharacterKey;
+  /** Null until discovery has created the character. */
+  displayName: string | null;
+  searchedAt: Date;
+  /**
+   * Whether the dossier is still being researched: the character's discovery
+   * run, or an evidence run for it or any member of its current snapshot, is
+   * queued, running or retrying.
+   */
+  inProgress: boolean;
+}
+
+/**
+ * The characters people have opened dossiers for, one row per character. It
+ * records what was searched and when, and nothing about who searched.
+ */
+export interface RecentDossierSearchRepository {
+  /** A repeat search for the same character moves its time forward. */
+  record(key: CharacterKey, at?: Date): Promise<void>;
+  /** Newest first, leaving out suppressed characters. */
+  listRecent(limit: number): Promise<readonly RecentDossierSearch[]>;
+}
+
 export interface RateLimitRepository {
   reserve(
     callerBucketHash: string,
@@ -1085,8 +1110,14 @@ export interface EvidenceRepository {
     settled: Date;
     active: Date;
   }): Promise<number>;
-  /** Every persisted run, projected only to the fields the operator monitor displays. */
-  listForMonitor(): Promise<readonly EvidenceMonitorRun[]>;
+  /**
+   * Persisted runs, projected only to the fields the operator monitor displays:
+   * every unsettled and failed run, plus the `completedLimit` most recently
+   * completed ones. Completed runs accumulate forever, so they alone are paged.
+   */
+  listForMonitor(options: {
+    completedLimit: number;
+  }): Promise<readonly EvidenceMonitorRun[]>;
   /**
    * Every run `reserve` currently counts as active, oldest first, with the two
    * facts recovery judges them by: the job they were sent to, and when a
@@ -1595,6 +1626,15 @@ export interface Repositories {
     markRunning(id: string): Promise<void>;
     markRetrying(id: string, attempt: number, nextRetryAt: Date): Promise<void>;
     complete(id: string, snapshotId: string): Promise<void>;
+    /**
+     * Completes a run against the snapshot another run's live fingerprint
+     * sweep cursor is extending for the same root, instead of one it published
+     * itself. Refuses any other snapshot.
+     */
+    completeWithLiveSweepSnapshot(
+      id: string,
+      snapshotId: string
+    ): Promise<void>;
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
@@ -1602,6 +1642,7 @@ export interface Repositories {
   snapshots: SnapshotRepository;
   manualConnections: ManualConnectionRepository;
   suppressions: SuppressionRepository;
+  recentSearches?: RecentDossierSearchRepository;
   rateLimits: RateLimitRepository;
   negativeCache: NegativeCacheRepository;
   evidence: EvidenceRepository;

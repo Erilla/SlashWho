@@ -347,6 +347,25 @@ export const dossierStartResponseSchema = z.discriminatedUnion("kind", [
     .strict()
 ]);
 
+/**
+ * The landing page's list of recently searched characters, one entry per
+ * character, newest first. It names what was searched and never who searched.
+ */
+export const recentDossierSearchesResponseSchema = z
+  .object({
+    searches: z.array(
+      z
+        .object({
+          character: characterKeySchema,
+          displayName: z.string().min(1),
+          searchedAt: z.iso.datetime(),
+          state: z.enum(["in_progress", "complete"])
+        })
+        .strict()
+    )
+  })
+  .strict();
+
 export const applicantDossierSchema = z
   .object({
     root: characterKeySchema,
@@ -470,4 +489,7 @@ export type DossierTierSearchOutcome = z.infer<
   typeof dossierTierSearchOutcomeSchema
 >;
 export type DossierStartResponse = z.infer<typeof dossierStartResponseSchema>;
+export type RecentDossierSearchesResponse = z.infer<
+  typeof recentDossierSearchesResponseSchema
+>;
 export type ApplicantDossier = z.infer<typeof applicantDossierSchema>;

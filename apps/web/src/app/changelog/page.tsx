@@ -1,11 +1,12 @@
 import Link from "next/link";
 
 import {
-  loadDeploymentChangelog,
+  loadCachedDeploymentChangelog,
   type ChangelogResult
 } from "../../server/deployment-changelog";
 
-export const revalidate = 300;
+// Rendered per request so runtime configuration is read; the GitHub data behind
+// it is cached in-process by loadCachedDeploymentChangelog.
 export const dynamic = "force-dynamic";
 
 type ChangelogLink = Readonly<{ href: string; label: string }>;
@@ -34,10 +35,15 @@ function renderLinks(links: readonly ChangelogLink[]) {
 }
 
 export default async function ChangelogPage() {
-  const changelog: ChangelogResult = await loadDeploymentChangelog();
+  const changelog: ChangelogResult = await loadCachedDeploymentChangelog();
+  // Every entry naming the same environment is noise; show it only when the
+  // list mixes environments.
+  const showEnvironment =
+    changelog.kind === "available" &&
+    new Set(changelog.entries.map((entry) => entry.environment)).size > 1;
 
   return (
-    <main className="page-shell document-page">
+    <main className="page-shell document-page changelog-page">
       <h1>Deployment changelog</h1>
       {changelog.kind === "unavailable" ? (
         <section className="empty-state">
@@ -60,28 +66,27 @@ export default async function ChangelogPage() {
           <ol className="changelog-list">
             {changelog.entries.map((entry) => (
               <li key={entry.id} className="changelog-entry">
-                <div className="changelog-entry-heading">
-                  <strong>{entry.summary}</strong>
+                <p className="changelog-entry-summary">{entry.summary}</p>
+                <div className="changelog-entry-meta">
                   <time dateTime={entry.createdAt.toISOString()}>
                     {changelogDateText(entry.createdAt.toISOString())}
                   </time>
-                </div>
-                <p className="changelog-entry-meta">
-                  <span>Environment: </span>
-                  <strong>{entry.environment}</strong>
-                </p>
-                <p className="changelog-entry-meta">
-                  <span>Commit: </span>
                   <Link
                     href={entry.commitUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="changelog-commit-link"
+                    aria-label={`Commit ${entry.commit.slice(0, 7)}`}
                   >
                     {entry.commit.slice(0, 7)}
                   </Link>
-                </p>
-                {renderLinks(entry.links)}
+                  {showEnvironment ? (
+                    <span className="changelog-entry-environment">
+                      {entry.environment}
+                    </span>
+                  ) : null}
+                  {renderLinks(entry.links)}
+                </div>
               </li>
             ))}
           </ol>

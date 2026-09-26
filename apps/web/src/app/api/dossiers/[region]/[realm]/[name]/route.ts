@@ -1,5 +1,6 @@
 import { applicantDossierSchema } from "@slashwho/contracts";
 
+import { compactDossierWipes } from "../../../../../../lib/dossier-wipes";
 import { loadWebConfig } from "../../../../../../server/config";
 import { resolveCredentialOverrides } from "../../../../../../server/credential-headers";
 import { getContainer } from "../../../../../../server/container";
@@ -37,17 +38,18 @@ export async function GET(
     const { dossiers, searches, accountAuth, accountCredentials } =
       await getContainer();
     const denied = publicReadAuthorizationResponse(
-      await searches.authorizePublicRead(request.headers)
+      await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
     const { principal } = accountAuth
-      ? await accountAuth.authenticate(request)
+      ? await accountAuth.authenticate(request, scope)
       : { principal: null };
     const overrides = await resolveCredentialOverrides(
       request,
       principal,
       accountCredentials,
-      loadWebConfig()
+      loadWebConfig(),
+      scope
     );
     const result =
       new URL(request.url).searchParams.get("scope") === "initial"
@@ -59,8 +61,11 @@ export async function GET(
           )
         : await dossiers.read(parsed.key, request.signal, overrides, scope);
     if (result.kind === "not_ready") return apiError("discovery_not_ready");
-    return Response.json(applicantDossierSchema.parse(result.dossier), {
-      headers: { "cache-control": "no-store" }
-    });
+    return Response.json(
+      applicantDossierSchema.parse(compactDossierWipes(result.dossier)),
+      {
+        headers: { "cache-control": "no-store" }
+      }
+    );
   });
 }

@@ -20,6 +20,7 @@ import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
+import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import {
   createDiscoveryRunNotifier,
@@ -31,6 +32,19 @@ import {
   createAccountWarcraftLogsResolver,
   announceNewApplicantIntents
 } from "./runtime";
+
+// The applicant watcher builds its Sheet client itself rather than taking it
+// as a dependency, so the tests that switch the watcher on stub the client and
+// the poll and drain it feeds. Every other test leaves the watcher disabled,
+// where none of these is ever reached.
+vi.mock("./applicant-sheet", () => ({
+  createApplicantSheetClient: vi.fn(() => ({ readRows: vi.fn(async () => []) }))
+}));
+vi.mock("./applicant-watcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./applicant-watcher")>()),
+  pollApplicantSheet: vi.fn(),
+  drainApplicantIntents: vi.fn()
+}));
 
 it("announces newly recorded applicant intents without alerting on baseline or unchanged polls", async () => {
   const notify = vi.fn(async () => undefined);
@@ -1542,8 +1556,263 @@ describe("worker runtime", () => {
       event: "evidence_resume_sweep",
       resumed: 0,
       released: 1,
-      republished: 0
+      republished: 0,
+      durationMs: expect.any(Number)
     });
+    await runtime.stop();
+  });
+
+  // Every reading of the injected clock advances 25ms, so a cycle that reads
+  // it once at the start and once for its record reports exactly 25.
+  function steppingClock() {
+    let now = 0;
+    return () => (now += 25);
+  }
+
+  it("times each resume sweep and names the error of one that fails", async () => {
+    // Break caught (#507): a slow sweep that delayed the next five-minute tick
+    // was invisible, and a failed one logged nothing at all before the queue
+    // retried it.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      { ...fakes.dependencies, clock: steppingClock() },
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+    fakes.listResumable.mockRejectedValueOnce(new TypeError("private-value"));
+    await expect(fakes.evidenceResumeHandler?.()).rejects.toThrow(TypeError);
+
+    const sweeps = logger.info.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.event === "evidence_resume_sweep");
+    expect(sweeps).toEqual([
+      {
+        event: "evidence_resume_sweep",
+        resumed: 0,
+        released: 0,
+        republished: 0,
+        durationMs: 25
+      },
+      {
+        event: "evidence_resume_sweep",
+        released: 0,
+        republished: 0,
+        durationMs: 25,
+        errorName: "TypeError"
+      }
+    ]);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
+    await runtime.stop();
+  });
+
+  it("times the hourly cleanup across the whole cycle and names a failure", async () => {
+    // Break caught (#507): the cleanup record carried counts but no duration,
+    // and a cycle that threw logged nothing before its retry.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      { ...fakes.dependencies, clock: steppingClock() },
+      logger
+    );
+
+    await fakes.maintenanceHandler?.();
+    fakes.cleanup.evidenceRunCosts.mockRejectedValueOnce(
+      new RangeError("private-value")
+    );
+    await expect(fakes.maintenanceHandler?.()).rejects.toThrow(RangeError);
+
+    const cleanups = logger.info.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.event === "evidence_cache_cleanup");
+    expect(cleanups).toEqual([
+      {
+        event: "evidence_cache_cleanup",
+        removedEvidenceRuns: 6,
+        removedCollectionStages: expect.any(Number),
+        removedRunCosts: 7,
+        durationMs: 25
+      },
+      // What had been removed before the failure is still reported.
+      expect.objectContaining({
+        event: "evidence_cache_cleanup",
+        removedEvidenceRuns: 6,
+        removedRunCosts: undefined,
+        durationMs: 25,
+        errorName: "RangeError"
+      })
+    ]);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
+    await runtime.stop();
+  });
+
+  it("writes one timed record per fingerprint admission, however it ends", async () => {
+    // Break caught (#507): a successful admission logged nothing, so the only
+    // sign the cycle ran at all was a run blocked for fifteen minutes.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000051";
+    const brokenRunId = "00000000-0000-4000-8000-000000000052";
+    const admitWaiting = fakes.repositories.fingerprintSweeps.admitWaiting;
+    fakes.repositories.fingerprintSweeps.admitWaiting = async (runId, at) => {
+      if (runId === brokenRunId) throw new SyntaxError(brokenRunId);
+      return admitWaiting(runId, at);
+    };
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      { ...fakes.dependencies, clock: steppingClock() },
+      logger
+    );
+
+    // A waiting run throws only to schedule its retry: not a failure.
+    await expect(fakes.admissionHandler?.(waitingRunId)).rejects.toMatchObject({
+      retryable: true
+    });
+    await expect(fakes.admissionHandler?.(brokenRunId)).rejects.toThrow(
+      SyntaxError
+    );
+
+    const admissions = logger.info.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.event === "fingerprint_admission");
+    expect(admissions).toEqual([
+      { event: "fingerprint_admission", outcome: "waiting", durationMs: 25 },
+      {
+        event: "fingerprint_admission",
+        durationMs: 25,
+        errorName: "SyntaxError"
+      }
+    ]);
+    // Neither the run id nor the error message reaches a record.
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(brokenRunId);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(waitingRunId);
+    await runtime.stop();
+  });
+
+  const applicantConfig: WorkerConfig = {
+    ...config,
+    applicantWatcher: {
+      ...config.applicantWatcher,
+      enabled: true,
+      sheetId: "applicant-sheet",
+      apiKey: "applicant-sheet-key"
+    }
+  };
+  const applicantGateway = () =>
+    ({
+      getRateLimit: vi.fn(),
+      resolveCharacterById: vi.fn()
+    }) as unknown as Pick<
+      WarcraftLogsGateway,
+      "getFirstKillReports" | "getRateLimit" | "resolveCharacterById"
+    >;
+  const applicantRecords = (logger: { info: ReturnType<typeof vi.fn> }) =>
+    logger.info.mock.calls
+      .map(([record]) => record as Record<string, unknown>)
+      .filter((record) => String(record.event).startsWith("applicant_sheet"));
+
+  it("times the applicant sheet poll and drain", async () => {
+    // Break caught (#507): the poll and drain logged counts but no duration,
+    // so a slow Sheet read that held up the resume tick could not be seen.
+    // The stepping clock is read at the sweep, the tick, the poll and the
+    // drain, each start and record 25ms apart.
+    vi.mocked(pollApplicantSheet).mockResolvedValueOnce({
+      baseline: false,
+      created: 0,
+      backlog: 0,
+      invalid: 0,
+      truncated: 0,
+      newApplicants: []
+    });
+    vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
+      admitted: 1,
+      suppressed: 0,
+      deferred: 0
+    });
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      applicantConfig,
+      {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway,
+        clock: steppingClock()
+      },
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(applicantRecords(logger)).toEqual([
+      {
+        event: "applicant_sheet_poll",
+        baseline: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        durationMs: 25
+      },
+      {
+        event: "applicant_sheet_drain",
+        admitted: 1,
+        suppressed: 0,
+        deferred: 0,
+        durationMs: 25
+      }
+    ]);
+    await runtime.stop();
+  });
+
+  it("times and names a failed applicant poll and a failed tick", async () => {
+    // Break caught (#507): a failed poll said only how many times it had
+    // failed, and a failed tick said nothing but that it failed -- not what
+    // threw, nor how long it ran first.
+    vi.mocked(pollApplicantSheet).mockRejectedValueOnce(
+      new TypeError("private-value")
+    );
+    vi.mocked(drainApplicantIntents).mockRejectedValueOnce(
+      new RangeError("private-value")
+    );
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      applicantConfig,
+      {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway,
+        clock: steppingClock()
+      },
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(applicantRecords(logger)).toEqual([
+      {
+        event: "applicant_sheet_poll_failed",
+        failures: 1,
+        durationMs: 25,
+        errorName: "TypeError"
+      },
+      // Timed from the start of the tick: the due check, the failed poll and
+      // the drain that threw.
+      {
+        event: "applicant_sheet_tick_failed",
+        durationMs: 100,
+        errorName: "RangeError"
+      }
+    ]);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
     await runtime.stop();
   });
 
@@ -1589,7 +1858,8 @@ describe("worker runtime", () => {
       event: "evidence_resume_sweep",
       resumed: 0,
       released: 0,
-      republished: 1
+      republished: 1,
+      durationMs: expect.any(Number)
     });
     expect(fakes.releaseAbandoned).not.toHaveBeenCalled();
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain(

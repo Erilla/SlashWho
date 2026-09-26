@@ -3,6 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -11,6 +12,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicantDossier } from "@slashwho/contracts";
+
+/** Evidence panels build their contents only once opened. */
+function openEvidencePanels(container: HTMLElement = document.body) {
+  for (const summary of within(container).getAllByText(
+    /^View (kill|wipe) evidence$/
+  )) {
+    fireEvent.click(summary);
+  }
+}
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -230,6 +240,7 @@ describe("DossierPageClient", () => {
     const evidence = screen.getByRole("group", {
       name: "Queen Ansurek evidence"
     });
+    openEvidencePanels(evidence);
     expect(
       within(evidence).getByRole("link", {
         name: "View Warcraft Logs report (opens in a new tab)"
@@ -299,6 +310,7 @@ describe("DossierPageClient", () => {
         jobId={null}
       />
     );
+    openEvidencePanels();
 
     const mageMentions = screen.getAllByText("Ryii");
     const priestMentions = screen.getAllByText("Ryalts");
@@ -323,6 +335,7 @@ describe("DossierPageClient", () => {
         jobId={null}
       />
     );
+    openEvidencePanels();
 
     expect(
       within(screen.getByRole("heading", { level: 1 })).getByText("Ryii")
