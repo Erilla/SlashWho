@@ -1,4 +1,6 @@
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
+
+import { listen } from "../../support/listen";
 
 type FakeRaiderIo = Readonly<{
   baseUrl: string;
@@ -73,20 +75,6 @@ function json(
 ) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
-}
-
-async function listen(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string")
-    throw new Error("fake_raiderio_address_unavailable");
-  return address.port;
 }
 
 export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
@@ -306,7 +294,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     json(response, 404, { status: 404 });
   });
 
-  const port = await listen(server);
+  const port = await listen(server, "fake_raiderio_address_unavailable");
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     close: () =>

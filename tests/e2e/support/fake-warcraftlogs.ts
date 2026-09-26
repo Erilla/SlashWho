@@ -1,9 +1,10 @@
 import {
   createServer,
   type IncomingMessage,
-  type Server,
   type ServerResponse
 } from "node:http";
+
+import { listen } from "../../support/listen";
 
 /**
  * The one character ID the fake knows: Ryun-Silvermoon (EU), a character no
@@ -12,21 +13,6 @@ import {
 export const fakeWarcraftLogsCharacterId = 40989140;
 
 type FakeWarcraftLogs = Readonly<{ baseUrl: string; close(): Promise<void> }>;
-
-async function listen(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("fake_warcraftlogs_address_unavailable");
-  }
-  return address.port;
-}
 
 export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
   const handle = async (
@@ -185,7 +171,7 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
   const server = createServer((request, response) => {
     void handle(request, response);
   });
-  const port = await listen(server);
+  const port = await listen(server, "fake_warcraftlogs_address_unavailable");
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     close: () =>
