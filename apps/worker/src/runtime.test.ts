@@ -1807,6 +1807,7 @@ describe("worker runtime", () => {
     // drain, each start and record 25ms apart.
     vi.mocked(pollApplicantSheet).mockResolvedValueOnce({
       baseline: false,
+      rebaselined: false,
       created: 0,
       backlog: 0,
       invalid: 0,
@@ -1836,6 +1837,7 @@ describe("worker runtime", () => {
       {
         event: "applicant_sheet_poll",
         baseline: false,
+        rebaselined: false,
         created: 0,
         backlog: 0,
         invalid: 0,
