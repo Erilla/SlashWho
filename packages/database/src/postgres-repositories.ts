@@ -579,6 +579,38 @@ function evidenceRunModeSql(alias = "character_evidence_runs"): string {
   return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh`;
 }
 
+const evidenceRunColumnNames = [
+  "id",
+  "region",
+  "realm_slug",
+  "normalized_name",
+  "queue_job_id",
+  "status",
+  "attempt",
+  "limitation_code",
+  "parse_limitation_code",
+  "retry_after_at",
+  "error_code",
+  "created_at",
+  "started_at",
+  "completed_at",
+  "wcl_client_id_encrypted",
+  "wcl_client_secret_encrypted",
+  "account_credential_owner_id",
+  "account_credential_version"
+] as const;
+
+// Every column `mapEvidenceRun` reads, in one place. `pool.query<Row>` is an
+// unchecked assertion, so a query that hand-copied this list and dropped a
+// column still compiled: listStatus once lost retry_after_at and returned a
+// run whose deadline was undefined.
+function evidenceRunColumns(alias = "character_evidence_runs"): string {
+  const columns = evidenceRunColumnNames
+    .map((column) => `${alias}.${column}`)
+    .join(", ");
+  return `${columns}, ${evidenceRunClassNameSql(alias)}, ${evidenceRunModeSql(alias)}`;
+}
+
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
   return {
     id: row.id,
@@ -842,12 +874,7 @@ async function loadCompletedEvidence(
   // freshly checked.
   const selectRun = (scope: "any" | "full") =>
     client.query<EvidenceRunRow>(
-      `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-              evidence_version, attempt, limitation_code, parse_limitation_code,
-              retry_after_at, error_code, created_at, started_at,
-              completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-              publication_scope,
-              ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
+      `SELECT ${evidenceRunColumns()}, evidence_version, publication_scope
        FROM character_evidence_runs
        WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
          AND status IN ('complete', 'partial')
@@ -4618,10 +4645,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           // can be looking at a character that is being re-collected right now
           // -- and it has no other way to find that out.
           const active = await client.query<EvidenceRunRow>(
-            `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                    attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-                    ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
+            `SELECT ${evidenceRunColumns()}
              FROM character_evidence_runs
              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
                AND status IN ('queued', 'running', 'retrying')
@@ -4724,10 +4748,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              VALUES ($1, $2, $3,
                      CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
                      $4, $5, $6, $7, $8, $9)
-             RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
-                       attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                       completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-                       ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`,
+             RETURNING ${evidenceRunColumns()}`,
             [
               key.region,
               key.realm,
@@ -4875,10 +4896,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         try {
           await client.query("BEGIN");
           await lockCharacterEvidence(client, key);
-          const columns = `id, region, realm_slug, normalized_name, queue_job_id, status,
-                    attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                    completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-                    ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`;
+          const columns = evidenceRunColumns();
           // One run per character at a time, whatever its mode: the unique
           // index says so, and a search joining an ordinary run would quietly
           // search nothing.
@@ -4963,10 +4981,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
       async find(id) {
         const result = await pool.query<EvidenceRunRow>(
-          `SELECT id, region, realm_slug, normalized_name, queue_job_id, status,
-                  attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                  completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-                  ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}
+          `SELECT ${evidenceRunColumns()}
            FROM character_evidence_runs WHERE id = $1`,
           [id]
         );
@@ -4985,10 +5000,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            WHERE id = $1
              AND attempt < $2
              AND status IN ('queued', 'running', 'retrying')
-           RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
-                     attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
-                     completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-                     ${evidenceRunClassNameSql()}, ${evidenceRunModeSql()}`,
+           RETURNING ${evidenceRunColumns()}`,
           [id, attempt]
         );
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
@@ -6160,13 +6172,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (keys.length === 0) return [];
         const result = await pool.query<EvidenceRunRow>(
           `SELECT DISTINCT ON (run.region, run.realm_slug, run.normalized_name)
-             run.id, run.region, run.realm_slug, run.normalized_name,
-             run.queue_job_id, run.status, run.attempt, run.limitation_code,
-             run.parse_limitation_code,
-             run.error_code, run.created_at, run.started_at, run.completed_at,
-             run.wcl_client_id_encrypted, run.wcl_client_secret_encrypted,
-             run.account_credential_owner_id, run.account_credential_version,
-             ${evidenceRunClassNameSql("run")}, ${evidenceRunModeSql("run")}
+             ${evidenceRunColumns("run")}
            FROM character_evidence_runs run
            JOIN unnest($1::text[], $2::text[], $3::text[])
              AS requested(region, realm_slug, normalized_name)

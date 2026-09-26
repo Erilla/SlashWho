@@ -5362,6 +5362,17 @@ describe("PostgreSQL repositories", () => {
       ).resolves.toEqual([rootKey]);
     });
 
+    it("reports a waiting run's deadline through listStatus", async () => {
+      // listStatus once carried its own copy of the run column list and
+      // dropped retry_after_at, so the deadline came back undefined.
+      const deadline = new Date("2026-09-18T12:40:00.000Z");
+      const runId = await publishWaiting(rootKey, deadline);
+
+      const [status] = await repositories.evidence.listStatus([rootKey]);
+      expect(status?.id).toBe(runId);
+      expect(status?.retryAfterAt).toEqual(deadline);
+    });
+
     it("leaves a character whose deadline has not arrived", async () => {
       await publishWaiting(rootKey, new Date("2026-09-18T13:40:00.000Z"));
 
