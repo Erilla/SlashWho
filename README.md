@@ -13,14 +13,16 @@ It extends the alt-discovery work from [Erilla/SeriouslyCasualBotV2](https://git
 SlashWho is a Node.js 22/pnpm TypeScript workspace:
 
 - `apps/web` — Next.js applicant-dossier interface and its server-side adapters.
-- `apps/worker` — durable pg-boss discovery worker and readiness server.
+- `apps/worker` — durable pg-boss discovery and evidence-collection worker, and its readiness server.
 - `packages/application` — authentication, freshness, rate-limit, and use-case orchestration.
 - `packages/domain` — canonical character identity and pure bounded discovery.
 - `packages/raiderio` — sanitized Raider.IO gateway.
+- `packages/warcraftlogs` — Warcraft Logs gateway for kill, wipe, parse, and ranked-backfill evidence.
+- `packages/blizzard` — Blizzard gateway for guild rosters and character achievements.
 - `packages/database` — PostgreSQL repositories, Drizzle migrations, and queue ownership.
 - `packages/contracts` — strict request/response schemas shared by the application.
 
-Successful refreshes are immutable. PostgreSQL atomically publishes the newest snapshot only after its full membership is committed. The service never stores BattleTags, Discord handles, raw client IPs, API keys, guess strings, raw Raider.IO responses, or raw request URLs.
+Successful refreshes are immutable. PostgreSQL atomically publishes the newest snapshot only after its full membership is committed. The service never stores BattleTags, Discord handles, raw client IPs, guess strings, raw Raider.IO responses, or raw request URLs, and never stores an API key in plaintext: provider keys saved to an account, and a visitor's Warcraft Logs key while its evidence job is queued, are held only AES-256-GCM encrypted.
 
 ## Local setup
 
@@ -34,7 +36,7 @@ docker run --name slashwho-postgres -e POSTGRES_USER=slashwho -e POSTGRES_PASSWO
 corepack pnpm dev
 ```
 
-Generate new values of at least 32 random characters for `BOT_API_KEY` and `RATE_LIMIT_HASH_SECRET`; do not use the example values outside local development. The web app defaults to port 3000 and the worker health server to port 3001.
+Generate new values of at least 32 random characters for `BOT_API_KEY` and `RATE_LIMIT_HASH_SECRET`; do not use the example values outside local development. `EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY` has no usable example value and must be generated even locally with `openssl rand -hex 32`. The web app defaults to port 3000 and the worker health server to port 3001.
 
 Account registration and recovery require a Resend verified sending domain and the account variables in [the account rollout guide](docs/operations/accounts.md). Public search, dossiers, and evidence collection remain available if account mail is unconfigured.
 
@@ -47,17 +49,17 @@ corepack pnpm typecheck
 corepack pnpm test:unit
 corepack pnpm test:integration
 corepack pnpm build
-corepack pnpm playwright test
+corepack pnpm test:e2e
 ```
 
-| Test layer  | Boundary                                                                           |
-| ----------- | ---------------------------------------------------------------------------------- |
-| Unit        | Pure domain, contracts, serializers, HTTP mapping, runtime lifecycle               |
-| Integration | Real PostgreSQL migrations, repositories, queue, policy, atomic snapshots          |
-| Browser     | Real PostgreSQL, real worker, Next.js, and a deterministic local Raider.IO fixture |
-| Live smoke  | Scheduled/manual production health and one real search; never gates pull requests  |
+| Test layer  | Boundary                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| Unit        | Pure domain, contracts, serializers, HTTP mapping, runtime lifecycle                              |
+| Integration | Real PostgreSQL migrations, repositories, queue, policy, atomic snapshots                         |
+| Browser     | Real PostgreSQL and worker, a production Next.js build, and deterministic local upstream fixtures |
+| Live smoke  | Scheduled/manual production health and one real search; never gates pull requests                 |
 
-Live Raider.IO traffic is never part of the pull-request gate. Automated discovery tests use sanitized recorded or local fixtures.
+Live Raider.IO, Warcraft Logs, or Blizzard traffic is never part of the pull-request gate. Automated discovery tests use sanitized recorded or local fixtures.
 
 ## Warcraft Logs parse evidence
 

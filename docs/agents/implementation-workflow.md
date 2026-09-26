@@ -47,8 +47,10 @@ Rules:
   of which work lives where.
 - **`.claude/worktrees/` is the only location.** The legacy `.worktrees/`
   directory is retained for historic branches; do not add to it.
-- Claude Code sessions should use the `EnterWorktree` tool or the
-  `superpowers:using-git-worktrees` skill, which apply the same convention.
+- Claude Code sessions should create the worktree with the `git worktree add`
+  command above, then switch into it with `EnterWorktree` and its `path`
+  argument. Called with a `name` or no argument, `EnterWorktree` picks its own
+  branch name rather than following this convention.
 
 ### First-time repository setup
 
@@ -231,8 +233,8 @@ what it costs grows with the size of the diff and the number of findings it has
 to check, so running once per pull request rather than once per push is the
 main control on the bill. A pull request that is already open therefore keeps
 its original review; push a fix and the comment stays until you resolve it
-yourself. Pull requests that touch only markdown or `docs/` are skipped
-entirely.
+yourself. Pull requests that touch only markdown, `docs/`, `LICENSE`, issue
+templates, or the web app's brand assets are skipped entirely.
 
 The reviewer is deliberately cheap, and the cost of that is precision: it
 reads the diff once rather than sending several agents over it, so it will

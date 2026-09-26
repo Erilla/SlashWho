@@ -144,7 +144,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-30).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
       { idx: 29, tag: "0030_unstick_schema_drift_runs" },
       { idx: 30, tag: "0031_partial_scan_skipped" },
@@ -173,7 +172,8 @@ describe("database migrations", () => {
       { idx: 53, tag: "0054_evidence_run_timings" },
       { idx: 54, tag: "0055_dossier_searches" },
       { idx: 55, tag: "0056_persistent_account_sessions" },
-      { idx: 56, tag: "0057_evidence_run_light_refresh" }
+      { idx: 56, tag: "0057_evidence_run_light_refresh" },
+      { idx: 57, tag: "0058_snapshot_character_lookup_index" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
@@ -555,5 +555,65 @@ describe("database migrations", () => {
         { id: revoked, absolute_expires_at: absolute }
       ])
     );
+  });
+
+  it("indexes snapshot membership by character on an already-migrated database", async () => {
+    // Break caught: the index lived only in an orphaned 0011 file the journal
+    // never listed, so no database ever had it. Re-adding it under a past
+    // timestamp would still skip every database that had applied 0057.
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+    await pool.query("DROP SCHEMA drizzle CASCADE");
+
+    const migrationSource = new URL(
+      "../../packages/database/drizzle/",
+      import.meta.url
+    );
+    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
+    try {
+      mkdirSync(join(folder, "meta"));
+      for (const file of readdirSync(migrationSource).filter(
+        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0057"
+      )) {
+        copyFileSync(new URL(file, migrationSource), join(folder, file));
+      }
+      const journal = JSON.parse(
+        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
+      ) as { entries: Array<{ tag: string }> };
+      journal.entries = journal.entries.filter(
+        ({ tag }) => tag.slice(0, 4) <= "0057"
+      );
+      writeFileSync(
+        join(folder, "meta", "_journal.json"),
+        JSON.stringify(journal)
+      );
+      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
+      try {
+        await runMigrations(pool);
+      } finally {
+        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+
+    const index = () =>
+      pool.query<{ indexdef: string }>(
+        `SELECT indexdef
+         FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND indexname = 'snapshot_characters_character_idx'`
+      );
+    expect((await index()).rows).toEqual([]);
+
+    await runMigrations(pool);
+
+    expect((await index()).rows).toEqual([
+      {
+        indexdef: expect.stringContaining(
+          "ON public.snapshot_characters USING btree (character_id)"
+        )
+      }
+    ]);
   });
 });

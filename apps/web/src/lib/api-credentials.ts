@@ -88,7 +88,7 @@ export function clearStoredProvider(provider: BrowserCredentialProvider): void {
 
 export function credentialHeaders(
   credentials: StoredApiCredentials
-): HeadersInit {
+): Record<string, string> {
   const headers: Record<string, string> = {};
   if (credentials.blizzardClientId && credentials.blizzardClientSecret) {
     headers["x-blizzard-client-id"] = credentials.blizzardClientId;
@@ -105,7 +105,9 @@ export function credentialHeaders(
 }
 
 /** Resolve the current session before attaching browser-only credentials. */
-export async function credentialHeadersForRequest(): Promise<HeadersInit> {
+export async function credentialHeadersForRequest(): Promise<
+  Record<string, string>
+> {
   const headers = credentialHeaders(readStoredCredentials());
   if (Object.keys(headers).length === 0) return headers;
   try {

@@ -11,7 +11,7 @@
 When reviewing a change, treat these as the standards for this repository:
 
 - Successful refreshes are immutable, and PostgreSQL publishes a new snapshot only after its full membership is committed. A change that lets a partial snapshot become visible is a bug.
-- The service never stores BattleTags, Discord handles, raw client IPs, API keys, guess strings, raw Raider.IO responses, or raw request URLs. Flag anything that would log or persist them.
+- The service never stores BattleTags, Discord handles, raw client IPs, plaintext API keys, guess strings, raw Raider.IO responses, or raw request URLs. Provider keys saved to an account, and a visitor's Warcraft Logs key while its evidence job is queued, are persisted only encrypted. Flag anything that would log or persist any of them otherwise.
 - Evidence states are distinct: an available numeric `0` is a legitimate provider result, `unavailable` means the value could not safely be obtained, and `not_applicable` is reserved for established role inapplicability. None of them may be rendered as, or collapsed into, numeric zero.
 - A partial parse result never removes verified kill evidence.
 - Assembled dossier responses are always `Cache-Control: no-store`.
