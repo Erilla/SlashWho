@@ -2354,7 +2354,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           issued_at: Date;
           last_used_at: Date;
           idle_expires_at: Date;
-          absolute_expires_at: Date;
+          absolute_expires_at: Date | null;
           revoked_at: Date | null;
         }>(
           `INSERT INTO account_sessions (id, secret_digest, account_id, credential_version, issued_at, last_used_at, idle_expires_at, absolute_expires_at)
@@ -2394,13 +2394,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             issued_at: Date;
             last_used_at: Date;
             idle_expires_at: Date;
-            absolute_expires_at: Date;
+            absolute_expires_at: Date | null;
             revoked_at: Date | null;
           }
         >(
           `UPDATE account_sessions s SET last_used_at = $3, idle_expires_at = LEAST($4, s.absolute_expires_at)
            FROM accounts a WHERE s.id = $1 AND s.secret_digest = $2 AND s.account_id = a.id
-             AND s.revoked_at IS NULL AND s.idle_expires_at > $3 AND s.absolute_expires_at > $3
+             AND s.revoked_at IS NULL AND s.idle_expires_at > $3 AND (s.absolute_expires_at IS NULL OR s.absolute_expires_at > $3)
              AND s.credential_version = a.credential_version AND a.active AND a.verified_at IS NOT NULL
            RETURNING a.*, s.id AS session_id, s.account_id AS session_account_id, s.credential_version AS session_credential_version,
              s.issued_at, s.last_used_at, s.idle_expires_at, s.absolute_expires_at, s.revoked_at`,
@@ -2437,7 +2437,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `UPDATE accounts SET password_hash = $5, password_salt = $6, scrypt_version = $7, scrypt_cost = $8,
                password_change_required = false, credential_version = credential_version + 1, updated_at = $9
              WHERE id = $1 AND credential_version = $3 AND password_hash = $4 AND active AND verified_at IS NOT NULL
-               AND EXISTS (SELECT 1 FROM account_sessions WHERE id = $2 AND account_id = $1 AND revoked_at IS NULL AND idle_expires_at > $9 AND absolute_expires_at > $9)
+               AND EXISTS (SELECT 1 FROM account_sessions WHERE id = $2 AND account_id = $1 AND revoked_at IS NULL AND idle_expires_at > $9 AND (absolute_expires_at IS NULL OR absolute_expires_at > $9))
              RETURNING id`,
             [
               input.accountId,
@@ -3280,6 +3280,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [key.region, key.realm, key.name]
         );
         return result.rows[0] ? mapRun(result.rows[0]) : null;
+      },
+
+      async listRecent(limit) {
+        const result = await pool.query<RunRow>(
+          `SELECT * FROM discovery_runs
+           ORDER BY created_at DESC, id DESC
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map(mapRun);
       }
     },
 
@@ -6577,6 +6587,101 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [runIds]
         );
         return result.rowCount ?? 0;
+      }
+    },
+
+    recentSearches: {
+      async record(key, at = new Date()) {
+        // GREATEST keeps a slow request from moving a newer search backwards.
+        await pool.query(
+          `INSERT INTO dossier_searches
+            (region, realm_slug, normalized_name, searched_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (region, realm_slug, normalized_name)
+           DO UPDATE SET searched_at =
+             GREATEST(dossier_searches.searched_at, EXCLUDED.searched_at)`,
+          [key.region, key.realm, key.name, at]
+        );
+      },
+
+      async listRecent(limit) {
+        // The current snapshot is chosen as getCurrent chooses it: the newest
+        // one published by a completed run, so a snapshot whose membership is
+        // still being written is never read.
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+          display_name: string | null;
+          searched_at: Date;
+          in_progress: boolean;
+        }>(
+          `SELECT search.region, search.realm_slug, search.normalized_name,
+                  root.display_name, search.searched_at,
+                  (
+                    EXISTS (
+                      SELECT 1 FROM discovery_runs run
+                      WHERE run.root_region = search.region
+                        AND run.root_realm_slug = search.realm_slug
+                        AND run.root_normalized_name = search.normalized_name
+                        AND run.status IN ${activeRunSql}
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM character_evidence_runs evidence
+                      WHERE evidence.status IN ${activeRunSql}
+                        AND (
+                          (evidence.region = search.region
+                            AND evidence.realm_slug = search.realm_slug
+                            AND evidence.normalized_name = search.normalized_name)
+                          OR EXISTS (
+                            SELECT 1
+                            FROM snapshot_characters membership
+                            JOIN characters member
+                              ON member.id = membership.character_id
+                            WHERE membership.snapshot_id = current_snapshot.id
+                              AND member.region = evidence.region
+                              AND member.realm_slug = evidence.realm_slug
+                              AND member.normalized_name = evidence.normalized_name
+                          )
+                        )
+                    )
+                  ) AS in_progress
+           FROM dossier_searches search
+           LEFT JOIN characters root
+             ON root.region = search.region
+            AND root.realm_slug = search.realm_slug
+            AND root.normalized_name = search.normalized_name
+           LEFT JOIN LATERAL (
+             SELECT snapshot.id
+             FROM snapshots snapshot
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE snapshot.root_character_id = root.id
+               AND run.status = 'complete'
+             ORDER BY snapshot.refreshed_at DESC, snapshot.id DESC
+             LIMIT 1
+           ) current_snapshot ON true
+           WHERE NOT EXISTS (
+             SELECT 1 FROM suppressed_characters suppression
+             WHERE suppression.region = search.region
+               AND suppression.realm_slug = search.realm_slug
+               AND suppression.normalized_name = search.normalized_name
+               AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+           )
+           ORDER BY search.searched_at DESC, search.region, search.realm_slug,
+                    search.normalized_name
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map((row) => ({
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
+          displayName: row.display_name,
+          searchedAt: row.searched_at,
+          inProgress: row.in_progress
+        }));
       }
     },
 

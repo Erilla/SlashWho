@@ -255,19 +255,83 @@ a {
 .home-shell {
   display: grid;
   min-height: calc(100vh - var(--header-height));
-  place-items: center;
-  padding: 2rem 1.25rem 9rem;
+  justify-items: center;
+  align-content: start;
+  padding: clamp(2rem, 8vh, 5rem) 1.25rem 4rem;
 }
 
 .home-search {
   width: min(100%, 42rem);
 }
 
-.home-introduction {
-  max-width: 34rem;
-  margin: -1.25rem auto 1.5rem;
+.recent-searches-heading {
+  margin: 0 0 0.75rem;
   color: var(--muted);
-  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.recent-searches-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.recent-searches-table td {
+  padding: 0.6rem 0.25rem;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.recent-searches-table tr:last-child td {
+  border-bottom: 1px solid var(--border);
+}
+
+.recent-searches-character {
+  overflow-wrap: anywhere;
+}
+
+.recent-searches-character a {
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.recent-searches-character a:hover,
+.recent-searches-character a:focus-visible {
+  color: var(--accent);
+}
+
+.recent-searches-started {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.recent-searches-state {
+  width: 2rem;
+  text-align: right;
+}
+
+.recent-searches-status {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.recent-searches-status--complete {
+  color: var(--success);
+}
+
+.recent-searches-status--complete svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
 }
 
 .wordmark {
@@ -689,6 +753,12 @@ a {
   text-transform: uppercase;
 }
 
+/* Back to top belongs to the fixed rail; the inline strip already sits at
+   the top of the page. */
+.dossier-section-navigation-top {
+  display: none;
+}
+
 .dossier-section-navigation ol {
   display: flex;
   gap: 0.25rem;
@@ -772,6 +842,39 @@ a {
 
   .dossier-section-navigation-title {
     display: none;
+  }
+
+  .dossier-section-navigation-top {
+    position: absolute;
+    right: 0.3rem;
+    bottom: calc(100% + 0.25rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    padding: 0;
+    color: #6b6b75;
+    cursor: pointer;
+  }
+
+  .dossier-section-navigation-top:hover {
+    background: var(--surface-raised);
+    color: var(--text);
+  }
+
+  .dossier-section-navigation-top:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    color: var(--text);
+  }
+
+  .dossier-section-navigation-top svg {
+    width: 1.125rem;
+    height: 1.125rem;
   }
 
   .dossier-section-navigation ol {
@@ -1209,6 +1312,16 @@ a {
   color: var(--text);
   font-weight: 720;
   white-space: nowrap;
+}
+
+/* Names link to their dossiers. They keep their class colour, so the underline
+   is what says a name can be followed. */
+a.dossier-character-name:hover,
+a.dossier-character-name:focus-visible,
+.collection-monitor-character:hover,
+.collection-monitor-character:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
 }
 
 .dossier-parse-character {
@@ -2456,67 +2569,67 @@ td > .collection-progress {
   cursor: pointer;
 }
 
+.changelog-page h1 {
+  margin-bottom: 0.5rem;
+  font-size: clamp(2rem, 4.5vw, 3rem);
+}
+
 .changelog-subheading {
-  margin: 0 0 1.3rem;
+  margin: 0 0 1.5rem;
   color: var(--muted);
-  font-size: 0.87rem;
+  font-size: 0.85rem;
   letter-spacing: 0.05em;
 }
 
 .changelog-list {
-  display: grid;
-  gap: 1rem;
   padding: 0;
   margin: 0;
   list-style: none;
+  border-bottom: 1px solid var(--border);
 }
 
-.changelog-entry {
+.document-page .changelog-entry {
   border-top: 1px solid var(--border);
-  padding: 1.15rem 0;
+  padding: 0.6rem 0;
+  line-height: 1.45;
 }
 
-.changelog-entry-heading {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.7rem;
-  justify-content: space-between;
-  align-items: baseline;
-}
-
-.changelog-entry-heading strong {
-  max-width: min(100%, 44ch);
-}
-
-.changelog-entry time {
-  color: var(--muted);
-  font-size: 0.84rem;
+.document-page .changelog-entry-summary {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .changelog-entry-meta {
-  margin: 0.5rem 0 0.15rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.2rem;
   color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.changelog-entry-meta span {
-  color: var(--muted);
-}
-
-.changelog-entry-meta strong {
-  color: var(--text);
+  font-size: 0.8rem;
 }
 
 .changelog-commit-link {
-  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.changelog-entry-environment {
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  padding: 0 0.35rem;
 }
 
 .changelog-links {
+  display: contents;
   list-style: none;
-  padding: 0;
-  margin: 0.5rem 0 0;
-  display: grid;
-  gap: 0.35rem;
+}
+
+.document-page .changelog-links li {
+  color: inherit;
+  line-height: inherit;
 }
 
 .collection-monitor-page {
@@ -2992,8 +3105,7 @@ td > .collection-progress {
   }
 
   .home-shell {
-    align-items: start;
-    padding-top: 19vh;
+    padding-top: 2rem;
   }
 
   .site-header {

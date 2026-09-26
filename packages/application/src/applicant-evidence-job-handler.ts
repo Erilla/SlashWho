@@ -49,6 +49,7 @@ import {
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope, type MeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+import { bindThrottleScope } from "./throttle-attribution";
 import {
   fromStagedCollection,
   terminalTiersFromStage,
@@ -880,6 +881,7 @@ export function createApplicantEvidenceJobHandler(
       const job = typeof input === "string" ? { runId: input } : input;
       const monotonic = options.monotonic ?? (() => performance.now());
       const scope = createMeasurementScope(monotonic);
+      bindThrottleScope(scope);
       const observedAt = monotonic();
       const activeContext = context ?? {
         attempt: 1,
@@ -1589,7 +1591,14 @@ export function createApplicantEvidenceJobHandler(
           ? 0
           : (storedEvidence.identityScanTurn ?? 0) % identities.length;
         const historyCaps = new Map<number, number>();
-        if (targeted || historicAliases.length === 0) {
+        // A light refresh reads the newest page for a new raid night, which
+        // is the current name's to have; it scans no former name. Its one
+        // request would otherwise go to the alias whose turn it is, and a
+        // capped page one would publish that alias a "resume at page 2" with
+        // the same double read the main bookmark had. Skipping the scan
+        // leaves each alias's stored progress in the map, so the run carries
+        // it forward unchanged, and the deferred alias keeps the run partial.
+        if (targeted || historicAliases.length === 0 || !movesHistoryBookmark) {
           // Explicit tier searches belong to the current identity. With no
           // aliases this is also the established parse-only zero-scan path.
           historyCaps.set(0, requestCap);

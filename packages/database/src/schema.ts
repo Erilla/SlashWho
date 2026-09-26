@@ -317,6 +317,29 @@ export const suppressedCharacters = pgTable(
   ]
 );
 
+/**
+ * One row per searched character, holding only when it was last searched. It
+ * never records the searcher, so the landing page can list it publicly.
+ */
+export const dossierSearches = pgTable(
+  "dossier_searches",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    searchedAt: timestamp("searched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "dossier_searches_pkey",
+      columns: [table.region, table.realmSlug, table.normalizedName]
+    }),
+    index("dossier_searches_searched_at_idx").on(table.searchedAt)
+  ]
+);
+
 export const rateLimitEvents = pgTable(
   "rate_limit_events",
   {
@@ -501,9 +524,10 @@ export const accountSessions = pgTable(
     idleExpiresAt: timestamp("idle_expires_at", {
       withTimezone: true
     }).notNull(),
+    // NULL: no absolute lifetime; the sliding idle deadline alone applies.
     absoluteExpiresAt: timestamp("absolute_expires_at", {
       withTimezone: true
-    }).notNull(),
+    }),
     revokedAt: timestamp("revoked_at", { withTimezone: true })
   },
   (table) => [

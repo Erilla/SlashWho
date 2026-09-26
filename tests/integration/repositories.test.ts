@@ -190,6 +190,7 @@ describe("PostgreSQL repositories", () => {
       character_terminal_tiers,
       character_historic_aliases,
       dossier_character_exclusions,
+      dossier_searches,
       character_attendance_searches,
       snapshot_characters,
       snapshots,
@@ -344,6 +345,84 @@ describe("PostgreSQL repositories", () => {
       [session.id]
     );
     expect(persisted.rows[0]?.revoked_at).toBeNull();
+  });
+
+  it("renews an account session with no absolute lifetime on idle alone", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const day = 24 * 60 * 60_000;
+    const account = await repositories.accountAuth.provisionAdmin(
+      registration("persistent@example.com", at)
+    );
+    const session = await repositories.accountAuth.issueSession({
+      sessionId: crypto.randomUUID(),
+      secretDigest: "persistent-secret",
+      accountId: account.id,
+      credentialVersion: 1,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date(at.getTime() + 400 * day),
+      absoluteExpiresAt: null
+    });
+    expect(session?.absoluteExpiresAt).toBeNull();
+    if (!session) throw new Error("expected session");
+    const use = (atUse: Date) =>
+      repositories.accountAuth.useSession({
+        sessionId: session.id,
+        secretDigest: "persistent-secret",
+        at: atUse,
+        idleExpiresAt: new Date(atUse.getTime() + 400 * day)
+      });
+    const later = new Date(at.getTime() + 399 * day);
+    expect(await use(later)).toMatchObject({
+      session: {
+        idleExpiresAt: new Date(later.getTime() + 400 * day),
+        absoluteExpiresAt: null
+      }
+    });
+    const muchLater = new Date(later.getTime() + 399 * day);
+    expect((await use(muchLater))?.account.id).toBe(account.id);
+    expect(
+      await repositories.accountAuth.changePassword({
+        accountId: account.id,
+        sessionId: session.id,
+        expectedCredentialVersion: 1,
+        expectedPasswordHash: "derived-password-hash",
+        passwordHash: "new-hash",
+        passwordSalt: "new-salt",
+        scryptVersion: 1,
+        scryptCost: 16_384,
+        at: muchLater
+      })
+    ).toBe(true);
+    expect(await use(muchLater)).toBeNull();
+  });
+
+  it("rejects an uncapped account session once its idle window lapses", async () => {
+    const at = new Date("2026-09-23T12:00:00Z");
+    const day = 24 * 60 * 60_000;
+    const account = await repositories.accountAuth.provisionAdmin(
+      registration("lapsed@example.com", at)
+    );
+    const session = await repositories.accountAuth.issueSession({
+      sessionId: crypto.randomUUID(),
+      secretDigest: "lapsed-secret",
+      accountId: account.id,
+      credentialVersion: 1,
+      issuedAt: at,
+      lastUsedAt: at,
+      idleExpiresAt: new Date(at.getTime() + 400 * day),
+      absoluteExpiresAt: null
+    });
+    if (!session) throw new Error("expected session");
+    const atUse = new Date(at.getTime() + 400 * day);
+    expect(
+      await repositories.accountAuth.useSession({
+        sessionId: session.id,
+        secretDigest: "lapsed-secret",
+        at: atUse,
+        idleExpiresAt: new Date(atUse.getTime() + 400 * day)
+      })
+    ).toBeNull();
   });
 
   it("consumes verification once only after matching the registration credential", async () => {
@@ -1840,6 +1919,34 @@ describe("PostgreSQL repositories", () => {
     });
   }
 
+  it("lists the most recently requested discovery runs first, up to the limit", async () => {
+    const first = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await repositories.runs.fail(first.id, "upstream_unavailable");
+    const second = await repositories.runs.createOrReuse(rootKey, "bot");
+    const third = await repositories.runs.createOrReuse(altKey, "anonymous");
+    // created_at defaults to now(), which a fast test can repeat; pin it so
+    // the order under test is the one the rows were requested in.
+    await pool.query(
+      `UPDATE discovery_runs
+          SET created_at = CASE id
+                WHEN $1::uuid THEN '2026-09-20T10:00:00Z'::timestamptz
+                WHEN $2::uuid THEN '2026-09-20T11:00:00Z'::timestamptz
+                ELSE '2026-09-20T12:00:00Z'::timestamptz
+              END`,
+      [first.id, second.id]
+    );
+
+    const all = await repositories.runs.listRecent(50);
+    const newestTwo = await repositories.runs.listRecent(2);
+
+    expect(all.map((run) => [run.id, run.status, run.errorCode])).toEqual([
+      [third.id, "queued", null],
+      [second.id, "queued", null],
+      [first.id, "failed", "upstream_unavailable"]
+    ]);
+    expect(newestTwo.map((run) => run.id)).toEqual([third.id, second.id]);
+  });
+
   it("round-trips a character's guild through the snapshot", async () => {
     // The guild columns are written by hand-built SQL and read back by a
     // mapper that treats a partially missing guild as none. Every other
@@ -1944,6 +2051,77 @@ describe("PostgreSQL repositories", () => {
         guild,
         source: "declared_main"
       })
+    ]);
+  });
+
+  it("lists each searched character once, newest search first", async () => {
+    // Break caught: the landing page listed a character once per search, or a
+    // slow request moved a newer search back behind an older one.
+    const recent = repositories.recentSearches!;
+    await seedCompleteSnapshot(repositories);
+    await recent.record(rootKey, new Date("2026-09-26T10:00:00Z"));
+    await recent.record(altKey, new Date("2026-09-26T11:00:00Z"));
+    await recent.record(rootKey, new Date("2026-09-26T12:00:00Z"));
+    await recent.record(rootKey, new Date("2026-09-26T09:00:00Z"));
+
+    expect(await recent.listRecent(10)).toEqual([
+      {
+        key: rootKey,
+        displayName: "Ryii",
+        searchedAt: new Date("2026-09-26T12:00:00Z"),
+        inProgress: false
+      },
+      {
+        // Searched, but not yet created by discovery.
+        key: altKey,
+        displayName: null,
+        searchedAt: new Date("2026-09-26T11:00:00Z"),
+        inProgress: false
+      }
+    ]);
+    expect(await recent.listRecent(1)).toHaveLength(1);
+  });
+
+  it("reports a recent search in progress while its discovery or any member's evidence is collecting", async () => {
+    // Break caught: the spinner followed only the searched character's own
+    // runs, so a dossier still gathering an alt's evidence read as complete.
+    const recent = repositories.recentSearches!;
+    await seedCompleteSnapshot(repositories, {
+      characters: [
+        observation(rootKey, "Ryii"),
+        observation(altKey, "Other", "claimed")
+      ]
+    });
+    await recent.record(rootKey);
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+
+    const discovery = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(true);
+    await repositories.runs.fail(discovery.id, "search_failed");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+
+    const evidence = await repositories.evidence.reserve({
+      key: altKey,
+      freshnessCutoff: new Date(),
+      at: new Date()
+    });
+    if (evidence.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(true);
+    await repositories.evidence.fail(evidence.run.id, "collection_failed");
+    expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
+  });
+
+  it("leaves suppressed characters off the recent searches", async () => {
+    const recent = repositories.recentSearches!;
+    await recent.record(rootKey);
+    await recent.record(altKey);
+    await repositories.suppressions.suppress(rootKey, "removal_request", null);
+
+    expect((await recent.listRecent(10)).map(({ key }) => key)).toEqual([
+      altKey
     ]);
   });
 
@@ -7839,6 +8017,57 @@ describe("PostgreSQL repositories", () => {
 
     await publishRun(30, {});
     expect((await stored()).historyScanResumePage).toBeUndefined();
+  });
+
+  it("keeps a former name's bookmark when a later light run carries it forward", async () => {
+    // A light refresh scans no former name and republishes each alias's
+    // stored progress on its own row. The progress is read from the newest
+    // published run that holds any, so what that run carries is what stands.
+    await seedCompleteSnapshot(repositories);
+    const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+    const progress = {
+      key: alias,
+      pendingParseFightUrls: [],
+      historyScanResumePage: 7,
+      historyScanResumeBoundaryReportCode: "alias-boundary",
+      historyComplete: false,
+      parseWorkOutstanding: false
+    };
+    const publishRun = async (
+      minute: number,
+      historicAliasProgress: (typeof progress)[]
+    ) => {
+      const reservation = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date(`2026-09-20T12:${minute}:00.000Z`),
+        at: new Date(`2026-09-20T12:${minute + 1}:00.000Z`)
+      });
+      if (reservation.kind !== "reserved") throw new Error("run_not_reserved");
+      await repositories.evidence.publish(reservation.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        historicAliasProgress,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: new Date(`2026-09-20T12:${minute + 2}:00.000Z`)
+      });
+    };
+    const stored = async () =>
+      (
+        await createPostgresRepositories(pool).evidence.storedEvidenceTiers(
+          rootKey
+        )
+      ).historicAliasProgress;
+
+    await publishRun(10, [progress]);
+    await publishRun(20, [progress]);
+    await expect(stored()).resolves.toEqual([progress]);
+
+    // An empty list is a statement, not an omission: it clears the bookmark.
+    await publishRun(30, []);
+    await expect(stored()).resolves.toEqual([]);
   });
 
   it("persists historic aliases and invalidates only kill completion and scan cursors", async () => {

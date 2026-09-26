@@ -73,7 +73,7 @@ it("migrates and initializes the durable queue before serving searches", async (
         TIER_SEARCHES_PER_HOUR: 6,
         FRESHNESS_HOURS: 24,
         FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
-        DOSSIER_CHARACTER_CAP: 12,
+        DOSSIER_CHARACTER_CEILING: 50,
         DOSSIER_PROVIDER_CONCURRENCY: 4,
         NEGATIVE_CACHE_TTL_MS: 300_000
       },
@@ -206,6 +206,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     },
     async searchTier() {
       return { kind: "unknown_tier" as const };
+    },
+    async listRecentSearches() {
+      return [];
     }
   };
   const raiderio = { getCharacter: vi.fn() };
@@ -228,7 +231,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
         TIER_SEARCHES_PER_HOUR: 6,
         FRESHNESS_HOURS: 24,
         FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
-        DOSSIER_CHARACTER_CAP: 12,
+        DOSSIER_CHARACTER_CEILING: 50,
         DOSSIER_PROVIDER_CONCURRENCY: 4,
         NEGATIVE_CACHE_TTL_MS: 300_000
       },
@@ -352,7 +355,7 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
         TIER_SEARCHES_PER_HOUR: 6,
         FRESHNESS_HOURS: 24,
         FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
-        DOSSIER_CHARACTER_CAP: 12,
+        DOSSIER_CHARACTER_CEILING: 50,
         DOSSIER_PROVIDER_CONCURRENCY: 4,
         NEGATIVE_CACHE_TTL_MS: 300_000
       },
@@ -465,7 +468,7 @@ it.each([
           TIER_SEARCHES_PER_HOUR: 6,
           FRESHNESS_HOURS: 24,
           FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
-          DOSSIER_CHARACTER_CAP: 12,
+          DOSSIER_CHARACTER_CEILING: 50,
           DOSSIER_PROVIDER_CONCURRENCY: 4,
           NEGATIVE_CACHE_TTL_MS: 300_000
         },

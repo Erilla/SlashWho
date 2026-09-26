@@ -28,7 +28,7 @@ it("signs in a verified email and issues an opaque cookie", async () => {
     "HttpOnly",
     "Secure",
     "SameSite=Strict",
-    "Max-Age=1800"
+    "Max-Age=34560000"
   ])
     expect(response.headers.get("set-cookie")).toContain(attribute);
   expect(response.headers.get("set-cookie")).not.toContain(accountEmail);

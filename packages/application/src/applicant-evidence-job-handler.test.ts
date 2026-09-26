@@ -22,6 +22,10 @@ import {
   type ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";
 import { encryptCredential, parseEncryptionKey } from "./credential-encryption";
+import {
+  attributeThrottlesTo,
+  upstreamThrottleRecord
+} from "./throttle-attribution";
 
 const encryptionKey = parseEncryptionKey("a".repeat(64));
 const key = { region: "eu" as const, realm: "silvermoon", name: "rinn" };
@@ -2621,6 +2625,44 @@ describe("applicant evidence job handler", () => {
       expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(1_900);
     });
 
+    it("counts a Warcraft Logs throttle on the run that hit it", async () => {
+      // Break caught: the client's onThrottle hook runs with no scope in hand,
+      // so if the handler did not bind its scope to the unit the worker opens
+      // for it, a throttle would reach only the standalone line and never
+      // this record (#508).
+      const records: Array<Record<string, unknown>> = [];
+      const options = baseOptions();
+      const collect = options.warcraftLogs.getFirstKillReports;
+      let throttleLine: Record<string, unknown> | undefined;
+      const handler = createApplicantEvidenceJobHandler({
+        ...options,
+        warcraftLogs: {
+          ...options.warcraftLogs,
+          getFirstKillReports: async () => {
+            throttleLine = upstreamThrottleRecord("warcraftlogs", {
+              retryAfterMs: 30_000
+            });
+            return collect();
+          }
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await attributeThrottlesTo({ runId: "run-1" }, () =>
+        handler.execute(
+          { runId: "run-1" },
+          { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+        )
+      );
+
+      expect(records[0]).toMatchObject({
+        event: "evidence_job",
+        warcraftLogsThrottles: 1,
+        warcraftLogsRetryAfterMaxMs: 30_000
+      });
+      expect(throttleLine).toMatchObject({ runId: "run-1" });
+    });
+
     it.each([
       ["answers", async () => []],
       [
@@ -4242,6 +4284,133 @@ describe("applicant evidence job handler", () => {
         expect(options).not.toHaveProperty(
           "historyScanResumeBoundaryReportCode"
         );
+      });
+
+      describe("with a former name", () => {
+        const alias = {
+          region: "eu",
+          realm: "old-realm",
+          name: "former"
+        } as const;
+        const storedAliasProgress = {
+          key: alias,
+          pendingParseFightUrls: [
+            "https://www.warcraftlogs.com/reports/oldreport#fight=7"
+          ],
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "alias-proved-report",
+          historyComplete: false,
+          parseWorkOutstanding: true
+        };
+        // The alias's turn: an unchanged handler gives it the light run's
+        // single request.
+        const withAlias = (
+          evidence: ReturnType<typeof store>,
+          historicAliasProgress: NonNullable<
+            Awaited<
+              ReturnType<ApplicantEvidenceStore["storedEvidenceTiers"]>
+            >["historicAliasProgress"]
+          >
+        ) => {
+          evidence.historicAliases = async () => [alias];
+          evidence.storedEvidenceTiers = async () => ({
+            kills: [],
+            wipes: [],
+            historicAliasProgress,
+            identityScanTurn: 1
+          });
+          return evidence;
+        };
+
+        it("creates no bookmark for a former name that had none", async () => {
+          // Break caught: the alias's turn gave it the one request, and its
+          // capped page-one scan published "resume at page 2". The next full
+          // run resumed it, never published complete (#437), and a third run
+          // read the former name's whole history again.
+          const evidence = withAlias(store(), []);
+          const getFirstKillReports = cappedAfterPageOne();
+          const handler = lightHandler(evidence, getFirstKillReports);
+
+          await handler.execute(light, context);
+
+          expect(getFirstKillReports).not.toHaveBeenCalledWith(
+            alias,
+            expect.anything()
+          );
+          expect(evidence.published[0]?.result.historicAliasProgress).toEqual(
+            []
+          );
+        });
+
+        it("carries a former name's stored bookmark forward unchanged", async () => {
+          const evidence = withAlias(store(), [storedAliasProgress]);
+          const handler = lightHandler(evidence, cappedAfterPageOne());
+
+          await handler.execute(light, context);
+
+          // Carried, not omitted, exactly as the main identity's bookmark is.
+          expect(evidence.published[0]?.result.historicAliasProgress).toEqual([
+            storedAliasProgress
+          ]);
+        });
+
+        it("leaves a former name's outstanding parse work as it was", async () => {
+          // No bookmark, so an unchanged handler admits the alias with one
+          // request and rewrites its progress from that capped page.
+          const pendingOnly = {
+            key: alias,
+            pendingParseFightUrls: storedAliasProgress.pendingParseFightUrls,
+            historyComplete: true,
+            parseWorkOutstanding: true
+          };
+          const evidence = withAlias(store(), [pendingOnly]);
+          const handler = lightHandler(evidence, cappedAfterPageOne());
+
+          await handler.execute(light, context);
+
+          expect(evidence.published[0]?.result.historicAliasProgress).toEqual([
+            pendingOnly
+          ]);
+        });
+
+        it("carries a former name's bookmark forward when its one page fails", async () => {
+          const evidence = withAlias(store(), [storedAliasProgress]);
+          const handler = lightHandler(
+            evidence,
+            vi.fn(async () => ({
+              kind: "limitation" as const,
+              code: "unavailable" as const
+            }))
+          );
+
+          await handler.execute(light, context);
+
+          expect(evidence.published[0]?.result).toMatchObject({
+            state: "partial",
+            limitationCode: "unavailable",
+            historicAliasProgress: [storedAliasProgress]
+          });
+        });
+
+        it("spends its one request on the newest page of the current name", async () => {
+          const evidence = withAlias(store(), []);
+          const getFirstKillReports = finished();
+          const handler = lightHandler(evidence, getFirstKillReports);
+
+          await handler.execute(light, context);
+
+          expect(getFirstKillReports).toHaveBeenCalledTimes(1);
+          expect(getFirstKillReports).toHaveBeenCalledWith(
+            run.key,
+            expect.objectContaining({ requestCap: 1 })
+          );
+          // The former name went unread, so the run cannot be complete: a
+          // complete publish would drop the kills only that name holds.
+          expect(evidence.published[0]?.result).toMatchObject({
+            state: "partial",
+            limitationCode: "request_cap"
+          });
+        });
       });
     });
 

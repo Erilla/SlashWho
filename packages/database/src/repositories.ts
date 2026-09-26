@@ -227,6 +227,31 @@ export interface SuppressionRepository {
   cleanupExpired(at?: Date): Promise<number>;
 }
 
+/** One character on the landing page's list of recent dossier searches. */
+export interface RecentDossierSearch {
+  key: CharacterKey;
+  /** Null until discovery has created the character. */
+  displayName: string | null;
+  searchedAt: Date;
+  /**
+   * Whether the dossier is still being researched: the character's discovery
+   * run, or an evidence run for it or any member of its current snapshot, is
+   * queued, running or retrying.
+   */
+  inProgress: boolean;
+}
+
+/**
+ * The characters people have opened dossiers for, one row per character. It
+ * records what was searched and when, and nothing about who searched.
+ */
+export interface RecentDossierSearchRepository {
+  /** A repeat search for the same character moves its time forward. */
+  record(key: CharacterKey, at?: Date): Promise<void>;
+  /** Newest first, leaving out suppressed characters. */
+  listRecent(limit: number): Promise<readonly RecentDossierSearch[]>;
+}
+
 export interface RateLimitRepository {
   reserve(
     callerBucketHash: string,
@@ -1324,7 +1349,7 @@ export interface AccountAuthRepository {
     issuedAt: Date;
     lastUsedAt: Date;
     idleExpiresAt: Date;
-    absoluteExpiresAt: Date;
+    absoluteExpiresAt: Date | null;
   }): Promise<AccountSession | null>;
   useSession(input: {
     sessionId: string;
@@ -1394,7 +1419,8 @@ export type AccountSession = Readonly<{
   issuedAt: Date;
   lastUsedAt: Date;
   idleExpiresAt: Date;
-  absoluteExpiresAt: Date;
+  /** Null when the session has no absolute lifetime. */
+  absoluteExpiresAt: Date | null;
   revokedAt: Date | null;
 }>;
 export interface AccountMailRepository {
@@ -1623,10 +1649,13 @@ export interface Repositories {
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
+    /** The most recently requested runs, newest first, for the operator monitor. */
+    listRecent(limit: number): Promise<readonly DiscoveryRun[]>;
   };
   snapshots: SnapshotRepository;
   manualConnections: ManualConnectionRepository;
   suppressions: SuppressionRepository;
+  recentSearches?: RecentDossierSearchRepository;
   rateLimits: RateLimitRepository;
   negativeCache: NegativeCacheRepository;
   evidence: EvidenceRepository;

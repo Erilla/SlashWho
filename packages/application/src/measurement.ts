@@ -3,7 +3,9 @@
  * plain accumulator with an injected clock rather than ambient context: this
  * codebase injects its clocks and observers everywhere else, and the service
  * containers are process-wide singletons, so an implicitly shared scope could
- * not attribute time to one request.
+ * not attribute time to one request. The one exception is throttle
+ * attribution (`throttle-attribution.ts`), which cannot be threaded through
+ * the singleton clients and uses async-local storage for that reason.
  *
  * Field names are derived uniformly from a prefix so that no rename map is
  * needed here or in the analysis script.

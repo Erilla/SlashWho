@@ -6,6 +6,7 @@ import {
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -15,6 +16,7 @@ import {
 } from "../../../lib/use-authoritative-poll";
 
 import { CollectionProgress } from "../../../components/collection-progress";
+import { dossierPath } from "../../../lib/dossier-path";
 
 function characterText(character: {
   region: string;
@@ -22,6 +24,23 @@ function characterText(character: {
   name: string;
 }): string {
   return `${character.name} — ${character.realm} (${character.region.toUpperCase()})`;
+}
+
+function CharacterCell({
+  character
+}: Readonly<{
+  character: CollectionMonitorResponse["inFlight"][number]["character"];
+}>) {
+  return (
+    <th scope="row">
+      <Link
+        className="collection-monitor-character"
+        href={dossierPath(character)}
+      >
+        {characterText(character)}
+      </Link>
+    </th>
+  );
 }
 
 function characterKey(character: {
@@ -195,7 +214,9 @@ export function CollectionMonitorView({
       <div className="collection-monitor-heading">
         <div>
           <h1>Collection monitor</h1>
-          <p>Operator view of persisted character evidence runs.</p>
+          <p>
+            Operator view of persisted discovery and character evidence runs.
+          </p>
         </div>
         <p>
           Updated <span className="visually-hidden">at </span>
@@ -228,7 +249,7 @@ export function CollectionMonitorView({
               ) : (
                 monitor.inFlight.map((run) => (
                   <tr key={characterKey(run.character)}>
-                    <th scope="row">{characterText(run.character)}</th>
+                    <CharacterCell character={run.character} />
                     <td>
                       <span className="state-badge" data-state={run.status}>
                         {run.status}
@@ -285,7 +306,7 @@ export function CollectionMonitorView({
                   <tr
                     key={`${characterKey(run.character)}:${run.completedAt ?? index}`}
                   >
-                    <th scope="row">{characterText(run.character)}</th>
+                    <CharacterCell character={run.character} />
                     <td>
                       <span className="state-badge" data-state={run.state}>
                         {run.state}
@@ -347,9 +368,51 @@ export function CollectionMonitorView({
                   <tr
                     key={`${characterKey(run.character)}:${run.stoppedAt ?? index}`}
                   >
-                    <th scope="row">{characterText(run.character)}</th>
+                    <CharacterCell character={run.character} />
                     <td>{code(run.errorCode)}</td>
                     <td>{dateTime(run.stoppedAt)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="collection-monitor-section">
+        <h2 id="collection-monitor-discovery-runs">Discovery runs</h2>
+        <div className="collection-monitor-table-scroll">
+          <table aria-labelledby="collection-monitor-discovery-runs">
+            <thead>
+              <tr>
+                <th scope="col">Character</th>
+                <th scope="col">Status</th>
+                <th scope="col">Requested</th>
+                <th scope="col">Started</th>
+                <th scope="col">Finished</th>
+                <th scope="col">Attempt</th>
+                <th scope="col">Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monitor.discoveryRuns.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No discovery runs have been requested.</td>
+                </tr>
+              ) : (
+                monitor.discoveryRuns.map((run) => (
+                  <tr key={`${characterKey(run.character)}:${run.requestedAt}`}>
+                    <CharacterCell character={run.character} />
+                    <td>
+                      <span className="state-badge" data-state={run.status}>
+                        {run.status}
+                      </span>
+                    </td>
+                    <td>{dateTime(run.requestedAt)}</td>
+                    <td>{dateTime(run.startedAt)}</td>
+                    <td>{dateTime(run.completedAt)}</td>
+                    <td>{run.attempt}</td>
+                    <td>{code(run.errorCode)}</td>
                   </tr>
                 ))
               )}

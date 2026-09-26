@@ -7,6 +7,7 @@ import {
 import type {
   DiscoveryQueue,
   EvidenceRunPhase,
+  RecentDossierSearch,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -127,6 +128,14 @@ export interface ApplicantDossierService {
     input: CreateDossierCommand,
     scope?: MeasurementScope
   ): Promise<CreateDossierResult>;
+  /**
+   * The characters most recently searched through `start`, one row each,
+   * for the landing page.
+   */
+  listRecentSearches(
+    limit: number,
+    scope?: MeasurementScope
+  ): Promise<readonly RecentDossierSearch[]>;
   addConnectedCharacter(
     root: CharacterKey,
     input: CreateDossierCommand,
@@ -1178,7 +1187,9 @@ async function assembleDossier(options: {
 // Sized for the achievement lookups made by one cold dossier and the number
 // of distinct rosters that should fit inside the TTL window without eviction.
 const DOSSIER_CACHE_TTL_MS = 15 * 60_000;
-const ACHIEVEMENT_KEYS_PER_DOSSIER = 10;
+// Every included character is read now, not the first 12 (#555); 25 covers
+// the largest roster seen (23) rather than the ceiling, which is a backstop.
+const ACHIEVEMENT_KEYS_PER_DOSSIER = 25;
 // The multiple is the number of concurrent cold reads of distinct rosters that
 // fit inside the 15-minute window before entries start evicting each other.
 //
@@ -1219,7 +1230,7 @@ function cacheObserver(
 export function createApplicantDossierService(options: {
   repositories: Pick<
     Repositories,
-    "snapshots" | "evidence" | "manualConnections"
+    "snapshots" | "evidence" | "manualConnections" | "recentSearches"
   >;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
@@ -1619,11 +1630,11 @@ export function createApplicantDossierService(options: {
     );
     const selected = includedOrdered.slice(
       0,
-      options.config.DOSSIER_CHARACTER_CAP
+      options.config.DOSSIER_CHARACTER_CEILING
     );
     const skipped = includedOrdered.slice(selected.length);
     // Excluded characters are ranked among themselves only, so one of them
-    // never costs a researchable character its place under the cap.
+    // never costs a researchable character its place under the ceiling.
     const excludedOrdered = [...excludedIdentities].sort(
       (left, right) =>
         right.level - left.level ||
@@ -1705,19 +1716,35 @@ export function createApplicantDossierService(options: {
       // start does real database and queue work through search.create, so its
       // scope is threaded through rather than discarded: this is the endpoint
       // the research doc measures as "submission to first response".
+      let key: CharacterKey;
+      let command: CreateDossierCommand;
       try {
-        const command = {
-          ...input,
-          characterUrl: toRaiderIoUrl(
-            parseApplicantCharacterUrl(input.characterUrl)
-          )
-        };
-        return scope
-          ? options.search.create(command, scope)
-          : options.search.create(command);
+        key = parseApplicantCharacterUrl(input.characterUrl);
+        command = { ...input, characterUrl: toRaiderIoUrl(key) };
       } catch {
         return { kind: "invalid", code: "invalid_character_url" };
       }
+      const result = scope
+        ? await options.search.create(command, scope)
+        : await options.search.create(command);
+      // Only a search that opened a dossier is listed; a refused, suppressed
+      // or unknown character is not. The list is a convenience, so failing to
+      // record the search must not fail the search itself.
+      if (result.kind === "job" || result.kind === "character") {
+        await scopedRepositories(scope)
+          .recentSearches?.record(key)
+          .catch(() => {
+            options.logger?.info({ event: "dossier_search_record_failed" });
+          });
+      }
+      return result;
+    },
+
+    async listRecentSearches(limit, scope) {
+      return (
+        (await scopedRepositories(scope).recentSearches?.listRecent(limit)) ??
+        []
+      );
     },
 
     async addConnectedCharacter(root, input, scope) {

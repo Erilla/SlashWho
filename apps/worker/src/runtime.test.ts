@@ -1,4 +1,8 @@
-import { encryptAccountMail, encryptCredential } from "@slashwho/application";
+import {
+  encryptAccountMail,
+  encryptCredential,
+  upstreamThrottleRecord
+} from "@slashwho/application";
 import { hkdfSync } from "node:crypto";
 import type {
   ApplicantEvidenceJobHandler,
@@ -1316,6 +1320,48 @@ describe("worker runtime", () => {
       },
       payload
     );
+    await runtime.stop();
+  });
+
+  it("opens a throttle unit named for the run around each job it dispatches", async () => {
+    // Break caught: the handlers only bind their scope to a unit someone else
+    // opened, so a dispatch that stopped opening one would leave every
+    // throttle off discovery_run and evidence_job with no error (#508).
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    const lines: Record<string, unknown>[] = [];
+    vi.mocked(fakes.handler.execute).mockImplementation(async () => {
+      lines.push(upstreamThrottleRecord("blizzard", { retryAfterMs: 1 }));
+    });
+    vi.mocked(fakes.evidenceHandler.execute).mockImplementation(async () => {
+      lines.push(upstreamThrottleRecord("warcraftlogs", { retryAfterMs: 1 }));
+    });
+    const context = {
+      attempt: 1,
+      maxAttempts: 5,
+      signal: new AbortController().signal
+    };
+
+    await fakes.workHandler?.(
+      {
+        runId: "00000000-0000-4000-8000-000000000011",
+        key: { region: "eu", realm: "silvermoon", name: "root" }
+      },
+      context
+    );
+    await fakes.evidenceWorkHandler?.(
+      { runId: "00000000-0000-4000-8000-000000000012" },
+      context
+    );
+
+    expect(lines).toEqual([
+      expect.objectContaining({
+        runId: "00000000-0000-4000-8000-000000000011"
+      }),
+      expect.objectContaining({
+        runId: "00000000-0000-4000-8000-000000000012"
+      })
+    ]);
     await runtime.stop();
   });
 

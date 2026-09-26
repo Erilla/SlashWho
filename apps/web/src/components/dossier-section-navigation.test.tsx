@@ -2,8 +2,9 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ApplicantDossier } from "@slashwho/contracts";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { DossierSectionNavigation } from "./dossier-section-navigation";
 
@@ -51,7 +52,10 @@ function raid(id: string, bosses: Boss[]): Raid {
   };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 it("shows the strongest raid evidence and describes the colour without changing navigation names", () => {
   render(
@@ -107,4 +111,28 @@ it("shows the strongest raid evidence and describes the colour without changing 
       link.querySelector(".dossier-section-navigation-label")
     ).toHaveAttribute("data-evidence-label", description);
   }
+});
+
+it("returns to the top of the page and clears the section fragment", async () => {
+  const user = userEvent.setup();
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  window.history.replaceState(
+    null,
+    "",
+    "/eu/silvermoon/ryii?tier=all#limitations-heading"
+  );
+  render(<DossierSectionNavigation hasLimitations raids={[]} />);
+
+  const button = screen.getByRole("button", { name: "Back to top" });
+  expect(button.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  await user.click(button);
+
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: "instant" });
+  expect(window.location.hash).toBe("");
+  expect(window.location.pathname + window.location.search).toBe(
+    "/eu/silvermoon/ryii?tier=all"
+  );
+  expect(
+    screen.getByRole("link", { name: "Connected characters" })
+  ).toHaveAttribute("aria-current", "location");
 });

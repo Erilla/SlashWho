@@ -21,7 +21,7 @@ import { tierSearchWindow, type TierSearchSubject } from "./tier-search";
  * largest dossier display cap; characters a press cannot reach are reported
  * as `over_limit`, never dropped.
  */
-export const DOSSIER_TIER_SEARCH_CHARACTER_LIMIT = 30;
+export const DOSSIER_TIER_SEARCH_CHARACTER_LIMIT = 50;
 
 export type DossierTierSearchCharacterOutcome =
   | Exclude<SearchCharacterTierResult, { kind: "unknown_tier" }>

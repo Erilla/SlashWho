@@ -1,6 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadDeploymentChangelog } from "./deployment-changelog";
+import {
+  createChangelogCache,
+  loadDeploymentChangelog,
+  type ChangelogResult
+} from "./deployment-changelog";
 
 function jsonResponse(value: object, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -205,4 +209,175 @@ it("paginates deployment history when a page is full", async () => {
 it("returns unavailable if repository is not configured", async () => {
   const changelog = await loadDeploymentChangelog({ environment: {} });
   expect(changelog.kind).toBe("unavailable");
+});
+
+function deploymentFixture(id: number, sha: string, minute: number) {
+  return {
+    id,
+    sha,
+    created_at: `2026-09-14T10:${String(minute).padStart(2, "0")}:00Z`,
+    statuses_url: `https://api.github.com/repos/acme/repo/deployments/${id}/statuses`
+  };
+}
+
+it("reads deployment statuses and commits concurrently", async () => {
+  let inFlight = 0;
+  let maxStatusesInFlight = 0;
+  let maxCommitsInFlight = 0;
+  const fetch = vi.fn(async (value: RequestInfo | URL) => {
+    const url = String(value);
+    if (url.includes("/deployments?environment=production")) {
+      return jsonResponse(
+        [1, 2, 3, 4, 5, 6].map((id) =>
+          deploymentFixture(id, `sha${id}`, 60 - id)
+        )
+      );
+    }
+    const isStatus = url.includes("/statuses");
+    inFlight += 1;
+    if (isStatus) maxStatusesInFlight = Math.max(maxStatusesInFlight, inFlight);
+    else maxCommitsInFlight = Math.max(maxCommitsInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight -= 1;
+    return isStatus
+      ? jsonResponse([{ state: "success", created_at: "2026-09-14T11:00:00Z" }])
+      : jsonResponse({ commit: { message: "Deployment" } });
+  });
+
+  const changelog = await loadDeploymentChangelog({
+    repository: "acme/repo",
+    environments: ["production"],
+    fetch
+  });
+
+  expect(changelog).toMatchObject({ kind: "available" });
+  if (changelog.kind === "unavailable") throw new Error("unreachable");
+  expect(changelog.entries).toHaveLength(6);
+  expect(maxStatusesInFlight).toBeGreaterThan(1);
+  expect(maxCommitsInFlight).toBeGreaterThan(1);
+});
+
+it("keeps newest-first selection and only enriches selected entries", async () => {
+  const fetch = vi.fn(async (value: RequestInfo | URL) => {
+    const url = String(value);
+    if (url.includes("/deployments?environment=production")) {
+      return jsonResponse([
+        deploymentFixture(4, "shaD", 10),
+        deploymentFixture(1, "shaA", 40),
+        deploymentFixture(3, "shaB", 20),
+        deploymentFixture(2, "shaB", 30),
+        deploymentFixture(5, "shaE", 5)
+      ]);
+    }
+    if (url.includes("/deployments/1/statuses"))
+      return jsonResponse([{ state: "failure", created_at: null }]);
+    if (url.includes("/statuses"))
+      return jsonResponse([{ state: "success", created_at: null }]);
+    const sha = url.split("/commits/")[1];
+    return jsonResponse({ commit: { message: `Ship ${sha}` } });
+  });
+
+  const changelog = await loadDeploymentChangelog({
+    repository: "acme/repo",
+    environments: ["production"],
+    maxEntries: 2,
+    fetch
+  });
+
+  expect(changelog.kind).toBe("available");
+  if (changelog.kind === "unavailable") throw new Error("unreachable");
+  expect(
+    changelog.entries.map((entry) => [entry.id, entry.commit, entry.summary])
+  ).toEqual([
+    [2, "shaB", "Ship shaB"],
+    [4, "shaD", "Ship shaD"]
+  ]);
+  const commitReads = fetch.mock.calls
+    .map(([value]) => String(value))
+    .filter((url) => url.includes("/commits/"));
+  expect(commitReads.sort()).toEqual([
+    "https://api.github.com/repos/acme/repo/commits/shaB",
+    "https://api.github.com/repos/acme/repo/commits/shaD"
+  ]);
+});
+
+describe("createChangelogCache", () => {
+  const available = {
+    kind: "available",
+    source: "github_deployments",
+    repository: "acme/repo",
+    generatedAt: new Date(0),
+    entries: []
+  } as const;
+  const unavailable = {
+    kind: "unavailable",
+    generatedAt: new Date(0),
+    reason: "down"
+  } as const;
+
+  it("serves a loaded changelog until the TTL expires", async () => {
+    let now = 0;
+    const load = vi.fn(async () => available);
+    const cached = createChangelogCache(load, {
+      ttlMs: 1_000,
+      unavailableTtlMs: 100,
+      now: () => now
+    });
+
+    await cached();
+    now = 999;
+    await cached();
+    expect(load).toHaveBeenCalledTimes(1);
+    now = 1_000;
+    await cached();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one in-flight load between concurrent callers", async () => {
+    const load = vi.fn(async () => available);
+    const cached = createChangelogCache(load, {
+      ttlMs: 1_000,
+      unavailableTtlMs: 100,
+      now: () => 0
+    });
+
+    const results = await Promise.all([cached(), cached(), cached()]);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(results.every((result) => result === available)).toBe(true);
+  });
+
+  it("holds an unavailable changelog only for the shorter TTL", async () => {
+    let now = 0;
+    const load = vi
+      .fn<() => Promise<ChangelogResult>>()
+      .mockResolvedValueOnce(unavailable)
+      .mockResolvedValue(available);
+    const cached = createChangelogCache(load, {
+      ttlMs: 1_000,
+      unavailableTtlMs: 100,
+      now: () => now
+    });
+
+    expect(await cached()).toBe(unavailable);
+    now = 99;
+    expect(await cached()).toBe(unavailable);
+    now = 100;
+    expect(await cached()).toBe(available);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries after a load that rejects", async () => {
+    const load = vi
+      .fn<() => Promise<ChangelogResult>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue(available);
+    const cached = createChangelogCache(load, {
+      ttlMs: 1_000,
+      unavailableTtlMs: 100,
+      now: () => 0
+    });
+
+    await expect(cached()).rejects.toThrow("boom");
+    expect(await cached()).toBe(available);
+  });
 });

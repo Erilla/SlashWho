@@ -290,6 +290,9 @@ function policyFixture(
       },
       async findActive() {
         return activeRun;
+      },
+      async listRecent() {
+        throw new Error("not used");
       }
     },
     snapshots: {

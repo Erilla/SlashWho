@@ -83,7 +83,8 @@ export async function accountAuthFixture() {
           session.secretDigest !== input.secretDigest ||
           session.revokedAt ||
           session.idleExpiresAt <= input.at ||
-          session.absoluteExpiresAt <= input.at ||
+          (session.absoluteExpiresAt !== null &&
+            session.absoluteExpiresAt <= input.at) ||
           !account.active ||
           !account.verifiedAt ||
           session.credentialVersion !== account.credentialVersion
@@ -95,7 +96,7 @@ export async function accountAuthFixture() {
           idleExpiresAt: new Date(
             Math.min(
               input.idleExpiresAt.getTime(),
-              session.absoluteExpiresAt.getTime()
+              session.absoluteExpiresAt?.getTime() ?? Infinity
             )
           )
         };

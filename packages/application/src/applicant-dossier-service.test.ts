@@ -297,6 +297,10 @@ function fixture(
             }
       ),
       markEnqueued
+    },
+    recentSearches: {
+      record: vi.fn().mockResolvedValue(undefined),
+      listRecent: vi.fn().mockResolvedValue([])
     }
   } as unknown as Repositories;
   const search = {
@@ -365,7 +369,7 @@ function fixture(
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
     ...(options.characterCap === undefined
       ? {}
-      : { DOSSIER_CHARACTER_CAP: options.characterCap }),
+      : { DOSSIER_CHARACTER_CEILING: options.characterCap }),
     ...(options.warcraftLogsRequestCap === undefined
       ? {}
       : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap }),
@@ -1165,6 +1169,68 @@ describe("applicant dossier service", () => {
     }
   );
 
+  it("records a search that opened a dossier, under its canonical key", async () => {
+    // Break caught: the landing page's recent searches would miss a character
+    // searched by its Warcraft Logs URL, or list it under a second key.
+    const { dossiers, repositories } = fixture();
+
+    await dossiers.start({
+      characterUrl: "https://www.warcraftlogs.com/character/eu/silvermoon/ryii",
+      headers
+    });
+
+    expect(repositories.recentSearches?.record).toHaveBeenCalledWith(root);
+  });
+
+  it.each([
+    { kind: "not_found", code: "character_not_found" },
+    { kind: "not_found", code: "suppressed_character" },
+    { kind: "rate_limited", retryAfterSeconds: 5 },
+    { kind: "failed", code: "upstream_unavailable" }
+  ] as const)(
+    "does not record a search that opened no dossier ($kind)",
+    async (outcome) => {
+      const { dossiers, repositories, search } = fixture();
+      vi.mocked(search.create).mockResolvedValue(outcome);
+
+      await expect(
+        dossiers.start({ characterUrl: raiderUrl, headers })
+      ).resolves.toBe(outcome);
+      expect(repositories.recentSearches?.record).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still starts the dossier when recording the search fails", async () => {
+    // Break caught: a failed write to a convenience list turned a working
+    // search into an error page.
+    const { dossiers, repositories } = fixture();
+    vi.mocked(repositories.recentSearches!.record).mockRejectedValue(
+      new Error("database_unavailable")
+    );
+
+    await expect(
+      dossiers.start({ characterUrl: raiderUrl, headers })
+    ).resolves.toMatchObject({ kind: "character" });
+  });
+
+  it("lists recent searches from the repository", async () => {
+    const { dossiers, repositories } = fixture();
+    const recent = [
+      {
+        key: root,
+        displayName: "Ryii",
+        searchedAt: new Date("2026-09-26T12:00:00Z"),
+        inProgress: true
+      }
+    ];
+    vi.mocked(repositories.recentSearches!.listRecent).mockResolvedValue(
+      recent
+    );
+
+    await expect(dossiers.listRecentSearches(10)).resolves.toBe(recent);
+    expect(repositories.recentSearches?.listRecent).toHaveBeenCalledWith(10);
+  });
+
   it("threads the request scope through to search.create so start's own database work is measured", async () => {
     // Break caught: start and addConnectedCharacter do real database and
     // queue work through search.create, so discarding the scope here would
@@ -1244,6 +1310,9 @@ describe("applicant dossier service", () => {
         },
         async findActive() {
           return null;
+        },
+        async listRecent() {
+          return [];
         }
       },
       suppressions: {
@@ -2285,6 +2354,38 @@ describe("applicant dossier service", () => {
         keys[0]
       ]);
     }
+  });
+
+  it("researches and lists every character of the largest real roster by default", async () => {
+    // Break caught (#555): the default cap of 12 researched only the first
+    // twelve characters and dropped the rest from the dossier, so six of the
+    // test environment's 35 rosters (the largest has 23) hid real characters.
+    const alts = Array.from({ length: 22 }, (_, index) => {
+      const name = `alt${String(index + 1).padStart(2, "0")}`;
+      return {
+        characterId: `10000000-0000-4000-8000-${String(index + 200).padStart(12, "0")}`,
+        key: { region: "eu" as const, realm: "silvermoon", name },
+        displayName: name,
+        className: "Priest",
+        level: 80,
+        guild: null,
+        raiderIoUrl: `https://raider.io/characters/eu/silvermoon/${name}`,
+        source: "claimed" as const,
+        displayOrder: index + 1
+      };
+    });
+    const { dossiers, repositories } = fixture({
+      snapshot: storedSnapshot([storedSnapshot().characters[0]!, ...alts])
+    });
+
+    const result = await dossiers.read(root);
+
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    expect(result.dossier.characters).toHaveLength(23);
+    expect(repositories.evidence.reserve).toHaveBeenCalledTimes(23);
+    expect(
+      result.dossier.limitations.filter((item) => item.code === "request_cap")
+    ).toEqual([]);
   });
 
   it("reports every evidence stream skipped by the character cap", async () => {

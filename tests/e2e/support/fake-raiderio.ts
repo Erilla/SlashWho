@@ -18,6 +18,13 @@ const queuedCharacter = {
   name: "Queued"
 } as const;
 
+// Searched from the landing page to watch its recent-searches row; declares
+// Frostalt so its discovery can be held on that read.
+const recentCharacter = {
+  ...ryii,
+  name: "Recent"
+} as const;
+
 // Reached only through a pasted Warcraft Logs character-ID URL, so the
 // evidence run its research starts shares no state with Ryii's specs.
 const ryun = {
@@ -254,6 +261,14 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
 
     if (url.pathname === "/api/characters/eu/silvermoon/queued") {
       declaredCharacter(queuedCharacter, {
+        name: frostalt.name,
+        path: "/characters/eu/silvermoon/Frostalt"
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/characters/eu/silvermoon/recent") {
+      declaredCharacter(recentCharacter, {
         name: frostalt.name,
         path: "/characters/eu/silvermoon/Frostalt"
       });
