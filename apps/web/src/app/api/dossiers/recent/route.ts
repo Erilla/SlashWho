@@ -3,6 +3,7 @@ import { formatCharacterDisplayName } from "@slashwho/domain";
 
 import { getContainer } from "../../../../server/container";
 import {
+  jsonNoStore,
   publicReadAuthorizationResponse,
   withHttpRequest
 } from "../../../../server/http";
@@ -21,19 +22,16 @@ export async function GET(request: Request): Promise<Response> {
       RECENT_DOSSIER_SEARCH_LIMIT,
       scope
     );
-    return Response.json(
-      recentDossierSearchesResponseSchema.parse({
-        searches: recent.map((search) => ({
-          character: search.key,
-          // A character discovery has not created yet has only its key.
-          displayName: formatCharacterDisplayName(
-            search.displayName ?? search.key.name
-          ),
-          searchedAt: search.searchedAt.toISOString(),
-          state: search.inProgress ? "in_progress" : "complete"
-        }))
-      }),
-      { headers: { "cache-control": "no-store" } }
-    );
+    return jsonNoStore(recentDossierSearchesResponseSchema, {
+      searches: recent.map((search) => ({
+        character: search.key,
+        // A character discovery has not created yet has only its key.
+        displayName: formatCharacterDisplayName(
+          search.displayName ?? search.key.name
+        ),
+        searchedAt: search.searchedAt.toISOString(),
+        state: search.inProgress ? "in_progress" : "complete"
+      }))
+    });
   });
 }

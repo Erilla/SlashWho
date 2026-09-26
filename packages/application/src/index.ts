@@ -78,7 +78,7 @@ export type {
   ReadDossierResult
 } from "./applicant-dossier-service";
 export { createMeasurementScope } from "./measurement";
-export type { MeasurementScope } from "./measurement";
+export type { MeasurementScope, MeasurementScopeOptions } from "./measurement";
 export {
   attributeThrottlesTo,
   bindThrottleScope,

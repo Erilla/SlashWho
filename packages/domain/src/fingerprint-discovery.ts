@@ -83,7 +83,25 @@ export type DiscoverFingerprintMatchesOptions = {
    * snapshot, which keeps this a one-hop traversal.
    */
   historicalGuilds?: readonly CharacterGuild[];
+  /**
+   * How many candidate reads the sweep keeps outstanding at once. Defaults to
+   * one, a serial sweep. This only lets the sweep offer reads concurrently: the
+   * process-wide concurrency and rate limits belong on the gateway's client,
+   * which every caller of the same credentials shares.
+   */
+  readConcurrency?: number;
 };
+
+type CandidateResult =
+  | { kind: "skipped" }
+  | { kind: "swept"; id: string; match?: DiscoveredCharacter }
+  | { kind: "unread"; id: string };
+
+function readConcurrency(value: number | undefined): number {
+  return value !== undefined && Number.isInteger(value) && value >= 1
+    ? value
+    : 1;
+}
 
 function isNotFound(error: unknown): boolean {
   return (
@@ -91,6 +109,15 @@ function isNotFound(error: unknown): boolean {
     error !== null &&
     "kind" in error &&
     error.kind === "not_found"
+  );
+}
+
+function isCapReached(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "kind" in error &&
+    error.kind === "fingerprint_cap_reached"
   );
 }
 
@@ -353,8 +380,8 @@ export async function discoverFingerprintMatches(
         )
       : sorted;
     const seen = new Set<string>();
+    const eligible: { candidate: FingerprintCandidate; id: string }[] = [];
     for (const candidate of candidates) {
-      throwIfAborted();
       const candidateId = canonicalCharacterId(candidate.key);
       if (
         candidateId === rootId ||
@@ -364,50 +391,147 @@ export async function discoverFingerprintMatches(
         continue;
       }
       seen.add(candidateId);
+      eligible.push({ candidate, id: candidateId });
+    }
 
-      const isSuppressed = await options.isSuppressed(candidate.key);
-      throwIfAborted();
-      if (isSuppressed) continue;
+    const verifiedRootFingerprint = rootFingerprint;
+    const concurrency = readConcurrency(options.readConcurrency);
+    // One entry per eligible candidate, filled as each settles. Reads complete
+    // out of order, so results are only folded into the outcome afterwards, in
+    // candidate order, which keeps admission order and the cursor identical to
+    // a serial sweep.
+    const settled: (CandidateResult | undefined)[] = [];
+    const inFlight = new Set<Promise<void>>();
+    const suppressionChecks = new Map<number, Promise<boolean>>();
+    const outstanding: Promise<unknown>[] = [];
+    let stopped = false;
+    let failure: { index: number; error: unknown } | undefined;
 
-      // A roster member with no readable achievement profile is ordinary, not an
-      // upstream fault: the measured live sweep saw 23 of 393 candidates return
-      // one. Skip the candidate and keep the request it already consumed.
-      let candidateFingerprint:
-        ReadonlyMap<number, number> | typeof budgetExhausted;
-      try {
-        candidateFingerprint = await request(() =>
-          gateway.getAchievementFingerprint(candidate.key, options.signal)
-        );
-      } catch (error) {
-        if (isNotFound(error)) {
-          lastSweptId = candidateId;
+    // The first suppression check is looked ahead across the next window of
+    // candidates, so the dispatcher rarely waits on it. It stays a separate
+    // check from the one immediately before admission.
+    function suppressedAt(index: number): Promise<boolean> {
+      const end = Math.min(eligible.length, index + concurrency);
+      for (let ahead = index; ahead < end; ahead += 1) {
+        if (suppressionChecks.has(ahead)) continue;
+        const check = options.isSuppressed(eligible[ahead]!.candidate.key);
+        // Handled here so a look-ahead the sweep never reaches cannot surface
+        // as an unhandled rejection; the awaited copy still rejects.
+        outstanding.push(check.catch(() => undefined));
+        suppressionChecks.set(ahead, check);
+      }
+      const check = suppressionChecks.get(index)!;
+      suppressionChecks.delete(index);
+      return check;
+    }
+
+    function readCandidate(index: number): Promise<void> {
+      const { candidate, id } = eligible[index]!;
+      // `request` runs synchronously up to the gateway call, so reads reach
+      // the gateway, and so reserve budget, strictly in candidate order. A
+      // budget that ends mid-window therefore ends at one candidate: every
+      // earlier read has its request and every later one is refused.
+      return request(() =>
+        gateway.getAchievementFingerprint(candidate.key, options.signal)
+      ).then(
+        async (candidateFingerprint) => {
+          if (candidateFingerprint === budgetExhausted) {
+            settled[index] = { kind: "unread", id };
+            stopped = true;
+            return;
+          }
+          if (!isFingerprint(candidateFingerprint)) {
+            throw { kind: "schema_drift" };
+          }
+          if (
+            !fingerprintMatches(
+              verifiedRootFingerprint,
+              candidateFingerprint,
+              options
+            )
+          ) {
+            settled[index] = { kind: "swept", id };
+            return;
+          }
+          const isSuppressedBeforeAdmission = await options.isSuppressed(
+            candidate.key
+          );
+          throwIfAborted();
+          settled[index] = isSuppressedBeforeAdmission
+            ? { kind: "swept", id }
+            : { kind: "swept", id, match: discoveredCharacter(candidate) };
+        },
+        (error: unknown) => {
+          // A roster member with no readable achievement profile is ordinary,
+          // not an upstream fault: the measured live sweep saw 23 of 393
+          // candidates return one. Skip the candidate and keep the request it
+          // already consumed.
+          if (isNotFound(error)) {
+            settled[index] = { kind: "swept", id };
+            return;
+          }
+          if (isCapReached(error)) {
+            // The gateway refused the read before spending anything, and with
+            // several reads outstanding more than one can be refused.
+            requestsUsed -= 1;
+            settled[index] = { kind: "unread", id };
+            capped = true;
+            stopped = true;
+            return;
+          }
+          throw error;
+        }
+      );
+    }
+
+    try {
+      for (let index = 0; index < eligible.length; index += 1) {
+        while (inFlight.size >= concurrency && !stopped) {
+          await Promise.race(inFlight);
+        }
+        if (stopped) break;
+        throwIfAborted();
+
+        const isSuppressed = await suppressedAt(index);
+        throwIfAborted();
+        if (stopped) break;
+        if (isSuppressed) {
+          settled[index] = { kind: "skipped" };
           continue;
         }
-        throw error;
-      }
-      if (candidateFingerprint === budgetExhausted) break;
-      lastSweptId = candidateId;
-      if (!isFingerprint(candidateFingerprint)) throw { kind: "schema_drift" };
 
-      if (!fingerprintMatches(rootFingerprint, candidateFingerprint, options)) {
-        continue;
+        const read = readCandidate(index)
+          .catch((error: unknown) => {
+            stopped = true;
+            // The earliest candidate's failure wins, so the outcome does not
+            // depend on which of several failing reads answered first.
+            if (failure === undefined || index < failure.index) {
+              failure = { index, error };
+            }
+          })
+          .finally(() => {
+            inFlight.delete(read);
+          });
+        inFlight.add(read);
       }
-      const isSuppressedBeforeAdmission = await options.isSuppressed(
-        candidate.key
-      );
-      throwIfAborted();
-      if (isSuppressedBeforeAdmission) continue;
+    } finally {
+      // Nothing returns while a read is still in flight: its budget write
+      // would otherwise race the caller releasing the reservation.
+      await Promise.allSettled([...inFlight, ...outstanding]);
+    }
+    if (failure !== undefined) throw failure.error;
 
-      matches.push(discoveredCharacter(candidate));
+    // The cursor stops at the first candidate whose read never completed, so
+    // the next sweep resumes there rather than skipping it.
+    for (const result of settled) {
+      if (result === undefined || result.kind === "unread") break;
+      if (result.kind === "skipped") continue;
+      lastSweptId = result.id;
+      if (result.match) matches.push(result.match);
     }
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "kind" in error &&
-      error.kind === "fingerprint_cap_reached"
-    ) {
+    if (isCapReached(error)) {
       return {
         kind: "capped",
         characters: matches,
