@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen
+} from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 
 import { evidenceFilter } from "../lib/character-visibility";
+import { DossierCharacterProvider } from "./dossier-character-name";
 import { DossierGuildHistory } from "./dossier-guild-history";
 
 const ryii: CharacterKey = { region: "eu", realm: "silvermoon", name: "ryii" };
@@ -99,12 +106,41 @@ it("shows the details in a tooltip on hover and on focus", () => {
     />
   );
   const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  const nightsLine = () =>
+    document.querySelector(".dossier-guild-timeline-tooltip span")?.textContent;
   fireEvent.mouseEnter(casualBar!);
-  expect(screen.getByText("3 raid nights: Ryun")).toBeInTheDocument();
+  expect(nightsLine()).toBe("8 Mar 2023 to 10 Dec 2023");
+  expect(
+    document.querySelector(".dossier-guild-timeline-tooltip")?.textContent
+  ).toContain("3 raid nights: Ryun");
   fireEvent.mouseLeave(casualBar!.closest("svg")!);
-  expect(screen.queryByText("3 raid nights: Ryun")).not.toBeInTheDocument();
+  expect(
+    document.querySelector(".dossier-guild-timeline-tooltip")
+  ).not.toBeInTheDocument();
   fireEvent.focus(casualBar!);
-  expect(screen.getByText("3 raid nights: Ryun")).toBeInTheDocument();
+  expect(
+    document.querySelector(".dossier-guild-timeline-tooltip")?.textContent
+  ).toContain("3 raid nights: Ryun");
+});
+
+it("colours the tooltip's character names by class", () => {
+  render(
+    <DossierCharacterProvider characters={characters}>
+      <DossierGuildHistory
+        characters={characters}
+        guildHistory={guildHistory}
+        today="2026-09-26"
+      />
+    </DossierCharacterProvider>
+  );
+  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  fireEvent.mouseEnter(casualBar!);
+  const name = screen.getByText("Ryun", {
+    selector: ".dossier-guild-timeline-tooltip .dossier-character-name"
+  });
+  expect(name).toHaveClass("dossier-character-name--priest");
+  // A tooltip cannot be clicked, so its names are not links.
+  expect(name.closest("a")).toBeNull();
 });
 
 it("shades alternate tiers across the background and names a tier on hover", () => {
@@ -125,6 +161,50 @@ it("shades alternate tiers across the background and names a tier on hover", () 
   );
   fireEvent.mouseEnter(bands[1]!);
   expect(screen.getByText(/^Tier: /)).toBeInTheDocument();
+});
+
+it("stretches to fill the section, and re-fits when the section resizes", () => {
+  let width = 1300;
+  const clientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get() {
+      return width;
+    }
+  });
+  const observers: (() => void)[] = [];
+  const original = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(callback: () => void) {
+      observers.push(callback);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  try {
+    const { container } = render(
+      <DossierGuildHistory
+        characters={characters}
+        guildHistory={guildHistory}
+        today="2026-09-26"
+      />
+    );
+    const svgWidth = () =>
+      container.querySelector("svg")?.getAttribute("width");
+    expect(svgWidth()).toBe("1300");
+    width = 1600;
+    act(() => observers.forEach((callback) => callback()));
+    expect(svgWidth()).toBe("1600");
+  } finally {
+    globalThis.ResizeObserver = original;
+    if (clientWidth) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidth);
+    }
+  }
 });
 
 it("scrolls horizontally in a keyboard-reachable region", () => {
