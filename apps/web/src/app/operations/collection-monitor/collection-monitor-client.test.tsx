@@ -410,6 +410,50 @@ describe("CollectionMonitorClient", () => {
       );
     });
 
+    it("drops a poll read at a shallower depth that resolves after a load", async () => {
+      // Break caught: a poll already in flight at fifty rows when "Load older
+      // runs" landed replaced the deeper snapshot, snapping the table back.
+      let resolvePoll: ((response: Response) => void) | undefined;
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((resolve) => {
+              resolvePoll = resolve;
+            })
+        )
+        .mockResolvedValueOnce(
+          Response.json({
+            ...secondPage,
+            hasActiveRuns: true,
+            hasMoreCompleted: true
+          })
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <CollectionMonitorClient
+          initialMonitor={{ ...firstPage, hasActiveRuns: true }}
+        />
+      );
+
+      await advance(1_000);
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/api/operations/collection-monitor?completedLimit=50",
+        expect.anything()
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Load older runs" }));
+      await advance(0);
+      expect(screen.getByText(/run55 —/)).toBeInTheDocument();
+
+      await act(async () => {
+        resolvePoll?.(Response.json({ ...firstPage, hasActiveRuns: true }));
+      });
+      await advance(0);
+
+      expect(screen.getByText(/run55 —/)).toBeInTheDocument();
+    });
+
     it("stops loading on scroll after a failed page until pressed again", async () => {
       // Break caught: the still-visible button re-arms the observer, so a
       // failing page would be re-requested in a tight loop.

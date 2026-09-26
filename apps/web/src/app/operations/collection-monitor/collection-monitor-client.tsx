@@ -87,6 +87,12 @@ async function readMonitor(
     : { kind: "terminal", response };
 }
 
+/** A polled snapshot and the completed-run depth it was read at. */
+type PolledMonitor = Readonly<{
+  monitor: CollectionMonitorResponse;
+  completedLimit: number;
+}>;
+
 type TerminalState = "complete" | "partial" | "failed";
 
 function terminalStateByCharacter(
@@ -387,15 +393,31 @@ export function CollectionMonitorClient({
     setError(terminalErrorMessage(response));
   }, []);
 
+  // Each poll carries the depth it asked for: a poll already in flight when
+  // "Load older runs" lands was read shallower, and must not undo that page.
   const readCurrentMonitor = useCallback(
-    (signal: AbortSignal) => readMonitor(signal, completedLimitRef.current),
+    async (signal: AbortSignal): Promise<PollReadResult<PolledMonitor>> => {
+      const completedLimit = completedLimitRef.current;
+      const result = await readMonitor(signal, completedLimit);
+      return result.kind === "snapshot"
+        ? { kind: "snapshot", value: { monitor: result.value, completedLimit } }
+        : result;
+    },
     []
+  );
+
+  const onPolledSnapshot = useCallback(
+    ({ monitor: snapshot, completedLimit }: PolledMonitor) => {
+      if (completedLimit < completedLimitRef.current) return;
+      onSnapshot(snapshot);
+    },
+    [onSnapshot]
   );
 
   useAuthoritativePoll({
     active: monitor.hasActiveRuns,
     read: readCurrentMonitor,
-    onSnapshot,
+    onSnapshot: onPolledSnapshot,
     onTerminalError
   });
 
