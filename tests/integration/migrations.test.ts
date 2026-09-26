@@ -142,7 +142,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-27).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-28).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
