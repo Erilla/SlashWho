@@ -385,6 +385,24 @@ it("leaves the Raider.IO access key undefined when it is absent or blank", () =>
   ).toBeUndefined();
 });
 
+it.each([
+  ["EVIDENCE_POINTS_RESERVE", "evidencePointsReserve", 3_500],
+  ["EVIDENCE_KILL_SETTLE_DAYS", "evidenceKillSettleDays", 7],
+  ["EVIDENCE_RETRY_COST_CEILING", "evidenceRetryCostCeiling", 250],
+  ["WORKER_ABORT_GRACE_MS", "workerAbortGraceMs", 5_000]
+] as const)(
+  "switches %s off only when it is set to 0, not when it is blank",
+  (name, field, fallback) => {
+    // Break caught (#569): the worker read a blank value as Number("") === 0,
+    // so an empty Railway variable silently switched this control off. Blank
+    // is now unset in both services; switching it off takes an explicit 0.
+    expect(loadWorkerConfig({ ...environment, [name]: "" })[field]).toBe(
+      fallback
+    );
+    expect(loadWorkerConfig({ ...environment, [name]: "0" })[field]).toBe(0);
+  }
+);
+
 it("reserves part of the drain budget for aborting work that cannot finish", () => {
   // Break caught: #306. Spending the whole budget waiting for evidence runs
   // that take minutes meant the handler's release path never ran on a deploy.
