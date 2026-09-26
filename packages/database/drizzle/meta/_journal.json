@@ -407,6 +407,13 @@
       "when": 1792011600009,
       "tag": "0058_snapshot_character_lookup_index",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1792011600010,
+      "tag": "0059_applicant_parser_version",
+      "breakpoints": true
     }
   ]
 }

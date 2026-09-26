@@ -154,7 +154,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-30).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 28, tag: "0029_parse_only_scan_state" },
       { idx: 29, tag: "0030_unstick_schema_drift_runs" },
       { idx: 30, tag: "0031_partial_scan_skipped" },
       { idx: 31, tag: "0032_report_provenance" },
@@ -183,7 +182,8 @@ describe("database migrations", () => {
       { idx: 54, tag: "0055_dossier_searches" },
       { idx: 55, tag: "0056_persistent_account_sessions" },
       { idx: 56, tag: "0057_evidence_run_light_refresh" },
-      { idx: 57, tag: "0058_snapshot_character_lookup_index" }
+      { idx: 57, tag: "0058_snapshot_character_lookup_index" },
+      { idx: 58, tag: "0059_applicant_parser_version" }
     ]);
   });
 
