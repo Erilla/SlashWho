@@ -227,6 +227,16 @@ sizing the cap from `request_cap` rows, tell the two apart:
 `history_scan_requests < request_cap_used` is a resumed scan that finished, not
 budget exhaustion.
 
+A light refresh neither resumes nor moves the history cursor: it reads the
+newest page and republishes the stored cursor unchanged on its own run. It has
+to republish it: the cursor lives on each run's row and is read from the
+newest published run, so a run that left it out would clear it. Before, its
+one-page cap
+saved "resume at page 2", which sent the next full run on a resumed scan and
+the run after that back to page one, so every light refresh on an active
+character paid for its history twice. A light run's `request_cap` is its
+one-page budget, not a cursor to follow.
+
 A kill whose first defeat was never logged can never be held, so it would be
 searched for on every full run until its tier settles. For a character with no
 stored Warcraft Logs evidence at all, that is never, because nothing gives it a

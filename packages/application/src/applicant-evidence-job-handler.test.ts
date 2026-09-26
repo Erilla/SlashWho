@@ -3886,6 +3886,159 @@ describe("applicant evidence job handler", () => {
       });
     });
 
+    describe("a light refresh and the history bookmark", () => {
+      const lightHandler = (
+        evidence: ReturnType<typeof store>,
+        getFirstKillReports: WarcraftLogsGateway["getFirstKillReports"]
+      ) =>
+        createApplicantEvidenceJobHandler({
+          evidence,
+          warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
+            WarcraftLogsGateway,
+            "getFirstKillReports" | "getRateLimit"
+          >,
+          requestCap: 500,
+          parseRequestCap: 24,
+          capRetryMs: 1_800_000,
+          transientRetryMs: 900_000,
+          pointsReserve: 0,
+          retryCostCeiling: 250,
+          failureCooldownMs: 1_800_000,
+          killSettleMs: 7 * 24 * 60 * 60 * 1000
+        });
+      const withBookmark = (evidence: ReturnType<typeof store>) => {
+        evidence.storedEvidenceTiers = async () =>
+          ({
+            kills: [],
+            wipes: [],
+            historyScanResumePage: 19,
+            historyScanResumeBoundaryReportCode: "newest-proved-report"
+          }) as unknown as Awaited<
+            ReturnType<typeof evidence.storedEvidenceTiers>
+          >;
+        return evidence;
+      };
+      const cappedAfterPageOne = () =>
+        vi.fn(async () => ({
+          kind: "evidence" as const,
+          limitation: {
+            kind: "limitation" as const,
+            code: "request_cap" as const
+          },
+          historyScanResumePage: 2,
+          historyScanResumeBoundaryReportCode: "page-one-last-report",
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        }));
+      const finished = () =>
+        vi.fn(async () => ({
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        }));
+      const light = { runId: run.id, mode: "light" as const };
+      const context = {
+        attempt: 1,
+        maxAttempts: 5,
+        signal: new AbortController().signal
+      };
+
+      it("carries a stored bookmark forward when its one page is capped", async () => {
+        // Break caught: a light refresh reads one page and was publishing the
+        // client's "resume at page 2" over the stored bookmark. The next full
+        // run resumed from page 2, read to the end, and -- a resumed scan never
+        // publishes complete (#437) -- was sent back to page one, so every
+        // light refresh cost an active character one whole extra history scan.
+        const evidence = withBookmark(store());
+        const handler = lightHandler(evidence, cappedAfterPageOne());
+
+        await handler.execute(light, context);
+
+        expect(evidence.published[0]?.result).toMatchObject({
+          state: "partial",
+          limitationCode: "request_cap"
+        });
+        // Carried, not omitted: the bookmark lives on each run's own row and
+        // is read from the newest, so leaving it out would clear it.
+        expect(evidence.published[0]?.result).toMatchObject({
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
+      });
+
+      it("creates no bookmark where none was stored", async () => {
+        // Break caught: the same page-2 cursor, written for a character whose
+        // last full run finished, turns its next full run into a resumed one.
+        const evidence = store();
+        const handler = lightHandler(evidence, cappedAfterPageOne());
+
+        await handler.execute(light, context);
+
+        expect(evidence.published[0]?.result).not.toHaveProperty(
+          "historyScanResumePage"
+        );
+      });
+
+      it("does not clear a stored bookmark when its one page ends the history", async () => {
+        const evidence = withBookmark(store());
+        const handler = lightHandler(evidence, finished());
+
+        await handler.execute(light, context);
+
+        expect(evidence.published[0]?.result).toMatchObject({
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
+      });
+
+      it("carries a stored bookmark forward when its one page fails", async () => {
+        const evidence = withBookmark(store());
+        const handler = lightHandler(
+          evidence,
+          vi.fn(async () => ({
+            kind: "limitation" as const,
+            code: "unavailable" as const
+          }))
+        );
+
+        await handler.execute(light, context);
+
+        expect(evidence.published[0]?.result).toMatchObject({
+          state: "partial",
+          limitationCode: "unavailable"
+        });
+        expect(evidence.published[0]?.result).toMatchObject({
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
+      });
+
+      it("reads the newest page rather than resuming from the bookmark", async () => {
+        // Break caught: resuming spent a light refresh's single request probing
+        // the bookmark's boundary page. It read no new raid night, and a probe
+        // that proved the boundary left nothing unread below it, so the client
+        // reset the bookmark to page one.
+        const evidence = withBookmark(store());
+        const getFirstKillReports = finished();
+        const handler = lightHandler(evidence, getFirstKillReports);
+
+        await handler.execute(light, context);
+
+        const options = (getFirstKillReports.mock.calls[0] as unknown[])[1];
+        expect(options).toMatchObject({ requestCap: 1 });
+        expect(options).not.toHaveProperty("historyScanStartPage");
+        expect(options).not.toHaveProperty(
+          "historyScanResumeBoundaryReportCode"
+        );
+      });
+    });
+
     it("publishes timestamp omissions as completed history metadata", async () => {
       const evidence = store();
       const handler = handlerFor(evidence, {
