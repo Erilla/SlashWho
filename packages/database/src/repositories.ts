@@ -899,6 +899,12 @@ export interface EvidenceRepository {
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
   markEnqueued(id: string, queueJobId: string): Promise<void>;
+  /**
+   * Records a still-queued run as a light refresh, for a caller that can only
+   * decide that after `reserve` created it: a stale dossier read of a settled
+   * character (#540). The same flag `reserve({ lightRefresh })` sets.
+   */
+  markLightRefresh(id: string): Promise<void>;
   seedPhases?(
     runId: string,
     phases: readonly { id: string; ordinal: number }[]

@@ -189,6 +189,7 @@ function fixture(
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([]),
       lastRaiderIoRecoveryAt: vi.fn().mockResolvedValue(null),
+      markLightRefresh: vi.fn().mockResolvedValue(undefined),
       addHistoricAlias: vi.fn().mockResolvedValue("added"),
       removeHistoricAlias: vi.fn().mockResolvedValue("removed"),
       latestTierSearches: vi.fn().mockResolvedValue(options.tierSearches ?? []),
@@ -666,6 +667,67 @@ describe("a stale dossier read (#540)", () => {
       expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
     }
   );
+
+  it("records the light run as a light refresh before queuing it", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+
+    await dossiers.read(root);
+
+    const markLightRefresh = vi.mocked(repositories.evidence.markLightRefresh);
+    expect(markLightRefresh).toHaveBeenCalledExactlyOnceWith(
+      "10000000-0000-4000-8000-000000000051"
+    );
+    expect(markLightRefresh.mock.invocationCallOrder[0]!).toBeLessThan(
+      enqueueCharacterEvidence.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does not record a full run as a light refresh", async () => {
+    const { dossiers, repositories } = fixture();
+    staleReservation(repositories);
+
+    await dossiers.read(root);
+
+    expect(repositories.evidence.markLightRefresh).not.toHaveBeenCalled();
+  });
+
+  const invalidTimestampNotices = (
+    limitations: readonly Readonly<{ character: unknown; code: string }>[]
+  ) =>
+    limitations.filter(
+      (item) =>
+        item.code === "invalid_fight_timestamp" &&
+        JSON.stringify(item.character) === JSON.stringify(root)
+    );
+
+  it("keeps the last run's invalid-timestamp notice while a stale read's light run collects", async () => {
+    // Break caught: the light run was stored as a full run, so it superseded
+    // the last run and hid a notice a one-page read never replaces (#541).
+    const { dossiers, repositories } = fixture({
+      omittedInvalidTimestamp: true
+    });
+    staleReservation(repositories);
+    settle(repositories);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+
+    expect(invalidTimestampNotices(result.dossier.limitations)).toHaveLength(1);
+  });
+
+  it("drops the last run's invalid-timestamp notice while a full run re-reads it", async () => {
+    const { dossiers, repositories } = fixture({
+      omittedInvalidTimestamp: true
+    });
+    staleReservation(repositories);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+
+    expect(invalidTimestampNotices(result.dossier.limitations)).toEqual([]);
+  });
 
   it("leaves a ranked continuation's mode to the continuation", async () => {
     const { dossiers, repositories, enqueueCharacterEvidence } = fixture();

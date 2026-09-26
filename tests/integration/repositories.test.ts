@@ -2730,6 +2730,40 @@ describe("PostgreSQL repositories", () => {
     expect(after?.kills[0]?.performance.damage).toEqual(expected);
   });
 
+  it("records a queued run as a light refresh after reserving it", async () => {
+    // A stale dossier read decides a run is light only after `reserve` made
+    // it (#540), and the dossier reads the mark to leave the last run's
+    // notices standing (#541).
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reserved.kind !== "reserved") throw new Error("evidence_not_reserved");
+    expect(reserved.run.lightRefresh).toBeUndefined();
+
+    await repositories.evidence.markLightRefresh(reserved.run.id);
+
+    await expect(
+      repositories.evidence.find(reserved.run.id)
+    ).resolves.toMatchObject({ lightRefresh: true });
+    const joined = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
+      at: new Date("2026-08-04T13:00:00.000Z")
+    });
+    expect(joined).toMatchObject({
+      kind: "active",
+      active: { id: reserved.run.id, lightRefresh: true }
+    });
+
+    // A run a worker already claimed is past being re-described.
+    await repositories.evidence.claim(reserved.run.id, 1);
+    await expect(
+      repositories.evidence.markLightRefresh(reserved.run.id)
+    ).rejects.toThrow("character_evidence_run_not_enqueuable");
+  });
+
   it("says whether a reservation's completed evidence is from the current collector", async () => {
     // Break caught: a stale dossier read queues only the newest page for a
     // settled character (#540). A snapshot from an older collector is not

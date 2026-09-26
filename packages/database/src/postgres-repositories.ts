@@ -5127,6 +5127,18 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? mapEvidenceRun(result.rows[0]) : null;
       },
 
+      async markLightRefresh(id) {
+        const result = await pool.query(
+          `UPDATE character_evidence_runs
+           SET light_refresh = true
+           WHERE id = $1 AND status = 'queued'`,
+          [id]
+        );
+        if (result.rowCount !== 1) {
+          throw new Error("character_evidence_run_not_enqueuable");
+        }
+      },
+
       async markEnqueued(id, queueJobId) {
         const result = await pool.query(
           `UPDATE character_evidence_runs

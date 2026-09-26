@@ -560,6 +560,7 @@ async function gatherCharacterEvidence(
         : null),
     phasePlan: fullEvidencePhasePlan()
   });
+  let lightRunId: string | null = null;
   if (reservation.kind === "reserved") {
     // Stale evidence of a character with nothing left to collect needs only
     // the newest page, for a raid night since its last run (#540). A ranked
@@ -573,6 +574,10 @@ async function gatherCharacterEvidence(
         completedVersionCurrent: reservation.completedVersionCurrent ?? false,
         evidence: options.repositories.evidence
       }));
+    // Recorded before the job exists, so no read of the queued run sees it as
+    // a full run that supersedes the last one's notices (#541).
+    if (light)
+      await options.repositories.evidence.markLightRefresh(reservation.run.id);
     const queueJobId = await options.queue.enqueueCharacterEvidence(
       reservation.run.id,
       {
@@ -584,12 +589,17 @@ async function gatherCharacterEvidence(
       reservation.run.id,
       queueJobId
     );
+    if (light) lightRunId = reservation.run.id;
   }
   const limitations: DossierLimitation[] = [];
   const completed = reservation.completed;
   // The same run `gathering` below is keyed on, so the steps describe exactly
-  // the collection the row's spinner reports.
-  const activeRun = reservation.active;
+  // the collection the row's spinner reports. A run this read just marked
+  // light carries the mark here too.
+  const activeRun =
+    reservation.active && reservation.active.id === lightRunId
+      ? { ...reservation.active, lightRefresh: true }
+      : reservation.active;
   // What the last run fell short on is only current until the next full run
   // starts re-reading it. From then the row shows that collection and its
   // steps, and repeating the old shortfall beside it reads as today's news
