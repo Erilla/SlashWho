@@ -287,13 +287,13 @@ describe("searching a dossier tier for every character", () => {
   });
 
   it("never stops short of the characters a dossier can display", () => {
-    // Break caught: a limit below the configurable display cap would leave
-    // listed characters unsearched on every press.
+    // Break caught: a limit below the configurable character ceiling would
+    // leave listed characters unsearched on every press.
     const config = (cap: number) =>
       applicationConfigSchema.safeParse({
         BOT_API_KEY: "b".repeat(32),
         RATE_LIMIT_HASH_SECRET: "r".repeat(32),
-        DOSSIER_CHARACTER_CAP: cap
+        DOSSIER_CHARACTER_CEILING: cap
       }).success;
 
     expect(config(1)).toBe(true);
