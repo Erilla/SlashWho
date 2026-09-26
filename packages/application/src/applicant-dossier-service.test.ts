@@ -834,6 +834,63 @@ describe("applicant dossier service", () => {
     });
   });
 
+  it("carries every guilded raid night, not only the first kills the raids lead with (#611)", async () => {
+    // Break caught: deriving the history from the raids' first kills would
+    // drop every later night, which is most of a guild's history.
+    const farm: StoredCharacterMythicKill = {
+      id: "10000000-0000-4000-8000-000000000041",
+      raidId: "42",
+      raidName: "Nerub-ar Palace",
+      bossId: "1234",
+      bossName: "Queen Ansurek",
+      journalBossId: null,
+      bossOrder: 8,
+      killedAt: "2024-10-08T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/farm",
+      fightUrl: "https://www.warcraftlogs.com/reports/farm#fight=3",
+      guild: { name: "Example Guild", realm: "silvermoon" },
+      historicWorldRank: null,
+      historicRankCheckedAt: null,
+      parsesReadAt: null,
+      performance: {
+        damage: { state: "unavailable" },
+        healing: { state: "unavailable" },
+        bossDamage: { state: "unavailable" }
+      }
+    };
+    const unguilded: StoredCharacterMythicKill = {
+      ...farm,
+      id: "10000000-0000-4000-8000-000000000042",
+      killedAt: "2024-10-15T20:00:00.000Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/personal",
+      fightUrl: "https://www.warcraftlogs.com/reports/personal#fight=1",
+      guild: null
+    };
+    const result = await fixture({
+      additionalKills: [farm, unguilded]
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(result.dossier.guildHistory).toEqual([
+      {
+        guild: {
+          name: "Example Guild",
+          region: root.region,
+          realm: "silvermoon"
+        },
+        nights: [
+          {
+            date: "2024-10-01",
+            characters: expect.arrayContaining([root, alt])
+          },
+          {
+            date: "2024-10-08",
+            characters: expect.arrayContaining([root, alt])
+          }
+        ]
+      }
+    ]);
+  });
+
   it("says where each character's search of each tier stands", async () => {
     // The button's queued, running and done states come from the dossier the
     // page already polls, not from a request per tier.

@@ -749,3 +749,80 @@ export function lookupRaiderIoBoss(
   const bossSlug = encounter?.raiderIoBossSlug ?? raiderIoBossSlug(bossName);
   return bossSlug ? { raidSlug: raid.raiderIoRaidSlug, bossSlug } : null;
 }
+
+/**
+ * One raid tier: the raids that were current together, and the day the tier
+ * opened. A tier lasts until the next one opens.
+ */
+export type RaidTier = Readonly<{
+  /** The tier's raids, joined for display. */
+  name: string;
+  raidNames: readonly string[];
+  /** The opening day, `YYYY-MM-DD` in UTC. */
+  startsOn: string;
+}>;
+
+// Raider.IO's windows are a union across regions, so one tier's close and the
+// next tier's opening routinely overlap by a day or two. A raid opening within
+// this margin of the current tier's close starts a new tier; one opening
+// earlier than that was released into the current tier, as Trial of Valor,
+// Crucible of Storms and Sporefall were.
+const TIER_BOUNDARY_TOLERANCE_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Every catalogued raid tier, oldest first, grouped from the schedule rather
+ * than transcribed.
+ *
+ * The windows used are the schedule's own -- the generated Raider.IO windows
+ * and the curated pre-Legion release dates -- and never the reviewed Blizzard
+ * widenings. Those move a boundary outwards to admit kills, which is right for
+ * deciding what evidence to withhold and wrong for saying when a tier began:
+ * Venomous Abyss's reviewed opening would fold it into the previous tier. A
+ * tier closes when its first raid does, since a side raid such as Trial of
+ * Valor outlives the tier it was released into.
+ */
+export function raidTiers(): readonly RaidTier[] {
+  const scheduled = catalogue.raids
+    .flatMap((raid) => {
+      const window =
+        generatedContentWindows.get(raid.journalRaidId) ??
+        preLegionContentWindows.get(raid.journalRaidId);
+      return window ? [{ raidName: raid.raidName, window }] : [];
+    })
+    .sort(
+      (a, b) =>
+        Date.parse(a.window.startsAt) - Date.parse(b.window.startsAt) ||
+        a.raidName.localeCompare(b.raidName)
+    );
+  const tiers: {
+    raidNames: string[];
+    startsAt: string;
+    endsAt: string | null;
+  }[] = [];
+  for (const { raidName, window } of scheduled) {
+    const current = tiers.at(-1);
+    if (
+      current &&
+      (current.endsAt === null ||
+        Date.parse(window.startsAt) <
+          Date.parse(current.endsAt) - TIER_BOUNDARY_TOLERANCE_MS)
+    ) {
+      current.raidNames.push(raidName);
+      continue;
+    }
+    tiers.push({
+      raidNames: [raidName],
+      startsAt: window.startsAt,
+      endsAt: window.endsAt
+    });
+  }
+  return Object.freeze(
+    tiers.map((tier) =>
+      Object.freeze({
+        name: tier.raidNames.join(" / "),
+        raidNames: Object.freeze([...tier.raidNames]),
+        startsOn: tier.startsAt.slice(0, 10)
+      })
+    )
+  );
+}
