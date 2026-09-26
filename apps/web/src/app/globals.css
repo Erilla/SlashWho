@@ -1283,8 +1283,28 @@ a {
 .dossier-character-lead {
   display: flex;
   min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: 0.6rem;
+}
+
+/* Stacked on a narrow screen the lead sizes to its content, and the eye
+   beside an unbroken long name would push the row past the viewport. Capping
+   the lead and letting the name break keeps the row inside it. */
+.dossier-character-lead > .dossier-character-identity {
+  flex: 1 1 auto;
+}
+
+.dossier-character-lead .dossier-character-name {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* The guild still gives way first; the name breaks only once it alone is
+   wider than the row. */
+.dossier-character-lead .dossier-character-name-line > :first-child {
+  flex-shrink: 0;
+  max-width: 100%;
 }
 
 .dossier-character-visibility {
