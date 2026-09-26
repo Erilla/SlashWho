@@ -437,7 +437,7 @@ export function DossierGuildHistory({
                       {labelled ? (
                         <text
                           aria-hidden="true"
-                          className="dossier-guild-timeline-label dossier-guild-timeline-label--outside"
+                          className="dossier-guild-timeline-ring-label"
                           textAnchor="end"
                           x={x - 10}
                           y={cy + 4}

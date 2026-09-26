@@ -309,21 +309,50 @@ function currentMarkers() {
     screen.getByRole("img", {
       name: `${guild} today. 1 character in the latest snapshot`
     });
-  const [casualBar, rancourBar] = screen.getAllByRole("img", {
-    name: /raid night/
-  });
-  const barY = (bar: HTMLElement) =>
-    Number(bar.querySelector("rect")?.getAttribute("y"));
+  const barY = (guild: string) =>
+    Number(
+      screen
+        .getByRole("img", { name: new RegExp(`^${guild}\\. .*raid night`) })
+        .querySelector("rect")
+        ?.getAttribute("y")
+    );
   const ringY = (marker: HTMLElement) =>
     Number(marker.querySelector("circle")?.getAttribute("cy"));
   return {
-    rancour: { bar: barY(rancourBar!), ring: ringY(ring("Rancour")) },
-    casual: { bar: barY(casualBar!), ring: ringY(ring("SeriouslyCasual")) },
-    label: (guild: string) => ring(guild).querySelector("text")?.textContent
+    rancour: { bar: barY("Rancour"), ring: ringY(ring("Rancour")) },
+    casual: {
+      bar: barY("SeriouslyCasual"),
+      ring: ringY(ring("SeriouslyCasual"))
+    },
+    label: (guild: string) => ring(guild).querySelector("text")
   };
 }
 
 it("marks the guilds the latest snapshot holds, each at the end of its row", () => {
+  // SeriouslyCasual raids alongside Rancour, so each has a row.
+  const [casualHistory, , rancourHistory] = guildHistory;
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={[
+        {
+          ...casualHistory!,
+          nights: nights(["2025-03-12", "2025-06-18"], [ryun])
+        },
+        rancourHistory!
+      ]}
+      today="2026-09-26"
+    />
+  );
+  const markers = currentMarkers();
+  expect(markers.casual.bar).not.toBe(markers.rancour.bar);
+  expect(markers.casual.ring).toBe(markers.casual.bar + 10);
+  expect(markers.rancour.ring).toBe(markers.rancour.bar + 10);
+  expect(markers.label("Rancour")).toBeNull();
+  expect(markers.label("SeriouslyCasual")).toBeNull();
+});
+
+it("gives a current guild's marker its own named row when a later guild ends its row", () => {
   render(
     <DossierGuildHistory
       characters={characters}
@@ -332,32 +361,17 @@ it("marks the guilds the latest snapshot holds, each at the end of its row", () 
     />
   );
   const markers = currentMarkers();
-  // Narrow, SeriouslyCasual's outside label pushes Rancour to the next row.
-  expect(markers.casual.bar).not.toBe(markers.rancour.bar);
-  expect(markers.casual.ring).toBe(markers.casual.bar + 10);
+  // Rancour follows SeriouslyCasual in the top row.
+  expect(markers.casual.bar).toBe(markers.rancour.bar);
   expect(markers.rancour.ring).toBe(markers.rancour.bar + 10);
-  expect(markers.label("Rancour")).toBeUndefined();
-  expect(markers.label("SeriouslyCasual")).toBeUndefined();
-});
-
-it("gives a current guild's marker its own named row when a later guild ends its row", () => {
-  withScroller(1300, () => {
-    render(
-      <DossierGuildHistory
-        characters={characters}
-        guildHistory={guildHistory}
-        today="2026-09-26"
-      />
-    );
-    const markers = currentMarkers();
-    // Wide, Rancour follows SeriouslyCasual in the top row.
-    expect(markers.casual.bar).toBe(markers.rancour.bar);
-    expect(markers.rancour.ring).toBe(markers.rancour.bar + 10);
-    expect(markers.label("Rancour")).toBeUndefined();
-    // A ring at that row's end would read as Rancour's.
-    expect(markers.casual.ring).toBeGreaterThan(markers.rancour.ring);
-    expect(markers.label("SeriouslyCasual")).toBe("SeriouslyCasual");
-  });
+  expect(markers.label("Rancour")).toBeNull();
+  // A ring at that row's end would read as Rancour's.
+  expect(markers.casual.ring).toBeGreaterThan(markers.rancour.ring);
+  const label = markers.label("SeriouslyCasual");
+  expect(label?.textContent).toBe("SeriouslyCasual");
+  // Drawn on the page, not on a bar: the bar label's fill would hide it.
+  expect(label).toHaveClass("dossier-guild-timeline-ring-label");
+  expect(label).not.toHaveClass("dossier-guild-timeline-label");
 });
 
 it("keeps a guild's colour when a character is hidden", () => {

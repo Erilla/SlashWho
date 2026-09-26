@@ -1187,6 +1187,12 @@ a {
   pointer-events: none;
 }
 
+/* Beside a current-guild ring, on the page rather than on a bar. */
+.dossier-guild-timeline-ring-label {
+  fill: var(--text);
+  pointer-events: none;
+}
+
 .dossier-guild-timeline-tooltip {
   position: absolute;
   z-index: 2;
