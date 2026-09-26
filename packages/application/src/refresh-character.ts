@@ -128,6 +128,7 @@ export async function refreshCharacter(options: {
     freshnessCutoff: options.at,
     at: options.at,
     phasePlan: fullEvidencePhasePlan(),
+    lightRefresh: mode === "light",
     credentials: options.credentials
   });
   if (reservation.kind === "reserved") {

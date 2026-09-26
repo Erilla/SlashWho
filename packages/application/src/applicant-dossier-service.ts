@@ -2,7 +2,8 @@ import {
   applicantDossierSchema,
   type ApplicantDossier as ContractApplicantDossier,
   type CollectionPhase,
-  type DossierLimitation as ContractDossierLimitation
+  type DossierLimitation as ContractDossierLimitation,
+  type DossierLimitationAffects
 } from "@slashwho/contracts";
 import type {
   DiscoveryQueue,
@@ -12,6 +13,7 @@ import type {
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
   StoredCharacterTierBestParse,
+  StoredSnapshot,
   StoredSnapshotCharacter
 } from "@slashwho/database";
 import {
@@ -21,6 +23,7 @@ import {
   lookupCuttingEdgeAchievement,
   isAccountWideCuttingEdgeAchievement,
   parseApplicantCharacterUrl,
+  summarizeLimitationEncounters,
   toRaiderIoUrl,
   type CharacterGuild,
   type CharacterKey,
@@ -321,12 +324,63 @@ function limitationMessage(
   }
 }
 
+/** The part of the dossier a shortfall leaves incomplete (#526). */
+export function limitationAffects(
+  source: EvidenceSource,
+  code: ContractDossierLimitation["code"]
+): DossierLimitationAffects {
+  if (source === "raiderio") return "world_ranks";
+  if (source === "blizzard") return "cutting_edge";
+  if (code.startsWith("parse_")) return "parses";
+  if (
+    code === "current_content_window_unknown" ||
+    code === "current_content_evidence_withheld" ||
+    code === "unmatched_encounter"
+  )
+    return "hidden_kills";
+  return "kill_history";
+}
+
+/**
+ * Whether collection clears a shortfall on its own. For Warcraft Logs this is
+ * `retryDelayMsFor`'s classification, which a test holds it to; the rest are
+ * decided by what would have to change: an upstream profile, a code fix, or a
+ * reviewed content window, none of which waiting brings about.
+ */
+export function limitationRecovery(
+  code: ContractDossierLimitation["code"]
+): ContractDossierLimitation["recovery"] {
+  switch (code) {
+    case "not_found":
+    case "private":
+    case "schema_changed":
+    case "parse_private":
+    case "parse_schema_drift":
+    case "invalid_fight_timestamp":
+    case "current_content_window_unknown":
+    case "current_content_evidence_withheld":
+    case "unmatched_encounter":
+      return "none";
+    case "rate_limited":
+    case "points_budget_low":
+    case "collection_failed":
+    case "request_cap":
+    case "unavailable":
+    case "parse_rate_limited":
+    case "parse_request_cap":
+    case "parse_unavailable":
+    case "parse_identity_unmatched":
+      return "automatic";
+  }
+}
+
 function limitation(
   source: EvidenceSource,
   character: CharacterKey,
   code: string,
   observedAt: Date = new Date(),
-  retryAfterAt?: Date | null
+  retryAfterAt?: Date | null,
+  encounters?: DossierLimitation["encounters"]
 ): DossierLimitation {
   return {
     source,
@@ -335,8 +389,22 @@ function limitation(
     observedAt: observedAt.toISOString(),
     ...(retryAfterAt && !Number.isNaN(retryAfterAt.valueOf())
       ? { retryAt: retryAfterAt.toISOString() }
-      : {})
+      : {}),
+    ...(encounters?.length ? { encounters } : {})
   };
+}
+
+/**
+ * A stored kill the dossier shows no parse for. Not "any metric unavailable":
+ * every fight starts all three unavailable and only a ranking row makes one
+ * available, so a DPS kill with a good damage parse still carries an
+ * unavailable healing metric. Counting that would name nearly every kill.
+ */
+function hasNoParse(kill: StoredCharacterMythicKill): boolean {
+  const { damage, healing, bossDamage } = kill.performance;
+  return [damage, healing, bossDamage].every(
+    (metric) => metric.state === "unavailable"
+  );
 }
 
 function retryAfterAt(error: unknown): Date | null {
@@ -522,24 +590,36 @@ async function gatherCharacterEvidence(
   // The same run `gathering` below is keyed on, so the steps describe exactly
   // the collection the row's spinner reports.
   const activeRun = reservation.active;
-  if (completed?.run.limitationCode) {
+  // What the last run fell short on is only current until the next full run
+  // starts re-reading it. From then the row shows that collection and its
+  // steps, and repeating the old shortfall beside it reads as today's news
+  // about a read already being redone (#526). A tier search re-reads none of
+  // it, and neither does a light refresh -- one page of history, bookmark
+  // untouched -- so neither supersedes anything.
+  const superseded =
+    !!activeRun &&
+    activeRun.id !== completed?.run.id &&
+    activeRun.mode !== "tier_search" &&
+    activeRun.lightRefresh !== true;
+  const lastRun = superseded ? undefined : completed?.run;
+  if (lastRun?.limitationCode) {
     limitations.push(
       limitation(
         "warcraft_logs",
         attributed,
-        completed.run.limitationCode,
-        completed.run.completedAt ?? new Date(),
-        completed.run.retryAfterAt
+        lastRun.limitationCode,
+        lastRun.completedAt ?? new Date(),
+        lastRun.retryAfterAt
       )
     );
   }
-  if (completed?.run.omittedInvalidTimestamp) {
+  if (lastRun?.omittedInvalidTimestamp) {
     limitations.push(
       limitation(
         "warcraft_logs",
         attributed,
         "invalid_fight_timestamp",
-        completed.run.completedAt ?? new Date()
+        lastRun.completedAt ?? new Date()
       )
     );
   }
@@ -559,16 +639,29 @@ async function gatherCharacterEvidence(
       )
     );
   }
-  if (completed?.run.parseLimitationCode) {
-    limitations.push(
-      limitation(
-        "warcraft_logs",
-        attributed,
-        completed.run.parseLimitationCode,
-        completed.run.completedAt ?? new Date(),
-        completed.run.retryAfterAt
-      )
+  if (lastRun?.parseLimitationCode) {
+    // Every reason the run met, not only the one it is judged by: two
+    // characters capped for different reasons read differently (#526). The
+    // kills are the ones whose parses are missing, which no single reason
+    // owns, so each reason names them all.
+    const missingParses = summarizeLimitationEncounters(
+      (completed?.kills ?? []).filter(hasNoParse)
     );
+    for (const code of new Set([
+      lastRun.parseLimitationCode,
+      ...(lastRun.parseLimitationCodesSeen ?? [])
+    ])) {
+      limitations.push(
+        limitation(
+          "warcraft_logs",
+          attributed,
+          code,
+          lastRun.completedAt ?? new Date(),
+          lastRun.retryAfterAt,
+          missingParses
+        )
+      );
+    }
   }
   return {
     limitations,
@@ -641,6 +734,51 @@ type IdentityEvidence = EvidenceResult & {
   collectionProgress: readonly CollectionPhase[];
 };
 
+/**
+ * One limitation per source and code across a subject's names, the first
+ * keeping its time and retry. The encounters each name affected are all kept,
+ * or the alias's raids would vanish from the detail.
+ */
+function mergeLimitations(
+  limitations: readonly DossierLimitation[]
+): DossierLimitation[] {
+  const merged = new Map<string, DossierLimitation>();
+  for (const item of limitations) {
+    const key = `${item.source}\0${item.code}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, item);
+      continue;
+    }
+    const encounters = new Map(
+      (existing.encounters ?? []).map((entry) => [
+        `${entry.raidName}\0${entry.bossName ?? ""}`,
+        entry
+      ])
+    );
+    for (const entry of item.encounters ?? []) {
+      const encounterKey = `${entry.raidName}\0${entry.bossName ?? ""}`;
+      const prior = encounters.get(encounterKey);
+      encounters.set(
+        encounterKey,
+        prior ? { ...prior, kills: prior.kills + entry.kills } : entry
+      );
+    }
+    if (encounters.size > 0) {
+      merged.set(key, {
+        ...existing,
+        encounters: [...encounters.values()].sort(
+          (a, b) =>
+            b.kills - a.kills ||
+            a.raidName.localeCompare(b.raidName) ||
+            (a.bossName ?? "").localeCompare(b.bossName ?? "")
+        )
+      });
+    }
+  }
+  return [...merged.values()];
+}
+
 function mergeIdentityEvidence(
   results: readonly IdentityEvidence[]
 ): IdentityEvidence {
@@ -663,10 +801,7 @@ function mergeIdentityEvidence(
     tierBests: results.flatMap((item) => item.tierBests),
     cuttingEdges: own.cuttingEdges,
     warcraftLogsComplete: results.every((item) => item.warcraftLogsComplete),
-    limitations: uniqueBy(
-      results.flatMap((item) => item.limitations),
-      (item) => `${item.source}\0${item.code}`
-    ),
+    limitations: mergeLimitations(results.flatMap((item) => item.limitations)),
     evidenceState: results.reduce(
       (state, item) =>
         EVIDENCE_STATE_SEVERITY[item.evidenceState] >
@@ -818,19 +953,29 @@ async function restoreMissingHistoricRanks(options: {
     string,
     NonNullable<ReturnType<typeof raiderIoRankingRequest>>
   >();
-  let capped = false;
+  const cappedKeys = new Set<string>();
   for (const kill of options.kills) {
     if (kill.historicWorldRank !== null || kill.rankLookup.checkedAt) continue;
     const request = raiderIoRankingRequest(kill, kill.character.region);
     if (!request) continue;
     const key = rankingRequestKey(request);
-    if (requests.has(key)) continue;
+    if (requests.has(key) || cappedKeys.has(key)) continue;
     if (requests.size >= MAX_LEGACY_RANK_FALLBACK_REQUESTS_PER_READ) {
-      capped = true;
+      cappedKeys.add(key);
       continue;
     }
     requests.set(key, request);
   }
+  // The kills a set of lookups left unranked, so a limitation can name them.
+  const unrankedKills = (matches: (key: string) => boolean) =>
+    summarizeLimitationEncounters(
+      options.kills.filter((kill) => {
+        if (kill.historicWorldRank !== null || kill.rankLookup.checkedAt)
+          return false;
+        const request = raiderIoRankingRequest(kill, kill.character.region);
+        return request !== null && matches(rankingRequestKey(request));
+      })
+    );
   const rankings = new Map<
     string,
     Awaited<ReturnType<RaiderIoGateway["getMythicBossRankings"]>>
@@ -849,21 +994,27 @@ async function restoreMissingHistoricRanks(options: {
     })
   );
   const limitations: DossierLimitation[] = [];
-  if (capped) {
+  if (cappedKeys.size > 0) {
     limitations.push({
       source: "raiderio",
       character: null,
       code: "request_cap",
-      observedAt: new Date().toISOString()
+      observedAt: new Date().toISOString(),
+      encounters: unrankedKills((key) => cappedKeys.has(key))
     });
   }
   for (const result of rankings.values()) {
     if (result.kind === "rankings") continue;
     if (limitations.some((item) => item.code === result.code)) continue;
+    const encounters = unrankedKills((key) => {
+      const other = rankings.get(key);
+      return other?.kind === "limitation" && other.code === result.code;
+    });
     limitations.push({
       source: "raiderio",
       character: null,
       code: result.code,
+      ...(encounters.length > 0 ? { encounters } : {}),
       observedAt: result.observedAt ?? new Date().toISOString(),
       ...(result.retryAfterMs === undefined
         ? {}
@@ -1065,9 +1216,12 @@ async function assembleDossier(options: {
     ...evidence.flatMap((item) => item.limitations),
     ...cuttingEdgeEvidence.limitations,
     ...ranked.limitations,
-    ...options.skippedSubjects.map((character) =>
-      limitation("warcraft_logs", character.key, "request_cap", new Date())
-    )
+    // Past the display cap nothing was requested, and nothing will be until
+    // the roster changes: no retry brings these in.
+    ...options.skippedSubjects.map((character) => ({
+      ...limitation("warcraft_logs", character.key, "request_cap", new Date()),
+      recovery: "none" as const
+    }))
   ];
   const dossier = buildApplicantDossier({
     root: options.root,
@@ -1142,19 +1296,23 @@ async function assembleDossier(options: {
       collectedTimes.length === 0
         ? null
         : new Date(Math.min(...collectedTimes)).toISOString(),
-    research: evidence.some((item) => item.gathering)
-      ? options.rootOnlyStoredEvidence
-        ? {
-            state: "gathering" as const,
-            message:
-              "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
-          }
-        : {
-            state: "gathering" as const,
-            message:
-              "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
-          }
-      : options.research,
+    // A provisional list is the page's cue to research the character itself,
+    // so evidence still gathering beneath it must not replace that state.
+    research:
+      options.research.state !== "provisional" &&
+      evidence.some((item) => item.gathering)
+        ? options.rootOnlyStoredEvidence
+          ? {
+              state: "gathering" as const,
+              message:
+                "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
+            }
+          : {
+              state: "gathering" as const,
+              message:
+                "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+            }
+        : options.research,
     characters: [
       ...options.subjects.map((character, index) =>
         serializeDossierSubject(
@@ -1175,12 +1333,17 @@ async function assembleDossier(options: {
         )
       )
     ],
-    limitations: dossier.limitations.map((item) => ({
-      ...item,
-      observedAt: item.observedAt ?? new Date().toISOString(),
-      code: contractLimitationCode(item.code),
-      message: limitationMessage(item.source, contractLimitationCode(item.code))
-    }))
+    limitations: dossier.limitations.map((item) => {
+      const code = contractLimitationCode(item.code);
+      return {
+        ...item,
+        observedAt: item.observedAt ?? new Date().toISOString(),
+        code,
+        message: limitationMessage(item.source, code),
+        affects: limitationAffects(item.source, code),
+        recovery: item.recovery ?? limitationRecovery(code)
+      };
+    })
   });
 }
 
@@ -1492,6 +1655,39 @@ export function createApplicantDossierService(options: {
     };
   }
   /**
+   * Another root's snapshot, re-rooted at a character it lists as a
+   * Raider.IO-declared member, so a character with no discovery of its own
+   * shows the account it was claimed on while that discovery runs. An
+   * inferred membership is not enough to put another root's whole list under
+   * this character's name. Nothing is stored: the view lasts one read, and
+   * the character's own snapshot replaces it once published.
+   */
+  function borrowSnapshot(
+    key: CharacterKey,
+    containing: StoredSnapshot | null | undefined
+  ): StoredSnapshot | null {
+    if (!containing) return null;
+    const id = canonicalCharacterId(key);
+    const member = containing.characters.find(
+      (character) => canonicalCharacterId(character.key) === id
+    );
+    if (member?.source !== "claimed" && member?.source !== "declared_main")
+      return null;
+    const formerRootId = canonicalCharacterId(containing.rootKey);
+    return {
+      ...containing,
+      rootKey: key,
+      characters: containing.characters.map((character) => {
+        const characterId = canonicalCharacterId(character.key);
+        if (characterId === id) return { ...character, source: "input" };
+        if (characterId === formerRootId)
+          return { ...character, source: "claimed" };
+        return character;
+      })
+    };
+  }
+
+  /**
    * The dossier's characters: each included identity in ranked order, split
    * at the display cap into `selected` and `skipped`, and the excluded ones.
    * Null when no snapshot contains the character yet. Reading and searching a
@@ -1502,9 +1698,13 @@ export function createApplicantDossierService(options: {
     key: CharacterKey,
     repositories: ReturnType<typeof scopedRepositories>
   ) {
+    const own = await repositories.snapshots.getCurrent(key);
     const snapshot =
-      (await repositories.snapshots.getCurrent(key)) ??
-      (await repositories.snapshots.getCurrentContainingCharacter?.(key));
+      own ??
+      borrowSnapshot(
+        key,
+        await repositories.snapshots.getCurrentDeclaringCharacter?.(key)
+      );
     if (!snapshot) return null;
     const seen = new Set(
       snapshot.characters.map((character) =>
@@ -1642,7 +1842,13 @@ export function createApplicantDossierService(options: {
         left.key.realm.localeCompare(right.key.realm, "en") ||
         left.key.name.localeCompare(right.key.name, "en")
     );
-    return { snapshot, selected, skipped, excludedOrdered };
+    return {
+      snapshot,
+      selected,
+      skipped,
+      excludedOrdered,
+      provisional: own === null
+    };
   }
 
   async function readRootOnly(
@@ -1925,7 +2131,8 @@ export function createApplicantDossierService(options: {
         if (!completed) return { kind: "not_ready" };
         return readRootOnly(key, true, repositories, signal, overrides, scope);
       }
-      const { snapshot, selected, skipped, excludedOrdered } = resolved;
+      const { snapshot, selected, skipped, excludedOrdered, provisional } =
+        resolved;
 
       // The existing dossier stays readable while this cadence-gated background
       // sweep checks for members who joined current or historical guilds. Its
@@ -1944,8 +2151,13 @@ export function createApplicantDossierService(options: {
           subjects: selected,
           skippedSubjects: skipped,
           excludedSubjects: excludedOrdered,
-          research:
-            snapshot.state === "complete"
+          research: provisional
+            ? {
+                state: "provisional",
+                message:
+                  "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
+              }
+            : snapshot.state === "complete"
               ? {
                   state: "complete",
                   message: "Linked-character research is complete."

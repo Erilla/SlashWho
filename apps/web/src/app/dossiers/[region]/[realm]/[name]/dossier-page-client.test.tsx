@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -129,6 +130,8 @@ const rateLimited = {
       character: null,
       code: "rate_limited" as const,
       message: "Raider.IO is temporarily rate limited.",
+      affects: "world_ranks" as const,
+      recovery: "automatic" as const,
       observedAt: "2026-09-15T12:00:00.000Z",
       retryAt: "2026-09-15T12:02:05.000Z"
     }
@@ -161,6 +164,30 @@ async function flushAsyncWork() {
     await Promise.resolve();
   });
 }
+
+function discoveryNotReady(): Response {
+  return Response.json(
+    {
+      error: {
+        code: "discovery_not_ready",
+        message: "Linked-character discovery is still running."
+      }
+    },
+    { status: 409 }
+  );
+}
+
+const provisional = {
+  ...dossier(
+    "provisional",
+    "Linked characters are shown from an existing dossier while this character's own research runs; the list may change.",
+    "Provisional evidence"
+  ),
+  characters: linkedCharacters.map((character) => ({
+    ...character,
+    source: "raiderio_declared" as const
+  }))
+};
 
 function withEvidenceState(
   source: ApplicantDossier,
@@ -1404,7 +1431,9 @@ describe("DossierPageClient staged research", () => {
         );
       }
       if (input === dossierPath)
-        return Promise.resolve(Response.json(expanded));
+        return Promise.resolve(
+          statusCalls < 2 ? discoveryNotReady() : Response.json(expanded)
+        );
       return Promise.reject(new Error(`Unexpected request: ${input}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -1458,6 +1487,86 @@ describe("DossierPageClient staged research", () => {
     expect(
       within(navigation).getByRole("link", { name: "Raid: Expanded evidence" })
     ).toHaveAttribute("href", "#dossier-raid-expanded-evidence");
+  });
+
+  it("shows a known account's characters while a new root is researched", async () => {
+    // Break caught: arriving from search with a job showed only the searched
+    // character until its own discovery finished, although a snapshot that
+    // already claimed it held the whole account.
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(provisional));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return Promise.resolve(
+          Response.json({ status: "running", error: null })
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+
+    expect(await screen.findByText("Provisional evidence")).toBeVisible();
+    expect(screen.getByText("Ryalts")).toBeVisible();
+    expect(screen.getByText(provisional.research.message)).toBeVisible();
+    expect(screen.queryByText("Initial evidence")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/dossiers",
+      expect.anything()
+    );
+  });
+
+  it("starts research for a directly visited character shown provisionally", async () => {
+    // Break caught: a provisional list roots the dossier at the visited
+    // character, so neither the root-only nor the other-root check fired and
+    // the character's own discovery never started.
+    const fetchMock = vi.fn((input: string) => {
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(provisional));
+      if (input === "/api/dossiers")
+        return Promise.resolve(
+          Response.json(
+            { kind: "job", jobId, status: "queued" },
+            { status: 202 }
+          )
+        );
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return new Promise<Response>(() => undefined);
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Provisional evidence")).toBeVisible();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/dossiers",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            characterUrl: "https://raider.io/characters/eu/silvermoon/ryii"
+          })
+        })
+      )
+    );
+    expect(screen.getByText("Ryalts")).toBeVisible();
   });
 
   it("keeps polling evidence after a transient read failure", async () => {
@@ -1661,14 +1770,20 @@ describe("DossierPageClient staged research", () => {
         resolveInitial = resolve;
         rejectInitial = reject;
       });
+      let jobComplete = false;
       const jobResponse = new Promise<Response>((resolve) => {
-        resolveJob = resolve;
+        resolveJob = (response) => {
+          jobComplete = true;
+          resolve(response);
+        };
       });
       vi.stubGlobal("fetch", (input: string) => {
         if (input === `${dossierPath}?scope=initial`) return initialResponse;
         if (input === `/api/dossiers/jobs/${jobId}`) return jobResponse;
         if (input === dossierPath)
-          return Promise.resolve(Response.json(expanded));
+          return Promise.resolve(
+            jobComplete ? Response.json(expanded) : discoveryNotReady()
+          );
         throw new Error(`Unexpected request: ${input}`);
       });
       render(
@@ -1977,5 +2092,94 @@ describe("DossierPageClient connected-character exclusions", () => {
     expect(
       await screen.findByText("Manual has been removed from this dossier.")
     ).toBeVisible();
+  });
+});
+
+describe("DossierPageClient character visibility", () => {
+  const ryalts = linkedCharacters[1]!.key;
+  const ryaltsOnly: ApplicantDossier = {
+    ...expanded,
+    characters: linkedCharacters,
+    raids: expanded.raids.map((raid) => ({
+      ...raid,
+      bosses: raid.bosses.map((boss) =>
+        boss.state === "kill"
+          ? { ...boss, firstKill: { ...boss.firstKill, characters: [ryalts] } }
+          : boss
+      )
+    }))
+  };
+
+  afterEach(() => window.localStorage.clear());
+
+  it("hides a character's evidence from the eye, keeps it across a reload, and shows it again", async () => {
+    const view = render(
+      <DossierPageClient
+        canAddCharacters={false}
+        identity={identity}
+        initialDossier={ryaltsOnly}
+        jobId={null}
+      />
+    );
+    const bossEvidence = () =>
+      screen.getByRole("group", { name: "Expanded evidence boss evidence" });
+    expect(bossEvidence()).toHaveTextContent(/First kill:.*Ryalts/);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show Ryalts in the evidence" })
+    );
+
+    expect(bossEvidence()).toHaveTextContent(
+      "Evidence found only for hidden characters"
+    );
+    expect(
+      screen.getByText("Showing evidence for 1 of 2 characters.")
+    ).toBeInTheDocument();
+
+    view.unmount();
+    render(
+      <DossierPageClient
+        canAddCharacters={false}
+        identity={identity}
+        initialDossier={ryaltsOnly}
+        jobId={null}
+      />
+    );
+    expect(bossEvidence()).toHaveTextContent(
+      "Evidence found only for hidden characters"
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+
+    expect(bossEvidence()).toHaveTextContent(/First kill:.*Ryalts/);
+    expect(screen.queryByText(/Showing evidence for/)).not.toBeInTheDocument();
+  });
+
+  it("shows only one character from the eye's context menu", async () => {
+    render(
+      <DossierPageClient
+        canAddCharacters={false}
+        identity={identity}
+        initialDossier={ryaltsOnly}
+        jobId={null}
+      />
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Show Ryii in the evidence" })
+    );
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Show only Ryii" })
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Show Ryalts in the evidence" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Show Ryii in the evidence" })
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("group", { name: "Expanded evidence boss evidence" })
+    ).toHaveTextContent("Evidence found only for hidden characters");
   });
 });

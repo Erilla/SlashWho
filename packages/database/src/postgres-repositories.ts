@@ -228,6 +228,8 @@ interface EvidenceRunRow {
   limitation_code: string | null;
   parse_limitation_code: string | null;
   omitted_invalid_timestamp: boolean;
+  parse_limitation_codes_seen?: string[] | null;
+  light_refresh?: boolean;
   retry_after_at: Date | null;
   error_code: string | null;
   created_at: Date;
@@ -573,7 +575,7 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
 // What a run was reserved to do. Selected everywhere a run is mapped, so a
 // re-claimed tier search is still a tier search.
 function evidenceRunModeSql(alias = "character_evidence_runs"): string {
-  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp`;
+  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh`;
 }
 
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
@@ -590,6 +592,10 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     limitationCode: row.limitation_code,
     parseLimitationCode: row.parse_limitation_code,
     omittedInvalidTimestamp: row.omitted_invalid_timestamp,
+    ...(row.parse_limitation_codes_seen?.length
+      ? { parseLimitationCodesSeen: row.parse_limitation_codes_seen }
+      : {}),
+    ...(row.light_refresh ? { lightRefresh: true } : {}),
     retryAfterAt: row.retry_after_at,
     errorCode: row.error_code,
     createdAt: row.created_at,
@@ -3689,19 +3695,31 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? loadSnapshot(pool, result.rows[0].id) : null;
       },
 
-      async getCurrentContainingCharacter(key) {
+      async getCurrentDeclaringCharacter(key) {
+        // Superseded snapshots are never deleted, so the latest per root is
+        // taken first; filtering the source before ordering keeps a newer
+        // inferred membership elsewhere from hiding a declared one.
         const result = await pool.query<{ id: string }>(
-          `SELECT snapshot.id
-           FROM snapshots snapshot
+          `WITH latest_snapshots AS (
+             SELECT DISTINCT ON (snapshot.root_character_id)
+               snapshot.id, snapshot.root_character_id, snapshot.refreshed_at
+             FROM snapshots snapshot
+             JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
+             WHERE run.status = 'complete'
+             ORDER BY snapshot.root_character_id,
+                      snapshot.refreshed_at DESC,
+                      snapshot.id DESC
+           )
+           SELECT snapshot.id
+           FROM latest_snapshots snapshot
            JOIN snapshot_characters membership
              ON membership.snapshot_id = snapshot.id
+            AND membership.discovery_source IN ('claimed', 'declared_main')
            JOIN characters character ON character.id = membership.character_id
            JOIN characters root ON root.id = snapshot.root_character_id
-           JOIN discovery_runs run ON run.id = snapshot.discovery_run_id
            WHERE character.region = $1
              AND character.realm_slug = $2
              AND character.normalized_name = $3
-             AND run.status = 'complete'
              AND NOT EXISTS (
                SELECT 1 FROM suppressed_characters suppression
                WHERE suppression.region = root.region
@@ -4703,7 +4721,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           client.release();
         }
       },
-      async reserve({ key, freshnessCutoff, at, credentials, phasePlan }) {
+      async reserve({
+        key,
+        freshnessCutoff,
+        at,
+        credentials,
+        phasePlan,
+        lightRefresh
+      }) {
         if (
           Number.isNaN(freshnessCutoff.valueOf()) ||
           Number.isNaN(at.valueOf())
@@ -4827,10 +4852,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
               (region, realm_slug, normalized_name, mode, tier_search_raid_id,
-               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version)
+               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
+               light_refresh)
              VALUES ($1, $2, $3,
                      CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
-                     $4, $5, $6, $7, $8)
+                     $4, $5, $6, $7, $8, $9)
              RETURNING id, region, realm_slug, normalized_name, queue_job_id, status,
                        attempt, limitation_code, parse_limitation_code, retry_after_at, error_code, created_at, started_at,
                        completed_at, wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
@@ -4851,7 +4877,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 : null,
               credentials && "credentialVersion" in credentials
                 ? credentials.credentialVersion
-                : null
+                : null,
+              // A tier continuation is its own mode, never a light refresh.
+              continuationRaidId === null && lightRefresh === true
             ]
           );
           const reservedRun = mapEvidenceRun(inserted.rows[0]!);

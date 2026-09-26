@@ -1277,6 +1277,108 @@ a {
   color: #ed405b;
 }
 
+/* The eye leads the row. It is the viewer's own filter over the evidence, so
+   a hidden row dims like an excluded one but keeps no badge: nothing about
+   the dossier has changed. */
+.dossier-character-lead {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Stacked on a narrow screen the lead sizes to its content, and the eye
+   beside an unbroken long name would push the row past the viewport. Capping
+   the lead and letting the name break keeps the row inside it. */
+.dossier-character-lead > .dossier-character-identity {
+  flex: 1 1 auto;
+}
+
+.dossier-character-lead .dossier-character-name {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* The guild still gives way first; the name breaks only once it alone is
+   wider than the row. */
+.dossier-character-lead .dossier-character-name-line > :first-child {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.dossier-character-visibility {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+
+.dossier-character-visibility-trigger {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.dossier-character-visibility-trigger[aria-pressed="false"],
+.dossier-character-visibility-trigger:disabled {
+  color: var(--muted);
+}
+
+.dossier-character-visibility-trigger:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.dossier-character-visibility-trigger:hover:not(:disabled),
+.dossier-character-visibility-trigger:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.dossier-character-visibility-trigger svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+}
+
+.dossier-character-visibility-items {
+  right: auto;
+  left: 0;
+  min-width: 11rem;
+}
+
+.dossier-character-row--hidden .dossier-character-identity,
+.dossier-character-row--hidden .source-badge,
+.dossier-character-row--hidden .profile-links {
+  opacity: 0.55;
+}
+
+.dossier-evidence-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
 .dossier-character-menu-error {
   position: absolute;
   top: calc(100% + 0.25rem);
@@ -2076,13 +2178,113 @@ td > .collection-progress {
   grid-column: 1 / -1;
 }
 
-.dossier-limitations li {
+.dossier-limitations-intro {
+  margin: -0.5rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.dossier-limitation {
   color: var(--muted);
   line-height: 1.5;
 }
 
-.dossier-limitations li + li {
-  margin-top: 0.55rem;
+.dossier-limitation + .dossier-limitation {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.dossier-limitation-message {
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}
+
+.dossier-limitation-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.dossier-limitation-facts > div {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.dossier-limitation-facts dt {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dossier-limitation-facts dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  color: var(--text);
+}
+
+.dossier-limitations .dossier-limitation-subjects {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.dossier-limitation-subject {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  font-size: 0.85rem;
+}
+
+.dossier-limitation-character {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 7rem;
+  color: var(--text);
+}
+
+.dossier-limitations .dossier-limitation-encounters {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface-raised);
+  font-size: 0.85rem;
+}
+
+.dossier-limitation-encounters li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.dossier-limitation-encounters li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.dossier-limitation-kills {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.dossier-limitation-more {
+  font-style: italic;
 }
 
 .dossier-rate-limit-countdown {

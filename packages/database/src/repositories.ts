@@ -150,7 +150,14 @@ export interface SnapshotRepository {
     options?: { signal?: AbortSignal }
   ): Promise<StoredSnapshot | null>;
   getCurrent(key: CharacterKey): Promise<StoredSnapshot | null>;
-  getCurrentContainingCharacter?(
+  /**
+   * The newest current snapshot of another root that lists this key as a
+   * Raider.IO-declared member (`claimed` or `declared_main`). Only each root's
+   * latest completed snapshot is considered, so a newer observation that drops
+   * the character retires the claim, and the source is filtered before the
+   * newest is chosen, so a newer inferred membership elsewhere cannot hide it.
+   */
+  getCurrentDeclaringCharacter?(
     key: CharacterKey
   ): Promise<StoredSnapshot | null>;
   /**
@@ -289,8 +296,18 @@ export interface CharacterEvidenceRun {
   attempt: number;
   limitationCode: string | null;
   parseLimitationCode: string | null;
+  /**
+   * Every parse shortfall the run met, of which `parseLimitationCode` is the
+   * one it is judged by. Absent when there were none.
+   */
+  parseLimitationCodesSeen?: readonly string[];
   /** Finished collection omitted fights whose timestamps could not be used. */
   omittedInvalidTimestamp?: boolean;
+  /**
+   * Reserved as a light refresh: one page of history, bookmark untouched.
+   * Absent on every other run.
+   */
+  lightRefresh?: boolean;
   retryAfterAt: Date | null;
   errorCode: string | null;
   createdAt: Date;
@@ -823,6 +840,11 @@ export interface EvidenceRepository {
     at: Date;
     /** The ordered collection plan fixed when a new run is reserved. */
     phasePlan?: readonly string[];
+    /**
+     * Records a newly reserved run as a light refresh. A run already in
+     * flight is joined as it is.
+     */
+    lightRefresh?: boolean;
     credentials?:
       | {
           wclClientIdEncrypted: string;
