@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { EvidenceFilter } from "../lib/character-visibility";
 import {
   layoutGuildTimeline,
+  tierBands,
   type GuildTimelineBar
 } from "../lib/guild-timeline-layout";
 
@@ -148,6 +149,7 @@ export function DossierGuildHistory({
         (_, index) => Number(layout.startsOn.slice(0, 4)) + index
       )
     : [];
+  const bands = layout ? tierBands(tiers, layout.startsOn, layout.endsOn) : [];
   const visibleTiers = layout
     ? tiers.filter(
         (tier) => tier.startsOn > layout.startsOn && tier.startsOn < today
@@ -204,38 +206,51 @@ export function DossierGuildHistory({
                 viewBox={`0 0 ${layout.width} ${height}`}
                 width={layout.width}
               >
-                {visibleTiers.map((tier) => {
-                  const x = layout.x(tier.startsOn);
+                {bands.map((band) => {
+                  const x = layout.x(band.from);
                   return (
-                    <g
+                    <rect
                       aria-hidden="true"
-                      className="dossier-guild-timeline-tier"
-                      key={tier.startsOn}
-                      onMouseEnter={() =>
+                      className={
+                        band.shaded
+                          ? "dossier-guild-timeline-band dossier-guild-timeline-band--shaded"
+                          : "dossier-guild-timeline-band"
+                      }
+                      height={height - AXIS_HEIGHT + 4}
+                      key={band.tier.startsOn}
+                      onMouseEnter={(event) =>
                         showTooltip(
                           [
-                            `Tier: ${tier.name}`,
-                            `Opened ${formatDay(tier.startsOn)}`
+                            `Tier: ${band.tier.name}`,
+                            `Opened ${formatDay(band.tier.startsOn)}`
                           ],
-                          x + 6,
+                          // Beside the pointer: a band can be wider than the
+                          // view, so its start may be scrolled out of sight.
+                          event.clientX -
+                            (event.currentTarget.ownerSVGElement?.getBoundingClientRect()
+                              .left ?? 0) +
+                            8,
                           TOP
                         )
                       }
-                    >
-                      <line
-                        x1={x}
-                        x2={x}
-                        y1={0}
-                        y2={height - AXIS_HEIGHT + 4}
-                      />
-                      <rect
-                        fill="transparent"
-                        height={height - AXIS_HEIGHT + 4}
-                        width={8}
-                        x={x - 4}
-                        y={0}
-                      />
-                    </g>
+                      width={layout.x(band.to) - x}
+                      x={x}
+                      y={0}
+                    />
+                  );
+                })}
+                {visibleTiers.map((tier) => {
+                  const x = layout.x(tier.startsOn);
+                  return (
+                    <line
+                      aria-hidden="true"
+                      className="dossier-guild-timeline-tier"
+                      key={tier.startsOn}
+                      x1={x}
+                      x2={x}
+                      y1={0}
+                      y2={height - AXIS_HEIGHT + 4}
+                    />
                   );
                 })}
                 {years.map((year) => {

@@ -107,6 +107,26 @@ it("shows the details in a tooltip on hover and on focus", () => {
   expect(screen.getByText("3 raid nights: Ryun")).toBeInTheDocument();
 });
 
+it("shades alternate tiers across the background and names a tier on hover", () => {
+  const { container } = render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const bands = [...container.querySelectorAll(".dossier-guild-timeline-band")];
+  expect(bands.length).toBeGreaterThan(3);
+  const shading = bands.map((band) =>
+    band.classList.contains("dossier-guild-timeline-band--shaded")
+  );
+  expect(shading.every((shaded, index) => shaded !== shading[index - 1])).toBe(
+    true
+  );
+  fireEvent.mouseEnter(bands[1]!);
+  expect(screen.getByText(/^Tier: /)).toBeInTheDocument();
+});
+
 it("scrolls horizontally in a keyboard-reachable region", () => {
   render(
     <DossierGuildHistory

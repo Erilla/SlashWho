@@ -1,7 +1,42 @@
 import type { GuildTimelineSpan } from "@slashwho/domain";
 import { describe, expect, it } from "vitest";
 
-import { layoutGuildTimeline } from "./guild-timeline-layout";
+import { layoutGuildTimeline, tierBands } from "./guild-timeline-layout";
+
+describe("tierBands", () => {
+  const tiers = [
+    { name: "A", raidNames: ["A"], startsOn: "2017-11-28" },
+    { name: "B", raidNames: ["B"], startsOn: "2018-09-04" },
+    { name: "C", raidNames: ["C"], startsOn: "2019-01-22" },
+    { name: "D", raidNames: ["D"], startsOn: "2027-06-01" }
+  ];
+
+  it("covers the axis tier by tier, clipping the tier under way at each end", () => {
+    expect(
+      tierBands(tiers, "2018-01-01", "2020-01-01").map((band) => [
+        band.tier.name,
+        band.from,
+        band.to
+      ])
+    ).toEqual([
+      ["A", "2018-01-01", "2018-09-04"],
+      ["B", "2018-09-04", "2019-01-22"],
+      ["C", "2019-01-22", "2020-01-01"]
+    ]);
+  });
+
+  it("alternates by position in the schedule, not on the axis", () => {
+    expect(
+      tierBands(tiers, "2018-10-01", "2020-01-01").map((band) => [
+        band.tier.name,
+        band.shaded
+      ])
+    ).toEqual([
+      ["B", true],
+      ["C", false]
+    ]);
+  });
+});
 
 function span(
   name: string,

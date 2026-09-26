@@ -1,4 +1,4 @@
-import type { GuildTimelineSpan } from "@slashwho/domain";
+import type { GuildTimelineSpan, RaidTier } from "@slashwho/domain";
 
 export type GuildTimelineBar = GuildTimelineSpan &
   Readonly<{
@@ -30,6 +30,37 @@ export type GuildTimelineLayoutOptions = Readonly<{
   labelWidth: (text: string) => number;
   padding?: number;
 }>;
+
+export type GuildTimelineTierBand = Readonly<{
+  tier: RaidTier;
+  /** The first day of the band drawn, clipped to the axis. */
+  from: string;
+  /** The day after the band ends: the next tier's opening, or the axis end. */
+  to: string;
+  /**
+   * Alternates tier by tier across the whole schedule, so a band keeps its
+   * shade however far back the axis happens to start.
+   */
+  shaded: boolean;
+}>;
+
+/**
+ * The stretch of axis each tier covers, from its opening to the next tier's.
+ * The tier already under way when the axis starts is clipped to the axis
+ * rather than left out, so the background has no unbanded gap.
+ */
+export function tierBands(
+  tiers: readonly RaidTier[],
+  startsOn: string,
+  endsOn: string
+): GuildTimelineTierBand[] {
+  return tiers.flatMap((tier, index) => {
+    const next = tiers[index + 1]?.startsOn ?? endsOn;
+    const from = tier.startsOn > startsOn ? tier.startsOn : startsOn;
+    const to = next < endsOn ? next : endsOn;
+    return from < to ? [{ tier, from, to, shaded: index % 2 === 1 }] : [];
+  });
+}
 
 const DAY_MS = 24 * 60 * 60_000;
 const YEAR_MS = 365.25 * DAY_MS;
