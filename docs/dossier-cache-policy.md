@@ -9,7 +9,7 @@ not stored records.
 
 | Source                                                             | Storage                                 | Freshness and bound                                                                                           |
 | ------------------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Warcraft Logs normalized kills, parse states, and safe limitations | PostgreSQL, per character               | `FRESHNESS_HOURS` (24 hours by default); one active scan per character; terminal runs retained for 30 days    |
+| Warcraft Logs normalized kills, parse states, and safe limitations | PostgreSQL, per character               | `FRESHNESS_HOURS` (24 hours by default); one active scan per character; terminal runs are kept indefinitely   |
 | Blizzard Cutting Edge completions                                  | Web-process memory, per character       | Served 15 minutes after success, held until re-read or evicted; 1,000 entries and at most 1,000 pending loads |
 | Raider.IO guild boss rankings                                      | Web-process memory, per raid/boss query | Served 15 minutes after success, held until re-read or evicted; 1,000 entries and at most 1,000 pending loads |
 | Blizzard and Warcraft Logs OAuth tokens                            | Owning process memory                   | Provider expiry minus 60 seconds; one shared token refresh                                                    |
@@ -386,8 +386,9 @@ reservations coordinate across them.
 
 Both memory caches are sized the same way, as one dossier's measured working
 set times 40 concurrent cold reads of distinct rosters inside the 15-minute
-window: ~25 ranking keys per dossier gives 1,000 entries, and ~10 achievement
-keys gives 400. An expired value stays resident until that key is read again
+window: ~25 ranking keys per dossier gives 1,000 entries, and 25 achievement
+keys (one per included character, covering the largest roster seen) likewise
+gives 1,000. An expired value stays resident until that key is read again
 or eviction reaches it, so the 15 minutes bound how long a value is _served_,
 not how long it is _held_; the entry count remains the bound on what a process
 retains.
@@ -408,11 +409,13 @@ window. The prior completed evidence remains readable while the replacement
 scan runs; a successful publication atomically replaces its normalized kills,
 parse states, and limitations.
 
-The worker's scheduled maintenance deletes terminal WCL evidence runs older
-than 30 days, with their kill rows removed by the existing cascading foreign
-key. Active jobs are excluded. A later request re-collects expired history.
-Cleanup logs `evidence_cache_cleanup` with the removed run count. Web cache
-events log `dossier_cache` with source and hit/miss/shared/failure/capacity only,
+The worker's scheduled maintenance does not delete WCL evidence runs; terminal
+runs and their kill rows are kept. It clears encrypted credentials a run left
+behind (an hour after it settled, six hours while it is still active), drops
+settled collection stages and deletes run-cost rows older than 28 days.
+Cleanup logs `evidence_cache_cleanup` with counts only: `removedEvidenceRuns`
+(runs whose credentials were cleared), `removedCollectionStages` and
+`removedRunCosts`. Web cache events log `dossier_cache` with source and hit/miss/shared/failure/capacity only,
 never character names, URLs, payloads or credentials. WCL run status and
 completed timestamps remain queryable in the evidence tables.
 
@@ -442,5 +445,5 @@ settling nothing.
 
 Verification covers repeated and concurrent reads, TTL expiry, failed refresh,
 snapshot membership changes, least-recently-used memory eviction, shared token
-refresh, concurrent database reservations, atomic publication and retention
-cascading.
+refresh, concurrent database reservations, atomic publication and maintenance
+cleanup.

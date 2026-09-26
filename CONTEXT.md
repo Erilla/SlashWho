@@ -13,11 +13,11 @@ A relationship between characters inferred from Blizzard achievement-completion 
 _Avoid_: Verified link, confirmed alt
 
 **Alt list**:
-The public list of characters linked to a root character. It intentionally does not distinguish Raider.IO-declared relationships from fingerprint-derived links.
+The list of characters linked to a root character in its snapshot. It is no longer presented publicly: the applicant dossier lists the same characters, each with its source label.
 _Avoid_: Verified-alt list, inferred-alt list
 
 **Partial snapshot**:
-An immutable historical result known not to contain every discoverable relationship. It is public as partial while its limitation reason remains internal.
+An immutable historical result known not to contain every discoverable relationship. It is shown as partial; only a privacy-hidden limitation is explained to the reader, and other limitation reasons remain internal.
 _Avoid_: Failed snapshot, incomplete refresh
 
 **Ephemeral fingerprint**:
@@ -25,7 +25,7 @@ Achievement-completion data held only while a single discovery sweep is running.
 _Avoid_: Fingerprint cache, stored signature
 
 **Reviewer surface**:
-The gated view of SlashWho's findings intended for someone assessing an applicant. It may expose material the public view withholds, but it takes the same input as a public search: a single character.
+The unlisted view of SlashWho's findings intended for someone assessing an applicant. There is no longer a separate public view; it takes a single character as input, and needs no account.
 _Avoid_: Officer mode, admin view, Applicant Intel API
 
 **Applicant dossier**:
@@ -48,7 +48,7 @@ The highest Mythic percentile a displayed character holds for a boss and metric,
 _Avoid_: Best shown parse, lifetime best, first-kill parse
 
 **Source label**:
-The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown only on the reviewer surface; the public alt list still shows one undifferentiated list, and no confidence value is retained alongside it.
+The record, per link, of whether a relationship was Raider.IO-declared or fingerprint-derived. It is retained on a snapshot and shown on the reviewer surface, which also labels manually added characters; no confidence value is retained alongside it.
 _Avoid_: Confidence, provenance score, match strength
 
 **Known reverse declaration**:
@@ -74,12 +74,14 @@ and is excluded when the target has an active removal request.
 _Avoid_: Verified manual alt, ownership claim, manual alt list
 
 **Excluded connection**:
-A manual connection a reviewer has hidden from one dossier's evidence. The
+A connected character, manual or snapshot-discovered, that a reviewer has hidden
+from one dossier's evidence. The searched character cannot be excluded. The
 character keeps its row, greyed and labelled, so the exclusion can be
 reversed; it contributes no kills, wipes, parses or Cutting Edge, raises no
-limitation, and spends no character-cap slot. It is scoped to the dossier it
-was made on, and it does not disturb the characters that connection's own
-discovery run found.
+limitation, and never costs another character its place under the character
+ceiling. It is scoped to the dossier it was made on, and excluding a manual
+connection does not disturb the characters that connection's own discovery run
+found. It is shared by every viewer, unlike the per-viewer visibility filter.
 _Avoid_: Removal request, suppression, blacklisted alt
 
 **Terminal tier**:
