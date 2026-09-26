@@ -1187,11 +1187,6 @@ a {
   pointer-events: none;
 }
 
-.dossier-guild-timeline-label--outside {
-  fill: var(--text);
-  font-weight: 400;
-}
-
 .dossier-guild-timeline-tooltip {
   position: absolute;
   z-index: 2;
