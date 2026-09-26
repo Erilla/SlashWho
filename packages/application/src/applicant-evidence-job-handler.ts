@@ -2325,8 +2325,10 @@ export function createApplicantEvidenceJobHandler(
           await evidence.fail(claimedRunId, "collection_failed");
         }
       } finally {
+        // Outside the logger guard: the cost row stores it too, and a handler
+        // built without a logger still ran for as long as it ran.
+        record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
         if (options.logger) {
-          record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
           options.logger.info({ ...record, ...scope.totals() });
         }
         if (announced) {
@@ -2366,6 +2368,12 @@ export function createApplicantEvidenceJobHandler(
           const requests = (field: string) => {
             const value = totals[`${field}Requests`];
             return typeof value === "number" ? value : 0;
+          };
+          // Absent from the totals is a bucket never timed, which stays null
+          // rather than reading as time the attempt did not spend.
+          const measured = (field: string) => {
+            const value = totals[field];
+            return typeof value === "number" ? value : null;
           };
           try {
             // `options.evidence`, not the measured wrapper: the totals this
@@ -2442,6 +2450,21 @@ export function createApplicantEvidenceJobHandler(
                   number | null,
                 verifiedKillsSkippedEmpty: record.verifiedKillsSkippedEmpty as
                   number | null
+              },
+              // The same totals the log line carries, so historical latency
+              // survives the log rotation (#502).
+              timings: {
+                durationMs: record.durationMs as number,
+                queueWaitMs: record.queueWaitMs as number | null,
+                warcraftLogsMs: measured("warcraftLogsMs"),
+                warcraftLogsHistoricAliasMs: measured(
+                  "warcraftLogsHistoricAliasMs"
+                ),
+                dbMs: measured("dbMs"),
+                dbMaxCallName:
+                  typeof totals.dbMaxCallName === "string"
+                    ? totals.dbMaxCallName
+                    : null
               }
             });
           } catch {

@@ -3174,9 +3174,88 @@ describe("applicant evidence job handler", () => {
               verifiedKillsSearched: null,
               verifiedKillsSkippedEmpty: null,
               recoveredKills: null
+            },
+            timings: {
+              durationMs: expect.any(Number),
+              // Enqueued without a timestamp, so the wait was not measured.
+              queueWaitMs: null,
+              warcraftLogsMs: expect.any(Number),
+              // No historic alias, so that bucket was never timed.
+              warcraftLogsHistoricAliasMs: null,
+              dbMs: expect.any(Number),
+              dbMaxCallName: expect.any(String)
             }
           }
         ]);
+      });
+
+      it("records where the attempt's time went, as the log line reports it", async () => {
+        // Break caught: only `raiderio_historic_ms` reached the table, and the
+        // rest of the run's timing lived on a log line Railway rotates away,
+        // so historical run latency could not be analysed (#502).
+        const { costs, store: evidence } = recordingStore();
+        const records: Array<Record<string, unknown>> = [];
+        let clock = 0;
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          warcraftLogs: {
+            ...openGate,
+            getFirstKillReports: async () => {
+              clock += 700;
+              return {
+                kind: "evidence" as const,
+                parsedFightUrls: [],
+                troubledRaidIds: { parses: [], tierBests: [] },
+                tierBests: [],
+                kills: [],
+                wipes: []
+              };
+            }
+          },
+          logger: { info: (record) => records.push(record) },
+          monotonic: () => (clock += 5)
+        });
+
+        await handler.execute(
+          {
+            runId: "run-cost-timed",
+            enqueuedAt: new Date(Date.now() - 3_000).toISOString()
+          },
+          { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+        );
+
+        const log = records.find((record) => record.event === "evidence_job")!;
+        expect(costs[0]?.timings).toEqual({
+          durationMs: log.durationMs,
+          queueWaitMs: log.queueWaitMs,
+          warcraftLogsMs: log.warcraftLogsMs,
+          warcraftLogsHistoricAliasMs: null,
+          dbMs: log.dbMs,
+          dbMaxCallName: log.dbMaxCallName
+        });
+        expect(costs[0]?.timings?.queueWaitMs).toBeGreaterThanOrEqual(2_900);
+        expect(costs[0]?.timings?.warcraftLogsMs).toBeGreaterThanOrEqual(700);
+        expect(costs[0]?.timings?.durationMs).toBeGreaterThan(
+          costs[0]!.timings!.warcraftLogsMs!
+        );
+      });
+
+      it("records the duration even when nothing logs it", async () => {
+        // The log line was the only place the duration was ever computed, so
+        // a handler built without a logger would have stored a run that took
+        // no time at all.
+        const { costs, store: evidence } = recordingStore();
+        let clock = 0;
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          evidence,
+          monotonic: () => (clock += 10)
+        });
+
+        await handler.execute("run-cost-unlogged");
+
+        expect(costs[0]?.timings?.durationMs).toBeGreaterThan(0);
       });
 
       it("says why a run fell short, not merely that it did", async () => {
