@@ -102,7 +102,7 @@ const allowlist = new Set([
  * only as the slowest call's label, so a future `...CharacterName` is not.
  */
 const measurementField =
-  /^(blizzard|db|raiderIo|warcraftLogs)[A-Za-z]*(Ms|Calls|Requests|Throttles|Keys|MaxCallName|MaxRequestName)$/;
+  /^(blizzard|db|raiderIo|warcraftLogs)[A-Za-z]*(Ms|Calls|Requests|Limited|Throttles|Keys|MaxCallName|MaxRequestName)$/;
 
 /** Exported so the logger test can pin the list rather than a copy of it. */
 export const allowedFields: ReadonlySet<string> = allowlist;

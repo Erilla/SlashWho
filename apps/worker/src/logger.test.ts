@@ -339,6 +339,7 @@ describe("worker logger", () => {
         warcraftLogsMaxCallName: "getFirstKillReports",
         warcraftLogsHistoryScanRequests: 1,
         warcraftLogsHistoryScanMs: 1,
+        warcraftLogsGuildAttendanceLimited: 1,
         warcraftLogsMaxRequestMs: 1,
         warcraftLogsMaxRequestName: "history_scan",
         warcraftLogsHistoricAliasMs: 1,
