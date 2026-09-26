@@ -5,7 +5,14 @@ import {
   guildTimelineSpans,
   raidTiers
 } from "@slashwho/domain";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 
 import { formatUtcDate } from "../lib/date-format";
 import type { EvidenceFilter } from "../lib/character-visibility";
@@ -30,8 +37,9 @@ const LANE_HEIGHT = 28;
 const BAR_HEIGHT = 20;
 const TOP = 8;
 const AXIS_HEIGHT = 22;
-// Bar labels are 12px; this over-estimates a little so a label never spills
-// into the next bar in its row.
+// Bar labels are 12px; this over-estimates a little so a label is shortened
+// before it reaches its bar's end. Each label is also clipped to its bar, so
+// an unusually wide name cannot spill out regardless.
 const CHARACTER_WIDTH = 7;
 // Matches the tooltip's max-width, 15rem, so it is kept inside the frame.
 const TOOLTIP_WIDTH = 240;
@@ -98,6 +106,9 @@ export function DossierGuildHistory({
   today = new Date().toISOString().slice(0, 10)
 }: DossierGuildHistoryProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Clip-path ids are document-wide, so they carry an id unique to this
+  // instance; useId's colons are not valid in a url(#...) reference.
+  const clipPrefix = `guild-label-${useId().replace(/:/g, "")}`;
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const tiers = useMemo(() => raidTiers(), []);
   // Assigned over every character's history rather than what is visible, so
@@ -306,7 +317,7 @@ export function DossierGuildHistory({
                     </g>
                   );
                 })}
-                {layout.bars.map((bar) => {
+                {layout.bars.map((bar, index) => {
                   const y = laneY(bar.lane) + (LANE_HEIGHT - BAR_HEIGHT) / 2;
                   const lines = barTooltipLines(bar);
                   return (
@@ -332,18 +343,27 @@ export function DossierGuildHistory({
                         x={bar.x}
                         y={y}
                       />
-                      <text
-                        aria-hidden="true"
-                        className={
-                          bar.labelInside
-                            ? "dossier-guild-timeline-label"
-                            : "dossier-guild-timeline-label dossier-guild-timeline-label--outside"
-                        }
-                        x={bar.labelInside ? bar.x + 6 : bar.x + bar.width + 6}
-                        y={y + 14}
-                      >
-                        {bar.guild.name}
-                      </text>
+                      {bar.label ? (
+                        <>
+                          <clipPath id={`${clipPrefix}-${index}`}>
+                            <rect
+                              height={BAR_HEIGHT}
+                              width={bar.width}
+                              x={bar.x}
+                              y={y}
+                            />
+                          </clipPath>
+                          <text
+                            aria-hidden="true"
+                            className="dossier-guild-timeline-label"
+                            clipPath={`url(#${clipPrefix}-${index})`}
+                            x={bar.x + 6}
+                            y={y + 14}
+                          >
+                            {bar.label}
+                          </text>
+                        </>
+                      ) : null}
                     </g>
                   );
                 })}
