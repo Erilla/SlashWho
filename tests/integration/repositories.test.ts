@@ -1919,6 +1919,34 @@ describe("PostgreSQL repositories", () => {
     });
   }
 
+  it("lists the most recently requested discovery runs first, up to the limit", async () => {
+    const first = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await repositories.runs.fail(first.id, "upstream_unavailable");
+    const second = await repositories.runs.createOrReuse(rootKey, "bot");
+    const third = await repositories.runs.createOrReuse(altKey, "anonymous");
+    // created_at defaults to now(), which a fast test can repeat; pin it so
+    // the order under test is the one the rows were requested in.
+    await pool.query(
+      `UPDATE discovery_runs
+          SET created_at = CASE id
+                WHEN $1::uuid THEN '2026-09-20T10:00:00Z'::timestamptz
+                WHEN $2::uuid THEN '2026-09-20T11:00:00Z'::timestamptz
+                ELSE '2026-09-20T12:00:00Z'::timestamptz
+              END`,
+      [first.id, second.id]
+    );
+
+    const all = await repositories.runs.listRecent(50);
+    const newestTwo = await repositories.runs.listRecent(2);
+
+    expect(all.map((run) => [run.id, run.status, run.errorCode])).toEqual([
+      [third.id, "queued", null],
+      [second.id, "queued", null],
+      [first.id, "failed", "upstream_unavailable"]
+    ]);
+    expect(newestTwo.map((run) => run.id)).toEqual([third.id, second.id]);
+  });
+
   it("round-trips a character's guild through the snapshot", async () => {
     // The guild columns are written by hand-built SQL and read back by a
     // mapper that treats a partially missing guild as none. Every other

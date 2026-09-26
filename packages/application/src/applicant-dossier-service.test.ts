@@ -1047,6 +1047,9 @@ describe("applicant dossier service", () => {
         },
         async findActive() {
           return null;
+        },
+        async listRecent() {
+          return [];
         }
       },
       suppressions: {

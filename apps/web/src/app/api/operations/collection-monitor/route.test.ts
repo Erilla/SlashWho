@@ -34,7 +34,8 @@ const monitor = {
   ],
   completed: [],
   hasMoreCompleted: false,
-  failed: []
+  failed: [],
+  discoveryRuns: []
 };
 
 function request(headers: Record<string, string> = {}, search = ""): Request {

@@ -41,6 +41,18 @@ export const collectionMonitorFailedRunSchema = z
   })
   .strict();
 
+export const collectionMonitorDiscoveryRunSchema = z
+  .object({
+    character: characterKeySchema,
+    status: z.enum(["queued", "running", "retrying", "complete", "failed"]),
+    attempt: z.number().int().nonnegative(),
+    requestedAt: timestampSchema,
+    startedAt: timestampSchema.nullable(),
+    completedAt: timestampSchema.nullable(),
+    errorCode: z.string().min(1).nullable()
+  })
+  .strict();
+
 export const collectionMonitorResponseSchema = z
   .object({
     generatedAt: timestampSchema,
@@ -50,7 +62,9 @@ export const collectionMonitorResponseSchema = z
     completed: z.array(collectionMonitorCompletedRunSchema),
     /** Whether older completed runs exist beyond the ones returned. */
     hasMoreCompleted: z.boolean(),
-    failed: z.array(collectionMonitorFailedRunSchema)
+    failed: z.array(collectionMonitorFailedRunSchema),
+    /** The most recently requested discovery runs, newest first. */
+    discoveryRuns: z.array(collectionMonitorDiscoveryRunSchema)
   })
   .strict();
 

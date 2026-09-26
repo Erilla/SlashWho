@@ -151,7 +151,8 @@ export async function createWebContainer(
           )
         : null;
     const collectionMonitor = createCollectionMonitorService({
-      evidence: repositories.evidence
+      evidence: repositories.evidence,
+      runs: repositories.runs
     });
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;

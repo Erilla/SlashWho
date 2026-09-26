@@ -3280,6 +3280,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [key.region, key.realm, key.name]
         );
         return result.rows[0] ? mapRun(result.rows[0]) : null;
+      },
+
+      async listRecent(limit) {
+        const result = await pool.query<RunRow>(
+          `SELECT * FROM discovery_runs
+           ORDER BY created_at DESC, id DESC
+           LIMIT $1`,
+          [limit]
+        );
+        return result.rows.map(mapRun);
       }
     },
 
