@@ -174,6 +174,19 @@ describe("dossier tier search route", () => {
     });
   });
 
+  it("reports a press that could queue nothing as failed, with each outcome", async () => {
+    result = searched({ kind: "failed" }, { kind: "no_evidence" });
+
+    const response = await POST(request(), context());
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      state: "failed",
+      characters: [{ outcome: "failed" }, { outcome: "no_evidence" }]
+    });
+  });
+
   it("rejects a tier it does not know, and a malformed one unread", async () => {
     result = { kind: "unknown_tier" };
     const unknown = await POST(request(), context());

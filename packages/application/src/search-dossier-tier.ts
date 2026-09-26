@@ -13,11 +13,13 @@ import {
 import { tierSearchWindow, type TierSearchSubject } from "./tier-search";
 
 /**
- * The most characters one press may queue a tier search for (#449). Each run
- * keeps its own request cap, so this bounds what one press can spend. It is
- * no lower than the largest dossier display cap, so it never stops short of
- * the characters a dossier researches; characters beyond it are reported as
- * `over_limit`, never dropped.
+ * The most tier searches one press may queue (#449). Each run keeps its own
+ * request cap, so this bounds what one press can spend. Only the searches a
+ * press queues, or tries to and fails, count against it: a character that is
+ * cooling down, collecting or has nothing to add to takes no place, so a
+ * later press reaches the characters after it. It is no lower than the
+ * largest dossier display cap; characters a press cannot reach are reported
+ * as `over_limit`, never dropped.
  */
 export const DOSSIER_TIER_SEARCH_CHARACTER_LIMIT = 30;
 
@@ -77,11 +79,14 @@ export async function searchDossierTier(options: {
 
   const characters: DossierTierSearchCharacterResult[] = [];
   const errors: unknown[] = [];
+  // Searches this press queued or tried to queue. Refusals cost no request
+  // cap, so they take no place (#494 review).
+  let attempted = 0;
   // One at a time: each reservation takes the character's lock, and a press
   // is bounded by `limit`, so there is nothing to gain from racing them.
-  for (const [index, subject] of distinct.entries()) {
+  for (const subject of distinct) {
     const base = { key: subject.key, displayName: subject.displayName };
-    if (index >= limit) {
+    if (attempted >= limit) {
       characters.push({ ...base, outcome: { kind: "over_limit" } });
       continue;
     }
@@ -97,8 +102,10 @@ export async function searchDossierTier(options: {
       });
       // The window was checked above, so no character can answer this.
       if (outcome.kind === "unknown_tier") return outcome;
+      if (outcome.kind === "queued") attempted += 1;
       characters.push({ ...base, outcome });
     } catch (error) {
+      attempted += 1;
       errors.push(error);
       characters.push({ ...base, outcome: { kind: "failed" } });
     }
@@ -149,6 +156,9 @@ export function dossierTierSearchResponse(
   const has = (outcome: DossierTierSearchOutcome["outcome"]) =>
     outcomes.some((item) => item.outcome === outcome);
   const reserved = has("queued");
+  // A queue failure is never summarised as "nothing collected yet"
+  // (#494 review): with nothing queued, in flight, searched or busy, a
+  // failure says what the press met.
   const state: DossierTierSearchResponse["state"] = reserved
     ? "queued"
     : has("running")
@@ -159,7 +169,9 @@ export function dossierTierSearchResponse(
           ? "searched"
           : has("busy")
             ? "busy"
-            : "no_evidence";
+            : has("failed")
+              ? "failed"
+              : "no_evidence";
   const again = outcomes.flatMap((item) =>
     item.searchableAgainAt ? [item.searchableAgainAt] : []
   );

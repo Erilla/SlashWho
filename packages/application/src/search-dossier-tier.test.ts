@@ -232,6 +232,60 @@ describe("searching a dossier tier for every character", () => {
     expect(test.reserveTierSearch).toHaveBeenCalledTimes(3);
   });
 
+  it("spends its limit only on searches it reserves, so a later press reaches the rest", async () => {
+    // Break caught (#494 review): cooling-down characters used up the limit,
+    // so on a dossier past the limit every later press answered "over limit"
+    // for the same characters and never queued them.
+    const searchedAt = new Date(at.getTime() - 60 * 60 * 1_000);
+    const recent = {
+      kind: "recent" as const,
+      status: "complete",
+      createdAt: searchedAt
+    };
+    const subjects = Array.from({ length: 6 }, (_, index) =>
+      subject(character(`c${index}`))
+    );
+    const test = harness({
+      c0: recent,
+      c1: recent,
+      c2: { kind: "no_evidence" },
+      c3: { kind: "active", mode: "full", raidId: null, status: "running" }
+    });
+
+    const result = await test.search(subjects, { limit: 2 });
+
+    if (result.kind !== "searched") throw new Error("not_searched");
+    expect(
+      result.characters.map((item) => [item.key.name, item.outcome.kind])
+    ).toEqual([
+      ["c0", "recent"],
+      ["c1", "recent"],
+      ["c2", "no_evidence"],
+      ["c3", "busy"],
+      ["c4", "queued"],
+      ["c5", "queued"]
+    ]);
+  });
+
+  it("counts a search it tried and failed to queue against its limit", async () => {
+    const subjects = Array.from({ length: 3 }, (_, index) =>
+      subject(character(`c${index}`))
+    );
+    const test = harness({});
+    test.enqueueCharacterEvidence.mockImplementationOnce(async () => {
+      throw new Error("queue_down");
+    });
+
+    const result = await test.search(subjects, { limit: 2 });
+
+    if (result.kind !== "searched") throw new Error("not_searched");
+    expect(result.characters.map((item) => item.outcome.kind)).toEqual([
+      "failed",
+      "queued",
+      "over_limit"
+    ]);
+  });
+
   it("never stops short of the characters a dossier can display", () => {
     // Break caught: a limit below the configurable display cap would leave
     // listed characters unsearched on every press.
@@ -391,6 +445,25 @@ describe("answering a dossier tier search press", () => {
     expect(
       summary([
         entry(ryii, { kind: "no_evidence" }),
+        entry(alt, {
+          kind: "busy",
+          searchingThisTier: false,
+          status: "running"
+        })
+      ])
+    ).toEqual({ reserved: false, state: "busy", again: null });
+    // Break caught (#494 review): a queue failure read as "nothing
+    // collected yet".
+    expect(
+      summary([
+        entry(ryii, { kind: "failed" }),
+        entry(alt, { kind: "no_evidence" }),
+        entry(fresh, { kind: "over_limit" })
+      ])
+    ).toEqual({ reserved: false, state: "failed", again: null });
+    expect(
+      summary([
+        entry(ryii, { kind: "failed" }),
         entry(alt, {
           kind: "busy",
           searchingThisTier: false,

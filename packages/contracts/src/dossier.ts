@@ -406,12 +406,20 @@ export const dossierTierSearchOutcomeSchema = z
  * What a "search this tier" press did across the dossier's characters.
  * `state` summarises them: `queued` when any search was reserved, then
  * `running` or `queued` when one was already in flight, then `searched`, with
- * the earliest `searchableAgainAt`, then `busy`, then `no_evidence`.
+ * the earliest `searchableAgainAt`, then `busy`, then `failed` when a search
+ * could not be queued, then `no_evidence`.
  * `characters` says what happened to each one.
  */
 export const dossierTierSearchResponseSchema = z
   .object({
-    state: z.enum(["queued", "running", "searched", "busy", "no_evidence"]),
+    state: z.enum([
+      "queued",
+      "running",
+      "searched",
+      "busy",
+      "failed",
+      "no_evidence"
+    ]),
     searchableAgainAt: z.iso.datetime().nullable(),
     characters: z.array(dossierTierSearchOutcomeSchema)
   })

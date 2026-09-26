@@ -797,9 +797,14 @@ function DossierPageState({
                           `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
                           { method: "POST" }
                         );
-                        // 409 is an answer -- busy, or nothing to search from --
-                        // not a failure; anything else unexpected is.
-                        if (!response.ok && response.status !== 409) {
+                        // 409 (busy, or nothing to search from) and 503 (no
+                        // search could be queued) are answers, with each
+                        // character's outcome; anything else unexpected is not.
+                        if (
+                          !response.ok &&
+                          response.status !== 409 &&
+                          response.status !== 503
+                        ) {
                           throw new Error("tier_search_failed");
                         }
                         const result =

@@ -320,9 +320,12 @@ including any beyond the dossier's display cap, but never an excluded one
 once. Each character's search is a run of its own, with its own reservation,
 cap, cooldown and cost row, so a character that is cooling down or already
 collecting never stops the others being queued. One press queues at most 30
-characters (`DOSSIER_TIER_SEARCH_CHARACTER_LIMIT`); any beyond that are reported
-as not queued, never dropped. A press can therefore spend up to that many runs'
-tier-search caps, spread across the worker's hourly allowance.
+searches (`DOSSIER_TIER_SEARCH_CHARACTER_LIMIT`). Only searches it queues, or
+tries to queue and fails, count: a character that is cooling down, collecting or
+has nothing collected takes no place, so a later press reaches the characters
+after it. Characters a press cannot reach are reported as not queued, never
+dropped. A press can therefore spend up to that many runs' tier-search caps,
+spread across the worker's hourly allowance.
 
 It is reserved only by that explicit request, never by a read, a resume or a
 retry, and at most once per tier per character a day. The one exception is a

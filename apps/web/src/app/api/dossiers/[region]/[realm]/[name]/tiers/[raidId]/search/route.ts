@@ -83,15 +83,18 @@ export async function POST(
     if (result.kind === "unknown_tier") return apiError("tier_not_found");
     // Accepted when any character's search was queued now. A press that
     // queued none is refused only when nothing is in flight or searched to
-    // show for it: every character busy, or with nothing to add to.
+    // show for it: every character busy, or with nothing to add to. One whose
+    // only attempts failed says so, with each character's outcome.
     const { reserved, body } = dossierTierSearchResponse(result.characters);
     return respond(
       body,
       reserved
         ? 202
-        : body.state === "busy" || body.state === "no_evidence"
-          ? 409
-          : 200
+        : body.state === "failed"
+          ? 503
+          : body.state === "busy" || body.state === "no_evidence"
+            ? 409
+            : 200
     );
   });
 }

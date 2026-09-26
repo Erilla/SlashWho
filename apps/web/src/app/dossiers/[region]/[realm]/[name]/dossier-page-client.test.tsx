@@ -371,6 +371,50 @@ describe("DossierPageClient live evidence", () => {
     }
   );
 
+  it("shows each character's outcome when a tier search press could queue nothing", async () => {
+    // A 503 from the search still says what happened to each character
+    // (#494 review), so it is an answer, not a bare failure.
+    const settled = withEvidenceState(expanded, "complete");
+    const raid = settled.raids[0]!;
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          state: "failed",
+          searchableAgainAt: null,
+          characters: [
+            {
+              key: identity,
+              displayName: "Ryii",
+              outcome: "failed",
+              searchableAgainAt: null
+            }
+          ]
+        },
+        { status: 503 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={settled}
+        jobId={null}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: `Search guild logs for ${raid.raidName}`
+      })
+    );
+
+    expect(
+      await screen.findByRole("list", {
+        name: `${raid.raidName} search by character`
+      })
+    ).toHaveTextContent("Ryii: failed: could not be queued");
+  });
+
   it("follows a tier search in flight for a character the list does not show", async () => {
     // Break caught (#449): polling followed only the listed characters, so a
     // search queued for one beyond the display cap was never seen to finish.
