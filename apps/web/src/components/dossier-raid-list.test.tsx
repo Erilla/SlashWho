@@ -463,13 +463,24 @@ it("offers every tier a search, and none where the dossier is read-only", async 
       tierSearch: {
         state: "running" as const,
         searchedAt: "2026-09-23T06:00:00.000Z",
-        searchableAgainAt: "2026-09-24T06:00:00.000Z"
+        searchableAgainAt: "2026-09-24T06:00:00.000Z",
+        characters: [
+          {
+            key: { region: "eu", realm: "silvermoon", name: "ryii" },
+            displayName: "Ryii",
+            state: "running" as const,
+            searchedAt: "2026-09-23T06:00:00.000Z",
+            searchableAgainAt: "2026-09-24T06:00:00.000Z"
+          }
+        ]
       }
     }
   ] as ApplicantDossier["raids"];
-  const onSearchTier = vi
-    .fn()
-    .mockResolvedValue({ state: "queued", searchableAgainAt: null });
+  const onSearchTier = vi.fn().mockResolvedValue({
+    state: "queued",
+    searchableAgainAt: null,
+    characters: []
+  });
   const view = renderWithDossierCharacters(
     <DossierRaidList onSearchTier={onSearchTier} raids={raids} />
   );

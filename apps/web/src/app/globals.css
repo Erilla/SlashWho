@@ -540,6 +540,20 @@ a {
   color: var(--muted);
 }
 
+/* One line per character, so a partial search never reads as a whole one. */
+.dossier-tier-search-characters {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.dossier-tier-search-character {
+  color: var(--text);
+}
+
 .dossier-refresh-age {
   margin: 0;
   font-size: 0.74rem;

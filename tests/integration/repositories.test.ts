@@ -5606,13 +5606,168 @@ describe("PostgreSQL repositories", () => {
       );
 
       await expect(
-        repositories.evidence.latestTierSearches(rootKey, dayBefore)
+        repositories.evidence.latestTierSearches([rootKey], dayBefore)
       ).resolves.toEqual([
-        { raidId: tier, status: "running", createdAt: searchedAt }
+        { key: rootKey, raidId: tier, status: "running", createdAt: searchedAt }
       ]);
       await expect(
-        repositories.evidence.latestTierSearches(altKey, dayBefore)
+        repositories.evidence.latestTierSearches([altKey], dayBefore)
       ).resolves.toEqual([]);
+    });
+
+    it("reports every dossier character's newest search of each tier in one read", async () => {
+      // A dossier searches a tier for every included character (#449), so it
+      // reads each character's newest search, never only the submitted one's.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      await publishEvidence(altKey, new Date("2026-09-22T12:00:00.000Z"));
+      const root = await repositories.evidence.reserveTierSearch({
+        key: rootKey,
+        raidId: tier,
+        at: searchedAt,
+        searchedSince: dayBefore
+      });
+      const alt = await repositories.evidence.reserveTierSearch({
+        key: altKey,
+        raidId: tier,
+        at: new Date(searchedAt.getTime() + 1_000),
+        searchedSince: dayBefore
+      });
+      if (root.kind !== "reserved" || alt.kind !== "reserved") {
+        throw new Error("tier_search_not_reserved");
+      }
+      await repositories.evidence.claim(alt.run.id, 1);
+      await repositories.evidence.fail(alt.run.id, "unavailable");
+
+      const latest = await repositories.evidence.latestTierSearches(
+        [rootKey, altKey, { ...rootKey, name: "nobody" }],
+        dayBefore
+      );
+
+      expect(
+        [...latest].sort((left, right) =>
+          left.key.name.localeCompare(right.key.name, "en")
+        )
+      ).toEqual(
+        [
+          {
+            key: rootKey,
+            raidId: tier,
+            status: "queued",
+            createdAt: searchedAt
+          },
+          {
+            key: altKey,
+            raidId: tier,
+            status: "failed",
+            createdAt: new Date(searchedAt.getTime() + 1_000)
+          }
+        ].sort((left, right) =>
+          left.key.name.localeCompare(right.key.name, "en")
+        )
+      );
+      await expect(
+        repositories.evidence.latestTierSearches([], dayBefore)
+      ).resolves.toEqual([]);
+    });
+
+    it("names which characters have evidence a tier search could add to", async () => {
+      // Break caught (#494 re-review): a character with nothing collected
+      // read as still to search, so the tier offered a search that the
+      // reservation always refuses.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const failed = await repositories.evidence.reserve({
+        key: altKey,
+        freshnessCutoff: searchedAt,
+        at: searchedAt
+      });
+      await repositories.evidence.claim(failed.run.id, 1);
+      await repositories.evidence.fail(failed.run.id, "unavailable");
+
+      await expect(
+        repositories.evidence.withCompletedEvidence!([
+          rootKey,
+          altKey,
+          { ...rootKey, name: "nobody" }
+        ])
+      ).resolves.toEqual([rootKey]);
+      await expect(
+        repositories.evidence.withCompletedEvidence!([])
+      ).resolves.toEqual([]);
+    });
+
+    it("keeps each character's tier search a run of its own, costed apart", async () => {
+      // One press queues one run per character (#449); each attempt's cost is
+      // recorded against that character's run, never pooled.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      await publishEvidence(altKey, new Date("2026-09-22T12:00:00.000Z"));
+      const runs = await Promise.all(
+        [rootKey, altKey].map(async (key) => {
+          const reservation = await repositories.evidence.reserveTierSearch({
+            key,
+            raidId: tier,
+            at: searchedAt,
+            searchedSince: dayBefore
+          });
+          if (reservation.kind !== "reserved") {
+            throw new Error("tier_search_not_reserved");
+          }
+          return reservation.run;
+        })
+      );
+      expect(new Set(runs.map((run) => run.id)).size).toBe(2);
+      expect(runs.map((run) => run.tierSearchRaidId)).toEqual([tier, tier]);
+
+      for (const [index, run] of runs.entries()) {
+        await repositories.evidence.recordRunCost({
+          runId: run.id,
+          attempt: 1,
+          outcome: "published",
+          credentials: "own",
+          mode: "tier_search",
+          limitationCode: null,
+          parseLimitationCode: null,
+          pointsSpent: 100 + index,
+          pointsLimitPerHour: 18_000,
+          pointsRemainingBefore: 17_000,
+          pointsRemainingAfter: 16_900 - index,
+          requestCapUsed: 60,
+          parseRequestCapUsed: 0,
+          requests: {
+            historyScan: 0,
+            guildAttendance: 1,
+            reportHydration: 1,
+            zoneRankings: 0,
+            fightParses: 0,
+            rankingIdentities: 0
+          },
+          recovery: {
+            raiderIoOutcome: "evidence",
+            raiderIoMs: 0,
+            verifiedKillsSearched: 0,
+            verifiedKillsSkippedEmpty: 0,
+            recoveredKills: 0
+          },
+          tierSearch: {
+            raidId: tier,
+            outcome: "complete",
+            requests: 2,
+            guilds: 1,
+            reportsHydrated: 1,
+            recoveredKills: index,
+            recoveredWipes: 0
+          }
+        });
+      }
+
+      const costs = await pool.query<{ run_id: string; points_spent: number }>(
+        `SELECT run_id, points_spent FROM character_evidence_run_costs
+          WHERE run_id = ANY($1::uuid[]) ORDER BY points_spent`,
+        [runs.map((run) => run.id)]
+      );
+      expect(costs.rows).toEqual([
+        { run_id: runs[0]!.id, points_spent: 100 },
+        { run_id: runs[1]!.id, points_spent: 101 }
+      ]);
     });
 
     it("names the guilds stored kills were in, for the search to walk", async () => {

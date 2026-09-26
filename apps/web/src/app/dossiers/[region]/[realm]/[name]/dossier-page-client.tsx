@@ -58,6 +58,21 @@ function hasLiveEvidence(value: ApplicantDossier | null): boolean {
   );
 }
 
+/**
+ * Whether any tier's search is in flight (#449). A search may run for a
+ * character beyond the list's cap, whose own evidence state is never shown,
+ * so polling follows the searches as well as the listed characters.
+ */
+function hasLiveTierSearch(value: ApplicantDossier | null): boolean {
+  return (
+    value?.raids.some(
+      (raid) =>
+        raid.tierSearch?.state === "queued" ||
+        raid.tierSearch?.state === "running"
+    ) ?? false
+  );
+}
+
 function dossierCharacterKey(character: CharacterKey): string {
   return `${character.region}:${character.realm}:${character.name}`;
 }
@@ -552,7 +567,10 @@ function DossierPageState({
   }, []);
 
   useAuthoritativePoll({
-    active: canAddCharacters && !pollStopped && hasLiveEvidence(dossier),
+    active:
+      canAddCharacters &&
+      !pollStopped &&
+      (hasLiveEvidence(dossier) || hasLiveTierSearch(dossier)),
     read: readDossierPoll,
     onSnapshot: applyFreshDossier,
     onTerminalError: applyDossierError
@@ -779,9 +797,14 @@ function DossierPageState({
                           `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
                           { method: "POST" }
                         );
-                        // 409 is an answer -- busy, or nothing to search from --
-                        // not a failure; anything else unexpected is.
-                        if (!response.ok && response.status !== 409) {
+                        // 409 (busy, or nothing to search from) and 503 (no
+                        // search could be queued) are answers, with each
+                        // character's outcome; anything else unexpected is not.
+                        if (
+                          !response.ok &&
+                          response.status !== 409 &&
+                          response.status !== 503
+                        ) {
                           throw new Error("tier_search_failed");
                         }
                         const result =

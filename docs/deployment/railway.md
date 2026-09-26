@@ -48,7 +48,8 @@ ANONYMOUS_SEARCHES_PER_HOUR=10
 BOT_SEARCHES_PER_HOUR=60
 PUBLIC_READS_PER_MINUTE=300
 # "Search this tier" presses a caller may make an hour, on top of the
-# once-a-day limit on each character's tier.
+# once-a-day limit on each character's tier. One press searches the tier for
+# every included dossier character, each as its own run.
 TIER_SEARCHES_PER_HOUR=6
 FRESHNESS_HOURS=24
 DOSSIER_RAIDERIO_TIER_CAP=8

@@ -34,6 +34,16 @@ export { refreshCharacter } from "./refresh-character";
 export type { RefreshCharacterResult } from "./refresh-character";
 export { searchCharacterTier } from "./search-character-tier";
 export type { SearchCharacterTierResult } from "./search-character-tier";
+export {
+  DOSSIER_TIER_SEARCH_CHARACTER_LIMIT,
+  dossierTierSearchResponse,
+  searchDossierTier
+} from "./search-dossier-tier";
+export type {
+  DossierTierSearchCharacterOutcome,
+  DossierTierSearchCharacterResult,
+  SearchDossierTierResult
+} from "./search-dossier-tier";
 export { TIER_SEARCH_SPACING_MS } from "./tier-search";
 export type { RefreshMode } from "./refresh-mode";
 export { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";

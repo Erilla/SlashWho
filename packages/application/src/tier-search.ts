@@ -1,6 +1,10 @@
-import type { DossierTierSearch } from "@slashwho/contracts";
-import type { StoredEvidenceTiers } from "@slashwho/database";
+import type {
+  DossierTierSearch,
+  DossierTierSearchCharacter
+} from "@slashwho/contracts";
+import type { LatestTierSearch, StoredEvidenceTiers } from "@slashwho/database";
 import {
+  canonicalCharacterId,
   lookupRaidCurrentContentWindow,
   lookupRaidForEvidence,
   type CharacterKey
@@ -93,37 +97,111 @@ export function tierSearchRequestCaps(
   return { history: scanCap - tier, tier };
 }
 
+/** One included dossier character, as a tier search reads it. */
+export type TierSearchSubject = Readonly<{
+  key: CharacterKey;
+  displayName: string;
+  /** Other names merged into this character by Warcraft Logs ID (#490). */
+  aliases?: readonly CharacterKey[];
+}>;
+
+function characterState(
+  status: LatestTierSearch["status"],
+  searchableAgainAt: Date,
+  now: Date
+): DossierTierSearchCharacter["state"] {
+  if (status === "running") return "running";
+  if (status === "queued" || status === "retrying") return "queued";
+  if (searchableAgainAt <= now) return "not_searched";
+  return status === "complete"
+    ? "completed"
+    : status === "partial"
+      ? "partial"
+      : "failed";
+}
+
 /**
- * The dossier's view of each tier's newest search: in flight, or searched
- * within the rate limit's window. A tier with neither is absent, meaning it
- * may be searched.
+ * The dossier's view of each tier's searches across its included characters
+ * (#449). A character's newest search, under any of its merged names, is in
+ * flight or ended within the rate limit's window; otherwise the character is
+ * still to search, unless `withEvidence` says it has nothing collected for a
+ * search to add to (#494 review): a reservation always refuses it, so it is
+ * never counted as remaining. `withEvidence` holds canonical character ids;
+ * without it every character is taken to be searchable. A tier no character
+ * has such a search for is absent, meaning it may be searched.
  */
 export function tierSearchStates(
-  latest: readonly Readonly<{
-    raidId: string;
-    status: string;
-    createdAt: Date;
-  }>[],
-  now: Date
+  subjects: readonly TierSearchSubject[],
+  latest: readonly LatestTierSearch[],
+  now: Date,
+  withEvidence?: ReadonlySet<string>
 ): ReadonlyMap<string, DossierTierSearch> {
-  const states = new Map<string, DossierTierSearch>();
+  const subjectOf = new Map<string, number>();
+  subjects.forEach((subject, index) => {
+    for (const key of [subject.key, ...(subject.aliases ?? [])]) {
+      subjectOf.set(canonicalCharacterId(key), index);
+    }
+  });
+  // Each tier's newest search per subject: several names of one character
+  // may each have searched it.
+  const newest = new Map<string, Map<number, LatestTierSearch>>();
   for (const search of latest) {
-    const searchableAgainAt = new Date(
-      search.createdAt.getTime() + TIER_SEARCH_SPACING_MS
+    const index = subjectOf.get(canonicalCharacterId(search.key));
+    if (index === undefined) continue;
+    const bySubject = newest.get(search.raidId) ?? new Map();
+    const current = bySubject.get(index);
+    if (!current || search.createdAt > current.createdAt) {
+      bySubject.set(index, search);
+    }
+    newest.set(search.raidId, bySubject);
+  }
+
+  const states = new Map<string, DossierTierSearch>();
+  for (const [raidId, bySubject] of newest) {
+    const characters: DossierTierSearchCharacter[] = subjects.map(
+      (subject, index) => {
+        const search = bySubject.get(index);
+        const base = { key: subject.key, displayName: subject.displayName };
+        const idle =
+          withEvidence && !withEvidence.has(canonicalCharacterId(subject.key))
+            ? "no_evidence"
+            : "not_searched";
+        if (!search) return { ...base, state: idle };
+        const searchableAgainAt = new Date(
+          search.createdAt.getTime() + TIER_SEARCH_SPACING_MS
+        );
+        const state = characterState(search.status, searchableAgainAt, now);
+        return state === "not_searched"
+          ? { ...base, state: idle }
+          : {
+              ...base,
+              state,
+              searchedAt: search.createdAt.toISOString(),
+              searchableAgainAt: searchableAgainAt.toISOString()
+            };
+      }
     );
-    const state =
-      search.status === "running"
-        ? "running"
-        : search.status === "queued" || search.status === "retrying"
-          ? "queued"
-          : searchableAgainAt > now
-            ? "searched"
-            : null;
-    if (state === null) continue;
-    states.set(search.raidId, {
+    const searched = characters.filter(
+      (character) =>
+        character.state !== "not_searched" && character.state !== "no_evidence"
+    );
+    if (searched.length === 0) continue;
+    const state = characters.some((character) => character.state === "running")
+      ? "running"
+      : characters.some((character) => character.state === "queued")
+        ? "queued"
+        : characters.some((character) => character.state === "not_searched")
+          ? "partly_searched"
+          : "searched";
+    states.set(raidId, {
       state,
-      searchedAt: search.createdAt.toISOString(),
-      searchableAgainAt: searchableAgainAt.toISOString()
+      searchedAt: searched
+        .map((character) => character.searchedAt!)
+        .reduce((left, right) => (left > right ? left : right)),
+      searchableAgainAt: searched
+        .map((character) => character.searchableAgainAt!)
+        .reduce((left, right) => (left < right ? left : right)),
+      characters
     });
   }
   return states;
