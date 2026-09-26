@@ -136,3 +136,35 @@ it("returns to the top of the page and clears the section fragment", async () =>
     screen.getByRole("link", { name: "Connected characters" })
   ).toHaveAttribute("aria-current", "location");
 });
+
+it("marks the Mythic evidence heading while one of its raids is current", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  const targets = [
+    "dossier-characters-heading",
+    "dossier-raid-amirdrassil"
+  ].map((id) => {
+    const target = document.createElement("h2");
+    target.id = id;
+    document.body.append(target);
+    return target;
+  });
+  render(
+    <DossierSectionNavigation
+      hasLimitations={false}
+      raids={[raid("amirdrassil", [kill])]}
+    />
+  );
+  const heading = screen.getByRole("link", {
+    name: "Historic Mythic boss evidence"
+  });
+
+  await user.click(screen.getByRole("link", { name: "Raid: amirdrassil" }));
+  expect(heading).toHaveAttribute("data-current-raid", "true");
+  expect(heading).not.toHaveAttribute("aria-current");
+
+  await user.click(screen.getByRole("link", { name: "Connected characters" }));
+  expect(heading).not.toHaveAttribute("data-current-raid");
+
+  for (const target of targets) target.remove();
+});
