@@ -116,15 +116,16 @@ function distribution(values: readonly number[]): Distribution {
   if (values.length === 0) {
     return { count: 0, min: null, median: null, max: null };
   }
+  // Non-empty, so every index read below is in range.
   const sorted = [...values].sort((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
   const median =
     sorted.length % 2 === 0
-      ? (sorted[middle - 1] + sorted[middle]) / 2
-      : sorted[middle];
+      ? (sorted[middle - 1]! + sorted[middle]!) / 2
+      : sorted[middle]!;
   return {
     count: sorted.length,
-    min: sorted[0],
+    min: sorted[0]!,
     median,
     max: sorted.at(-1) ?? null
   };

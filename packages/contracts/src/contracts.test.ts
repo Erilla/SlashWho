@@ -535,7 +535,7 @@ it("retains an unknown historic world rank as null", () => {
   // Break caught: an unavailable historic rank could be converted into a
   // fabricated numeric finding or rejected entirely.
   expect(
-    validDossier.raids[0].bosses[0].firstKill.historicWorldRank
+    validDossier.raids[0]?.bosses[0]?.firstKill.historicWorldRank
   ).toBeNull();
   const parsed = applicantDossierSchema.parse(validDossier).raids[0]?.bosses[0];
   expect(parsed?.state).toBe("kill");
