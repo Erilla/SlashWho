@@ -245,6 +245,14 @@ the run after that back to page one, so every light refresh on an active
 character paid for its history twice. A light run's `request_cap` is its
 one-page budget, not a cursor to follow.
 
+The same holds for a former name's cursor in `historic_alias_progress`. A
+light refresh scans no former name: its one request goes to the newest page of
+the current name, and it republishes each alias's stored progress unchanged.
+Before, the alias whose turn it was took the request, and its capped page one
+saved "resume at page 2" for that alias. Because the former name goes unread,
+such a run always publishes partial, so it never drops kills only that name
+holds.
+
 A kill whose first defeat was never logged can never be held, so it would be
 searched for on every full run until its tier settles. For a character with no
 stored Warcraft Logs evidence at all, that is never, because nothing gives it a
