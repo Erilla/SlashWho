@@ -7769,6 +7769,57 @@ describe("PostgreSQL repositories", () => {
     expect((await stored()).historyScanResumePage).toBeUndefined();
   });
 
+  it("keeps a former name's bookmark when a later light run carries it forward", async () => {
+    // A light refresh scans no former name and republishes each alias's
+    // stored progress on its own row. The progress is read from the newest
+    // published run that holds any, so what that run carries is what stands.
+    await seedCompleteSnapshot(repositories);
+    const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+    const progress = {
+      key: alias,
+      pendingParseFightUrls: [],
+      historyScanResumePage: 7,
+      historyScanResumeBoundaryReportCode: "alias-boundary",
+      historyComplete: false,
+      parseWorkOutstanding: false
+    };
+    const publishRun = async (
+      minute: number,
+      historicAliasProgress: (typeof progress)[]
+    ) => {
+      const reservation = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date(`2026-09-20T12:${minute}:00.000Z`),
+        at: new Date(`2026-09-20T12:${minute + 1}:00.000Z`)
+      });
+      if (reservation.kind !== "reserved") throw new Error("run_not_reserved");
+      await repositories.evidence.publish(reservation.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        historicAliasProgress,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: new Date(`2026-09-20T12:${minute + 2}:00.000Z`)
+      });
+    };
+    const stored = async () =>
+      (
+        await createPostgresRepositories(pool).evidence.storedEvidenceTiers(
+          rootKey
+        )
+      ).historicAliasProgress;
+
+    await publishRun(10, [progress]);
+    await publishRun(20, [progress]);
+    await expect(stored()).resolves.toEqual([progress]);
+
+    // An empty list is a statement, not an omission: it clears the bookmark.
+    await publishRun(30, []);
+    await expect(stored()).resolves.toEqual([]);
+  });
+
   it("persists historic aliases and invalidates only kill completion and scan cursors", async () => {
     await seedCompleteSnapshot(repositories);
     const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;

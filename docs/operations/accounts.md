@@ -21,7 +21,7 @@ The CLI requires an interactive TTY and prompts for a **hidden temporary passwor
 
 - Search for a character and open a dossier while signed out. Public search, dossier reads, evidence collection, controls, rate limits, and allowance policy still work without registration.
 - Register a test account, follow its verification link, and sign in. Exercise recovery and a saved key import if migrating a browser-stored key. A saved account key is never returned as a secret; signed-out browser keys continue to work.
-- Confirm an ordinary account is denied admin settings and monitor access. Confirm a valid `BOT_API_KEY` can still call the monitor API.
+- Confirm an ordinary account is denied Account Management and monitor access. Confirm a valid `BOT_API_KEY` can still call the monitor API.
 - Check worker mail-delivery logs for failures without exposing tokens or addresses. Account mail uses durable encrypted outbox messages and stable idempotency keys for retries.
 
 Without Resend configuration or while mail delivery is unavailable, new registration verification, recovery, and email-change delivery cannot complete. This affects account flows only; existing public features and bearer automation remain available. Restore mail configuration and retry the account action after delivery recovers.

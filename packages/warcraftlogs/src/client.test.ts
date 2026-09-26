@@ -3896,7 +3896,8 @@ describe("Warcraft Logs gateway", () => {
     it("asks each report only for its player actors", async () => {
       // Break caught: history pages and hydrated reports listed every actor
       // -- pets, NPCs, bosses -- although every decoder keeps only players,
-      // so each request paid query complexity for rows it threw away.
+      // so each response carried rows it threw away. It costs the same points
+      // and complexity either way; the saving is response size.
       const actorSelections: string[] = [];
       const { client } = clientFor((url, init) => {
         if (url.pathname === "/oauth/token") return token();
