@@ -210,6 +210,14 @@ Recovery's requests are counted apart from the history scan:
 All three draw on the same scan cap. Rows written before the split read zero in
 both, with their recovery counted inside `history_scan_requests`.
 
+A search gallops through a guild's attendance, as the tier search does: it
+doubles its way to the first page that is not wholly newer than every wanted
+night, bisects for it, and walks on from there until it is past the oldest.
+A night 40 pages back costs about a dozen pages rather than 41. Before, the
+walk read every page from page one, so `guild_attendance_requests` grew with
+how old the kill was, and a kill far enough back could not be reached within
+the cap at all.
+
 A search never limits the run: a guild Warcraft Logs does not know, a page it
 will not serve, or a spent budget recovers nothing and leaves the run's status
 to its history scan. A re-read that fails for any reason other than the report
