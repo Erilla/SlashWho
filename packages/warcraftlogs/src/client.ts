@@ -36,6 +36,12 @@ const MYTHIC_DIFFICULTY = 5;
 const REPORTS_PER_PAGE = 10;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const MAX_RANKING_IDENTITIES = 50;
+// How long a finished guild attendance walk and the zone catalogue are
+// reused. The walk outlives one dossier tier press, whose runs go one after
+// another; the catalogue changes only with a new raid.
+const SHARED_ATTENDANCE_WALK_TTL_MS = 30 * 60_000;
+const SHARED_ATTENDANCE_WALK_LIMIT = 64;
+const SHARED_ZONES_TTL_MS = 6 * 60 * 60_000;
 
 const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
@@ -121,7 +127,7 @@ const recentReportsQuery = (lookup: CharacterLookup) => `
             owner { name }
             guild { name server { slug region { slug } } }
             zone { id name encounters { id journalID } }
-            masterData { actors { id name server type } }
+            masterData { actors(type: "Player") { id name server type } }
             fights {
               id
               encounterID
@@ -173,7 +179,7 @@ const reportByCodeQuery = `
         owner { name }
         guild { name server { slug region { slug } } }
         zone { id name encounters { id journalID } }
-        masterData { actors { id name server type } }
+        masterData { actors(type: "Player") { id name server type } }
         fights {
           id encounterID name startTime endTime kill difficulty friendlyPlayers
           gameZone { id name }
@@ -220,7 +226,7 @@ const historicRankedReportQuery = `
         guild { name server { slug region { slug } } }
         zone { id name encounters { id journalID } }
         rankedCharacters { id canonicalID name server { slug name } }
-        masterData { actors { id name server type } }
+        masterData { actors(type: "Player") { id name server type } }
         fights(fightIDs: [$fightId]) {
           id encounterID name startTime endTime kill difficulty friendlyPlayers friendlySpecs
           gameZone { id name }
@@ -240,7 +246,7 @@ const reportFightParsesQuery = `
     reportData {
       report(code: $code) {
         code
-        masterData { actors { id name server type } }
+        masterData { actors(type: "Player") { id name server type } }
         damage: rankings(
           compare: Rankings
           fightIDs: $fightIDs
@@ -1989,6 +1995,23 @@ export function createWarcraftLogsClient(
     Math.max(0, Math.round(monotonic() - startedAt));
   let cachedToken: AccessToken | undefined;
   let tokenRequest: Promise<string | WarcraftLogsLimitation> | undefined;
+  // The zone catalogue is Warcraft Logs' own static data, the same for every
+  // character, and each ranked walk used to ask for it afresh.
+  let sharedZones: { value: unknown; at: number } | undefined;
+  // One dossier tier press searches up to 30 characters, one run after
+  // another, and alts share guilds: each run walked the same guild's
+  // attendance across the same window. A walk that finished is kept for a
+  // while and replayed. Only whole walks are kept, never a page on its own:
+  // pages shift as reports are uploaded, so a kept page beside a fresh one
+  // could skip a report at the seam. Which pages a walk reads depends on
+  // report start times alone, so a replay asks for exactly the pages kept;
+  // each character still judges each report by its own name. A report
+  // uploaded since is missed until the walk expires, which costs discovery
+  // only: a tier search can add evidence but never remove it.
+  const sharedAttendanceWalks = new Map<
+    string,
+    { pages: ReadonlyMap<number, unknown>; at: number }
+  >();
 
   function tokenUrl(): URL {
     return new URL("/oauth/token", baseUrl ?? "https://www.warcraftlogs.com");
@@ -2223,11 +2246,18 @@ export function createWarcraftLogsClient(
       return result;
     };
     if (!progress.zonesLoaded) {
-      const zones = await request("zone_rankings", historicRaidZonesQuery, {});
+      const zones =
+        sharedZones && monotonic() - sharedZones.at < SHARED_ZONES_TTL_MS
+          ? { kind: "success" as const, value: sharedZones.value }
+          : await request("zone_rankings", historicRaidZonesQuery, {});
       if (!zones) return limited({ kind: "limitation", code: "request_cap" });
       if (zones.kind !== "success") return limited(zones);
       const scopes = historicZoneIds(zones.value, options.journalRaidId);
       if (!scopes) return limited({ kind: "limitation", code: "schema_drift" });
+      // Kept only once it has decoded, so a drifted answer is asked again.
+      if (sharedZones?.value !== zones.value) {
+        sharedZones = { value: zones.value, at: monotonic() };
+      }
       progress = { ...progress, ...scopes, zonesLoaded: true };
     }
     while (progress.zoneIndex < progress.zoneIds.length) {
@@ -3017,14 +3047,43 @@ export function createWarcraftLogsClient(
       }
 
       type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
-      search: for (const guild of guilds.values()) {
+      search: for (const [guildKey, guild] of guilds) {
         const pages = new Map<number, Page | null>();
+        const walkKey = `${guildKey} ${earliestStart} ${latestStart}`;
+        const kept = sharedAttendanceWalks.get(walkKey);
+        const replay =
+          kept && monotonic() - kept.at < SHARED_ATTENDANCE_WALK_TTL_MS
+            ? kept.pages
+            : undefined;
+        // Every answer this walk read, kept if the walk finishes.
+        const read = new Map<number, unknown>();
+        const decode = (value: unknown) =>
+          // A guild Warcraft Logs says it has no record of has nothing to
+          // walk, which is a finished walk rather than an unreadable one.
+          guildIsAbsent(value)
+            ? { reports: [], hasMorePages: false }
+            : guildAttendancePage(value, key.name);
+        const finished = () => {
+          if (replay) return;
+          sharedAttendanceWalks.delete(walkKey);
+          sharedAttendanceWalks.set(walkKey, { pages: read, at: monotonic() });
+          // Insertion order is age order, so the first key is the oldest.
+          if (sharedAttendanceWalks.size > SHARED_ATTENDANCE_WALK_LIMIT) {
+            const oldest = sharedAttendanceWalks.keys().next().value;
+            if (oldest !== undefined) sharedAttendanceWalks.delete(oldest);
+          }
+        };
         // Null when the page could not be read, so this guild's walk cannot
         // be finished; undefined when the budget ran out first.
         const page = async (
           number: number
         ): Promise<Page | null | undefined> => {
           if (pages.has(number)) return pages.get(number);
+          if (replay?.has(number)) {
+            const decoded = decode(replay.get(number));
+            pages.set(number, decoded);
+            return decoded;
+          }
           if (!spend()) return undefined;
           const attendance = await counted("guild_attendance", () =>
             graphql(
@@ -3038,14 +3097,9 @@ export function createWarcraftLogsClient(
               options.signal
             )
           );
-          // A guild Warcraft Logs says it has no record of has nothing to
-          // walk, which is a finished walk rather than an unreadable one.
           const decoded =
-            attendance.kind !== "success"
-              ? null
-              : guildIsAbsent(attendance.value)
-                ? { reports: [], hasMorePages: false }
-                : guildAttendancePage(attendance.value, key.name);
+            attendance.kind !== "success" ? null : decode(attendance.value);
+          if (attendance.kind === "success") read.set(number, attendance.value);
           pages.set(number, decoded);
           return decoded;
         };
@@ -3084,7 +3138,10 @@ export function createWarcraftLogsClient(
           }
           if (!newerThanWindow(value)) break;
           // The whole of this guild's attendance is newer than the tier.
-          if (!value.hasMorePages) continue search;
+          if (!value.hasMorePages) {
+            finished();
+            continue search;
+          }
           before = first;
           first *= 2;
         }
@@ -3107,7 +3164,10 @@ export function createWarcraftLogsClient(
             summary.outcome = "incomplete";
             continue search;
           }
-          if (olderThanWindow(value)) continue search;
+          if (olderThanWindow(value)) {
+            finished();
+            continue search;
+          }
           for (const report of value.reports) {
             if (skip.has(report.code) || scannedReportCodes.has(report.code)) {
               continue;
@@ -3140,7 +3200,10 @@ export function createWarcraftLogsClient(
             }
             if (decoded.limitation) summary.outcome = "incomplete";
           }
-          if (!value.hasMorePages) continue search;
+          if (!value.hasMorePages) {
+            finished();
+            continue search;
+          }
         }
       }
       return summary;

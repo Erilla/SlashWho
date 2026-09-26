@@ -1590,6 +1590,15 @@ export interface Repositories {
     markRunning(id: string): Promise<void>;
     markRetrying(id: string, attempt: number, nextRetryAt: Date): Promise<void>;
     complete(id: string, snapshotId: string): Promise<void>;
+    /**
+     * Completes a run against the snapshot another run's live fingerprint
+     * sweep cursor is extending for the same root, instead of one it published
+     * itself. Refuses any other snapshot.
+     */
+    completeWithLiveSweepSnapshot(
+      id: string,
+      snapshotId: string
+    ): Promise<void>;
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;

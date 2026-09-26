@@ -32,17 +32,18 @@ export async function GET(
     const { characterIds, searches, accountAuth, accountCredentials } =
       await getContainer();
     const denied = publicReadAuthorizationResponse(
-      await searches.authorizePublicRead(request.headers)
+      await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
     const { principal } = accountAuth
-      ? await accountAuth.authenticate(request)
+      ? await accountAuth.authenticate(request, scope)
       : { principal: null };
     const { wclCredentials } = await resolveCredentialOverrides(
       request,
       principal,
       accountCredentials,
-      loadWebConfig()
+      loadWebConfig(),
+      scope
     );
     const result = await scope.time("warcraftLogs", () =>
       characterIds.resolve(

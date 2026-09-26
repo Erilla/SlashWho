@@ -90,14 +90,16 @@ export interface SearchService {
     scope?: MeasurementScope
   ): Promise<CreateSearchResult>;
   authorizePublicRead(
-    headers: Pick<Headers, "get">
+    headers: Pick<Headers, "get">,
+    scope?: MeasurementScope
   ): Promise<PublicReadAuthorizationResult>;
   /**
    * The per-caller limit on "search this tier" presses, identified the same
    * way a public read is: a hashed bucket, never the raw address.
    */
   authorizeTierSearch(
-    headers: Pick<Headers, "get">
+    headers: Pick<Headers, "get">,
+    scope?: MeasurementScope
   ): Promise<PublicReadAuthorizationResult>;
   getRun(jobId: string): Promise<JobStatusResponse | null>;
   getCurrent(key: CharacterKey): Promise<CharacterResource | null>;
@@ -179,6 +181,21 @@ export function createSearchService(options: {
     now
   });
 
+  // Admission runs before the route's scoped service call, so its reservation
+  // is charged to the request's `db*` totals only when the route passes the
+  // scope through. Rebuilt per call for the same reason `create` wraps its
+  // repositories per call: the service is a process-wide singleton.
+  function admissionLimiter(scope: MeasurementScope | undefined) {
+    return scope
+      ? createRateLimiter({
+          repository: measuredRepositories(options.repositories, scope)
+            .rateLimits,
+          config: options.config,
+          now
+        })
+      : rateLimiter;
+  }
+
   function readRootCharacter(
     key: CharacterKey,
     scope?: MeasurementScope
@@ -203,9 +220,10 @@ export function createSearchService(options: {
 
   async function limitedRead(
     caller: CallerIdentity,
+    scope: MeasurementScope | undefined,
     result: CreateSearchResult
   ): Promise<CreateSearchResult> {
-    const decision = await rateLimiter.reservePublicRead(caller);
+    const decision = await admissionLimiter(scope).reservePublicRead(caller);
     return decision.allowed
       ? result
       : {
@@ -281,7 +299,7 @@ export function createSearchService(options: {
 
       const at = now();
       if (await repositories.suppressions.isActive(key, at)) {
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "not_found",
           code: "suppressed_character"
         });
@@ -293,14 +311,14 @@ export function createSearchService(options: {
         current.refreshedAt.getTime() >
           at.getTime() - options.config.FRESHNESS_HOURS * 60 * 60 * 1_000
       ) {
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "character",
           character: serializeCharacterResource(current)
         });
       }
 
       if (!current && (await repositories.negativeCache.find(key, at))) {
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "not_found",
           code: "character_not_found"
         });
@@ -315,12 +333,12 @@ export function createSearchService(options: {
             key,
             new Date(now().getTime() + options.config.NEGATIVE_CACHE_TTL_MS)
           );
-          return limitedRead(caller, {
+          return limitedRead(caller, scope, {
             kind: "not_found",
             code: "character_not_found"
           });
         }
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "failed",
           code: "upstream_unavailable"
         });
@@ -351,13 +369,13 @@ export function createSearchService(options: {
       }
 
       if (reservation.kind === "suppressed") {
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "not_found",
           code: "suppressed_character"
         });
       }
       if (reservation.kind === "negative") {
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "not_found",
           code: "character_not_found"
         });
@@ -365,12 +383,12 @@ export function createSearchService(options: {
       if (reservation.kind === "fresh") {
         const fresh = await repositories.snapshots.getCurrent(key);
         if (fresh) {
-          return limitedRead(caller, {
+          return limitedRead(caller, scope, {
             kind: "character",
             character: serializeCharacterResource(fresh)
           });
         }
-        return limitedRead(caller, {
+        return limitedRead(caller, scope, {
           kind: "not_found",
           code: (await repositories.suppressions.isActive(key, at))
             ? "suppressed_character"
@@ -404,7 +422,7 @@ export function createSearchService(options: {
       return jobResult(reservation, staleCharacter);
     },
 
-    async authorizePublicRead(headers) {
+    async authorizePublicRead(headers, scope) {
       let caller: CallerIdentity;
       try {
         caller = classifyCaller(headers, options.config);
@@ -414,7 +432,7 @@ export function createSearchService(options: {
         }
         throw error;
       }
-      const decision = await rateLimiter.reservePublicRead(caller);
+      const decision = await admissionLimiter(scope).reservePublicRead(caller);
       return decision.allowed
         ? { allowed: true }
         : {
@@ -423,7 +441,7 @@ export function createSearchService(options: {
           };
     },
 
-    async authorizeTierSearch(headers) {
+    async authorizeTierSearch(headers, scope) {
       let caller: CallerIdentity;
       try {
         caller = classifyCaller(headers, options.config);
@@ -433,7 +451,7 @@ export function createSearchService(options: {
         }
         throw error;
       }
-      const decision = await rateLimiter.reserveTierSearch(caller);
+      const decision = await admissionLimiter(scope).reserveTierSearch(caller);
       return decision.allowed
         ? { allowed: true }
         : {
