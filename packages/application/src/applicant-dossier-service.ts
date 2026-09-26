@@ -1470,13 +1470,6 @@ export function createApplicantDossierService(options: {
     };
   }
   /**
-   * The dossier's characters: each included identity in ranked order, split
-   * at the display cap into `selected` and `skipped`, and the excluded ones.
-   * Null when no snapshot contains the character yet. Reading and searching a
-   * tier both go through here, so they can never disagree about who is in
-   * the dossier.
-   */
-  /**
    * Another root's snapshot, re-rooted at a character it lists as a
    * Raider.IO-declared member, so a character with no discovery of its own
    * shows the account it was claimed on while that discovery runs. An
@@ -1509,6 +1502,13 @@ export function createApplicantDossierService(options: {
     };
   }
 
+  /**
+   * The dossier's characters: each included identity in ranked order, split
+   * at the display cap into `selected` and `skipped`, and the excluded ones.
+   * Null when no snapshot contains the character yet. Reading and searching a
+   * tier both go through here, so they can never disagree about who is in
+   * the dossier.
+   */
   async function resolveSubjects(
     key: CharacterKey,
     repositories: ReturnType<typeof scopedRepositories>
