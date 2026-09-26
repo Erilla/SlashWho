@@ -116,6 +116,85 @@ function clientFor(name: FixtureName) {
   });
 }
 
+// Redacted live responses; see tests/fixtures/recorded/README.md. Unlike the
+// hand-built fixtures above, their shape is what Raider.IO actually sent.
+function recordedClient(file: string) {
+  const recording = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL(
+          `../../../tests/fixtures/recorded/raiderio/${file}.json`,
+          import.meta.url
+        )
+      ),
+      "utf8"
+    )
+  ) as { status: number; body: unknown };
+  return createRaiderIoClient({
+    fetch: async () =>
+      new Response(JSON.stringify(recording.body), {
+        status: recording.status,
+        headers: { "Content-Type": "application/json" }
+      }),
+    baseUrl: "https://fixtures.invalid",
+    timeoutMs: 50
+  });
+}
+
+describe("Raider.IO gateway against recorded responses", () => {
+  it("reads a recorded claimed character's owner, guild and Discord guess", async () => {
+    const character = await recordedClient("character-claimed").getCharacter({
+      region: "eu",
+      realm: "silvermoon",
+      name: "charlie"
+    });
+    expect(character).toMatchObject({
+      className: "Warrior",
+      ownerId: "fixture-owner",
+      profileGuess: "fixture-discord-bravo",
+      declaredMain: null,
+      guild: { name: "Fixture Guild Alfa", region: "eu", realm: "draenor" }
+    });
+  });
+
+  it("reads a recorded declared main from its path and slugs", async () => {
+    const character = await recordedClient(
+      "character-declared-main"
+    ).getCharacter({ region: "eu", realm: "argent-dawn", name: "alfa" });
+    expect(character).toMatchObject({
+      ownerId: null,
+      declaredMain: { region: "eu", realm: "argent-dawn", name: "bravo" }
+    });
+  });
+
+  it("reads every member of a recorded profile list", async () => {
+    const profile = await recordedClient(
+      "view-characters-claimed"
+    ).getClaimedCharacters("fixture-owner");
+    expect(profile.characters).toHaveLength(10);
+    expect(profile).not.toHaveProperty("omittedMembers");
+  });
+
+  it("classifies a recorded unknown profile owner as not found", async () => {
+    await expect(
+      recordedClient("view-characters-unknown-owner").getClaimedCharacters(
+        "fixture-owner"
+      )
+    ).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("pins the recorded 400 for an unknown character as transient", async () => {
+    // Recorded 2026-09-26: Raider.IO answers a character that does not exist
+    // with 400 "Could not find requested character", not the 404 the
+    // hand-built missing-character fixture assumes. This pins today's
+    // classification so a change to it is deliberate; it is the same class of
+    // fault as #36.
+    await expect(
+      recordedClient("character-unknown-name").getCharacter(sentinel)
+    ).rejects.toMatchObject({ kind: "transient", status: 400 });
+  });
+});
+
 describe("Raider.IO gateway", () => {
   it("attaches the configured access key only to official API requests", async () => {
     // Break caught: Raider.IO rejects access_key on the undocumented endpoints

@@ -1,0 +1,45 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.view-characters",
+  "recordedOn": "2026-09-14",
+  "status": 200,
+  "body": {
+    "viewUserCharactersApi": {
+      "name": "fixture-owner",
+      "characters": [
+        {
+          "character": {
+            "class": {
+              "name": "Paladin"
+            },
+            "realm": {
+              "realmType": "tr",
+              "slug": "eu-mythic-dungeons"
+            },
+            "region": {
+              "slug": "eu"
+            },
+            "name": "Tournament",
+            "level": 80
+          }
+        },
+        {
+          "character": {
+            "class": {
+              "name": "Priest"
+            },
+            "realm": {
+              "realmType": "live",
+              "slug": "silvermoon"
+            },
+            "region": {
+              "slug": "eu"
+            },
+            "name": "Retail",
+            "level": 90
+          }
+        }
+      ]
+    }
+  }
+}

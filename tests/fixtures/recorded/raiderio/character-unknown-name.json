@@ -1,0 +1,11 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.character",
+  "recordedOn": "2026-09-26",
+  "status": 400,
+  "body": {
+    "statusCode": 400,
+    "error": "Bad Request",
+    "message": "Could not find requested character"
+  }
+}

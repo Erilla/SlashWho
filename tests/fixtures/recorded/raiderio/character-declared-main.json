@@ -1,0 +1,48 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.character",
+  "recordedOn": "2026-09-26",
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "character": {
+        "name": "Alfa",
+        "class": {
+          "name": "Druid"
+        },
+        "level": 90,
+        "realm": {
+          "slug": "argent-dawn",
+          "realmType": "live"
+        },
+        "region": {
+          "slug": "eu"
+        },
+        "guild": {
+          "name": "Fixture Guild Alfa",
+          "realm": {
+            "slug": "draenor"
+          },
+          "region": {
+            "slug": "eu"
+          }
+        }
+      },
+      "characterCustomizations": {
+        "main_character": {
+          "name": "Bravo",
+          "path": "/characters/eu/argent-dawn/Bravo",
+          "realm": {
+            "slug": "argent-dawn"
+          },
+          "region": {
+            "slug": "eu"
+          }
+        },
+        "discord_profile": "fixture-discord-alfa"
+      },
+      "user": null,
+      "isTournamentProfile": false
+    }
+  }
+}

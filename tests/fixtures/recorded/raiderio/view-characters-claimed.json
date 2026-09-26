@@ -1,0 +1,173 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.view-characters",
+  "recordedOn": "2026-09-26",
+  "status": 200,
+  "body": {
+    "viewUserCharactersApi": {
+      "name": "fixture-owner",
+      "characters": [
+        {
+          "character": {
+            "name": "Delta",
+            "level": 90,
+            "class": {
+              "name": "Priest"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Echo",
+            "level": 90,
+            "class": {
+              "name": "Monk"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Foxtrot",
+            "level": 90,
+            "class": {
+              "name": "Death Knight"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Golf",
+            "level": 80,
+            "class": {
+              "name": "Rogue"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Hotel",
+            "level": 90,
+            "class": {
+              "name": "Evoker"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "India",
+            "level": 90,
+            "class": {
+              "name": "Paladin"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Juliett",
+            "level": 90,
+            "class": {
+              "name": "Druid"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Charlie",
+            "level": 90,
+            "class": {
+              "name": "Warrior"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Kilo",
+            "level": 80,
+            "class": {
+              "name": "Hunter"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        },
+        {
+          "character": {
+            "name": "Lima",
+            "level": 90,
+            "class": {
+              "name": "Demon Hunter"
+            },
+            "realm": {
+              "slug": "silvermoon",
+              "realmType": "live"
+            },
+            "region": {
+              "slug": "eu"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
