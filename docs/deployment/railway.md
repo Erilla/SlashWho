@@ -13,7 +13,7 @@ The prior Railway project has been retired. These instructions assume no existin
 3. Set the web service's config-as-code path to `/railway.web.toml`; set the worker's to `/railway.worker.toml`.
 4. Confirm the web build uses `Dockerfile.web` and the worker build uses `Dockerfile.worker`.
 5. Add `DATABASE_URL` to both app services as a private reference to the environment's PostgreSQL `DATABASE_URL`. Do not paste the public TCP proxy URL into any service variable. Maintainer commands that must reach the database from outside Railway read `DATABASE_PUBLIC_URL` from the PostgreSQL service transiently instead; see [`docs/operations/removals.md`](../operations/removals.md).
-6. Generate public domains for web and worker. The worker domain exists only so the scheduled live smoke can read `/health`, `/ready`, and the aggregate `/probe`; do not add application routes to it. Do not expose PostgreSQL publicly.
+6. Generate public domains for web and worker. The worker domain serves only `/health`, `/ready`, and the aggregate `/probe`, and exists so the scheduled live smoke can read `/probe`; do not add application routes to it. Do not expose PostgreSQL publicly.
 7. Configure both services to deploy `main` in `test` and `prod` in `prod`. Disable direct production deploys from feature branches. Do not migrate or reuse resources from the retired project.
 
 The checked-in service configs use Railway watch patterns to avoid deploying an
@@ -52,13 +52,16 @@ PUBLIC_READS_PER_MINUTE=300
 # every included dossier character, each as its own run.
 TIER_SEARCHES_PER_HOUR=6
 FRESHNESS_HOURS=24
-DOSSIER_RAIDERIO_TIER_CAP=8
 # Replaces DOSSIER_CHARACTER_CAP (#555), which no longer has any effect and can
 # be deleted from the service. A backstop, not a display cap.
 DOSSIER_CHARACTER_CEILING=50
-DOSSIER_WARCRAFT_LOGS_REQUEST_CAP=80
-DOSSIER_INITIAL_WARCRAFT_LOGS_REQUEST_CAP=20
-DOSSIER_INITIAL_WARCRAFT_LOGS_TIMEOUT_MS=8000
+# Shared with the worker: how long after a sweep a search schedules another
+# fingerprint sweep. Keep the two values identical.
+FINGERPRINT_SWEEP_CADENCE_HOURS=168
+# Required: the web service will not load without them. The dossier read path
+# builds its Blizzard gateway from these server credentials.
+BLIZZARD_CLIENT_ID=<Blizzard OAuth client ID secret>
+BLIZZARD_CLIENT_SECRET=<Blizzard OAuth client secret>
 # Shared between web and worker: how long a failed upstream lookup is
 # remembered. One operational limit with one definition, so it must be
 # identical in both services. Defaults to 300000 milliseconds (5 minutes).
@@ -104,11 +107,12 @@ values share a separately bounded global bucket. Forwarded-IP headers are not
 accepted as substitutes.
 
 Worker variables. `DISCOVERY_REQUEST_CAP` and the Blizzard fingerprint settings
-are read only by the worker, so set them on the worker service alone.
-`BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET` must be Railway secret
-variables. The fingerprint budget defaults shown below are the application
-defaults and can be omitted after the required credentials and sweep cap are
-configured:
+other than `FINGERPRINT_SWEEP_CADENCE_HOURS` are read only by the worker, so set
+them on the worker service alone. `BLIZZARD_CLIENT_ID` and
+`BLIZZARD_CLIENT_SECRET` are required by both services and must be Railway
+secret variables. The fingerprint budget defaults shown below are the
+application defaults and can be omitted after the required credentials and
+sweep cap are configured:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
@@ -177,11 +181,20 @@ takes precedence for that request.
 
 `MAINTAINER_ALERT_WEBHOOK_URL` is optional and worker-only. Set it as a secret
 variable to receive the internal budget and admission-pressure alerts; leave it
-unset to keep those alerts in the logs alone. Its path and query string carry
-the shared secret for most providers, so configure the complete URL — it is
-used exactly as given. Delivery is best effort: a rejected or unresponsive
-webhook is logged as `maintainer_alert_delivery_failed` and never fails the
+unset to keep those alerts in the logs alone. The applicant Sheet watcher also
+sends its alerts here, and the worker will not start with the watcher enabled
+and this unset; see
+[`docs/operations/applicant-sheet-watcher.md`](../operations/applicant-sheet-watcher.md).
+Its path and query string carry the shared secret for most providers, so
+configure the complete URL — it is used exactly as given. Delivery is best
+effort: a rejected or unresponsive webhook is logged as `maintainer_alert_delivery_failed` and never fails the
 sweep that raised it.
+
+Account mail (`RESEND_API_KEY`, `ACCOUNT_EMAIL_FROM`, and
+`ACCOUNT_CREDENTIAL_ENCRYPTION_KEY`) is optional and set identically on both
+services; see [`docs/operations/accounts.md`](../operations/accounts.md). The
+worker-only `APPLICANT_*` variables are described in
+[`docs/operations/applicant-sheet-watcher.md`](../operations/applicant-sheet-watcher.md).
 
 Railway currently documents `X-Real-IP` as the single remote-client header supplied by its public proxy. SlashWho intentionally accepts only that header for anonymous rate-limit identity and fails closed when it is absent or invalid; it does not trust an arbitrary forwarded chain or a runtime-selectable header name. Verify this exact contract against Railway's public-networking documentation before first launch and after any proxy change.
 
@@ -209,6 +222,7 @@ Railway's scheduled volume backups and point-in-time recovery are paid-plan feat
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `suppressedCharacters`                                       | **Reconstructible.** Every suppression records its GitHub issue number as the reason, so the list can be rebuilt by re-running `ops:removals add` from the issues and the private operations log. This is what makes [`docs/operations/removals.md`](../operations/removals.md)'s "record the canonical identity, issue reason, environment, command timestamp" step load-bearing rather than merely tidy — it is the off-database copy of a privacy commitment. |
 | `snapshots`, `snapshotCharacters`                            | **Irreplaceable.** A fresh search rediscovers the _current_ alt list; nothing rediscovers what it looked like last month. This is the dated history the product promises, and it is the only genuinely unrecoverable data.                                                                                                                                                                                                                                       |
+| `accounts`, `accountApiCredentials`                          | **Not regenerable by the service.** Each account would have to register again and re-save its provider keys, and the admin would need provisioning again with `ops:operators provision-admin`; see [`docs/operations/accounts.md`](../operations/accounts.md).                                                                                                                                                                                                   |
 | `characters`                                                 | Regenerable by searching again.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `discoveryRuns`, `rateLimitEvents`, `negativeCharacterCache` | Operational and short-lived; regenerable.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -228,7 +242,7 @@ docker run --rm -e DATABASE_URL postgres:18-alpine \
 unset DATABASE_URL
 ```
 
-Restore with `pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" <file>`. Store dumps outside this repository: they contain the suppression list and the full character corpus, and this repository is public. A dump that has never been restored is not a verified backup — restore one into a scratch database before relying on it.
+Restore with `pg_restore --clean --if-exists --no-owner --no-privileges -d "$DATABASE_URL" <file>`. Store dumps outside this repository: they contain the suppression list, the full character corpus, and account email addresses with encrypted saved keys, and this repository is public. A dump that has never been restored is not a verified backup — restore one into a scratch database before relying on it.
 
 ### When to revisit
 
