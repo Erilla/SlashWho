@@ -1011,4 +1011,170 @@ describe("ranked Mythic backfill", () => {
       expect(asked.encounters).toEqual([2063, 2092, 4000]);
     });
   });
+
+  describe("limitation reporting", () => {
+    // Break caught (tier-search run c2906a78, 2026-09-26): the walk ended
+    // `schema_drift` on a decoder check whose HTTP request had succeeded, so
+    // neither `onRequest` nor `onLimitation` named the zone-rankings read and
+    // the run carried no `limitationQuery`.
+    const antorus = {
+      data: {
+        worldData: {
+          zones: [
+            {
+              id: 17,
+              name: "Antorus, The Burning Throne",
+              partitions: [{ id: 1 }]
+            }
+          ]
+        }
+      }
+    };
+    const zoneRankings = {
+      data: {
+        characterData: {
+          character: {
+            id: 40989140,
+            damage: { rankings: [{ encounterID: 2092, totalKills: 1 }] },
+            healing: { rankings: [] }
+          }
+        }
+      }
+    };
+    const encounterRankings = {
+      data: {
+        characterData: {
+          character: {
+            encounterRankings: {
+              ranks: [{ report: { code: "ranked", fightID: 10 }, spec: "Holy" }]
+            }
+          }
+        }
+      }
+    };
+    const clientAnswering = (answers: {
+      zones?: unknown;
+      zoneRankings?: unknown;
+      report?: unknown;
+    }) =>
+      createWarcraftLogsClient({
+        fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(
+            typeof input === "string" || input instanceof URL
+              ? input
+              : input.url
+          );
+          if (url.pathname === "/oauth/token")
+            return Response.json({ access_token: "token", expires_in: 3600 });
+          const { query } = JSON.parse(String(init?.body)) as {
+            query: string;
+          };
+          if (query.includes("HistoricRaidZones"))
+            return Response.json(answers.zones ?? antorus);
+          if (query.includes("HistoricZoneRankings"))
+            return Response.json(answers.zoneRankings ?? zoneRankings);
+          if (query.includes("HistoricEncounterRankings"))
+            return Response.json(encounterRankings);
+          return Response.json(answers.report ?? report("ranked", 10));
+        }) as typeof globalThis.fetch,
+        clientId: "id",
+        clientSecret: "secret"
+      });
+    const walk = async (
+      answers: Parameters<typeof clientAnswering>[0],
+      requestCap = 10
+    ) => {
+      const onLimitation = vi.fn();
+      const result = await clientAnswering(answers).getRankedKillReports(key, {
+        journalRaidId: "946",
+        requestCap,
+        onLimitation
+      });
+      return { result, onLimitation };
+    };
+
+    it("names zone discovery when the zone list has drifted", async () => {
+      const { result, onLimitation } = await walk({
+        zones: { data: { worldData: { zones: null } } }
+      });
+
+      expect(result).toMatchObject({ limitation: { code: "schema_drift" } });
+      expect(onLimitation.mock.calls).toEqual([
+        ["zone_rankings", "schema_drift"]
+      ]);
+    });
+
+    it("names the zone rankings when a character's encounters have drifted", async () => {
+      const { result, onLimitation } = await walk({
+        zoneRankings: { data: { characterData: { character: null } } }
+      });
+
+      expect(result).toMatchObject({ limitation: { code: "schema_drift" } });
+      expect(onLimitation.mock.calls).toEqual([
+        ["zone_rankings", "schema_drift"]
+      ]);
+    });
+
+    it("names report hydration when a ranked report has drifted", async () => {
+      const { result, onLimitation } = await walk({
+        report: { data: { reportData: { report: { code: "someOther" } } } }
+      });
+
+      expect(result).toMatchObject({ limitation: { code: "schema_drift" } });
+      expect(onLimitation.mock.calls).toEqual([
+        ["report_hydration", "schema_drift"]
+      ]);
+    });
+
+    it("names the query the request cap stopped", async () => {
+      // Zones, zone rankings and one encounter ranking spend the cap, so the
+      // report that ranking names is the read that goes unasked.
+      const { result, onLimitation } = await walk({}, 3);
+
+      expect(result).toMatchObject({ limitation: { code: "request_cap" } });
+      expect(onLimitation.mock.calls).toEqual([
+        ["report_hydration", "request_cap"]
+      ]);
+    });
+
+    it("reports nothing for a walk that finishes", async () => {
+      const { result, onLimitation } = await walk({});
+
+      expect(result).toMatchObject({ kind: "evidence" });
+      expect(result).not.toHaveProperty("limitation");
+      expect(onLimitation).not.toHaveBeenCalled();
+    });
+
+    it("keeps its result when the observer throws", async () => {
+      const result = await clientAnswering({
+        zones: { data: { worldData: { zones: null } } }
+      }).getRankedKillReports(key, {
+        journalRaidId: "946",
+        requestCap: 10,
+        onLimitation: () => {
+          throw new Error("observer");
+        }
+      });
+
+      expect(result).toMatchObject({ limitation: { code: "schema_drift" } });
+    });
+
+    it("carries the ranked walk's limitation through the main collection", async () => {
+      const onLimitation = vi.fn();
+      const result = await clientAnswering({
+        zoneRankings: { data: { characterData: { character: null } } }
+      }).getFirstKillReports(key, {
+        requestCap: 0,
+        targetedOnly: true,
+        parseRequestCap: 1,
+        rankedBackfill: { journalRaidId: "946", requestCap: 10 },
+        onLimitation
+      });
+
+      expect(result).toMatchObject({ limitation: { code: "schema_drift" } });
+      expect(onLimitation.mock.calls).toEqual([
+        ["zone_rankings", "schema_drift"]
+      ]);
+    });
+  });
 });

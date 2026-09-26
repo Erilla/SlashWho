@@ -376,6 +376,15 @@ export interface WarcraftLogsGateway {
       characterId?: number;
       cursor?: WarcraftLogsRankedBackfillCursor;
       onRequest?(event: WarcraftLogsRequestEvent): void;
+      /**
+       * Called when the walk stops short, naming the read that stopped it:
+       * `zone_rankings` for discovery and rankings, `report_hydration` for a
+       * ranked report.
+       */
+      onLimitation?(
+        query: WarcraftLogsQueryType,
+        code: WarcraftLogsLimitationCode
+      ): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsRankedBackfillResult>;
