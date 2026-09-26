@@ -1,4 +1,5 @@
-export { createWarcraftLogsClient, MYTHIC_DIFFICULTY } from "./client";
+export { createWarcraftLogsClient } from "./client";
+export { MYTHIC_DIFFICULTY } from "./queries";
 export type { CreateWarcraftLogsClientOptions } from "./client";
 export type {
   WarcraftLogsFirstKillEvidence,
