@@ -519,6 +519,41 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  it("returns a limitation when the token endpoint never responds", async () => {
+    // Break caught: the token request's own timeout escaped as a raw
+    // TimeoutError; the history and parse guards only absorb the caller's
+    // deadline, so a slow token endpoint broke the limitation contract.
+    const tokenDeadline = new AbortController();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(tokenDeadline.signal);
+    try {
+      const { client } = clientFor((url, init) => {
+        if (url.pathname !== "/oauth/token")
+          throw new Error(`unexpected endpoint: ${url.pathname}`);
+        if (init?.signal?.aborted) return Promise.reject(init.signal.reason);
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason)
+          );
+          tokenDeadline.abort(
+            new DOMException("Token deadline", "TimeoutError")
+          );
+        });
+      });
+
+      expect(await client.getRateLimit()).toEqual({
+        kind: "limitation",
+        code: "unavailable"
+      });
+      await expect(
+        client.getFirstKillReports(key, { requestCap: 3, parseRequestCap: 10 })
+      ).resolves.toEqual({ kind: "limitation", code: "unavailable" });
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("reports schema drift when the rate limit response omits its fields", async () => {
     // Break caught: a missing limitPerHour read as 0 would make every run look
     // over budget and refuse collection forever.

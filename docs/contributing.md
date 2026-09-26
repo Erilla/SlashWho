@@ -36,4 +36,4 @@ Never commit directly to `prod`, merge unrelated work into it, or force-push it.
 
 ## Repository automation
 
-GitHub Actions and Railway deployment requirements will be documented once the application stack and service layout are selected. Until then, perform the relevant local verification described by each change.
+The `ci` workflow (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `main` and `prod`. Its final job, `ci`, is the only required status check: the `main` and `prod` rulesets both require it, and the `main` ruleset also requires a pull request, squash merges, linear history and resolved review threads. The `claude-code-review` workflow posts an advisory review and is not required; see [`docs/agents/implementation-workflow.md`](agents/implementation-workflow.md). Railway deployment is described in [`docs/deployment/railway.md`](deployment/railway.md).

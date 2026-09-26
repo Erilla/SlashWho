@@ -1367,9 +1367,9 @@ export const characterMythicWipes = pgTable(
  * The raid tiers one character's evidence is stored for indefinitely: read
  * once, then never re-queried.
  *
- * Keyed by character rather than by evidence run, because the worker's
- * maintenance deletes terminal runs after 30 days and a mark has to outlive
- * that or the whole design unwinds every month.
+ * Keyed by character rather than by evidence run, so a mark never depends on
+ * any one run surviving. (Maintenance deleted terminal runs after 30 days
+ * until #104; runs are now kept, but the mark still must not lean on them.)
  *
  * `collectionVersion` is the automatic half of the correction path. Bumping one
  * domain's version drops that domain's marks out of every read, so its tiers
