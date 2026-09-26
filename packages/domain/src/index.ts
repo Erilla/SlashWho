@@ -20,6 +20,7 @@ export {
   raidTierConclusion,
   raidTierConclusionForEvidence,
   raidTiers,
+  raiderIoRaidContentWindowEnd,
   supportedRaidCatalogue
 } from "./raid-catalogue";
 export type {

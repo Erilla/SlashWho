@@ -26,14 +26,49 @@ import type {
 
 /**
  * The `raid-progress` tiers that hold every Raider.IO raid from Legion
- * onwards, recorded by sweeping tiers 0-45 on 2026-09-23: 19 is The Emerald
- * Nightmare, The Nighthold and Trial of Valor, and 35 is the opening Midnight
- * tier. Pinned rather than probed because Raider.IO answers an unknown tier
- * with the current raid instead of an error. Current raids ride along on every
- * tier's response, so a tier added after this list still arrives.
+ * onwards, recorded by sweeping tiers 0-45 on 2026-09-23. Pinned rather than
+ * probed because Raider.IO answers an unknown tier with the current raid
+ * instead of an error. Current raids ride along on every tier's response, so
+ * a tier added after this list still arrives.
+ *
+ * Each tier names the raids it answers for, so a caller can tell which tiers
+ * can no longer hold anything it wants (#298). Recorded on 2026-09-26 from the
+ * `raid` slugs of live responses across a veteran guild's roster; a tier
+ * returns only raids the character has an entry in, so each was confirmed on
+ * a character who had raided it. Sporefall was released into the last tier
+ * and was not seen on anyone swept; that tier is asked on every run anyway.
  */
+export const raiderIoHistoricTiers: readonly Readonly<{
+  ordinal: number;
+  raidSlugs: readonly string[];
+}>[] = Object.freeze(
+  (
+    [
+      [19, ["the-emerald-nightmare", "the-nighthold", "trial-of-valor"]],
+      [20, ["tomb-of-sargeras"]],
+      [21, ["antorus-the-burning-throne"]],
+      [22, ["uldir"]],
+      [23, ["battle-of-dazaralor", "crucible-of-storms"]],
+      [24, ["the-eternal-palace"]],
+      [25, ["nyalotha-the-waking-city"]],
+      [26, ["castle-nathria"]],
+      [27, ["sanctum-of-domination"]],
+      [28, ["sepulcher-of-the-first-ones"]],
+      [29, ["vault-of-the-incarnates"]],
+      [30, ["aberrus-the-shadowed-crucible"]],
+      [31, ["amirdrassil-the-dreams-hope"]],
+      [32, ["nerubar-palace"]],
+      [33, ["liberation-of-undermine"]],
+      [34, ["manaforge-omega"]],
+      [35, ["tier-mn-1"]]
+    ] as const
+  ).map(([ordinal, raidSlugs]) =>
+    Object.freeze({ ordinal, raidSlugs: Object.freeze([...raidSlugs]) })
+  )
+);
+
 export const raiderIoHistoricTierOrdinals: readonly number[] = Object.freeze(
-  Array.from({ length: 17 }, (_, index) => 19 + index)
+  raiderIoHistoricTiers.map((tier) => tier.ordinal)
 );
 
 export const maximumHistoricMythicKillTiers =
@@ -481,13 +516,13 @@ export function createRaiderIoClient(
     ]
       .map(encodeURIComponent)
       .join("/");
-    // Tiers are asked a few at a time rather than one after another: every
-    // full run asks for all of them, so a serial walk made each run wait on
-    // seventeen round trips. The result is still what a serial walk would
-    // give. Tiers start in order and none starts after a failure, so every
-    // tier below the earliest failure has been answered, and that failure is
-    // the limitation reported. Kills merge in tier order, so an overlapping
-    // duplicate resolves exactly as before.
+    // Tiers are asked a few at a time rather than one after another: a full
+    // run with no settled history asks for all of them, so a serial walk made
+    // each run wait on seventeen round trips. The result is still what a
+    // serial walk would give. Tiers start in order and none starts after a
+    // failure, so every tier below the earliest failure has been answered,
+    // and that failure is the limitation reported. Kills merge in tier order,
+    // so an overlapping duplicate resolves exactly as before.
     const outcomes: Array<
       | { kind: "kills"; kills: readonly HistoricMythicKill[] }
       | { kind: "failed"; error: unknown }

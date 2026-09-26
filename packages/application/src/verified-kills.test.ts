@@ -1,8 +1,13 @@
 import type { HistoricMythicKill } from "@slashwho/raiderio";
-import { raiderIoHistoricTierOrdinals } from "@slashwho/raiderio";
+import { raiderIoRaidContentWindowEnd } from "@slashwho/domain";
+import {
+  raiderIoHistoricTierOrdinals,
+  raiderIoHistoricTiers
+} from "@slashwho/raiderio";
 import { describe, expect, it } from "vitest";
 
 import {
+  historicTierOrdinalsFrom,
   raiderIoVerifiedKills,
   searchableKills,
   storedKillReportCodes
@@ -95,6 +100,59 @@ describe("raiderIoVerifiedKills", () => {
     expect(asked).toEqual([[...raiderIoHistoricTierOrdinals]]);
   });
 
+  it("asks only the tiers that can still hold a kill at or above the scan floor", async () => {
+    // Everything Castle Nathria's tier can return is either below the floor,
+    // which is never searched, or after its raid stopped being current
+    // content. Asking for it again on every run is the cost #298 measured.
+    const asked: number[][] = [];
+    await raiderIoVerifiedKills(
+      {
+        getHistoricMythicKills: async (_key, options) => {
+          asked.push([...options.tierOrdinals]);
+          return { kind: "evidence", kills: [] };
+        }
+      },
+      key,
+      { storedKills: [], killScanFloor: "2021-07-15T00:00:00.000Z" }
+    );
+
+    expect(asked).toEqual([[27, 28, 29, 30, 31, 32, 33, 34, 35]]);
+  });
+
+  it("still asks the last tier when every pinned raid closed below the floor", async () => {
+    // Current raids ride along on every tier's response, so one tier is
+    // always asked: it is how kills this week reach the run at all.
+    const asked: number[][] = [];
+    await raiderIoVerifiedKills(
+      {
+        getHistoricMythicKills: async (_key, options) => {
+          asked.push([...options.tierOrdinals]);
+          return { kind: "evidence", kills: [] };
+        }
+      },
+      key,
+      { storedKills: [], killScanFloor: "2026-09-20T00:00:00.000Z" }
+    );
+
+    expect(asked).toEqual([[35]]);
+  });
+
+  it("asks every tier when the floor cannot be read", async () => {
+    const asked: number[][] = [];
+    await raiderIoVerifiedKills(
+      {
+        getHistoricMythicKills: async (_key, options) => {
+          asked.push([...options.tierOrdinals]);
+          return { kind: "evidence", kills: [] };
+        }
+      },
+      key,
+      { storedKills: [], killScanFloor: "not a date" }
+    );
+
+    expect(asked).toEqual([[...raiderIoHistoricTierOrdinals]]);
+  });
+
   it("names Raider.IO's limitation and offers nothing to search", async () => {
     // A private or unavailable profile skips recovery; it must not become an
     // error that fails the run, or a partial that retries forever.
@@ -142,6 +200,55 @@ describe("raiderIoVerifiedKills", () => {
         { storedKills: [], signal: controller.signal }
       )
     ).rejects.toBe(reason);
+  });
+});
+
+describe("historicTierOrdinalsFrom", () => {
+  it("keeps a tier while any of its raids cannot be shown closed below the floor", () => {
+    const ends = new Map<string, string | null>([
+      ["closed", "2020-01-01T00:00:00.000Z"],
+      ["unplaced", null],
+      ["late", "2021-06-01T00:00:00.000Z"]
+    ]);
+    const tiers = [
+      { ordinal: 1, raidSlugs: ["closed"] },
+      { ordinal: 2, raidSlugs: ["closed", "unplaced"] },
+      { ordinal: 3, raidSlugs: ["late"] },
+      { ordinal: 4, raidSlugs: ["closed"] }
+    ];
+
+    expect(
+      historicTierOrdinalsFrom(
+        "2021-01-01T00:00:00.000Z",
+        tiers,
+        (slug) => ends.get(slug) ?? null
+      )
+    ).toEqual([2, 3, 4]);
+  });
+
+  it("keeps a tier whose raids closed exactly at the floor", () => {
+    // A kill at the floor is searched, so its tier must still be asked.
+    expect(
+      historicTierOrdinalsFrom(
+        "2020-01-01T00:00:00.000Z",
+        [
+          { ordinal: 1, raidSlugs: ["closed"] },
+          { ordinal: 2, raidSlugs: ["closed"] }
+        ],
+        () => "2020-01-01T00:00:00.000Z"
+      )
+    ).toEqual([1, 2]);
+  });
+
+  it("names every pinned raid slug in the catalogue", () => {
+    // A slug the catalogue cannot place is always asked, which is safe but
+    // quietly spends the request this exists to save. Only the last tier,
+    // asked on every run regardless, may still be open.
+    const unplaced = raiderIoHistoricTiers
+      .slice(0, -1)
+      .flatMap((tier) => tier.raidSlugs)
+      .filter((slug) => raiderIoRaidContentWindowEnd(slug) === null);
+    expect(unplaced).toEqual([]);
   });
 });
 

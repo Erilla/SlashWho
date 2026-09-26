@@ -3677,6 +3677,64 @@ describe("applicant evidence job handler", () => {
       );
     });
 
+    it("asks Raider.IO only for the tiers above the scan floor", async () => {
+      // Break caught: #298. Every full run asked all seventeen historic tiers,
+      // and discarded everything below the floor once it arrived.
+      const evidence = store();
+      evidence.stored.push({ raidId: "42", domain: "kills" });
+      evidence.storedKills.push(
+        {
+          raidId: "42",
+          raidName: "The Dreamrift",
+          killedAt: "2026-06-01T00:00:00.000Z"
+        },
+        {
+          raidId: "43",
+          raidName: "The Venomous Abyss",
+          killedAt: "2026-09-01T00:00:00.000Z"
+        }
+      );
+      const getHistoricMythicKills = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          getFirstKillReports: vi.fn(async () => ({
+            kind: "evidence" as const,
+            parsedFightUrls: [],
+            kills: [],
+            wipes: [],
+            tierBests: [],
+            troubledRaidIds: { parses: [], tierBests: [] }
+          })),
+          ...openGate
+        } as unknown as Pick<
+          WarcraftLogsGateway,
+          "getFirstKillReports" | "getRateLimit"
+        >,
+        raiderio: { getHistoricMythicKills } as never,
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      // Every pinned raid closed before 2026-09-01; only the tier current
+      // raids ride along on is left.
+      expect(getHistoricMythicKills).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({ tierOrdinals: [35] })
+      );
+    });
+
     it("resumes a capped history scan below its last proved page", async () => {
       // Break caught: #394. Starting another capped attempt at page one pays for
       // the same newest reports forever and never reaches the older history.

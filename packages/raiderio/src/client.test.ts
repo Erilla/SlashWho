@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
-import { createRaiderIoClient, raiderIoHistoricTierOrdinals } from "./index";
+import {
+  createRaiderIoClient,
+  raiderIoHistoricTierOrdinals,
+  raiderIoHistoricTiers
+} from "./index";
 import recordedRankings from "./fixtures/queen-ansurek-rankings.json";
 
 type FixtureName =
@@ -749,6 +753,40 @@ describe("Raider.IO gateway", () => {
     expect(raiderIoHistoricTierOrdinals).toEqual([
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
     ]);
+  });
+
+  it("names the raids each pinned tier answers for", () => {
+    // Pinned by name, not count: a raid filed one tier off passes any
+    // structural check, and would let a run skip the tier that holds it.
+    // Recorded from live responses on 2026-09-26.
+    expect(raiderIoHistoricTiers).toEqual([
+      {
+        ordinal: 19,
+        raidSlugs: ["the-emerald-nightmare", "the-nighthold", "trial-of-valor"]
+      },
+      { ordinal: 20, raidSlugs: ["tomb-of-sargeras"] },
+      { ordinal: 21, raidSlugs: ["antorus-the-burning-throne"] },
+      { ordinal: 22, raidSlugs: ["uldir"] },
+      {
+        ordinal: 23,
+        raidSlugs: ["battle-of-dazaralor", "crucible-of-storms"]
+      },
+      { ordinal: 24, raidSlugs: ["the-eternal-palace"] },
+      { ordinal: 25, raidSlugs: ["nyalotha-the-waking-city"] },
+      { ordinal: 26, raidSlugs: ["castle-nathria"] },
+      { ordinal: 27, raidSlugs: ["sanctum-of-domination"] },
+      { ordinal: 28, raidSlugs: ["sepulcher-of-the-first-ones"] },
+      { ordinal: 29, raidSlugs: ["vault-of-the-incarnates"] },
+      { ordinal: 30, raidSlugs: ["aberrus-the-shadowed-crucible"] },
+      { ordinal: 31, raidSlugs: ["amirdrassil-the-dreams-hope"] },
+      { ordinal: 32, raidSlugs: ["nerubar-palace"] },
+      { ordinal: 33, raidSlugs: ["liberation-of-undermine"] },
+      { ordinal: 34, raidSlugs: ["manaforge-omega"] },
+      { ordinal: 35, raidSlugs: ["tier-mn-1"] }
+    ]);
+    expect(raiderIoHistoricTiers.map((tier) => tier.ordinal)).toEqual(
+      raiderIoHistoricTierOrdinals
+    );
   });
 
   it("keeps the earliest duplicate Mythic kill returned by overlapping tiers", async () => {

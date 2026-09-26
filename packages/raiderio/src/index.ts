@@ -1,7 +1,8 @@
 export {
   createRaiderIoClient,
   maximumHistoricMythicKillTiers,
-  raiderIoHistoricTierOrdinals
+  raiderIoHistoricTierOrdinals,
+  raiderIoHistoricTiers
 } from "./client";
 export type { CreateRaiderIoClientOptions } from "./client";
 export { isRaiderIoFailure } from "./errors";

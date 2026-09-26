@@ -1,6 +1,10 @@
-import { supportedRegions, type CharacterKey } from "@slashwho/domain";
 import {
-  raiderIoHistoricTierOrdinals,
+  raiderIoRaidContentWindowEnd,
+  supportedRegions,
+  type CharacterKey
+} from "@slashwho/domain";
+import {
+  raiderIoHistoricTiers,
   type HistoricMythicKill,
   type RaiderIoGateway
 } from "@slashwho/raiderio";
@@ -51,7 +55,7 @@ export async function raiderIoVerifiedKills(
   let result: Awaited<ReturnType<RaiderIoGateway["getHistoricMythicKills"]>>;
   try {
     result = await raiderio.getHistoricMythicKills(key, {
-      tierOrdinals: raiderIoHistoricTierOrdinals,
+      tierOrdinals: historicTierOrdinalsFrom(options.killScanFloor),
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.onPhysicalRequest
         ? { onPhysicalRequest: options.onPhysicalRequest }
@@ -68,6 +72,47 @@ export async function raiderIoVerifiedKills(
     kills: searchableKills(result.kills, options),
     guilds: raiderIoGuilds(result.kills)
   };
+}
+
+/**
+ * The Raider.IO tiers still worth asking, given the character's scan floor.
+ *
+ * A tier is left out only when every raid it answers for stopped being
+ * current content before the floor. Whatever it could return is then either
+ * below the floor, which `searchableKills` never searches, or a first kill
+ * made after its raid's content window closed, which the dossier does not
+ * count as current. Asking for it again on every run was most of a full run's
+ * Raider.IO requests and about a quarter of its median time (#298).
+ *
+ * Kept whenever that cannot be shown: no floor, a floor that cannot be read,
+ * or a raid the catalogue cannot place. The last pinned tier is always kept,
+ * because current raids ride along on every tier's response and one of them
+ * has to be asked for this week's kills to arrive at all.
+ */
+export function historicTierOrdinalsFrom(
+  killScanFloor: string | undefined,
+  tiers: readonly Readonly<{
+    ordinal: number;
+    raidSlugs: readonly string[];
+  }>[] = raiderIoHistoricTiers,
+  contentWindowEnd: (
+    raidSlug: string
+  ) => string | null = raiderIoRaidContentWindowEnd
+): readonly number[] {
+  const floor =
+    killScanFloor === undefined ? Number.NaN : Date.parse(killScanFloor);
+  const closedBelowFloor = (slug: string) => {
+    const endsAt = contentWindowEnd(slug);
+    return endsAt !== null && Date.parse(endsAt) < floor;
+  };
+  return tiers
+    .filter(
+      (tier, index) =>
+        Number.isNaN(floor) ||
+        index === tiers.length - 1 ||
+        !tier.raidSlugs.every(closedBelowFloor)
+    )
+    .map((tier) => tier.ordinal);
 }
 
 export function raiderIoGuilds(
