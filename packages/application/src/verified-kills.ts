@@ -45,13 +45,17 @@ export async function raiderIoVerifiedKills(
     storedKills: readonly Readonly<{ killedAt: string }>[];
     killScanFloor?: string;
     signal?: AbortSignal;
+    onPhysicalRequest?: () => void;
   }>
 ): Promise<VerifiedKillsResult> {
   let result: Awaited<ReturnType<RaiderIoGateway["getHistoricMythicKills"]>>;
   try {
     result = await raiderio.getHistoricMythicKills(key, {
       tierOrdinals: raiderIoHistoricTierOrdinals,
-      ...(options.signal ? { signal: options.signal } : {})
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.onPhysicalRequest
+        ? { onPhysicalRequest: options.onPhysicalRequest }
+        : {})
     });
   } catch (error) {
     if (options.signal?.aborted) throw error;
