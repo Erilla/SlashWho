@@ -181,6 +181,9 @@ importers:
       '@slashwho/warcraftlogs':
         specifier: workspace:*
         version: link:../warcraftlogs
+      pino:
+        specifier: ^10.1.0
+        version: 10.3.1
       zod:
         specifier: ^4.3.5
         version: 4.4.3

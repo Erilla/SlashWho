@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 
-import { createWorkerLogger } from "./logger";
+import { createWorkerLogger, redactSensitive } from "./logger";
 
 describe("worker logger", () => {
   it("redacts credentials, bodies, and private lookup values", async () => {
@@ -40,15 +40,11 @@ describe("worker logger", () => {
     expect(captured).not.toContain(marker);
   });
 
-  it("handles cycles and redacts generic private lookup keys", async () => {
-    // Break caught: cyclic diagnostic data could crash logging or expose lookup secrets.
+  it("handles cycles and redacts generic private lookup keys", () => {
+    // Break caught: cyclic diagnostic data could crash logging or expose lookup
+    // secrets. The allowlist drops an unlisted object outright, so this pins
+    // the backstop that runs over a kept one.
     const marker = "UNIQUE_CYCLIC_MARKER_b6221e";
-    const output = new PassThrough();
-    let captured = "";
-    output.on("data", (chunk) => {
-      captured += chunk.toString();
-    });
-    const logger = createWorkerLogger(output);
     const value: Record<string, unknown> = {
       region: "eu",
       realm: "silvermoon",
@@ -60,12 +56,36 @@ describe("worker logger", () => {
     };
     value.self = value;
 
-    expect(() => logger.info({ value }, "cyclic_event")).not.toThrow();
-    await new Promise((resolve) => setImmediate(resolve));
+    let redacted: unknown;
+    expect(() => (redacted = redactSensitive({ value }))).not.toThrow();
+    const serialized = JSON.stringify(redacted);
 
-    expect(captured).toContain("normalized-root");
-    expect(captured).toContain("[Circular]");
-    expect(captured).not.toContain(marker);
+    expect(serialized).toContain("normalized-root");
+    expect(serialized).toContain("[Circular]");
+    expect(serialized).not.toContain(marker);
+  });
+
+  it("censors a credential nested inside a field the allowlist keeps", () => {
+    // Break caught: `queues` is kept whole, so a secret that reached it would
+    // print unless the backstop still ran over kept fields.
+    const marker = "UNIQUE_NESTED_KEPT_MARKER_31d0aa";
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "queue_depth",
+      queues: { "discover-character": { depth: 1, clientSecret: marker } }
+    });
+
+    const record = JSON.parse(lines[0]!) as {
+      queues: Record<string, Record<string, unknown>>;
+    };
+    expect(record.queues["discover-character"]).toEqual({
+      depth: 1,
+      clientSecret: "[Redacted]"
+    });
   });
 
   it("redacts every ephemeral fingerprint and credential marker", async () => {
@@ -245,5 +265,183 @@ describe("worker logger", () => {
     expect(record.characterCount).toBe(3);
     expect(record.correlationId).toBe("c1");
     expect(record.outcome).toBe("complete");
+  });
+
+  it("drops a field it does not know, and names it instead", () => {
+    // Break caught: the allowlist silently swallowing a new field would lose
+    // telemetry nobody noticed was gone; naming it makes the omission show.
+    const marker = "UNIQUE_UNLISTED_FIELD_MARKER_c83e10";
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+
+    logger.info({
+      event: "evidence_job",
+      characterName: marker,
+      raiderIoCharacterName: marker,
+      durationMs: 5
+    });
+
+    const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(lines[0]).not.toContain(marker);
+    expect(record.durationMs).toBe(5);
+    expect(record.droppedFields).toEqual([
+      "characterName",
+      "raiderIoCharacterName"
+    ]);
+  });
+
+  it("keeps every field of the records the worker writes", () => {
+    // Break caught: moving from a denylist to an allowlist drops anything the
+    // list forgot. These are the worker's records, field for field.
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    } as never);
+    const records: Record<string, unknown>[] = [
+      {
+        event: "evidence_job",
+        runId: "run-1",
+        correlationId: "c1",
+        queueWaitMs: 1,
+        attempt: 1,
+        outcome: "complete",
+        limitationCode: null,
+        parseLimitationCode: null,
+        killCount: 0,
+        raiderIoHistoricOutcome: null,
+        verifiedKillsSearched: null,
+        verifiedKillsSkippedEmpty: null,
+        attendanceRecoveredKills: null,
+        tierSearchRaidId: null,
+        tierSearchOutcome: null,
+        tierSearchRecoveredKills: null,
+        tierSearchRecoveredWipes: null,
+        terminalTierCount: 0,
+        requestCapUsed: 80,
+        parseRequestCapUsed: 20,
+        pointsLimitPerHour: null,
+        pointsRemainingBefore: null,
+        pointsSpentByRun: null,
+        pointsRemainingAfter: null,
+        errorName: null,
+        errorCode: null,
+        retryDecision: null,
+        retryReason: null,
+        stopDisposition: null,
+        limitationQuery: null,
+        durationMs: 0,
+        // Measurement totals, by every suffix the scope writes.
+        warcraftLogsMs: 1,
+        warcraftLogsCalls: 1,
+        warcraftLogsMaxCallMs: 1,
+        warcraftLogsMaxCallName: "getFirstKillReports",
+        warcraftLogsHistoryScanRequests: 1,
+        warcraftLogsHistoryScanMs: 1,
+        warcraftLogsMaxRequestMs: 1,
+        warcraftLogsMaxRequestName: "history_scan",
+        warcraftLogsHistoricAliasMs: 1,
+        raiderIoRankingsRequests: 1,
+        raiderIoRankingPhysicalCalls: 1,
+        raiderIoRankingLogicalKeys: 1,
+        blizzardAchievementsRequests: 1,
+        blizzardLimiterWaitMs: 1,
+        dbCallMs: 1,
+        limiterWaitMs: 1,
+        retryAfterMaxMs: 1,
+        rateLimitHits: 1,
+        runJoined: true,
+        warcraftLogsThrottles: 1,
+        warcraftLogsRetryAfterMaxMs: 1
+      },
+      {
+        event: "discovery_run",
+        runId: "run-2",
+        region: "eu",
+        realm: "silvermoon",
+        name: "ryii",
+        attempt: 1,
+        outcome: "complete",
+        state: "complete",
+        limitationCode: null,
+        characterCount: 3,
+        durationMs: 1,
+        correlationId: null,
+        queueWaitMs: null,
+        fingerprintQueueWaitMs: null,
+        fingerprintReservedRequests: 0,
+        fingerprintUsedRequests: 0,
+        fingerprintDurationMs: 0
+      },
+      {
+        event: "upstream_throttle",
+        provider: "blizzard",
+        retryAfterMs: 1,
+        runId: "run-3"
+      },
+      {
+        event: "evidence_resume_sweep",
+        resumed: 1,
+        released: 0,
+        republished: 0,
+        durationMs: 1,
+        errorName: "Error"
+      },
+      {
+        event: "applicant_sheet_poll",
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        failures: 0,
+        durationMs: 1
+      },
+      {
+        event: "applicant_sheet_drain",
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        durationMs: 1
+      },
+      {
+        event: "evidence_cache_cleanup",
+        removedEvidenceRuns: 0,
+        removedCollectionStages: 0,
+        removedRunCosts: 0,
+        durationMs: 1
+      },
+      {
+        event: "maintainer_alert_delivery_failed",
+        alertEvent: "applicant_new_intents",
+        failure: "http_status",
+        status: 500
+      },
+      {
+        event: "fingerprint_reservation_pressure",
+        committedRequests: 1,
+        hourlyBudget: 1,
+        blockedForMs: 1
+      },
+      { event: "evidence_run_announcement_failed", phase: "started" },
+      {
+        event: "light_collection_skipped",
+        reason: "all_domains_fresh_terminal"
+      },
+      { event: "worker_stopping", signal: "SIGTERM" },
+      { event: "worker_ready", port: 8080 }
+    ];
+
+    for (const written of records) logger.info(written);
+
+    expect(lines.map((line) => JSON.parse(line) as unknown)).toEqual(
+      records.map((written) => ({
+        level: 30,
+        time: expect.any(Number),
+        ...written
+      }))
+    );
   });
 });
