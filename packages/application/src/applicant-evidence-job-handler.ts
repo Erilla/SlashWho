@@ -1466,7 +1466,15 @@ export function createApplicantEvidenceJobHandler(
             activePhase = next;
           });
         };
+        // A light refresh reads the newest page for a new raid night, so it
+        // neither resumes the history bookmark nor moves it. Resuming spent
+        // its one request probing the boundary page, which read nothing new
+        // and reset the bookmark to page one; publishing its own "resume at
+        // page 2" sent the next full run on a resumed scan that may never
+        // publish complete (#437), so it paid for the history twice.
+        const movesHistoryBookmark = !targeted && job.mode !== "light";
         const historyScanResumeOptions =
+          movesHistoryBookmark &&
           storedEvidence.historyScanResumePage &&
           storedEvidence.historyScanResumeBoundaryReportCode
             ? {
@@ -1661,9 +1669,9 @@ export function createApplicantEvidenceJobHandler(
                       }
                     }
                   : {}),
-                // The ordinary history cursor is not a targeted search's to
-                // prove or move.
-                ...(targeted ? {} : historyScanResumeOptions),
+                // The ordinary history cursor is not a targeted search's or a
+                // light refresh's to prove or move: the options are empty then.
+                ...historyScanResumeOptions,
                 ...(parseOnlyResume
                   ? {
                       storedKills: (storedEvidence.parseOnlyKills ?? [])
@@ -1873,7 +1881,7 @@ export function createApplicantEvidenceJobHandler(
               ...(!targeted && historicAliases.length > 0
                 ? { historicAliasProgress }
                 : {}),
-              ...(!targeted &&
+              ...(movesHistoryBookmark &&
               storedEvidence.historyScanResumePage !== undefined
                 ? {
                     historyScanResumePage: storedEvidence.historyScanResumePage,
@@ -2123,7 +2131,8 @@ export function createApplicantEvidenceJobHandler(
             ...(response.rankedBackfillCursor !== undefined
               ? { rankedBackfillCursor: response.rankedBackfillCursor }
               : {}),
-            ...(targeted || response.scanSkipped
+            // Omitted, storage keeps the bookmark exactly as it was.
+            ...(!movesHistoryBookmark || response.scanSkipped
               ? {}
               : response.historyScanResumePage !== undefined
                 ? {
