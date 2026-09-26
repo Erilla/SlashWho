@@ -9,6 +9,7 @@ import {
   type LabelledRecording,
   type ProbeInput
 } from "./provider-drift.mts";
+import { TargetError } from "./provider-fetch.mts";
 import {
   PlaceholderBook,
   recordPayload,
@@ -362,5 +363,20 @@ describe("targetsFromEnvironment", () => {
     expect(() => targetsFromEnvironment({})).toThrow(
       "no drift targets configured"
     );
+  });
+
+  it("refuses a malformed character target before any request", () => {
+    for (const value of [
+      "character:claimed=eu/silvermoon",
+      "view-characters:claimed=owner-of:eu/silvermoon"
+    ])
+      expect(() =>
+        targetsFromEnvironment({ PROVIDER_DRIFT_RAIDERIO_TARGETS: value })
+      ).toThrow(TargetError);
+    expect(
+      targetsFromEnvironment({
+        PROVIDER_DRIFT_RAIDERIO_TARGETS: "view-characters:claimed=some-owner"
+      })
+    ).toHaveLength(1);
   });
 });

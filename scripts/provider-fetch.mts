@@ -42,6 +42,14 @@ export function parseTarget(provider: Provider, value: string): Target {
   const [, endpoint, label, target] = match;
   if (!endpointsByProvider[provider].includes(endpoint!))
     throw new TargetError(`unknown ${provider} endpoint`);
+  // Checked here rather than at fetch time, so a malformed target is a usage
+  // error before any request, not a failed request.
+  if (endpoint === "view-characters") {
+    if (target!.startsWith("owner-of:"))
+      characterTarget(target!.slice("owner-of:".length));
+  } else if (endpoint !== "playable-class-index") {
+    characterTarget(target!);
+  }
   return {
     endpoint: `${provider}.${endpoint}` as Endpoint,
     label: label!,
