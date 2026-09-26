@@ -71,10 +71,14 @@ the table below, or a row names a file that does not exist.
 | `achievements-rate-limited.json`                  | synthetic  | [status]     | 429 with `Retry-After: 60`                                 |
 | `achievements-rate-limited-no-retry-after.json`   | synthetic  | [status]     | 429 without `Retry-After`                                  |
 
-Tests also derive variants in code, named where they are built: invalid
-achievement ids and timestamps from `achievements-completed.json`, and a
-marker body substituted into an error fixture to prove the body never reaches
-a typed failure. Those markers are test inputs, not Blizzard shapes.
+Tests also derive variants in code, named where they are built:
+
+- invalid achievement ids and timestamps from `achievements-completed.json`;
+- in `request-limiter.test.ts`, a 40-member roster made by renaming a
+  `guild-roster.json` member, and 250 achievement entries carrying only the
+  [#23] fields, a scale no fixture holds;
+- a marker body substituted into an error fixture to prove the body never
+  reaches a typed failure. Those markers are test inputs, not Blizzard shapes.
 
 ## Gaps
 

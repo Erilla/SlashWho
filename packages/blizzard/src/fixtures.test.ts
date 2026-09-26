@@ -1,12 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const fixtureDirectory = fileURLToPath(
-  new URL("../../../tests/fixtures/blizzard/", import.meta.url)
-);
+import { fixtureDirectory } from "./test-fixtures";
 
 // A table row: | `name.json` | synthetic or recorded | source | shape |
 const rowPattern = /^\|\s*`([^`]+\.json)`\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|/;
