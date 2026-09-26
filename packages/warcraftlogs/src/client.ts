@@ -1,4 +1,5 @@
 import type { CharacterKey } from "@slashwho/domain";
+import type { ThrottleObserver } from "@slashwho/upstream-http";
 
 import type { ClientContext } from "./collect/context";
 import { collectFirstKillReports } from "./collect/first-kill";
@@ -24,7 +25,7 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
-  onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  onThrottle?: ThrottleObserver;
   /** Times each request for `onRequest`. Injected so tests control it. */
   monotonic?: () => number;
 }>;

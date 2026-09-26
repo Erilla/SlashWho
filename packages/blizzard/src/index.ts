@@ -5,8 +5,6 @@ export { compareFingerprints } from "./fingerprint";
 export type {
   AchievementFingerprint,
   CompletedAchievement,
-  BlizzardError,
-  BlizzardFailure,
   BlizzardGateway,
   BlizzardProfileRequestObserver,
   BlizzardSlotWait,

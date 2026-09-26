@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isValidCharacterKey,
   parseApplicantCharacterUrl,
   parseWarcraftLogsCharacterIdUrl,
   parseRaiderIoCharacterUrl,
@@ -118,5 +119,27 @@ describe("Warcraft Logs character ID URL", () => {
         "https://www.warcraftlogs.com/character/id/40989140"
       )
     ).toThrow("invalid_character_url");
+  });
+});
+
+describe("canonical character key", () => {
+  it("accepts a key in the form every lookup uses", () => {
+    expect(
+      isValidCharacterKey({
+        region: "eu",
+        realm: "aggra-portugues",
+        name: "ãlt"
+      })
+    ).toBe(true);
+  });
+
+  it.each([
+    { region: "cn", realm: "silvermoon", name: "alt" },
+    { region: "eu", realm: "Silvermoon", name: "alt" },
+    { region: "eu", realm: "silver moon", name: "alt" },
+    { region: "eu", realm: "silvermoon", name: "Alt" },
+    { region: "eu", realm: "silvermoon", name: "alt?" }
+  ])("rejects %o", (key) => {
+    expect(isValidCharacterKey(key as never)).toBe(false);
   });
 });

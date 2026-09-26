@@ -4,6 +4,7 @@ import type {
   DossierLimitationCode
 } from "@slashwho/contracts";
 import type { CharacterKey, DossierLimitation } from "@slashwho/domain";
+import { isUpstreamFailure } from "@slashwho/upstream-http";
 
 /**
  * Every code a limitation is recorded under, and the one the contract names it
@@ -221,8 +222,7 @@ export function retryAfterAt(error: unknown): Date | null {
 export function blizzardLimitationCode(
   error: unknown
 ): "not_found" | "schema_drift" | "unavailable" {
-  if (typeof error !== "object" || error === null || !("kind" in error))
-    return "unavailable";
+  if (!isUpstreamFailure(error)) return "unavailable";
   if (error.kind === "not_found" || error.kind === "schema_drift")
     return error.kind;
   return "unavailable";

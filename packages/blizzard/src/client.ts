@@ -1,13 +1,23 @@
 import {
+  isValidCharacterKey,
   supportedRegions,
   type CharacterGuild,
   type CharacterKey
 } from "@slashwho/domain";
+import {
+  classifyResponse,
+  createClientCredentialsTokenSource,
+  createUpstreamError,
+  finiteNumber,
+  nonEmptyString,
+  record as valueRecord,
+  type ThrottleObserver,
+  type UpstreamError,
+  type UpstreamFailure
+} from "@slashwho/upstream-http";
 
 import type {
   AchievementFingerprint,
-  BlizzardError,
-  BlizzardFailure,
   BlizzardGateway,
   BlizzardProfileRequestObserver,
   BlizzardSlotWait,
@@ -22,18 +32,13 @@ export type CreateBlizzardClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides both Blizzard hosts for deterministic local integration tests. */
   baseUrl?: string;
-  onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  onThrottle?: ThrottleObserver;
   /**
    * Bounds every API read this client makes, across all of its callers. A
    * process that shares one client between several consumers of the same
    * credentials shares these limits too; the OAuth token fetch is exempt.
    */
   requestLimits?: RequestLimits;
-}>;
-
-type AccessToken = Readonly<{
-  value: string;
-  expiresAt: number;
 }>;
 
 type CachedPlayableClassNames = Readonly<{
@@ -46,70 +51,27 @@ type CachedPlayableClassNames = Readonly<{
 // roster, or fingerprint material.
 const PLAYABLE_CLASS_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
-function createBlizzardError(failure: BlizzardFailure): BlizzardError {
-  return Object.assign(
-    new Error(`blizzard_${failure.kind}`),
-    failure
-  ) as BlizzardError;
-}
-
-function retryAfterMs(response: Response): number | undefined {
-  const value = response.headers.get("Retry-After")?.trim();
-  if (!value) return undefined;
-
-  if (/^\d+$/.test(value)) return Number(value) * 1_000;
-
-  const retryAt = Date.parse(value);
-  return Number.isFinite(retryAt)
-    ? Math.max(0, retryAt - Date.now())
-    : undefined;
+function createBlizzardError(failure: UpstreamFailure): UpstreamError {
+  return createUpstreamError("blizzard", failure);
 }
 
 /**
- * A reporting callback must never change what this client returns. If the
- * logger behind `onThrottle` throws, the raw thrown value would otherwise
- * replace the failure being built here, degrading a genuine rate limit into an
- * unavailable upstream. Swallowed silently: there is no safe place to report a
- * failure of the reporting path itself, and it must not become a second
- * failure.
+ * This client has always read a 403 as transient, never as a refusal about
+ * the character, and its callers retry on that basis. Kept as it was: this
+ * client never throws `forbidden`.
  */
-function reportThrottle(
-  onThrottle:
-    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
-  retryAfterMs: number | undefined
-): void {
-  try {
-    onThrottle?.({ retryAfterMs });
-  } catch {
-    // Intentionally ignored; see above.
-  }
-}
-
 function responseFailure(
   response: Response,
-  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
-): BlizzardFailure {
-  if (response.status === 404) return { kind: "not_found" };
-
-  const retryAfter = retryAfterMs(response);
-  if (response.status === 429 || retryAfter !== undefined) {
-    reportThrottle(onThrottle, retryAfter);
-  }
-  return {
-    kind: "transient",
-    status: response.status,
-    ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter })
-  };
+  onThrottle?: ThrottleObserver
+): UpstreamFailure {
+  const failure = classifyResponse(response, onThrottle);
+  return failure.kind === "forbidden"
+    ? { kind: "transient", status: response.status }
+    : failure;
 }
 
 function validCharacterKey(value: CharacterKey): CharacterKey {
-  const valid =
-    supportedRegions.includes(value.region) &&
-    /^[a-z0-9-]+$/.test(value.realm) &&
-    /^[\p{L}\p{M}'-]+$/u.test(value.name) &&
-    value.realm === value.realm.toLocaleLowerCase("en-US") &&
-    value.name === value.name.toLocaleLowerCase("en-US");
-  if (!valid) throw new Error("invalid_character_key");
+  if (!isValidCharacterKey(value)) throw new Error("invalid_character_key");
   return value;
 }
 
@@ -122,20 +84,6 @@ function validGuild(value: CharacterGuild): CharacterGuild {
     value.name.trim().length > 0;
   if (!valid) throw new Error("invalid_guild_identity");
   return value;
-}
-
-function valueRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function normalizedRosterCharacter(
@@ -233,8 +181,14 @@ function blizzardSlug(value: string): string {
 export function createBlizzardClient(
   options: CreateBlizzardClientOptions
 ): BlizzardGateway {
-  let cachedToken: AccessToken | undefined;
-  let tokenRequest: Promise<string> | undefined;
+  const tokens = createClientCredentialsTokenSource({
+    provider: "blizzard",
+    fetch: options.fetch,
+    url: new URL("/token", options.baseUrl ?? "https://oauth.battle.net"),
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    onThrottle: options.onThrottle
+  });
   const cachedClassNames = new Map<
     CharacterKey["region"],
     CachedPlayableClassNames
@@ -243,72 +197,6 @@ export function createBlizzardClient(
     ? createRequestLimiter(options.requestLimits)
     : undefined;
 
-  async function accessToken(signal?: AbortSignal): Promise<string> {
-    signal?.throwIfAborted();
-    tokenRequest ??= fetchAccessToken(AbortSignal.timeout(15_000)).finally(
-      () => {
-        tokenRequest = undefined;
-      }
-    );
-    const token = await tokenRequest;
-    signal?.throwIfAborted();
-    return token;
-  }
-
-  // The signal is the token request's own deadline, never a caller's: the
-  // request is shared, so its expiry is an upstream failure, not a
-  // cancellation, and is reported like any other.
-  async function fetchAccessToken(signal?: AbortSignal): Promise<string> {
-    if (cachedToken && cachedToken.expiresAt > Date.now()) {
-      return cachedToken.value;
-    }
-
-    let response: Response;
-    try {
-      response = await options.fetch(
-        new URL(
-          "/token",
-          options.baseUrl ?? "https://oauth.battle.net"
-        ).toString(),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            Authorization: `Basic ${Buffer.from(
-              `${options.clientId}:${options.clientSecret}`
-            ).toString("base64")}`
-          },
-          body: "grant_type=client_credentials",
-          signal
-        }
-      );
-    } catch {
-      throw createBlizzardError({ kind: "transient" });
-    }
-
-    if (signal?.aborted) throw createBlizzardError({ kind: "transient" });
-    if (!response.ok)
-      throw createBlizzardError(responseFailure(response, options.onThrottle));
-
-    try {
-      const body = valueRecord(await response.json());
-      if (signal?.aborted) throw new Error("token_deadline");
-      const token = body && nonEmptyString(body.access_token);
-      const expiresIn = body && finiteNumber(body.expires_in);
-      if (!token || expiresIn === null || expiresIn <= 0) {
-        throw new Error("invalid_token_response");
-      }
-      cachedToken = {
-        value: token,
-        expiresAt: Date.now() + Math.max(0, expiresIn * 1_000 - 60_000)
-      };
-      return token;
-    } catch {
-      if (signal?.aborted) throw createBlizzardError({ kind: "transient" });
-      throw createBlizzardError({ kind: "schema_drift" });
-    }
-  }
-
   async function request<T>(
     url: URL,
     normalize: (value: unknown) => T | null,
@@ -316,7 +204,7 @@ export function createBlizzardClient(
     onProfileRequest?: BlizzardProfileRequestObserver,
     waitForSlot?: BlizzardSlotWait
   ): Promise<T> {
-    const token = await accessToken(signal);
+    const token = await tokens.token(signal);
     await onProfileRequest?.();
     signal?.throwIfAborted();
     if (!limiter) return send(url, token, normalize, signal);
@@ -559,5 +447,3 @@ export function createBlizzardClient(
     getCompletedAchievements
   };
 }
-
-export { createBlizzardError };

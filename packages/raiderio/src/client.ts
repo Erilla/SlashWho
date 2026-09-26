@@ -1,12 +1,14 @@
-import type { CharacterKey } from "@slashwho/domain";
-import { supportedRegions } from "@slashwho/domain";
+import { isValidCharacterKey, type CharacterKey } from "@slashwho/domain";
+import {
+  classifyResponse,
+  createUpstreamError,
+  isUpstreamFailure,
+  type ThrottleObserver,
+  type UpstreamError,
+  type UpstreamFailure
+} from "@slashwho/upstream-http";
 import { z } from "zod";
 
-import {
-  createRaiderIoError,
-  isRaiderIoFailure,
-  type RaiderIoFailure
-} from "./errors";
 import {
   normalizeCharacterResponse,
   normalizeProfileResponse
@@ -161,38 +163,11 @@ export type CreateRaiderIoClientOptions = {
   baseUrl: string;
   timeoutMs: number;
   accessKey?: string;
-  onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  onThrottle?: ThrottleObserver;
 };
 
-function retryAfterMs(response: Response): number | undefined {
-  const value = response.headers.get("Retry-After")?.trim();
-  if (!value) return undefined;
-
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
-
-  const at = Date.parse(value);
-  if (!Number.isFinite(at)) return undefined;
-  return Math.max(0, at - Date.now());
-}
-
-/**
- * A reporting callback must never change what this client returns. If the
- * logger behind `onThrottle` throws, the raw thrown value would otherwise
- * replace the failure being built here, degrading a genuine rate limit into an
- * unavailable upstream. Swallowed silently: there is no safe place to report a
- * failure of the reporting path itself, and it must not become a second
- * failure.
- */
-function reportThrottle(
-  onThrottle:
-    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
-  retryAfterMs: number | undefined
-): void {
-  try {
-    onThrottle?.({ retryAfterMs });
-  } catch {
-    // Intentionally ignored; see above.
-  }
+function createRaiderIoError(failure: UpstreamFailure): UpstreamError {
+  return createUpstreamError("raiderio", failure);
 }
 
 function reportPhysicalRequest(
@@ -205,36 +180,8 @@ function reportPhysicalRequest(
   }
 }
 
-function responseFailure(
-  response: Response,
-  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
-): RaiderIoFailure {
-  if (response.status === 404) return { kind: "not_found" };
-  // Raider.IO answers 403 for a user profile its owner has made private. That
-  // is a permanent answer about visibility, not an outage, so it must never be
-  // retried as one, and it must never fire onThrottle.
-  if (response.status === 403) return { kind: "forbidden" };
-
-  const retryAfter = retryAfterMs(response);
-  if (response.status === 429 || retryAfter !== undefined) {
-    reportThrottle(onThrottle, retryAfter);
-  }
-  return {
-    kind: "transient",
-    status: response.status,
-    ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter })
-  };
-}
-
 function validatedCharacterKey(key: CharacterKey): CharacterKey {
-  const valid =
-    supportedRegions.includes(key.region) &&
-    /^[a-z0-9-]+$/.test(key.realm) &&
-    /^[\p{L}\p{M}'-]+$/u.test(key.name) &&
-    key.realm === key.realm.toLocaleLowerCase("en-US") &&
-    key.name === key.name.toLocaleLowerCase("en-US");
-
-  if (!valid) throw new Error("invalid_character_key");
+  if (!isValidCharacterKey(key)) throw new Error("invalid_character_key");
   return key;
 }
 
@@ -265,7 +212,7 @@ function normalizeHistoricRaidProgress(
 }
 
 function historicKillLimitation(error: unknown): HistoricMythicKillResult {
-  if (!isRaiderIoFailure(error)) {
+  if (!isUpstreamFailure(error)) {
     return { kind: "limitation", code: "unavailable" };
   }
 
@@ -288,7 +235,7 @@ function historicKillLimitation(error: unknown): HistoricMythicKillResult {
 }
 
 function bossRankingLimitation(error: unknown): MythicBossRankingsResult {
-  if (!isRaiderIoFailure(error)) {
+  if (!isUpstreamFailure(error)) {
     return { kind: "limitation", code: "unavailable" };
   }
 
@@ -364,8 +311,12 @@ export function createRaiderIoClient(
     signal?: AbortSignal,
     onPhysicalRequest?: RaiderIoPhysicalRequestObserver
   ): Promise<T> {
-    if (options.accessKey && url.pathname.startsWith("/api/v1/"))
+    // A copy, so the caller's URL never carries the key: a URL holding it
+    // must never be logged, and the caller cannot know it had been added.
+    if (options.accessKey && url.pathname.startsWith("/api/v1/")) {
+      url = new URL(url);
       url.searchParams.set("access_key", options.accessKey);
+    }
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
     const requestSignal = signal
       ? AbortSignal.any([signal, timeoutSignal])
@@ -393,7 +344,10 @@ export function createRaiderIoClient(
 
     signal?.throwIfAborted();
     if (!response.ok) {
-      throw createRaiderIoError(responseFailure(response, options.onThrottle));
+      // Raider.IO answers 403 for a user profile its owner has made private.
+      // That is a permanent answer about visibility, not an outage, so it is
+      // never retried as one, and it never fires onThrottle.
+      throw createRaiderIoError(classifyResponse(response, options.onThrottle));
     }
 
     let value: unknown;
@@ -481,7 +435,7 @@ export function createRaiderIoClient(
       };
     } catch (error) {
       if (
-        isRaiderIoFailure(error) &&
+        isUpstreamFailure(error) &&
         (error.kind === "not_found" || error.kind === "forbidden")
       ) {
         return null;

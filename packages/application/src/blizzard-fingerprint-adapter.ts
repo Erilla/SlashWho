@@ -3,6 +3,7 @@ import type {
   BlizzardProfileRequestObserver
 } from "@slashwho/blizzard";
 import type { FingerprintGateway } from "@slashwho/domain";
+import { isUpstreamFailure } from "@slashwho/upstream-http";
 
 function capReached(): Error {
   return Object.assign(new Error("fingerprint_cap_reached"), {
@@ -57,11 +58,9 @@ export function createBlizzardFingerprintAdapter(
       return await operation();
     } catch (error) {
       if (
-        typeof error === "object" &&
-        error !== null &&
-        "kind" in error &&
-        (error as { kind?: unknown }).kind === "transient" &&
-        (error as { status?: unknown }).status === 429
+        isUpstreamFailure(error) &&
+        error.kind === "transient" &&
+        error.status === 429
       ) {
         await options.onRateLimited?.();
       }
