@@ -38,6 +38,14 @@ export type MeasurementScope = {
   observe(field: string, value: number): void;
   /** Keeps the largest value seen, e.g. `retryAfterMaxMs`. */
   observeMax(field: string, value: number): void;
+  /**
+   * Keeps the largest of durations timed elsewhere as `${field}Ms`, and the
+   * label of the one that set it as `${field}Name`, by the same rule as
+   * `time`'s longest call. For work only an upstream client can time, such as
+   * a single request inside one gateway call. The label must be static, as
+   * `time`'s is.
+   */
+  observeSlowest(field: string, value: number, label?: string): void;
   /** Adds to a counter, e.g. `rateLimitHits`. */
   increment(field: string, amount?: number): void;
   /** Sets a boolean flag, e.g. `runJoined`. */
@@ -55,6 +63,17 @@ export function createMeasurementScope(
 
   const add = (field: string, value: number) => {
     values.set(field, (values.get(field) ?? 0) + value);
+  };
+
+  const slowest = (field: string, value: number, label?: string) => {
+    const maxField = `${field}Ms`;
+    const previousMax = values.get(maxField);
+    // Strictly greater, so a later call of equal duration does not steal
+    // the name from the first call that reached the maximum.
+    if (previousMax === undefined || value > previousMax) {
+      values.set(maxField, value);
+      if (label !== undefined) names.set(`${field}Name`, label);
+    }
   };
 
   return {
@@ -80,14 +99,7 @@ export function createMeasurementScope(
         );
         add(`${prefix}Ms`, elapsed);
         add(`${prefix}Calls`, 1);
-        const maxField = `${prefix}MaxCallMs`;
-        const previousMax = values.get(maxField);
-        // Strictly greater, so a later call of equal duration does not steal
-        // the name from the first call that reached the maximum.
-        if (previousMax === undefined || elapsed > previousMax) {
-          values.set(maxField, elapsed);
-          if (label !== undefined) names.set(`${prefix}MaxCallName`, label);
-        }
+        slowest(`${prefix}MaxCall`, elapsed, label);
       }
     },
 
@@ -100,6 +112,10 @@ export function createMeasurementScope(
         field,
         Math.max(values.get(field) ?? 0, Math.max(0, Math.round(value)))
       );
+    },
+
+    observeSlowest(field, value, label) {
+      slowest(field, Math.max(0, Math.round(value)), label);
     },
 
     increment(field, amount = 1) {

@@ -193,7 +193,12 @@ const config: WorkerConfig = {
   evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
 };
 
-function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
+function runtimeFakes(
+  options: {
+    probeHasCompletedRun?: boolean;
+    queueDepthRows?: Array<Record<string, unknown>> | Error;
+  } = {}
+) {
   let connectionAttempts = 0;
   let ended = false;
   let queueReady = false;
@@ -276,8 +281,16 @@ function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
   const evidenceHandler: ApplicantEvidenceJobHandler = {
     execute: vi.fn(async () => {})
   };
+  const queueDepthQueries: Array<unknown[] | undefined> = [];
   const pool = {
-    async query(text: string) {
+    async query(text: string, values?: unknown[]) {
+      if (text.includes("oldest_wait_ms")) {
+        queueDepthQueries.push(values);
+        if (options.queueDepthRows instanceof Error) {
+          throw options.queueDepthRows;
+        }
+        return { rows: options.queueDepthRows ?? [] };
+      }
       if (text.includes("MAX(completed_at)")) {
         const noRunAge = text.includes(
           "WHEN MAX(completed_at) IS NULL THEN NULL"
@@ -482,6 +495,7 @@ function runtimeFakes(options: { probeHasCompletedRun?: boolean } = {}) {
     listActive,
     releaseAbandoned,
     stagedCollection,
+    queueDepthQueries,
     get evidenceResumeHandler() {
       return evidenceResumeHandler;
     },
@@ -1397,6 +1411,70 @@ describe("worker runtime", () => {
     expect(fakes.releaseAbandoned).toHaveBeenCalledWith([
       "00000000-0000-4000-8000-000000000031"
     ]);
+    await runtime.stop();
+  });
+
+  it("records each queue's depth and oldest wait on every sweep", async () => {
+    // #509: the probe gives depth only on demand, so nothing recorded the
+    // backlog a slow run or a queueWaitMs spike could be read against. A
+    // queue with nothing waiting still appears, at zero, so a gap in the
+    // series means the tick did not run rather than an empty queue.
+    const fakes = runtimeFakes({
+      queueDepthRows: [
+        {
+          name: "collect-character-evidence",
+          depth: "3",
+          oldest_wait_ms: "90500.4"
+        }
+      ]
+    });
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.queueDepthQueries).toEqual([
+      [
+        [
+          "discover-character",
+          "fingerprint-admission",
+          "collect-character-evidence"
+        ]
+      ]
+    ]);
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "queue_depth",
+      queues: {
+        "discover-character": { depth: 0, oldestWaitMs: null },
+        "fingerprint-admission": { depth: 0, oldestWaitMs: null },
+        "collect-character-evidence": { depth: 3, oldestWaitMs: 90500 }
+      }
+    });
+    await runtime.stop();
+  });
+
+  it("still sweeps when the queue depth read fails", async () => {
+    const fakes = runtimeFakes({ queueDepthRows: new RangeError("boom") });
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "queue_depth_failed",
+      failure: "RangeError"
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "evidence_resume_sweep" })
+    );
     await runtime.stop();
   });
 

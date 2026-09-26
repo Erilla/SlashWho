@@ -6387,12 +6387,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              tier_search_reports_hydrated, tier_search_recovered_kills,
              tier_search_recovered_wipes,
              raiderio_historic_requests, raiderio_rankings_requests,
-             blizzard_achievements_requests
+             blizzard_achievements_requests,
+             duration_ms, queue_wait_ms, warcraft_logs_ms,
+             warcraft_logs_historic_alias_ms, db_ms, db_max_call_name
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
                    $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
-                   $33, $34, $35)
+                   $33, $34, $35, $36, $37, $38, $39, $40, $41)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -6428,7 +6430,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              raiderio_historic_requests = EXCLUDED.raiderio_historic_requests,
              raiderio_rankings_requests = EXCLUDED.raiderio_rankings_requests,
              blizzard_achievements_requests =
-               EXCLUDED.blizzard_achievements_requests`,
+               EXCLUDED.blizzard_achievements_requests,
+             duration_ms = EXCLUDED.duration_ms,
+             queue_wait_ms = EXCLUDED.queue_wait_ms,
+             warcraft_logs_ms = EXCLUDED.warcraft_logs_ms,
+             warcraft_logs_historic_alias_ms =
+               EXCLUDED.warcraft_logs_historic_alias_ms,
+             db_ms = EXCLUDED.db_ms,
+             db_max_call_name = EXCLUDED.db_max_call_name`,
           [
             cost.runId,
             cost.attempt,
@@ -6464,7 +6473,13 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             cost.tierSearch?.recoveredWipes ?? null,
             cost.requests.raiderIoHistoric ?? 0,
             cost.requests.raiderIoRankings ?? 0,
-            cost.requests.blizzardAchievements ?? 0
+            cost.requests.blizzardAchievements ?? 0,
+            cost.timings?.durationMs ?? null,
+            cost.timings?.queueWaitMs ?? null,
+            cost.timings?.warcraftLogsMs ?? null,
+            cost.timings?.warcraftLogsHistoricAliasMs ?? null,
+            cost.timings?.dbMs ?? null,
+            cost.timings?.dbMaxCallName ?? null
           ]
         );
       },

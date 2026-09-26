@@ -89,8 +89,25 @@ describe("summarize", () => {
     });
   });
 
+  it("tallies the slowest Warcraft Logs request by query kind", () => {
+    const runs = [
+      { warcraftLogsMaxRequestName: "guild_attendance" },
+      { warcraftLogsMaxRequestName: "guild_attendance" },
+      { warcraftLogsMaxRequestName: "history_scan" },
+      {}
+    ].map((fields) =>
+      JSON.stringify({ event: "evidence_job", warcraftLogsMs: 10, ...fields })
+    );
+    expect(summarize(runs, "evidence_job").warcraftLogsMaxRequestNames).toEqual(
+      { guild_attendance: 2, history_scan: 1 }
+    );
+  });
+
   it("tallies no names when no record carries one", () => {
     expect(summarize(lines, "discovery_run").dbMaxCallNames).toEqual({});
+    expect(
+      summarize(lines, "discovery_run").warcraftLogsMaxRequestNames
+    ).toEqual({});
   });
 
   it("summarizes upstream_throttle numeric fields", () => {

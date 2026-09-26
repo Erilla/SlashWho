@@ -127,6 +127,35 @@ describe("createMeasurementScope", () => {
     });
   });
 
+  it("names the slowest of durations measured elsewhere", () => {
+    // Break caught: a request timed inside an upstream client reaches the
+    // scope only as a number, so the scope's own `time` cannot name it.
+    const scope = createMeasurementScope(fakeClock([0]));
+
+    scope.observeSlowest("warcraftLogsMaxRequest", 120, "history_scan");
+    scope.observeSlowest("warcraftLogsMaxRequest", 480, "guild_attendance");
+    scope.observeSlowest("warcraftLogsMaxRequest", 480, "fight_parses");
+    scope.observeSlowest("warcraftLogsMaxRequest", 90, "zone_rankings");
+
+    expect(scope.totals()).toEqual({
+      warcraftLogsMaxRequestMs: 480,
+      warcraftLogsMaxRequestName: "guild_attendance"
+    });
+  });
+
+  it("names a slowest duration of zero", () => {
+    // Break caught: seeding the maximum at zero would leave an instant first
+    // request unnamed, and a name-less maximum points at nothing.
+    const scope = createMeasurementScope(fakeClock([0]));
+
+    scope.observeSlowest("warcraftLogsMaxRequest", 0, "history_scan");
+
+    expect(scope.totals()).toEqual({
+      warcraftLogsMaxRequestMs: 0,
+      warcraftLogsMaxRequestName: "history_scan"
+    });
+  });
+
   it("marks a boolean flag", () => {
     const scope = createMeasurementScope(fakeClock([0]));
     scope.mark("runJoined");
