@@ -1,3 +1,5 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import { parseCharacterRoute, withHttpRequest } from "./http";
@@ -71,5 +73,85 @@ describe("withHttpRequest", () => {
     );
 
     expect(records[0]).not.toHaveProperty("runJoined");
+  });
+
+  it("returns a body the caller can still read after garbage collection", async () => {
+    // Node's bundled undici ties a cloned response's finaliser to the
+    // original's tee branch: collecting a discarded clone cancels the body
+    // the caller has yet to read.
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const logger = { info: () => {} };
+
+    const response = await withHttpRequest(
+      "register",
+      async () => Response.json({ items: [1, 2] }, { status: 202 }),
+      logger
+    );
+    gc();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ items: [1, 2] });
+  });
+
+  it("keeps the status, headers and counted items of a JSON response", async () => {
+    const records: Record<string, unknown>[] = [];
+    const logger = {
+      info: (value: Record<string, unknown>) => records.push(value)
+    };
+    const headers = new Headers({ "cache-control": "no-store" });
+    headers.append("set-cookie", "a=1; Path=/");
+    headers.append("set-cookie", "b=2; Path=/");
+
+    const response = await withHttpRequest(
+      "list",
+      async () =>
+        Response.json(
+          { items: [1, 2, 3] },
+          { status: 201, statusText: "Created", headers }
+        ),
+      logger
+    );
+
+    expect(records[0]).toMatchObject({ status: 201, count: 3 });
+    expect(response.status).toBe(201);
+    expect(response.statusText).toBe("Created");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-request-id")).toBe(
+      records[0]?.correlationId
+    );
+    expect(response.headers.getSetCookie()).toEqual([
+      "a=1; Path=/",
+      "b=2; Path=/"
+    ]);
+    expect(await response.json()).toEqual({ items: [1, 2, 3] });
+  });
+
+  it("reports a JSON body that fails mid-read as a failed request", async () => {
+    const records: Record<string, unknown>[] = [];
+    const logger = {
+      info: (value: Record<string, unknown>) => records.push(value)
+    };
+    const broken = new ReadableStream({
+      pull(controller) {
+        controller.error(new TypeError("upstream reset"));
+      }
+    });
+
+    const response = await withHttpRequest(
+      "list",
+      async () =>
+        new Response(broken, {
+          headers: { "content-type": "application/json" }
+        }),
+      logger
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("x-request-id")).toBe(
+      records[0]?.correlationId
+    );
+    expect(records[0]).toMatchObject({ status: 500, errorName: "TypeError" });
   });
 });
