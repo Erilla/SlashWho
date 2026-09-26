@@ -5613,6 +5613,30 @@ describe("Warcraft Logs gateway", () => {
       });
       expect(counts()).toEqual({ tokens: 1, requests: 1 });
     });
+
+    it("keeps an UNAUTHORIZED envelope that says the thing is private as private", async () => {
+      // Break caught: exempting only "private" took a per-report denial for a
+      // refused token, dropped the shared token, and held a gone report's
+      // stored kill partial on every retry.
+      for (const message of [
+        "You are not authorized to view this report",
+        "This report is forbidden",
+        "This character has private logs"
+      ]) {
+        const { client, counts } = authClient([
+          () =>
+            jsonResponse({
+              errors: [{ message, extensions: { code: "UNAUTHORIZED" } }]
+            })
+        ]);
+
+        await expect(client.resolveCharacter(key)).resolves.toEqual({
+          kind: "limitation",
+          code: "private"
+        });
+        expect(counts()).toEqual({ tokens: 1, requests: 1 });
+      }
+    });
   });
 
   it("represents an absent public character as not found", async () => {

@@ -473,15 +473,31 @@ function firstGraphQlError(
 }
 
 /**
+ * Whether an error message says the thing asked about is closed to us. Shared
+ * by both readers below so that an envelope `graphQlErrorLimitation` would
+ * call private is never first taken for a refused token.
+ */
+function messageSaysPrivate(message: string | null): boolean {
+  return (
+    message !== null &&
+    (message.includes("private") ||
+      message.includes("forbidden") ||
+      message.includes("not authorized"))
+  );
+}
+
+/**
  * Whether a GraphQL envelope refuses our token rather than the thing asked
  * for. `UNAUTHORIZED` was read as a private character until #563, which made
- * a revoked token look like every player it touched choosing privacy.
+ * a revoked token look like every player it touched choosing privacy. One
+ * whose message says the thing is private is still private: taking it for a
+ * refused token would drop the shared token and hold a gone report's kill.
  */
 function graphQlAuthRejected(value: unknown): boolean {
   const error = firstGraphQlError(value);
   return (
     (error?.code === "UNAUTHORIZED" || error?.code === "UNAUTHENTICATED") &&
-    !error.message?.includes("private")
+    !messageSaysPrivate(error.message)
   );
 }
 
@@ -500,12 +516,7 @@ function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
   ) {
     return { kind: "limitation", code: "not_found" };
   }
-  if (
-    code === "FORBIDDEN" ||
-    message?.includes("private") ||
-    message?.includes("forbidden") ||
-    message?.includes("not authorized")
-  ) {
+  if (code === "FORBIDDEN" || messageSaysPrivate(message)) {
     return { kind: "limitation", code: "private" };
   }
   return { kind: "limitation", code: "unavailable" };
