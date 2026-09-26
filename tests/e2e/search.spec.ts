@@ -275,6 +275,51 @@ test("shows submitted-character evidence while privacy-safe discovery is held", 
   );
 });
 
+test("lists a searched character once on the landing page until its research completes", async ({
+  page
+}) => {
+  // Break caught: the landing page repeated a character searched twice, or
+  // kept its spinner after research finished because it never read again.
+  await seedCharacterEvidence({
+    region: "eu",
+    realm: "silvermoon",
+    name: "recent"
+  });
+  await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/hold`);
+  try {
+    for (let search = 0; search < 2; search += 1) {
+      await page.goto("/");
+      await page
+        .getByLabel("Character/URL")
+        .fill("https://raider.io/characters/eu/silvermoon/recent");
+      await page.getByRole("button", { name: "Research applicant" }).click();
+      await expect(page).toHaveURL(/\/dossiers\/eu\/silvermoon\/recent\?job=/);
+    }
+
+    await page.goto("/");
+    await expect(page.getByText(/Research a World of Warcraft/)).toHaveCount(0);
+    const table = page.getByRole("region", { name: "Recent searches" });
+    const row = table.getByRole("row").filter({ hasText: "Recent-Silvermoon" });
+    await expect(row).toHaveCount(1);
+    await expect(table.getByRole("row").nth(1)).toContainText(
+      "Recent-Silvermoon"
+    );
+    await expect(
+      row.getByRole("link", { name: "Recent-Silvermoon" })
+    ).toHaveAttribute("href", "/dossiers/eu/silvermoon/recent");
+    await expect(row).toContainText("In progress");
+  } finally {
+    await fetch(`${process.env.E2E_RAIDER_IO_BASE_URL}/__control/release`);
+  }
+
+  await expect(
+    page
+      .getByRole("region", { name: "Recent searches" })
+      .getByRole("row")
+      .filter({ hasText: "Recent-Silvermoon" })
+  ).toContainText("Completed", { timeout: 30_000 });
+});
+
 test("discloses that a partial snapshot may omit linked characters", async ({
   page
 }) => {

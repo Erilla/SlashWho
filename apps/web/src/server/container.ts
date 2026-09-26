@@ -96,7 +96,7 @@ export type WebContainerDependencies = Readonly<{
   createApplicantDossierService(options: {
     repositories: Pick<
       Repositories,
-      "snapshots" | "evidence" | "manualConnections"
+      "snapshots" | "evidence" | "manualConnections" | "recentSearches"
     >;
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
