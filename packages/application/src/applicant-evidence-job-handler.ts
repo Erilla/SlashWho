@@ -2087,11 +2087,16 @@ export function createApplicantEvidenceJobHandler(
         if (options.blizzard && !targeted) {
           await phaseLedger?.transition("blizzard_achievements", "active");
           try {
+            const blizzard = options.blizzard;
+            // The request observer only bumps a counter, so unlike discovery's
+            // database-writing observer it needs no exclusion from the bucket.
             cuttingEdges = (
-              await options.blizzard.getCompletedAchievements(
-                run.key,
-                activeContext.signal,
-                () => scope.increment("blizzardAchievementsRequests")
+              await scope.time("blizzard", () =>
+                blizzard.getCompletedAchievements(
+                  run.key,
+                  activeContext.signal,
+                  () => scope.increment("blizzardAchievementsRequests")
+                )
               )
             )
               .filter((achievement) =>
