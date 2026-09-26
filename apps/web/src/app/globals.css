@@ -1250,6 +1250,16 @@ a {
   white-space: nowrap;
 }
 
+/* Names link to their dossiers. They keep their class colour, so the underline
+   is what says a name can be followed. */
+a.dossier-character-name:hover,
+a.dossier-character-name:focus-visible,
+.collection-monitor-character:hover,
+.collection-monitor-character:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
 .dossier-parse-character {
   display: inline-block;
   min-width: 4.5rem;
@@ -2495,67 +2505,67 @@ td > .collection-progress {
   cursor: pointer;
 }
 
+.changelog-page h1 {
+  margin-bottom: 0.5rem;
+  font-size: clamp(2rem, 4.5vw, 3rem);
+}
+
 .changelog-subheading {
-  margin: 0 0 1.3rem;
+  margin: 0 0 1.5rem;
   color: var(--muted);
-  font-size: 0.87rem;
+  font-size: 0.85rem;
   letter-spacing: 0.05em;
 }
 
 .changelog-list {
-  display: grid;
-  gap: 1rem;
   padding: 0;
   margin: 0;
   list-style: none;
+  border-bottom: 1px solid var(--border);
 }
 
-.changelog-entry {
+.document-page .changelog-entry {
   border-top: 1px solid var(--border);
-  padding: 1.15rem 0;
+  padding: 0.6rem 0;
+  line-height: 1.45;
 }
 
-.changelog-entry-heading {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.7rem;
-  justify-content: space-between;
-  align-items: baseline;
-}
-
-.changelog-entry-heading strong {
-  max-width: min(100%, 44ch);
-}
-
-.changelog-entry time {
-  color: var(--muted);
-  font-size: 0.84rem;
+.document-page .changelog-entry-summary {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .changelog-entry-meta {
-  margin: 0.5rem 0 0.15rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.2rem;
   color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.changelog-entry-meta span {
-  color: var(--muted);
-}
-
-.changelog-entry-meta strong {
-  color: var(--text);
+  font-size: 0.8rem;
 }
 
 .changelog-commit-link {
-  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.changelog-entry-environment {
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  padding: 0 0.35rem;
 }
 
 .changelog-links {
+  display: contents;
   list-style: none;
-  padding: 0;
-  margin: 0.5rem 0 0;
-  display: grid;
-  gap: 0.35rem;
+}
+
+.document-page .changelog-links li {
+  color: inherit;
+  line-height: inherit;
 }
 
 .collection-monitor-page {

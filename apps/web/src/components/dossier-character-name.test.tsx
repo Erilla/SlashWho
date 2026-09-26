@@ -8,6 +8,7 @@ import type { CharacterKey, DossierCharacter } from "@slashwho/contracts";
 
 import {
   DossierCharacterName,
+  DossierCharacterNameByName,
   DossierCharacterNames,
   DossierCharacterProvider
 } from "./dossier-character-name";
@@ -58,9 +59,11 @@ it("shows comma-separated historic identities on hover and keyboard focus", () =
       showGuild
     />
   );
-  const name = screen.getByText("Ryii");
+  // The name is a link, so it is already the single focus stop that reveals
+  // the tooltip; a tabindex on top would add a second.
+  const name = screen.getByRole("link", { name: "Ryii" });
   const tooltip = screen.getByRole("tooltip");
-  expect(name).toHaveAttribute("tabindex", "0");
+  expect(name).not.toHaveAttribute("tabindex");
   expect(name).toHaveAttribute("aria-describedby", tooltip.id);
   expect(tooltip).toHaveTextContent(
     "Also known as: Erilla-Neptulon, Former-Draenor"
@@ -194,4 +197,84 @@ it("renders nothing extra for a guildless character", () => {
 
   expect(screen.getByText("Ryii")).toBeInTheDocument();
   expect(screen.queryByText(/</)).not.toBeInTheDocument();
+});
+
+it("links a character's name to its dossier", () => {
+  render(<DossierCharacterName character={mage} />);
+
+  expect(screen.getByRole("link", { name: "Ryii" })).toHaveAttribute(
+    "href",
+    "/dossiers/eu/silvermoon/ryii"
+  );
+});
+
+it("links a bare key to its dossier even when the dossier has not resolved it", () => {
+  render(
+    <DossierCharacterProvider characters={[mage]}>
+      <DossierCharacterName
+        character={{ region: "eu", realm: "argent-dawn", name: "missing" }}
+      />
+    </DossierCharacterProvider>
+  );
+
+  expect(screen.getByRole("link", { name: "Missing" })).toHaveAttribute(
+    "href",
+    "/dossiers/eu/argent-dawn/missing"
+  );
+});
+
+it("does not link the dossier's own character back to the page it is on", () => {
+  render(
+    <DossierCharacterProvider
+      characters={[mage, sameNamedPriest]}
+      current={mage.key}
+    >
+      <DossierCharacterName character={mage} showGuild />
+      <DossierCharacterNames characters={[mage.key, sameNamedPriest.key]} />
+    </DossierCharacterProvider>
+  );
+
+  const links = screen.getAllByRole("link", { name: "Ryii" });
+  expect(links).toHaveLength(1);
+  expect(links[0]).toHaveAttribute("href", "/dossiers/us/stormrage/ryii");
+  expect(screen.getAllByText("Ryii")).toHaveLength(3);
+});
+
+it("matches the current character case-insensitively", () => {
+  render(
+    <DossierCharacterProvider
+      characters={[mage]}
+      current={{ region: "eu", realm: "Silvermoon", name: "Ryii" }}
+    >
+      <DossierCharacterName character={mage} />
+    </DossierCharacterProvider>
+  );
+
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+});
+
+it("links a parse's character name only when it resolves to one character", () => {
+  render(
+    <DossierCharacterProvider characters={[mage, sameNamedPriest]}>
+      <DossierCharacterNameByName name="Ryii" />
+    </DossierCharacterProvider>
+  );
+
+  // Two characters share the name and a parse carries no realm, so there is
+  // no single dossier to link to.
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  expect(screen.getByText("Ryii")).toBeInTheDocument();
+});
+
+it("links a parse's character name that resolves to a single character", () => {
+  render(
+    <DossierCharacterProvider characters={[mage]}>
+      <DossierCharacterNameByName name="ryii" />
+    </DossierCharacterProvider>
+  );
+
+  expect(screen.getByRole("link", { name: "Ryii" })).toHaveAttribute(
+    "href",
+    "/dossiers/eu/silvermoon/ryii"
+  );
 });

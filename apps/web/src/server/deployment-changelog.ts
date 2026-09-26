@@ -63,6 +63,9 @@ type GithubCommit = Readonly<{
 const githubApiBase = "https://api.github.com";
 const defaultMaxEntries = 20;
 const defaultDeploymentsPerEnvironment = 40;
+// Parallel GitHub reads per batch: enough to collapse ~40 serial round trips
+// into a handful, without bursting a whole page of requests at once.
+const githubReadConcurrency = 8;
 
 function parseList(value: string | undefined): readonly string[] {
   if (!value) return [];
@@ -205,12 +208,41 @@ async function readDeploymentCommitMessage(
   return commit.commit?.message ?? null;
 }
 
-function uniqueEntryKey(
-  entries: Map<string, ChangeLogEnvironment>,
-  sha: string
-): boolean {
-  return entries.has(sha);
+async function readStatusOrNull(
+  fetchInstance: typeof globalThis.fetch,
+  statusUrl: string,
+  headers: HeadersInit
+): Promise<GithubDeploymentStatus | null> {
+  try {
+    return await readDeploymentStatus(fetchInstance, statusUrl, headers);
+  } catch {
+    return null;
+  }
 }
+
+async function readCommitMessageOrNull(
+  fetchInstance: typeof globalThis.fetch,
+  repository: string,
+  sha: string,
+  headers: HeadersInit
+): Promise<string | null> {
+  try {
+    return await readDeploymentCommitMessage(
+      fetchInstance,
+      repository,
+      sha,
+      headers
+    );
+  } catch {
+    // Commit enrichment is optional; retain the deployment with a fallback summary.
+    return null;
+  }
+}
+
+type SelectedDeployment = Readonly<{
+  deployment: GithubDeployment;
+  status: GithubDeploymentStatus;
+}>;
 
 async function loadForEnvironment(
   repository: string,
@@ -220,7 +252,7 @@ async function loadForEnvironment(
   fetchInstance: typeof globalThis.fetch,
   headers: HeadersInit
 ): Promise<readonly ChangeLogEnvironment[]> {
-  const entries = new Map<string, ChangeLogEnvironment>();
+  const selected = new Map<string, SelectedDeployment>();
   const pageSize = Math.min(100, maxDeploymentsPerEnvironment);
   for (let page = 1; ; page += 1) {
     const deployments = await fetchJson<GithubDeployment[]>(
@@ -230,69 +262,95 @@ async function loadForEnvironment(
     );
     if (!Array.isArray(deployments)) break;
 
-    const sortedByCreated = [...deployments].sort(compareDeployments);
-    for (const deployment of sortedByCreated) {
-      if (entries.size >= maxEntries) break;
-      if (!deployment?.sha || !deployment.statuses_url) continue;
-
-      let status: GithubDeploymentStatus | null;
-      try {
-        status = await readDeploymentStatus(
-          fetchInstance,
-          deployment.statuses_url,
-          headers
-        );
-      } catch {
-        continue;
-      }
-      if (!status) continue;
-
-      const commitSha = deployment.sha;
-      if (uniqueEntryKey(entries, commitSha)) continue;
-
-      let commitMessage: string | null = null;
-      try {
-        commitMessage = await readDeploymentCommitMessage(
-          fetchInstance,
-          repository,
-          commitSha,
-          headers
-        );
-      } catch {
-        // Commit enrichment is optional; retain the deployment with a fallback summary.
-      }
-
-      const summary = commitMessage
-        ? buildSummary(commitMessage)
-        : `Deploy ${environment}`;
-      const links = commitMessage
-        ? normalizeReferences(commitMessage)
-            .slice(0, 4)
-            .map((number) => ({
-              number: Number(number),
-              href: safeLink(repository, number),
-              label: `#${number}`
-            }))
-        : [];
-      const deployedAt = parseDate(
-        status.created_at,
-        parseDate(deployment.created_at, 0).valueOf()
+    const candidates = [...deployments]
+      .sort(compareDeployments)
+      .filter((deployment) => deployment?.sha && deployment.statuses_url);
+    // Statuses are read a batch at a time, newest first, so selection stays in
+    // order and stops within one batch of the cap instead of reading the page.
+    for (
+      let offset = 0;
+      offset < candidates.length && selected.size < maxEntries;
+      offset += githubReadConcurrency
+    ) {
+      const batch = candidates.slice(offset, offset + githubReadConcurrency);
+      const statuses = await Promise.all(
+        batch.map((deployment) =>
+          readStatusOrNull(fetchInstance, deployment.statuses_url, headers)
+        )
       );
-      entries.set(commitSha, {
-        id: deployment.id,
-        createdAt: deployedAt,
-        environment,
-        commit: commitSha,
-        summary,
-        links,
-        commitUrl: `https://github.com/${repository}/commit/${commitSha}`
+      batch.forEach((deployment, index) => {
+        const status = statuses[index];
+        if (!status || selected.size >= maxEntries) return;
+        if (selected.has(deployment.sha)) return;
+        selected.set(deployment.sha, { deployment, status });
       });
     }
 
-    if (entries.size >= maxEntries || deployments.length < pageSize) break;
+    if (selected.size >= maxEntries || deployments.length < pageSize) break;
   }
 
-  return [...entries.values()].sort(compareEntries);
+  const chosen = [...selected.values()];
+  const messages: (string | null)[] = [];
+  for (
+    let offset = 0;
+    offset < chosen.length;
+    offset += githubReadConcurrency
+  ) {
+    const batch = chosen.slice(offset, offset + githubReadConcurrency);
+    messages.push(
+      ...(await Promise.all(
+        batch.map(({ deployment }) =>
+          readCommitMessageOrNull(
+            fetchInstance,
+            repository,
+            deployment.sha,
+            headers
+          )
+        )
+      ))
+    );
+  }
+
+  return chosen
+    .map(({ deployment, status }, index) =>
+      toEntry(repository, environment, deployment, status, messages[index])
+    )
+    .sort(compareEntries);
+}
+
+function toEntry(
+  repository: string,
+  environment: string,
+  deployment: GithubDeployment,
+  status: GithubDeploymentStatus,
+  commitMessage: string | null
+): ChangeLogEnvironment {
+  const commitSha = deployment.sha;
+  const summary = commitMessage
+    ? buildSummary(commitMessage)
+    : `Deploy ${environment}`;
+  const links = commitMessage
+    ? normalizeReferences(commitMessage)
+        .slice(0, 4)
+        .map((number) => ({
+          number: Number(number),
+          href: safeLink(repository, number),
+          label: `#${number}`
+        }))
+    : [];
+  const deployedAt = parseDate(
+    status.created_at,
+    parseDate(deployment.created_at, 0).valueOf()
+  );
+  return {
+    id: deployment.id,
+    createdAt: deployedAt,
+    environment,
+    commit: commitSha,
+    summary,
+    links,
+    commitUrl: `https://github.com/${repository}/commit/${commitSha}`
+  };
 }
 
 function compareDeployments(
@@ -374,3 +432,47 @@ export async function loadDeploymentChangelog(
     };
   }
 }
+
+type ChangelogCacheOptions = Readonly<{
+  ttlMs: number;
+  unavailableTtlMs: number;
+  now?: () => number;
+}>;
+
+/**
+ * Wraps a changelog loader so repeated page views reuse one result for the TTL
+ * and concurrent views share a single in-flight load. An unavailable result is
+ * kept only briefly, so a GitHub outage recovers quickly without every view
+ * retrying it.
+ */
+export function createChangelogCache(
+  load: () => Promise<ChangelogResult>,
+  { ttlMs, unavailableTtlMs, now = Date.now }: ChangelogCacheOptions
+): () => Promise<ChangelogResult> {
+  let pending: Promise<ChangelogResult> | null = null;
+  let expiresAt = 0;
+  return () => {
+    if (pending && now() < expiresAt) return pending;
+    const current = load().then(
+      (result) => {
+        if (pending === current) {
+          expiresAt =
+            now() + (result.kind === "available" ? ttlMs : unavailableTtlMs);
+        }
+        return result;
+      },
+      (error: unknown) => {
+        if (pending === current) pending = null;
+        throw error;
+      }
+    );
+    pending = current;
+    expiresAt = Number.POSITIVE_INFINITY;
+    return current;
+  };
+}
+
+export const loadCachedDeploymentChangelog = createChangelogCache(
+  () => loadDeploymentChangelog(),
+  { ttlMs: 5 * 60_000, unavailableTtlMs: 30_000 }
+);

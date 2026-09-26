@@ -65,3 +65,26 @@ it("directs a required password change to its own form", async () => {
   await user.click(screen.getByRole("button", { name: "Sign in" }));
   expect(router.replace).toHaveBeenCalledWith("/account/change-password");
 });
+
+it("moves focus to the failure alert even when a frame paints before it renders", async () => {
+  // A loaded browser can run the next frame before React commits the failed
+  // attempt, so focus must follow the alert's render rather than a frame.
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 0;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(new Response(null, { status: 401 }))
+  );
+  const user = userEvent.setup();
+  render(<OperatorLoginForm />);
+  await user.type(screen.getByLabelText("Email address"), "ryan@example.test");
+  await user.type(screen.getByLabelText("Password"), "abcdef");
+  await user.click(screen.getByRole("button", { name: "Sign in" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(
+    "Sign in failed. Check your email and password."
+  );
+  expect(alert).toHaveFocus();
+});
