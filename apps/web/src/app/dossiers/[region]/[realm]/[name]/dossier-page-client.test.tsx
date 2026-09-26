@@ -306,7 +306,9 @@ describe("DossierPageClient live evidence", () => {
     let reads = 0;
     const fetchMock = vi.fn((input: string) => {
       if (input.endsWith("/refresh"))
-        return Promise.resolve(Response.json({ mode: "light" }));
+        return Promise.resolve(
+          Response.json({ mode: "light", lastCollectedAt: null })
+        );
       reads += 1;
       return Promise.resolve(
         reads === 1
@@ -742,7 +744,9 @@ describe("DossierPageClient live evidence", () => {
       "fetch",
       vi.fn((input: string) => {
         if (input.endsWith("/refresh")) {
-          return Promise.resolve(Response.json({ mode: "full" }));
+          return Promise.resolve(
+            Response.json({ mode: "full", lastCollectedAt: null })
+          );
         }
         reads += 1;
         if (reads === 3) return secondCompletion;
@@ -1965,7 +1969,9 @@ describe("DossierPageClient saved credentials", () => {
       if (input === "/api/account/session")
         return Promise.resolve(Response.json({ account: null }));
       if (input === `${dossierPath}/refresh`)
-        return Promise.resolve(Response.json({ mode: "full" }));
+        return Promise.resolve(
+          Response.json({ mode: "full", lastCollectedAt: null })
+        );
       if (input === dossierPath)
         return Promise.resolve(
           Response.json(withEvidenceState(expanded, "complete"))

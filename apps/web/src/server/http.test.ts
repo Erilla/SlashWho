@@ -7,7 +7,6 @@ import { dossierStartResponseSchema } from "@slashwho/contracts";
 
 import {
   jsonNoStore,
-  parseCharacterRoute,
   resolveCharacterRoute,
   startResultResponse,
   withHttpRequest
@@ -119,21 +118,6 @@ describe("startResultResponse", () => {
       code: "suppressed_character"
     });
     expect(await errorCode(response)).toBe("suppressed_character");
-  });
-});
-
-describe("character route parsing", () => {
-  it("accepts a percent-encoded Unicode name from the page route", () => {
-    expect(
-      parseCharacterRoute({
-        region: "eu",
-        realm: "silvermoon",
-        name: "eldr%C3%ADtch"
-      })
-    ).toEqual({
-      key: { region: "eu", realm: "silvermoon", name: "eldrítch" },
-      canonical: true
-    });
   });
 });
 

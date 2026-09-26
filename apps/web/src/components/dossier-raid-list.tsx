@@ -10,6 +10,7 @@ import {
   type EvidenceFilter,
   type VisibleBoss
 } from "../lib/character-visibility";
+import { formatUtcDate } from "../lib/date-format";
 import { reportKey, sortWipes } from "../lib/dossier-wipes";
 import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
@@ -280,12 +281,6 @@ function displayGuild(guild: KillBoss["firstKill"]["guild"]) {
   return guild ? `${guild.name} · ${guild.realm}` : "—";
 }
 
-function displayDate(isoDate: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeZone: "UTC"
-  }).format(new Date(isoDate));
-}
 function StatusIcon({ state }: { state: "kill" | "wipe" | "no_logs" }) {
   const label =
     state === "kill"
@@ -342,7 +337,7 @@ function WipeEvidenceList({
               <dt>Wipe</dt>
               <dd>
                 <time dateTime={wipe.attemptedAt}>
-                  {displayDate(wipe.attemptedAt)}
+                  {formatUtcDate(wipe.attemptedAt)}
                 </time>
               </dd>
             </div>
@@ -503,7 +498,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
             <span>{boss.bossName}</span>
           </h4>
           <p className="dossier-boss-first-kill">
-            First kill: {displayDate(firstKill.killedAt)} ·{" "}
+            First kill: {formatUtcDate(firstKill.killedAt)} ·{" "}
             <DossierCharacterNames characters={firstKill.characters} />
           </p>
           <p className="dossier-boss-rank">
@@ -540,7 +535,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                       <dt>{isChronologicalFirst ? "First kill" : "Kill"}</dt>
                       <dd>
                         <time dateTime={evidence.killedAt}>
-                          {displayDate(evidence.killedAt)}
+                          {formatUtcDate(evidence.killedAt)}
                         </time>
                       </dd>
                     </div>
@@ -626,7 +621,7 @@ function BossEvidence({
                 <span>{boss.bossName}</span>
               </h4>
               <p className="dossier-boss-first-kill">
-                Wipe found: {displayDate(boss.wipe.attemptedAt)} ·{" "}
+                Wipe found: {formatUtcDate(boss.wipe.attemptedAt)} ·{" "}
                 <DossierCharacterNames characters={boss.wipe.characters} />
               </p>
             </div>

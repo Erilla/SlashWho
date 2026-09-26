@@ -4,6 +4,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createBackoff,
   type PollReadResult,
   retryAfterMilliseconds,
   useAuthoritativePoll
@@ -336,5 +337,12 @@ describe("useAuthoritativePoll", () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
     expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createBackoff", () => {
+  it("walks the schedule and holds at its last delay", () => {
+    const backoff = createBackoff([1, 2, 3]);
+    expect([1, 2, 3, 4, 5].map(() => backoff.next())).toEqual([1, 2, 3, 3, 3]);
   });
 });

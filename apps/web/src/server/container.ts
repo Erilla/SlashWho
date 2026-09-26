@@ -1,7 +1,7 @@
 import {
   createApplicantDossierService,
   createSearchService,
-  upstreamThrottleRecord,
+  throttleReporter,
   type ApplicantDossierService,
   type ApplicationConfig,
   type SearchService
@@ -163,8 +163,7 @@ export async function createWebContainer(
       baseUrl: config.dossier.raiderIoBaseUrl,
       timeoutMs: config.dossier.raiderIoTimeoutMs,
       accessKey: config.dossier.raiderIoAccessKey,
-      onThrottle: (event) =>
-        webLogger.info(upstreamThrottleRecord("raiderio", event))
+      onThrottle: throttleReporter(webLogger, "raiderio")
     });
     const searches = dependencies.createSearchService({
       repositories,
@@ -180,8 +179,7 @@ export async function createWebContainer(
         fetch: globalThis.fetch,
         clientId: config.dossier.blizzardClientId,
         clientSecret: config.dossier.blizzardClientSecret,
-        onThrottle: (event) =>
-          webLogger.info(upstreamThrottleRecord("blizzard", event))
+        onThrottle: throttleReporter(webLogger, "blizzard")
       }),
       raiderio,
       config: config.application,
@@ -197,8 +195,7 @@ export async function createWebContainer(
         createWarcraftLogsGateway({
           fetch: globalThis.fetch,
           ...credentials,
-          onThrottle: (event) =>
-            webLogger.info(upstreamThrottleRecord("warcraftlogs", event))
+          onThrottle: throttleReporter(webLogger, "warcraftlogs")
         })
     });
     return {

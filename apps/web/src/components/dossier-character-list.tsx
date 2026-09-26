@@ -1,4 +1,5 @@
 import type { DossierCharacter } from "@slashwho/contracts";
+import { canonicalCharacterId } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
 import type { CharacterVisibilityControls } from "../lib/use-character-visibility";
@@ -31,14 +32,7 @@ type DossierCharacterListProps = Readonly<{
 }>;
 
 function isRoot(character: DossierCharacter, root: DossierCharacter["key"]) {
-  return (
-    character.key.region.toLocaleLowerCase("en-US") ===
-      root.region.toLocaleLowerCase("en-US") &&
-    character.key.realm.toLocaleLowerCase("en-US") ===
-      root.realm.toLocaleLowerCase("en-US") &&
-    character.key.name.toLocaleLowerCase("en-US") ===
-      root.name.toLocaleLowerCase("en-US")
-  );
+  return canonicalCharacterId(character.key) === canonicalCharacterId(root);
 }
 
 const sourceLabel: Record<DossierCharacter["source"], string> = {

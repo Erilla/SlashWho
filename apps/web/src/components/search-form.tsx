@@ -1,13 +1,13 @@
 "use client";
 
-import {
-  dossierStartResponseSchema,
-  safeApiErrorSchema
-} from "@slashwho/contracts";
+import { dossierStartResponseSchema } from "@slashwho/contracts";
 import { parseApplicantCharacterUrl } from "@slashwho/domain";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { dossierStartApiPath } from "../lib/dossier-api";
+import { dossierPath, warcraftLogsCharacterUrl } from "../lib/dossier-path";
+import { refusalMessage } from "../lib/refusal-message";
 import {
   CharacterIdentityFields,
   emptyCharacterIdentity,
@@ -16,18 +16,6 @@ import {
 
 const invalidStructuredUrlMessage =
   "Enter a valid character URL, or character name, realm, and region.";
-
-function errorMessage(response: Response, body: unknown): string {
-  const parsed = safeApiErrorSchema.safeParse(body);
-  if (response.status === 429) {
-    const retryAfter = response.headers.get("retry-after");
-    return retryAfter && /^\d+$/.test(retryAfter)
-      ? `Too many searches. Try again in ${retryAfter} seconds.`
-      : "Too many searches. Please try again shortly.";
-  }
-  if (parsed.success) return parsed.data.error.message;
-  return "The search could not be started. Please try again.";
-}
 
 export function SearchForm() {
   const router = useRouter();
@@ -54,7 +42,7 @@ export function SearchForm() {
     } catch {
       try {
         identity = parseApplicantCharacterUrl(
-          `https://www.warcraftlogs.com/character/${region}/${encodeURIComponent(realm)}/${encodeURIComponent(name)}`
+          warcraftLogsCharacterUrl({ region, realm, name })
         );
       } catch {
         setError(invalidStructuredUrlMessage);
@@ -62,18 +50,25 @@ export function SearchForm() {
       }
     }
 
-    const canonicalCharacterUrl = `https://www.warcraftlogs.com/character/${identity.region}/${identity.realm}/${identity.name}`;
+    const canonicalCharacterUrl = warcraftLogsCharacterUrl(identity);
 
     setPending(true);
     try {
-      const response = await fetch("/api/dossiers", {
+      const response = await fetch(dossierStartApiPath, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ characterUrl: canonicalCharacterUrl })
       });
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        setError(errorMessage(response, body));
+        setError(
+          refusalMessage(
+            response,
+            body,
+            "The search could not be started. Please try again.",
+            "searches"
+          )
+        );
         return;
       }
       const parsed = dossierStartResponseSchema.safeParse(body);
@@ -85,14 +80,12 @@ export function SearchForm() {
       }
       if (parsed.data.kind === "job") {
         router.push(
-          `/dossiers/${identity.region}/${identity.realm}/${identity.name}?job=${parsed.data.jobId}`
+          `${dossierPath(identity)}?job=${encodeURIComponent(parsed.data.jobId)}`
         );
         resetFields();
         return;
       }
-      router.push(
-        `/dossiers/${identity.region}/${identity.realm}/${identity.name}`
-      );
+      router.push(dossierPath(identity));
       resetFields();
     } catch {
       setError(

@@ -14,6 +14,7 @@ import {
   useState
 } from "react";
 
+import { formatUtcDate } from "../lib/date-format";
 import type { EvidenceFilter } from "../lib/character-visibility";
 import { DossierCharacterLabels } from "./dossier-character-name";
 import {
@@ -57,13 +58,8 @@ const GUILD_COLOURS = [
   "#5fa33a"
 ];
 
-const dateFormat = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeZone: "UTC"
-});
-
 function formatDay(date: string): string {
-  return dateFormat.format(new Date(`${date}T00:00:00.000Z`));
+  return formatUtcDate(`${date}T00:00:00.000Z`);
 }
 
 function plural(count: number, one: string, many = `${one}s`): string {

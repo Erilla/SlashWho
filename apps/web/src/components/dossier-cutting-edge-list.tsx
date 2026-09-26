@@ -2,6 +2,7 @@ import type { ApplicantDossier } from "@slashwho/contracts";
 import { buildCuttingEdgeSequence } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
+import { formatUtcDate } from "../lib/date-format";
 import { DossierMediaFallback } from "./dossier-media-fallback";
 
 type DossierCuttingEdgeListProps = Readonly<{
@@ -118,10 +119,7 @@ export function DossierCuttingEdgeList({
                     <p>
                       Achieved:{" "}
                       <time dateTime={entry.achievement.completedAt}>
-                        {new Intl.DateTimeFormat("en-GB", {
-                          dateStyle: "medium",
-                          timeZone: "UTC"
-                        }).format(new Date(entry.achievement.completedAt))}
+                        {formatUtcDate(entry.achievement.completedAt)}
                       </time>
                     </p>
                   </>

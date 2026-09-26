@@ -1,3 +1,4 @@
+import { createAllowlistLogger } from "@slashwho/application";
 import pino, { type DestinationStream, type Logger } from "pino";
 
 // This Set is the sole control keeping character names, realms, URLs,
@@ -68,38 +69,15 @@ const allowlist = new Set([
 // survives serialization, without the test's own list drifting from this
 // allowlist (a typo here or there would otherwise pass silently). Typed as
 // `ReadonlySet` -- not just a runtime freeze -- so an attempted mutation
-// from outside this module is a compile error; `allowlistedLog` below reads
-// from the same underlying `allowlist` instance, so there is only ever one
-// source of truth.
+// from outside this module is a compile error; the logger below reads from
+// the same underlying `allowlist` instance, so there is only ever one source
+// of truth.
 export const allowedFields: ReadonlySet<string> = allowlist;
 
-function allowlistedLog(
-  value: Record<string, unknown>
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(value).filter(([key]) => allowlist.has(key))
-  );
-}
-
 export function createWebLogger(destination?: DestinationStream): Logger {
-  const options = {
-    base: undefined,
-    formatters: { log: allowlistedLog },
-    redact: {
-      paths: [
-        "authorization",
-        "cookie",
-        "request.body",
-        "response.body",
-        "battleTag",
-        "discordProfile",
-        "profileGuess",
-        "rawUpstreamBody"
-      ],
-      censor: "[Redacted]"
-    }
-  };
-  return destination ? pino(options, destination) : pino(options);
+  // No redaction paths: every one named a field outside the allowlist, which
+  // is already dropped before a path could apply.
+  return createAllowlistLogger(allowlist, destination);
 }
 
 export const webLogger =

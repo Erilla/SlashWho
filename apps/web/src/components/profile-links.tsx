@@ -1,5 +1,10 @@
 import type { CharacterKey } from "@slashwho/contracts";
 
+import {
+  characterPathSegments,
+  raiderIoCharacterUrl,
+  warcraftLogsCharacterUrl
+} from "../lib/dossier-path";
 import { UpstreamIconLink } from "./upstream-icon-link";
 
 type ProfileCharacter = Readonly<{
@@ -13,24 +18,19 @@ type ProfileGuild = Readonly<{
   realm: string;
 }>;
 
-function segment(value: string): string {
-  return encodeURIComponent(value);
-}
-
 export function CharacterProfileLinks({
   character
 }: Readonly<{ character: ProfileCharacter }>) {
   const { key, displayName } = character;
-  const path = `${segment(key.region)}/${segment(key.realm)}/${segment(key.name)}`;
   return (
     <span className="profile-links">
       <UpstreamIconLink
-        href={`https://raider.io/characters/${path}`}
+        href={raiderIoCharacterUrl(key)}
         label={`View ${displayName} on Raider.IO`}
         source="raiderio"
       />
       <UpstreamIconLink
-        href={`https://www.warcraftlogs.com/character/${path}`}
+        href={warcraftLogsCharacterUrl(key)}
         label={`View ${displayName} on Warcraft Logs`}
         source="warcraft_logs"
       />
@@ -41,7 +41,8 @@ export function CharacterProfileLinks({
 export function GuildProfileLinks({
   guild
 }: Readonly<{ guild: ProfileGuild }>) {
-  const path = `${segment(guild.region)}/${segment(guild.realm)}/${segment(guild.name)}`;
+  // A guild's path has a character's shape: region, realm, then its name.
+  const path = characterPathSegments(guild);
   return (
     <span className="profile-links">
       <UpstreamIconLink

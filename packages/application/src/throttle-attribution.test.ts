@@ -5,6 +5,7 @@ import {
   attributeThrottlesTo,
   bindThrottleScope,
   throttleFields,
+  throttleReporter,
   upstreamThrottleRecord,
   type ThrottleUnit
 } from "./throttle-attribution";
@@ -139,5 +140,44 @@ describe("throttle attribution", () => {
     expect(Object.keys(scope.totals()).sort()).toEqual(
       [...throttleFields].sort()
     );
+  });
+});
+
+describe("throttleReporter", () => {
+  it("logs each throttle as its record and counts it on the unit", async () => {
+    const records: Record<string, unknown>[] = [];
+    const report = throttleReporter(
+      { info: (record) => records.push(record) },
+      "blizzard"
+    );
+    const scope = createMeasurementScope(() => 0);
+
+    await asUnit({ runId: "run-1" }, scope, async () => {
+      report({ retryAfterMs: 250 });
+    });
+
+    expect(records).toEqual([
+      {
+        event: "upstream_throttle",
+        provider: "blizzard",
+        retryAfterMs: 250,
+        runId: "run-1"
+      }
+    ]);
+    expect(scope.totals()).toEqual({
+      blizzardThrottles: 1,
+      blizzardRetryAfterMaxMs: 250
+    });
+  });
+
+  it("still counts the throttle when there is no logger", async () => {
+    const report = throttleReporter(undefined, "raiderio");
+    const scope = createMeasurementScope(() => 0);
+
+    await asUnit({ runId: "run-1" }, scope, async () => {
+      report({ retryAfterMs: undefined });
+    });
+
+    expect(scope.totals()).toEqual({ raiderIoThrottles: 1 });
   });
 });

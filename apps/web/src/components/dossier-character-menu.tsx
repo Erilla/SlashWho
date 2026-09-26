@@ -4,6 +4,8 @@ import { safeApiErrorSchema, type DossierCharacter } from "@slashwho/contracts";
 import type { CharacterKey } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
+import { dossierApiPath } from "../lib/dossier-api";
+import { refusalMessage } from "../lib/refusal-message";
 import { closeDialog, openDialog, supportsModalDialog } from "./modal-dialog";
 import { HistoricAliasDialog } from "./historic-alias-dialog";
 
@@ -13,17 +15,6 @@ const failedMessage = "The character could not be updated.";
 
 type Status =
   Readonly<{ kind: "idle" }> | Readonly<{ kind: "error"; message: string }>;
-
-function refusalMessage(response: Response, body: unknown): string {
-  const parsed = safeApiErrorSchema.safeParse(body);
-  if (response.status === 429) {
-    const retryAfter = response.headers.get("retry-after");
-    return retryAfter && /^\d+$/.test(retryAfter)
-      ? `Too many requests. Try again in ${retryAfter} seconds.`
-      : "Too many requests. Please try again shortly.";
-  }
-  return parsed.success ? parsed.data.error.message : failedMessage;
-}
 
 /** What a row action did, so the dossier can announce it in its own words. */
 export type ConnectedCharacterChange = Readonly<{
@@ -105,18 +96,15 @@ export function DossierCharacterMenu({
     setPending(true);
     setStatus({ kind: "idle" });
     try {
-      const response = await fetch(
-        `/api/dossiers/${root.region}/${root.realm}/${root.name}/historic-aliases`,
-        {
-          method: "DELETE",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            character: character.key,
-            name: alias.name,
-            realm: alias.realm
-          })
-        }
-      );
+      const response = await fetch(dossierApiPath(root, "historic-aliases"), {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          character: character.key,
+          name: alias.name,
+          realm: alias.realm
+        })
+      });
       if (!response.ok) {
         const parsed = safeApiErrorSchema.safeParse(
           await response.json().catch(() => null)
@@ -149,7 +137,7 @@ export function DossierCharacterMenu({
     setStatus({ kind: "idle" });
     try {
       const response = await fetch(
-        `/api/dossiers/${root.region}/${root.realm}/${root.name}/connected-characters`,
+        dossierApiPath(root, "connected-characters"),
         {
           method,
           headers: { "content-type": "application/json" },
@@ -160,7 +148,7 @@ export function DossierCharacterMenu({
       if (!response.ok) {
         setStatus({
           kind: "error",
-          message: refusalMessage(response, responseBody)
+          message: refusalMessage(response, responseBody, failedMessage)
         });
         return;
       }

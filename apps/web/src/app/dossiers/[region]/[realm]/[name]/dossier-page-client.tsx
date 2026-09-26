@@ -2,21 +2,33 @@
 
 import {
   applicantDossierSchema,
-  dossierStartResponseSchema,
+  dossierRefreshResponseSchema,
   dossierResearchStatusSchema,
+  dossierStartResponseSchema,
+  dossierTierSearchResponseSchema,
   safeApiErrorSchema,
   type ApplicantDossier,
-  type CharacterKey,
-  type DossierTierSearchResponse
+  type CharacterKey
 } from "@slashwho/contracts";
-import { formatCharacterDisplayName } from "@slashwho/domain";
+import {
+  canonicalCharacterId,
+  formatCharacterDisplayName
+} from "@slashwho/domain";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { dossierFetch } from "../../../../../lib/dossier-fetch";
+import {
+  dossierApiPath,
+  dossierJobApiPath,
+  dossierStartApiPath,
+  fetchDossierApi,
+  type DossierApiResult
+} from "../../../../../lib/dossier-api";
+import { raiderIoCharacterUrl } from "../../../../../lib/dossier-path";
 import { evidenceFilter } from "../../../../../lib/character-visibility";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
+  createBackoff,
   type PollReadResult,
   retryAfterMilliseconds,
   useAuthoritativePoll
@@ -47,7 +59,12 @@ type DossierPageClientProps = Readonly<{
 }>;
 
 const activeJobStates = new Set(["queued", "running", "retrying"]);
-const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
+const researchingStatus = "Researching applicant dossier…";
+const unexpectedDossierMessage = "The dossier returned an unexpected response.";
+const unexpectedResearchMessage =
+  "The applicant research returned an unexpected response.";
+const unreachableDossierMessage =
+  "The dossier could not be loaded. Please check your connection.";
 
 function hasLiveEvidence(value: ApplicantDossier | null): boolean {
   return (
@@ -76,8 +93,16 @@ function hasLiveTierSearch(value: ApplicantDossier | null): boolean {
   );
 }
 
-function dossierCharacterKey(character: CharacterKey): string {
-  return `${character.region}:${character.realm}:${character.name}`;
+/** Whether the dossier is only the submitted character, with nothing linked. */
+function isRootOnly(value: ApplicantDossier | null): boolean {
+  return (
+    value?.characters.some((character) => character.source === "submitted") ??
+    false
+  );
+}
+
+function isAbortError(caught: unknown): boolean {
+  return caught instanceof Error && caught.name === "AbortError";
 }
 
 function evidenceStatesByCharacter(value: ApplicantDossier | null) {
@@ -85,7 +110,7 @@ function evidenceStatesByCharacter(value: ApplicantDossier | null) {
     (value?.characters ?? [])
       .filter((character) => !character.excluded)
       .map((character) => [
-        dossierCharacterKey(character.key),
+        canonicalCharacterId(character.key),
         { name: character.displayName, state: character.evidenceState }
       ])
   );
@@ -166,9 +191,7 @@ function DossierPageState({
   const [announcement, setAnnouncement] = useState("");
   const [pollUnavailable, setPollUnavailable] = useState(false);
   const [pollStopped, setPollStopped] = useState(false);
-  const terminalPollError = useRef(
-    "The dossier returned an unexpected response."
-  );
+  const terminalPollError = useRef(unexpectedDossierMessage);
   const previousDossier = useRef(initialDossier);
   const [researchFailed, setResearchFailed] = useState(false);
   const [identityHidden, setIdentityHidden] = useState(false);
@@ -178,7 +201,7 @@ function DossierPageState({
     initialDossier
       ? null
       : jobId
-        ? "Researching applicant dossier…"
+        ? researchingStatus
         : "Loading applicant dossier…"
   );
   const hasExpandedDossier = useRef(false);
@@ -195,55 +218,66 @@ function DossierPageState({
       setAnnouncement("");
     previousDossier.current = dossier;
   }, [dossier]);
-  const dossierPath = useMemo(
-    () => `/api/dossiers/${identity.region}/${identity.realm}/${identity.name}`,
-    [identity]
+  const dossierApi = useMemo(() => dossierApiPath(identity), [identity]);
+
+  /**
+   * Shows a dossier read in place of whatever was showing, and clears the
+   * errors an earlier read left. A read that took a sequence number claims it,
+   * so an older response still in flight cannot replace this one. `keepError`
+   * leaves a research error standing, for a read that only fills in the view
+   * while that research is still being followed.
+   */
+  const showDossier = useCallback(
+    (
+      value: ApplicantDossier,
+      {
+        sequence,
+        expanded = true,
+        keepError = false
+      }: Readonly<{
+        sequence?: number;
+        expanded?: boolean;
+        keepError?: boolean;
+      }> = {}
+    ) => {
+      if (sequence !== undefined) appliedSequence.current = sequence;
+      hasExpandedDossier.current = expanded;
+      setDossier(value);
+      setInitialError(null);
+      if (!keepError) setError(null);
+    },
+    []
   );
 
   // A manually connected character changes the dossier immediately, so read it
   // back rather than reloading the page and discarding the polls in flight.
   const refreshDossier = useCallback(async () => {
     const sequence = ++requestSequence.current;
-    const response = await dossierFetch(dossierPath, {
+    const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
       cache: "no-store"
     });
-    if (!response.ok) return;
-    const body: unknown = await response.json().catch(() => null);
-    if (sequence < appliedSequence.current) return;
-    const parsed = applicantDossierSchema.safeParse(body);
-    if (!parsed.success) return;
-    appliedSequence.current = sequence;
-    hasExpandedDossier.current = true;
-    setDossier(parsed.data);
-    setInitialError(null);
-    setError(null);
+    if (result.kind !== "ok" || sequence < appliedSequence.current) return;
+    showDossier(result.data, { sequence });
     setPollUnavailable(false);
     setPollStopped(false);
-  }, [dossierPath]);
+  }, [dossierApi, showDossier]);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    async function readJson(response: Response): Promise<unknown> {
-      return response.json().catch(() => null);
-    }
-
     async function readInitialDossier() {
-      const response = await dossierFetch(`${dossierPath}?scope=initial`, {
-        cache: "no-store",
-        signal: controller.signal
-      });
-      const body = await readJson(response);
+      const result = await fetchDossierApi(
+        `${dossierApi}?scope=initial`,
+        applicantDossierSchema,
+        { cache: "no-store", signal: controller.signal }
+      );
       if (controller.signal.aborted || hasExpandedDossier.current) return;
-      if (!response.ok) {
-        setInitialError(apiError(response, body));
-        return;
-      }
-      const parsed = applicantDossierSchema.safeParse(body);
-      if (!parsed.success) {
-        setInitialError("The dossier returned an unexpected response.");
+      if (result.kind === "refused") {
+        setInitialError(apiError(result.response, result.body));
+      } else if (result.kind === "unexpected") {
+        setInitialError(unexpectedDossierMessage);
       } else {
-        setDossier(parsed.data);
+        setDossier(result.data);
       }
     }
 
@@ -254,29 +288,24 @@ function DossierPageState({
     // initial view in place.
     async function readKnownDossier() {
       const sequence = ++requestSequence.current;
-      const response = await dossierFetch(dossierPath, {
+      const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
         cache: "no-store",
         signal: controller.signal
       });
-      if (!response.ok) return;
-      const body = await readJson(response);
-      if (controller.signal.aborted || sequence < appliedSequence.current)
+      if (
+        result.kind !== "ok" ||
+        controller.signal.aborted ||
+        sequence < appliedSequence.current
+      )
         return;
-      const parsed = applicantDossierSchema.safeParse(body);
-      if (!parsed.success) return;
-      appliedSequence.current = sequence;
-      hasExpandedDossier.current = true;
-      setDossier(parsed.data);
-      setInitialError(null);
+      showDossier(result.data, { sequence, keepError: true });
     }
 
     if (!initialDossier && activeJobId) {
       void readInitialDossier().catch((caught) => {
-        if (caught instanceof Error && caught.name === "AbortError") return;
+        if (isAbortError(caught)) return;
         if (controller.signal.aborted || hasExpandedDossier.current) return;
-        setInitialError(
-          "The dossier could not be loaded. Please check your connection."
-        );
+        setInitialError(unreachableDossierMessage);
       });
       // A direct visit reached its job through a full read already.
       if (!hasExpandedDossier.current)
@@ -284,79 +313,65 @@ function DossierPageState({
     }
 
     return () => controller.abort();
-  }, [activeJobId, dossierPath, initialDossier]);
+  }, [activeJobId, dossierApi, initialDossier, showDossier]);
 
   useEffect(() => {
     if (activeJobId || initialDossier) return;
 
     const controller = new AbortController();
 
-    async function readJson(response: Response): Promise<unknown> {
-      return response.json().catch(() => null);
-    }
-
     async function readCompletedDossier() {
       const sequence = ++requestSequence.current;
-      const response = await dossierFetch(dossierPath, {
+      const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
         cache: "no-store",
         signal: controller.signal
       });
-      const body = await readJson(response);
       if (controller.signal.aborted || sequence < appliedSequence.current)
         return;
-      if (!response.ok) {
-        setError(apiError(response, body));
-        setStatus(null);
-        return;
-      }
-      const parsed = applicantDossierSchema.safeParse(body);
-      if (!parsed.success) {
-        setError("The dossier returned an unexpected response.");
+      if (result.kind === "refused") {
+        setError(apiError(result.response, result.body));
+      } else if (result.kind === "unexpected") {
+        setError(unexpectedDossierMessage);
       } else {
-        appliedSequence.current = sequence;
-        hasExpandedDossier.current = true;
-        setDossier(parsed.data);
-        setInitialError(null);
-        setError(null);
+        showDossier(result.data, { sequence });
       }
       setStatus(null);
     }
 
     async function startResearch(researchRoot = identity) {
       try {
-        const response = await dossierFetch("/api/dossiers", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            characterUrl: `https://raider.io/characters/${researchRoot.region}/${researchRoot.realm}/${researchRoot.name}`
-          }),
-          cache: "no-store",
-          signal: controller.signal
-        });
-        const body = await readJson(response);
+        const result = await fetchDossierApi(
+          dossierStartApiPath,
+          dossierStartResponseSchema,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              characterUrl: raiderIoCharacterUrl(researchRoot)
+            }),
+            cache: "no-store",
+            signal: controller.signal
+          }
+        );
         if (controller.signal.aborted) return;
-        if (!response.ok) {
+        if (result.kind !== "ok") {
           setResearchFailed(true);
-          setError(apiError(response, body));
+          setError(
+            result.kind === "refused"
+              ? apiError(result.response, result.body)
+              : unexpectedResearchMessage
+          );
           setStatus(null);
           return;
         }
-        const parsed = dossierStartResponseSchema.safeParse(body);
-        if (!parsed.success) {
-          setResearchFailed(true);
-          setError("The applicant research returned an unexpected response.");
-          setStatus(null);
-          return;
-        }
-        if (parsed.data.kind === "job") {
-          setActiveJobId(parsed.data.jobId);
-          setStatus("Researching applicant dossier…");
+        if (result.data.kind === "job") {
+          setActiveJobId(result.data.jobId);
+          setStatus(researchingStatus);
           return;
         }
         await readCompletedDossier();
       } catch (caught) {
-        if (caught instanceof Error && caught.name === "AbortError") return;
-        if (controller.signal.aborted) return;
+        if (isAbortError(caught) || controller.signal.aborted) return;
         setResearchFailed(true);
         setError("The applicant research could not be started.");
         setStatus(null);
@@ -365,59 +380,50 @@ function DossierPageState({
 
     async function readCurrentOrStartResearch() {
       try {
-        const response = await dossierFetch(dossierPath, {
-          cache: "no-store",
-          signal: controller.signal
-        });
-        const body = await readJson(response);
-        if (controller.signal.aborted) return;
-        if (response.ok) {
-          const parsed = applicantDossierSchema.safeParse(body);
-          if (!parsed.success) {
-            setError("The dossier returned an unexpected response.");
-          } else {
-            const rootOnly = parsed.data.characters.some(
-              (character) => character.source === "submitted"
-            );
-            hasExpandedDossier.current = !rootOnly;
-            setDossier(parsed.data);
-            setInitialError(null);
-            setError(null);
-            if (
-              parsed.data.root.region !== identity.region ||
-              parsed.data.root.realm !== identity.realm ||
-              parsed.data.root.name !== identity.name
-            ) {
-              await startResearch(parsed.data.root);
-              return;
-            }
-            // A provisional list is another root's account shown under this
-            // character, so its own discovery still has to run.
-            if (rootOnly || parsed.data.research.state === "provisional") {
-              await startResearch();
-              return;
-            }
-          }
-          setStatus(null);
-          return;
-        }
-        const parsedError = safeApiErrorSchema.safeParse(body);
-        if (
-          response.status !== 409 ||
-          !parsedError.success ||
-          parsedError.data.error.code !== "discovery_not_ready"
-        ) {
-          setError(apiError(response, body));
-          setStatus(null);
-          return;
-        }
-        await startResearch();
-      } catch (caught) {
-        if (caught instanceof Error && caught.name === "AbortError") return;
-        if (controller.signal.aborted) return;
-        setError(
-          "The dossier could not be loaded. Please check your connection."
+        const result = await fetchDossierApi(
+          dossierApi,
+          applicantDossierSchema,
+          { cache: "no-store", signal: controller.signal }
         );
+        if (controller.signal.aborted) return;
+        if (result.kind === "unexpected") {
+          setError(unexpectedDossierMessage);
+          setStatus(null);
+          return;
+        }
+        if (result.kind === "refused") {
+          const parsedError = safeApiErrorSchema.safeParse(result.body);
+          if (
+            result.response.status !== 409 ||
+            !parsedError.success ||
+            parsedError.data.error.code !== "discovery_not_ready"
+          ) {
+            setError(apiError(result.response, result.body));
+            setStatus(null);
+            return;
+          }
+          await startResearch();
+          return;
+        }
+        const current = result.data;
+        const rootOnly = isRootOnly(current);
+        showDossier(current, { expanded: !rootOnly });
+        if (
+          canonicalCharacterId(current.root) !== canonicalCharacterId(identity)
+        ) {
+          await startResearch(current.root);
+          return;
+        }
+        // A provisional list is another root's account shown under this
+        // character, so its own discovery still has to run.
+        if (rootOnly || current.research.state === "provisional") {
+          await startResearch();
+          return;
+        }
+        setStatus(null);
+      } catch (caught) {
+        if (isAbortError(caught) || controller.signal.aborted) return;
+        setError(unreachableDossierMessage);
         setStatus(null);
       }
     }
@@ -425,98 +431,80 @@ function DossierPageState({
     void readCurrentOrStartResearch();
 
     return () => controller.abort();
-  }, [activeJobId, dossierPath, identity, initialDossier]);
+  }, [activeJobId, dossierApi, identity, initialDossier, showDossier]);
 
   useEffect(() => {
     if (!activeJobId) return;
 
+    const jobApi = dossierJobApiPath(activeJobId);
     const controller = new AbortController();
+    const backoff = createBackoff();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
-    let attempt = 0;
-
-    async function readJson(response: Response): Promise<unknown> {
-      return response.json().catch(() => null);
-    }
 
     function schedulePoll() {
-      const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
-      attempt += 1;
-      timeout = setTimeout(() => void pollJob(), delay);
+      timeout = setTimeout(() => void pollJob(), backoff.next());
     }
 
     async function readExpandedDossier() {
       const sequence = ++requestSequence.current;
-      const response = await dossierFetch(dossierPath, {
+      const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
         cache: "no-store",
         signal: controller.signal
       });
-      const body = await readJson(response);
       if (controller.signal.aborted || sequence < appliedSequence.current)
         return;
-      if (!response.ok) {
-        if (response.status === 409) {
-          setStatus("Researching applicant dossier…");
+      if (result.kind === "refused") {
+        if (result.response.status === 409) {
+          setStatus(researchingStatus);
           schedulePoll();
           return;
         }
         appliedSequence.current = sequence;
-        setError(apiError(response, body));
-        setStatus(null);
-        return;
-      }
-      const parsed = applicantDossierSchema.safeParse(body);
-      appliedSequence.current = sequence;
-      if (!parsed.success) {
-        setError("The dossier returned an unexpected response.");
+        setError(apiError(result.response, result.body));
+      } else if (result.kind === "unexpected") {
+        appliedSequence.current = sequence;
+        setError(unexpectedDossierMessage);
       } else {
-        hasExpandedDossier.current = true;
-        setDossier(parsed.data);
-        setInitialError(null);
-        setError(null);
+        showDossier(result.data, { sequence });
       }
       setStatus(null);
     }
 
     async function pollJob() {
       try {
-        const response = await dossierFetch(
-          `/api/dossiers/jobs/${activeJobId}`,
-          {
-            cache: "no-store",
-            signal: controller.signal
-          }
+        const result = await fetchDossierApi(
+          jobApi,
+          dossierResearchStatusSchema,
+          { cache: "no-store", signal: controller.signal }
         );
-        const body = await readJson(response);
         if (controller.signal.aborted) return;
-        if (!response.ok) {
-          setError(apiError(response, body));
+        if (result.kind !== "ok") {
+          setError(
+            result.kind === "refused"
+              ? apiError(result.response, result.body)
+              : unexpectedResearchMessage
+          );
           setStatus(null);
           return;
         }
-        const parsed = dossierResearchStatusSchema.safeParse(body);
-        if (!parsed.success) {
-          setError("The applicant research returned an unexpected response.");
-          setStatus(null);
-          return;
-        }
-        if (parsed.data.status === "complete") {
+        const job = result.data;
+        if (job.status === "complete") {
           await readExpandedDossier();
           return;
         }
-        if (parsed.data.status === "failed") {
+        if (job.status === "failed") {
           setResearchFailed(true);
           setError(
-            parsed.data.error?.message ??
+            job.error?.message ??
               "The applicant research could not be completed."
           );
           setStatus(null);
           return;
         }
-        if (activeJobStates.has(parsed.data.status)) schedulePoll();
+        if (activeJobStates.has(job.status)) schedulePoll();
       } catch (caught) {
-        if (caught instanceof Error && caught.name === "AbortError") return;
-        if (stopped) return;
+        if (isAbortError(caught) || stopped) return;
         setError("The applicant research status could not be loaded.");
         setStatus(null);
       }
@@ -529,7 +517,7 @@ function DossierPageState({
       controller.abort();
       if (timeout) clearTimeout(timeout);
     };
-  }, [activeJobId, dossierPath]);
+  }, [activeJobId, dossierApi, showDossier]);
 
   const readDossierPoll = useCallback(
     async (
@@ -538,9 +526,9 @@ function DossierPageState({
       PollReadResult<{ dossier: ApplicantDossier; sequence: number }>
     > => {
       const sequence = ++requestSequence.current;
-      let response: Response;
+      let result: DossierApiResult<ApplicantDossier>;
       try {
-        response = await dossierFetch(dossierPath, {
+        result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
           cache: "no-store",
           signal
         });
@@ -551,49 +539,35 @@ function DossierPageState({
       }
       if (signal.aborted || sequence < appliedSequence.current)
         return { kind: "retry" };
-      if (!response.ok) {
+      if (result.kind === "ok") {
+        return { kind: "snapshot", value: { dossier: result.data, sequence } };
+      }
+      if (result.kind === "refused") {
         setPollUnavailable(true);
-        if (response.status === 429) {
+        if (result.response.status === 429) {
           return {
             kind: "retry",
-            retryAfterMs: retryAfterMilliseconds(response)
+            retryAfterMs: retryAfterMilliseconds(result.response)
           };
         }
-        if (response.status >= 500) return { kind: "retry" };
-        const body: unknown = await response.json().catch(() => null);
-        if (signal.aborted || sequence < appliedSequence.current)
-          return { kind: "retry" };
-        terminalPollError.current = apiError(response, body);
-        appliedSequence.current = sequence;
-        return { kind: "terminal", response };
+        if (result.response.status >= 500) return { kind: "retry" };
+        terminalPollError.current = apiError(result.response, result.body);
+      } else {
+        terminalPollError.current = unexpectedDossierMessage;
       }
-      const body: unknown = await response.json().catch(() => null);
-      if (signal.aborted || sequence < appliedSequence.current)
-        return { kind: "retry" };
-      const parsed = applicantDossierSchema.safeParse(body);
-      if (!parsed.success) {
-        terminalPollError.current =
-          "The dossier returned an unexpected response.";
-        appliedSequence.current = sequence;
-      }
-      return parsed.success
-        ? { kind: "snapshot", value: { dossier: parsed.data, sequence } }
-        : { kind: "terminal", response };
+      appliedSequence.current = sequence;
+      return { kind: "terminal", response: result.response };
     },
-    [dossierPath]
+    [dossierApi]
   );
 
   const applyFreshDossier = useCallback(
     (snapshot: { dossier: ApplicantDossier; sequence: number }) => {
       if (snapshot.sequence < appliedSequence.current) return;
-      appliedSequence.current = snapshot.sequence;
-      hasExpandedDossier.current = true;
-      setDossier(snapshot.dossier);
-      setInitialError(null);
-      setError(null);
+      showDossier(snapshot.dossier, { sequence: snapshot.sequence });
       setPollUnavailable(false);
     },
-    []
+    [showDossier]
   );
 
   const applyDossierError = useCallback(() => {
@@ -614,16 +588,12 @@ function DossierPageState({
 
   const visibleError = error ?? initialError;
   const research = dossier?.research;
-  const rootOnly =
-    dossier?.characters.some((character) => character.source === "submitted") ??
-    false;
-  const rootDisplayName =
-    dossier?.characters.find(
-      (character) =>
-        character.key.region === identity.region &&
-        character.key.realm.toLowerCase() === identity.realm.toLowerCase() &&
-        character.key.name.toLowerCase() === identity.name.toLowerCase()
-    )?.displayName ?? identity.name;
+  const rootOnly = isRootOnly(dossier);
+  const rootCharacter = dossier?.characters.find(
+    (character) =>
+      canonicalCharacterId(character.key) === canonicalCharacterId(identity)
+  );
+  const rootDisplayName = rootCharacter?.displayName ?? identity.name;
   const visibleResearch =
     research && rootOnly && researchFailed
       ? {
@@ -649,12 +619,7 @@ function DossierPageState({
 
   // generateMetadata titles the tab from the route alone, because the guild is
   // only known once the dossier lands.
-  const rootGuild = dossier?.characters.find(
-    (character) =>
-      character.key.region === identity.region &&
-      character.key.realm.toLowerCase() === identity.realm.toLowerCase() &&
-      character.key.name.toLowerCase() === identity.name.toLowerCase()
-  )?.guild;
+  const rootGuild = rootCharacter?.guild;
   // The layout's "%s · Who" template applies to metadata, not to an assigned
   // title, so this carries the suffix itself.
   const guildTitle = rootGuild
@@ -741,16 +706,14 @@ function DossierPageState({
                 lastCollectedAt={dossier?.lastCollectedAt ?? null}
                 onRefresh={async () => {
                   setAnnouncement("");
-                  const response = await dossierFetch(
-                    `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
+                  const result = await fetchDossierApi(
+                    dossierApiPath(identity, "refresh"),
+                    dossierRefreshResponseSchema,
                     { method: "POST" }
                   );
-                  if (!response.ok) throw new Error("refresh_failed");
-                  const result = (await response.json()) as {
-                    mode: "full" | "light";
-                  };
+                  if (result.kind !== "ok") throw new Error("refresh_failed");
                   await refreshDossier();
-                  return result;
+                  return result.data;
                 }}
               />
             ) : null}
@@ -844,26 +807,23 @@ function DossierPageState({
                 {...(canAddCharacters
                   ? {
                       onSearchTier: async (raidId: string) => {
-                        const response = await dossierFetch(
-                          `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
-                          { method: "POST" }
-                        );
                         // 409 (busy, or nothing to search from) and 503 (no
                         // search could be queued) are answers, with each
                         // character's outcome; anything else unexpected is not.
-                        if (
-                          !response.ok &&
-                          response.status !== 409 &&
-                          response.status !== 503
-                        ) {
+                        const result = await fetchDossierApi(
+                          dossierApiPath(identity, "tiers", raidId, "search"),
+                          dossierTierSearchResponseSchema,
+                          { method: "POST" },
+                          { answers: [409, 503] }
+                        );
+                        if (result.kind !== "ok") {
                           throw new Error("tier_search_failed");
                         }
-                        const result =
-                          (await response.json()) as DossierTierSearchResponse;
                         // Re-read so the tier shows the search in flight and the
                         // page's polling follows it.
-                        if (result.state === "queued") await refreshDossier();
-                        return result;
+                        if (result.data.state === "queued")
+                          await refreshDossier();
+                        return result.data;
                       }
                     }
                   : {})}
