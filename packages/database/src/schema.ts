@@ -1116,7 +1116,21 @@ export const characterEvidenceRunCosts = pgTable(
     tierSearchGuilds: integer("tier_search_guilds"),
     tierSearchReportsHydrated: integer("tier_search_reports_hydrated"),
     tierSearchRecoveredKills: integer("tier_search_recovered_kills"),
-    tierSearchRecoveredWipes: integer("tier_search_recovered_wipes")
+    tierSearchRecoveredWipes: integer("tier_search_recovered_wipes"),
+    /**
+     * Where the attempt's time went, as the `evidence_job` line reports it
+     * (#502). Each is null when it was not measured, which is not a zero:
+     * `queue_wait_ms` on a job enqueued without a timestamp, a Warcraft Logs
+     * bucket on an attempt that never called it, every column on a row
+     * recorded before these existed.
+     */
+    durationMs: integer("duration_ms"),
+    queueWaitMs: integer("queue_wait_ms"),
+    warcraftLogsMs: integer("warcraft_logs_ms"),
+    warcraftLogsHistoricAliasMs: integer("warcraft_logs_historic_alias_ms"),
+    dbMs: integer("db_ms"),
+    /** The repository call that took longest, a static label from source. */
+    dbMaxCallName: text("db_max_call_name")
   },
   (table) => [
     primaryKey({

@@ -6832,6 +6832,76 @@ describe("PostgreSQL repositories", () => {
       });
     });
 
+    it("records where the attempt's time went", async () => {
+      const runId = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(runId, {
+          timings: {
+            durationMs: 41_250,
+            queueWaitMs: 0,
+            warcraftLogsMs: 38_900,
+            warcraftLogsHistoricAliasMs: 1_200,
+            dbMs: 310,
+            dbMaxCallName: "evidence.publish"
+          }
+        })
+      );
+
+      const [row] = await rows();
+      expect(row).toMatchObject({
+        duration_ms: 41_250,
+        // Zero is a measured wait that was nothing, not an unmeasured one.
+        queue_wait_ms: 0,
+        warcraft_logs_ms: 38_900,
+        warcraft_logs_historic_alias_ms: 1_200,
+        db_ms: 310,
+        db_max_call_name: "evidence.publish"
+      });
+    });
+
+    it("keeps an unmeasured timing null rather than zero", async () => {
+      // A job enqueued without a timestamp, or a bucket the attempt never
+      // entered, was not measured. Averaging it in as zero would make runs
+      // look faster than any of them were.
+      const unmeasured = await reserveRun(rootKey, new Date());
+      await repositories.evidence.recordRunCost(cost(unmeasured));
+      await pool.query(
+        `UPDATE character_evidence_runs SET status = 'failed' WHERE id = $1`,
+        [unmeasured]
+      );
+      const partial = await reserveRun(rootKey, new Date());
+      await repositories.evidence.recordRunCost(
+        cost(partial, {
+          timings: {
+            durationMs: 900,
+            queueWaitMs: null,
+            warcraftLogsMs: null,
+            warcraftLogsHistoricAliasMs: null,
+            dbMs: 12,
+            dbMaxCallName: null
+          }
+        })
+      );
+
+      const recorded = await rows();
+      expect(recorded.find((row) => row.run_id === unmeasured)).toMatchObject({
+        duration_ms: null,
+        queue_wait_ms: null,
+        warcraft_logs_ms: null,
+        warcraft_logs_historic_alias_ms: null,
+        db_ms: null,
+        db_max_call_name: null
+      });
+      expect(recorded.find((row) => row.run_id === partial)).toMatchObject({
+        duration_ms: 900,
+        queue_wait_ms: null,
+        warcraft_logs_ms: null,
+        db_ms: 12,
+        db_max_call_name: null
+      });
+    });
+
     it("keeps a recovery step that did not run null rather than zero", async () => {
       // Raider.IO not asked is not Raider.IO asked and answering with nothing
       // to search, and no attendance search is not one that recovered
@@ -6959,7 +7029,19 @@ describe("PostgreSQL repositories", () => {
     it("drops rows older than the retention cutoff and keeps the rest", async () => {
       const oldRun = await reserveRun(rootKey, new Date());
       const freshRun = await reserveRun(altKey, new Date());
-      await repositories.evidence.recordRunCost(cost(oldRun));
+      // With timings, so the sweep is seen to take them too (#502).
+      await repositories.evidence.recordRunCost(
+        cost(oldRun, {
+          timings: {
+            durationMs: 1_000,
+            queueWaitMs: 50,
+            warcraftLogsMs: 800,
+            warcraftLogsHistoricAliasMs: null,
+            dbMs: 40,
+            dbMaxCallName: "evidence.publish"
+          }
+        })
+      );
       await repositories.evidence.recordRunCost(cost(freshRun));
       await pool.query(
         `UPDATE character_evidence_run_costs SET recorded_at = $2
@@ -6988,8 +7070,43 @@ describe("PostgreSQL repositories", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the five queries the document describes", () => {
-        expect(queries).toHaveLength(5);
+      it("finds exactly the six queries the document describes", () => {
+        expect(queries).toHaveLength(6);
+      });
+
+      it("reports where a run's time goes, apart from rows nothing timed", async () => {
+        const untimed = await reserveRun(rootKey, new Date());
+        const quick = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(cost(untimed));
+        await repositories.evidence.recordRunCost(
+          cost(quick, {
+            timings: {
+              durationMs: 2_000,
+              queueWaitMs: 100,
+              warcraftLogsMs: 1_500,
+              warcraftLogsHistoricAliasMs: null,
+              dbMs: 60,
+              dbMaxCallName: "evidence.publish"
+            }
+          })
+        );
+
+        const result = await pool.query(queries[5] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            mode: "full",
+            attempts: "2",
+            measured: "1",
+            // Over the timed row alone: the untimed one is not a zero.
+            duration_p50_ms: "2000",
+            duration_p95_ms: "2000",
+            duration_max_ms: 2_000,
+            queue_wait_p95_ms: "100",
+            mean_warcraft_logs_ms: "1500",
+            mean_db_ms: "60"
+          })
+        ]);
       });
 
       it("reports what Raider.IO and Blizzard cost, apart from rows nothing counted", async () => {
