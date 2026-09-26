@@ -507,7 +507,8 @@ export function createRaiderIoClient(
             kills: await request(
               url,
               normalizeHistoricRaidProgress,
-              options.signal
+              options.signal,
+              options.onPhysicalRequest
             )
           };
         } catch (error) {

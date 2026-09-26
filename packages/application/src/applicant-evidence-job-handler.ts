@@ -1495,7 +1495,9 @@ export function createApplicantEvidenceJobHandler(
                   {
                     storedKills: storedEvidence.kills,
                     ...(killScanFloor ? { killScanFloor } : {}),
-                    signal: activeContext.signal
+                    signal: activeContext.signal,
+                    onPhysicalRequest: () =>
+                      scope.increment("raiderIoHistoricRequests")
                   }
                 )
               )
@@ -2018,7 +2020,8 @@ export function createApplicantEvidenceJobHandler(
                         key,
                         result: await options.raiderio!.getMythicBossRankings(
                           request,
-                          activeContext.signal
+                          activeContext.signal,
+                          () => scope.increment("raiderIoRankingsRequests")
                         )
                       };
                     } catch (error) {
@@ -2074,7 +2077,8 @@ export function createApplicantEvidenceJobHandler(
             cuttingEdges = (
               await options.blizzard.getCompletedAchievements(
                 run.key,
-                activeContext.signal
+                activeContext.signal,
+                () => scope.increment("blizzardAchievementsRequests")
               )
             )
               .filter((achievement) =>
@@ -2383,7 +2387,12 @@ export function createApplicantEvidenceJobHandler(
                 fightParses: requests(REQUEST_COUNTER_PREFIX.fight_parses),
                 rankingIdentities: requests(
                   REQUEST_COUNTER_PREFIX.ranking_identities
-                )
+                ),
+                // The other two upstreams, counted so their cost can be
+                // weighed before any of it is retained (#298).
+                raiderIoHistoric: requests("raiderIoHistoric"),
+                raiderIoRankings: requests("raiderIoRankings"),
+                blizzardAchievements: requests("blizzardAchievements")
               },
               recovery: {
                 raiderIoOutcome: record.raiderIoHistoricOutcome as

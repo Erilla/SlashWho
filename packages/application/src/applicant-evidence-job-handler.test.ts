@@ -12,6 +12,7 @@ import {
   createWarcraftLogsClient,
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
+import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { supportedRaidCatalogue, type CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
@@ -3034,7 +3035,10 @@ describe("applicant evidence job handler", () => {
               reportHydration: 0,
               zoneRankings: 1,
               fightParses: 1,
-              rankingIdentities: 1
+              rankingIdentities: 1,
+              raiderIoHistoric: 0,
+              raiderIoRankings: 0,
+              blizzardAchievements: 0
             },
             // No Raider.IO client, so recovery never ran: null, not zero.
             recovery: {
@@ -3499,7 +3503,9 @@ describe("applicant evidence job handler", () => {
         >
       > = {},
       integrations: {
-        raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
+        raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings"> &
+          Partial<Pick<RaiderIoGateway, "getHistoricMythicKills">>;
+        blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
       } = {}
     ) {
       return createApplicantEvidenceJobHandler({
@@ -4645,6 +4651,71 @@ describe("applicant evidence job handler", () => {
       ).toBe(true);
     });
 
+    it("counts what Raider.IO and Blizzard cost the run on its cost row", async () => {
+      // Break caught: the cost row counted Warcraft Logs alone, so whether
+      // retaining Raider.IO or Blizzard evidence would save anything could
+      // not be measured (#298). Each provider reports its own physical
+      // requests, which a cache hit or a guild query's second call would
+      // otherwise hide.
+      const evidence = store();
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [
+            {
+              ...concludedKill,
+              raidName: "The Venomous Abyss",
+              bossName: "Sszorak",
+              guild: { name: "Guild", region: "eu", realm: "Silvermoon" }
+            }
+          ],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {},
+        {
+          raiderio: {
+            getHistoricMythicKills: vi.fn(async (_key, options) => {
+              options.onPhysicalRequest?.();
+              options.onPhysicalRequest?.();
+              options.onPhysicalRequest?.();
+              return { kind: "evidence" as const, kills: [] };
+            }),
+            getMythicBossRankings: vi.fn(
+              async (_request, _signal, onPhysicalRequest) => {
+                onPhysicalRequest?.();
+                onPhysicalRequest?.();
+                return { kind: "rankings" as const, rows: [] };
+              }
+            )
+          },
+          blizzard: {
+            getCompletedAchievements: vi.fn(
+              async (_key, _signal, onProfileRequest) => {
+                await onProfileRequest?.();
+                return [];
+              }
+            )
+          }
+        }
+      );
+
+      await handler.execute(run.id);
+
+      expect(evidence.costs).toEqual([
+        expect.objectContaining({
+          requests: expect.objectContaining({
+            raiderIoHistoric: 3,
+            raiderIoRankings: 2,
+            blizzardAchievements: 1
+          })
+        })
+      ]);
+    });
+
     it("records a successful Raider.IO no-match answer without inventing a rank", async () => {
       const evidence = store();
       const handler = handlerFor(
@@ -4734,7 +4805,8 @@ describe("applicant evidence job handler", () => {
           expect.objectContaining({
             guild: expect.objectContaining({ name: "Unranked" })
           }),
-          expect.anything()
+          expect.anything(),
+          expect.any(Function)
         );
         const published = evidence.published[0]?.result.kills ?? [];
         // Left unset, so publishing carries the stored rank forward.

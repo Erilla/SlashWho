@@ -697,6 +697,26 @@ describe("Raider.IO gateway", () => {
     });
   });
 
+  it("reports each tier request it sends, so a run can count its cost", async () => {
+    // Break caught: raid-progress costs one request per tier, and a run that
+    // could not see them had no way to say what Raider.IO cost it (#298).
+    const client = createRaiderIoClient({
+      fetch: raidProgressFixtureFetch(),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+    let physicalRequests = 0;
+
+    await client.getHistoricMythicKills(sentinel, {
+      tierOrdinals: [30, 31],
+      onPhysicalRequest: () => {
+        physicalRequests += 1;
+      }
+    });
+
+    expect(physicalRequests).toBe(2);
+  });
+
   it("returns a rate-limit limitation with Retry-After timing", async () => {
     await expect(
       clientFor("raid-progress-rate-limited").getHistoricMythicKills(sentinel, {
