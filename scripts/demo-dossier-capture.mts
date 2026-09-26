@@ -1,6 +1,8 @@
 import { applicantDossierSchema } from "@slashwho/contracts";
 import { dirname } from "node:path";
 
+import { compactDossierWipes } from "../apps/web/src/lib/dossier-wipes.ts";
+
 const emailAddress = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 
 export function redactDemoUploaderEmails(value: unknown): unknown {
@@ -41,12 +43,11 @@ export async function captureDemoDossier(
     throw new Error("demo_dossier_response_unexpected");
   }
 
+  // Fold wiped pulls as the live dossier route does, and write it minified:
+  // `/demo` serialises the whole capture into every page load.
+  const dossier = compactDossierWipes(parsed.data);
   await dependencies.mkdir(dirname(output), { recursive: true });
-  await dependencies.writeFile(
-    output,
-    `${JSON.stringify(parsed.data, null, 2)}\n`,
-    "utf8"
-  );
+  await dependencies.writeFile(output, `${JSON.stringify(dossier)}\n`, "utf8");
 
-  return parsed.data;
+  return dossier;
 }

@@ -11,7 +11,6 @@
       },
       "user": { "name": "owner-alpha" },
       "characterCustomizations": {
-        "isClaimed": true,
         "discord_profile": "public-alias",
         "main_character": null
       }

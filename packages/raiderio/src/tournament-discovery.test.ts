@@ -5,23 +5,31 @@ import { describe, expect, it } from "vitest";
 
 import { createRaiderIoClient } from "./index";
 
-const recorded = JSON.parse(
-  readFileSync(
-    new URL(
-      "../../../tests/fixtures/raiderio/tournament-recorded.json",
-      import.meta.url
-    ),
-    "utf8"
-  )
-) as {
-  retail: CharacterBody;
-  tournament: CharacterBody;
-  profile: {
+// Recorded on 2026-09-14 from a tournament profile, a retail member of the
+// same owner, and that owner's profile list; see tests/fixtures/recorded/.
+function recordedBody<T>(file: string): T {
+  return (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          `../../../tests/fixtures/recorded/raiderio/${file}.json`,
+          import.meta.url
+        ),
+        "utf8"
+      )
+    ) as { body: T }
+  ).body;
+}
+
+const recorded = {
+  retail: recordedBody<CharacterBody>("character-tournament-retail"),
+  tournament: recordedBody<CharacterBody>("character-tournament"),
+  profile: recordedBody<{
     viewUserCharactersApi: {
       name: string;
       characters: { character: UpstreamCharacter }[];
     };
-  };
+  }>("view-characters-tournament")
 };
 
 type UpstreamCharacter = {

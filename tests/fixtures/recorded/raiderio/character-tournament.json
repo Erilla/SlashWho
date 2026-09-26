@@ -1,0 +1,28 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.character",
+  "recordedOn": "2026-09-14",
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "user": {
+        "name": "fixture-owner"
+      },
+      "isTournamentProfile": true,
+      "character": {
+        "class": {
+          "name": "Paladin"
+        },
+        "realm": {
+          "realmType": "tr",
+          "slug": "eu-mythic-dungeons"
+        },
+        "region": {
+          "slug": "eu"
+        },
+        "name": "Tournament",
+        "level": 80
+      }
+    }
+  }
+}
