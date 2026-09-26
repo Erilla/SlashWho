@@ -103,19 +103,26 @@ describe("database migrations", () => {
       { column_name: "historic_world_rank" }
     ]);
 
-    // Break caught: 0011 added snapshot_characters_character_idx without a
-    // journal entry, so the migrator never created it.
-    const indexes = await pool.query<{ indexname: string }>(`
+    const wipeFightIndex = await pool.query<{ indexname: string }>(`
       SELECT indexname
       FROM pg_indexes
       WHERE schemaname = 'public'
-        AND indexname IN
-          ('character_mythic_wipes_run_fight_idx', 'snapshot_characters_character_idx')
-      ORDER BY indexname
+        AND tablename = 'character_mythic_wipes'
+        AND indexname = 'character_mythic_wipes_run_fight_idx'
     `);
-    expect(indexes.rows).toEqual([
-      { indexname: "character_mythic_wipes_run_fight_idx" },
-      { indexname: "snapshot_characters_character_idx" }
+    expect(wipeFightIndex.rows).toEqual([
+      { indexname: "character_mythic_wipes_run_fight_idx" }
+    ]);
+
+    const damageParseState = await pool.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'character_mythic_kills'
+        AND column_name = 'damage_parse_state'
+    `);
+    expect(damageParseState.rows).toEqual([
+      { column_name: "damage_parse_state" }
     ]);
   });
 
@@ -145,9 +152,8 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-31).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-30).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
       { idx: 29, tag: "0030_unstick_schema_drift_runs" },
       { idx: 30, tag: "0031_partial_scan_skipped" },
@@ -177,7 +183,7 @@ describe("database migrations", () => {
       { idx: 54, tag: "0055_dossier_searches" },
       { idx: 55, tag: "0056_persistent_account_sessions" },
       { idx: 56, tag: "0057_evidence_run_light_refresh" },
-      { idx: 57, tag: "0058_snapshot_character_lookup" }
+      { idx: 57, tag: "0058_snapshot_character_lookup_index" }
     ]);
   });
 
@@ -550,5 +556,65 @@ describe("database migrations", () => {
         { id: revoked, absolute_expires_at: absolute }
       ])
     );
+  });
+
+  it("indexes snapshot membership by character on an already-migrated database", async () => {
+    // Break caught: the index lived only in an orphaned 0011 file the journal
+    // never listed, so no database ever had it. Re-adding it under a past
+    // timestamp would still skip every database that had applied 0057.
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+    await pool.query("DROP SCHEMA drizzle CASCADE");
+
+    const migrationSource = new URL(
+      "../../packages/database/drizzle/",
+      import.meta.url
+    );
+    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
+    try {
+      mkdirSync(join(folder, "meta"));
+      for (const file of readdirSync(migrationSource).filter(
+        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0057"
+      )) {
+        copyFileSync(new URL(file, migrationSource), join(folder, file));
+      }
+      const journal = JSON.parse(
+        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
+      ) as { entries: Array<{ tag: string }> };
+      journal.entries = journal.entries.filter(
+        ({ tag }) => tag.slice(0, 4) <= "0057"
+      );
+      writeFileSync(
+        join(folder, "meta", "_journal.json"),
+        JSON.stringify(journal)
+      );
+      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
+      try {
+        await runMigrations(pool);
+      } finally {
+        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+
+    const index = () =>
+      pool.query<{ indexdef: string }>(
+        `SELECT indexdef
+         FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND indexname = 'snapshot_characters_character_idx'`
+      );
+    expect((await index()).rows).toEqual([]);
+
+    await runMigrations(pool);
+
+    expect((await index()).rows).toEqual([
+      {
+        indexdef: expect.stringContaining(
+          "ON public.snapshot_characters USING btree (character_id)"
+        )
+      }
+    ]);
   });
 });

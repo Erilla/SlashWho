@@ -53,9 +53,12 @@ function parseCharacterPath(url: URL, expectedPrefix: string): CharacterKey {
   if (parts.length !== 4 || parts[0].toLowerCase() !== expectedPrefix) {
     return invalidCharacterUrl();
   }
-  const [region, realm, name] = parts
+  const [region, accentedRealm, name] = parts
     .slice(1)
     .map((part) => part.toLocaleLowerCase("en-US"));
+  // Raider.IO slugs keep a realm's accents ("aggra-português"); Blizzard's,
+  // which every lookup uses, drop them ("aggra-portugues").
+  const realm = accentedRealm.normalize("NFD").replace(/\p{M}/gu, "");
   if (
     !supportedRegions.includes(region as Region) ||
     !/^[a-z0-9-]+$/.test(realm) ||
