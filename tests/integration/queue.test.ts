@@ -9,6 +9,7 @@ import {
   createPostgresRepositories,
   runMigrations
 } from "../../packages/database/src";
+import { readQueueDepths } from "../../apps/worker/src/runtime";
 import { startPostgres } from "./postgres";
 
 const queueName = "discover-character";
@@ -135,6 +136,35 @@ describe("durable discovery queue", () => {
       [queueName, runId]
     );
     expect(duplicateCount.rows[0]?.count).toBe("1");
+  });
+
+  it("reads each queue's waiting depth and oldest age from pg-boss itself", async () => {
+    // The fakes cannot say whether this SQL runs against pg-boss's real
+    // schema; a renamed column or state would otherwise surface only as a
+    // queue_depth_failed line in production.
+    const boss = new PgBoss(connectionString);
+    cleanup.push(() => boss.stop({ graceful: false, timeout: 1_000 }));
+    await boss.start();
+    await boss.createQueue(queueName);
+    // Distinct singleton keys: the queue is exclusive once an earlier test
+    // has upgraded it, and exclusive admits one waiting job per key.
+    await boss.send(queueName, { runId: "a", key }, { singletonKey: "a" });
+    await boss.send(queueName, { runId: "b", key }, { singletonKey: "b" });
+    await applicationPool.query(
+      "UPDATE pgboss.job SET created_on = now() - interval '90 seconds' WHERE name = $1 AND data->>'runId' = 'a'",
+      [queueName]
+    );
+
+    const queues = await readQueueDepths(applicationPool);
+
+    expect(queues[queueName]?.depth).toBe(2);
+    expect(queues[queueName]?.oldestWaitMs).toBeGreaterThanOrEqual(90_000);
+    expect(queues[queueName]?.oldestWaitMs).toBeLessThan(120_000);
+    expect(queues[characterEvidenceQueueName]).toEqual({
+      depth: 0,
+      oldestWaitMs: null
+    });
+    expect(JSON.stringify(queues)).not.toContain(key.name);
   });
 
   it("delivers one job once across two concurrent worker processes", async () => {
