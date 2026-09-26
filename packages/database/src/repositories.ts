@@ -1593,6 +1593,8 @@ export interface Repositories {
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
+    /** The most recently requested runs, newest first, for the operator monitor. */
+    listRecent(limit: number): Promise<readonly DiscoveryRun[]>;
   };
   snapshots: SnapshotRepository;
   manualConnections: ManualConnectionRepository;

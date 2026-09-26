@@ -563,6 +563,17 @@ it("defines a strict operator collection monitor without internal run fields", (
         errorCode: "warcraft_logs_unavailable",
         stoppedAt: "2026-09-20T10:00:00.000Z"
       }
+    ],
+    discoveryRuns: [
+      {
+        character: applicantCharacter,
+        status: "failed",
+        attempt: 3,
+        requestedAt: "2026-09-20T09:00:00.000Z",
+        startedAt: "2026-09-20T09:00:01.000Z",
+        completedAt: "2026-09-20T09:05:00.000Z",
+        errorCode: "upstream_unavailable"
+      }
     ]
   };
 
@@ -585,6 +596,17 @@ it("defines a strict operator collection monitor without internal run fields", (
         {
           ...response.completed[0],
           wclClientSecretEncrypted: "ciphertext"
+        }
+      ]
+    })
+  ).toThrow();
+  expect(() =>
+    collectionMonitorResponseSchema.parse({
+      ...response,
+      discoveryRuns: [
+        {
+          ...response.discoveryRuns[0],
+          snapshotId: "private-snapshot"
         }
       ]
     })

@@ -33,7 +33,8 @@ const monitor = {
     }
   ],
   completed: [],
-  failed: []
+  failed: [],
+  discoveryRuns: []
 };
 
 function request(headers: Record<string, string> = {}): Request {

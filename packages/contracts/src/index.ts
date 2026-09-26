@@ -76,6 +76,7 @@ export {
 export type { HistoricalSnapshot, HistoryItem, HistoryPage } from "./history";
 export {
   collectionMonitorCompletedRunSchema,
+  collectionMonitorDiscoveryRunSchema,
   collectionMonitorFailedRunSchema,
   collectionMonitorInFlightRunSchema,
   collectionMonitorResponseSchema

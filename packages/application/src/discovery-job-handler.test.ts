@@ -377,6 +377,9 @@ function createMemoryRepositories(): Repositories {
               ["queued", "running", "retrying"].includes(run.status)
           ) ?? null
         );
+      },
+      async listRecent() {
+        throw new Error("not used");
       }
     },
     snapshots: {
