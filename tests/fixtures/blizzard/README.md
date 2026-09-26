@@ -17,9 +17,8 @@ Blizzard recording exists to check its shape against.
 
 ## Sources
 
-- **[#23]** — the fingerprint sweep prototype
-  (`scripts/prototypes/fingerprint-sweep-measurement.ts`) ran against the live
-  API on Railway `test` and read `guild.name` and `guild.realm.slug` from the
+- **[#23]** — the fingerprint sweep measurement prototype, since deleted (its
+  plan in `docs/superpowers` keeps the history), ran against the live API on Railway `test` and read `guild.name` and `guild.realm.slug` from the
   character profile, `members[].character.name` and
   `members[].character.realm.slug` from the guild roster, and
   `achievements[].id` and `achievements[].completed_timestamp` from character
