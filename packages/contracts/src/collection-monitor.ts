@@ -4,6 +4,11 @@ import { characterKeySchema, collectionPhaseSchema } from "./dossier";
 
 const timestampSchema = z.iso.datetime({ offset: true });
 
+/** How many more completed runs the monitor reveals each time it loads more. */
+export const collectionMonitorCompletedPageSize = 50;
+/** The most completed runs one monitor read returns, however far it scrolls. */
+export const collectionMonitorCompletedLimitMax = 1_000;
+
 export const collectionMonitorInFlightRunSchema = z
   .object({
     character: characterKeySchema,
@@ -53,7 +58,10 @@ export const collectionMonitorResponseSchema = z
     generatedAt: timestampSchema,
     hasActiveRuns: z.boolean(),
     inFlight: z.array(collectionMonitorInFlightRunSchema),
+    /** The most recently completed runs, newest first, up to the requested limit. */
     completed: z.array(collectionMonitorCompletedRunSchema),
+    /** Whether older completed runs exist beyond the ones returned. */
+    hasMoreCompleted: z.boolean(),
     failed: z.array(collectionMonitorFailedRunSchema),
     /** The most recently requested discovery runs, newest first. */
     discoveryRuns: z.array(collectionMonitorDiscoveryRunSchema)

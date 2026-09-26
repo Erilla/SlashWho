@@ -1,5 +1,6 @@
 import { collectionProgress } from "@slashwho/application";
 import {
+  collectionMonitorCompletedPageSize,
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
@@ -11,7 +12,9 @@ export const monitorDiscoveryRunLimit = 50;
 const activeStatuses = new Set(["queued", "running", "retrying"]);
 
 export type CollectionMonitorService = Readonly<{
-  list(): Promise<CollectionMonitorResponse>;
+  list(options?: {
+    completedLimit?: number;
+  }): Promise<CollectionMonitorResponse>;
 }>;
 
 export function createCollectionMonitorService(options: {
@@ -21,10 +24,13 @@ export function createCollectionMonitorService(options: {
 }): CollectionMonitorService {
   const clock = options.clock ?? (() => new Date());
   return {
-    async list() {
+    async list({ completedLimit = collectionMonitorCompletedPageSize } = {}) {
       const generatedAt = clock();
+      // One row past the limit says whether older completed runs remain.
       const [rows, discoveryRuns] = await Promise.all([
-        options.evidence.listForMonitor(),
+        options.evidence.listForMonitor({
+          completedLimit: completedLimit + 1
+        }),
         options.runs.listRecent(monitorDiscoveryRunLimit)
       ]);
       const hasActiveRuns =
@@ -35,6 +41,7 @@ export function createCollectionMonitorService(options: {
         hasActiveRuns,
         inFlight: [],
         completed: [],
+        hasMoreCompleted: false,
         failed: [],
         // The run id, queue job and snapshot stay server-side.
         discoveryRuns: discoveryRuns.map((run) => ({
@@ -76,6 +83,10 @@ export function createCollectionMonitorService(options: {
         }
 
         if (row.status === "complete" || row.status === "partial") {
+          if (response.completed.length === completedLimit) {
+            response.hasMoreCompleted = true;
+            continue;
+          }
           response.completed.push({
             character: row.key,
             state: row.status,
