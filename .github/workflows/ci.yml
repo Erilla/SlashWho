@@ -10,7 +10,20 @@ on:
 # blocks merging forever, and GitHub cannot tell "skipped by a path filter"
 # apart from "has not run yet" — so this workflow must always trigger and
 # always report. Prose-only pull requests are made cheap by skipping the
-# steps, not by skipping the workflow.
+# suite's jobs, not by skipping the workflow.
+#
+# The suite runs as parallel jobs, so the wall clock is set by the slowest one
+# (e2e) rather than by the sum of all of them:
+#
+#   scope ──┬── static        format, lint, typecheck, unit tests
+#           ├── integration
+#           ├── e2e           build, then Playwright
+#           └── docker
+#   all five ───> ci          the required check
+#
+# Only the final job is named `ci`, and it is the only one branch protection
+# needs to know about. The others report under their own names and can be
+# renamed or split freely; `ci` cannot be, without also changing the ruleset.
 permissions:
   contents: read
   pull-requests: read
@@ -20,9 +33,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
+  scope:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      run_full: ${{ steps.scope.outputs.run_full }}
     steps:
       - uses: actions/checkout@v4
 
@@ -78,82 +93,163 @@ jobs:
           fi
           echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
 
+  # Everything that needs only an installed workspace: no build, no browser,
+  # no database. Typecheck does not depend on a build, so it belongs here.
+  static:
+    needs: scope
+    if: needs.scope.outputs.run_full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        if: steps.scope.outputs.run_full == 'true'
         with:
           version: 11.20.0
           run_install: false
       - uses: actions/setup-node@v4
-        if: steps.scope.outputs.run_full == 'true'
         with:
           node-version: 22.15.0
           cache: pnpm
       - run: corepack pnpm install --frozen-lockfile
-        if: steps.scope.outputs.run_full == 'true'
+      - run: corepack pnpm format:check
+      - run: corepack pnpm lint
+      - run: corepack pnpm typecheck
+      # The unit suite was first given a 6 GB heap and then, when that was
+      # still not enough, split into one vitest process per workspace
+      # (d4739580, 209f11c9). apps/web is the heavy half — two thirds of the
+      # time, and all the React and jsdom files — so it keeps a process to
+      # itself. The other workspaces are small, and each paid a second or two
+      # of vitest start-up for about a second of tests, so they share one
+      # process. If that process runs out of heap, split it again rather than
+      # raising the limit: each of the two workers inherits this setting.
+      - run: corepack pnpm exec vitest run --project unit apps/web
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - run: >-
+          corepack pnpm exec vitest run --project unit
+          apps/worker packages scripts tests/e2e/support
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+
+  # Testcontainers starts its own PostgreSQL through the runner's Docker
+  # daemon, so this job needs no service container.
+  integration:
+    needs: scope
+    if: needs.scope.outputs.run_full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.15.0
+          cache: pnpm
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm test:integration
+
+  # The slowest job, and so the one that sets the wall clock. It is the only
+  # job that needs a browser, so it is the only one that installs one. The
+  # build shares its install, so it runs here rather than in a job of its own,
+  # where it would be one more install and not one fewer minute.
+  e2e:
+    needs: scope
+    if: needs.scope.outputs.run_full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.15.0
+          cache: pnpm
+      - run: corepack pnpm install --frozen-lockfile
       - uses: actions/cache@v4
-        if: steps.scope.outputs.run_full == 'true'
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-1.62.1-chromium
       - run: corepack pnpm playwright install --with-deps chromium
-        if: steps.scope.outputs.run_full == 'true'
-      - run: corepack pnpm format:check
-        if: steps.scope.outputs.run_full == 'true'
-      - run: corepack pnpm lint
-        if: steps.scope.outputs.run_full == 'true'
-      - run: corepack pnpm typecheck
-        if: steps.scope.outputs.run_full == 'true'
-      - run: corepack pnpm exec vitest run --project unit apps/web
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit apps/worker
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/application
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/blizzard
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/contracts
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/database
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/domain
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/raiderio
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit packages/warcraftlogs
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit scripts
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm exec vitest run --project unit tests/e2e/support
-        if: steps.scope.outputs.run_full == 'true'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: corepack pnpm test:integration
-        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm build
-        if: steps.scope.outputs.run_full == 'true'
       - run: corepack pnpm playwright test tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts tests/e2e/dossier-navigation.spec.ts
-        if: steps.scope.outputs.run_full == 'true'
-      - run: docker build -f Dockerfile.web -t slashwho-web:ci .
-        if: steps.scope.outputs.run_full == 'true'
-      - run: docker build -f Dockerfile.worker -t slashwho-worker:ci .
-        if: steps.scope.outputs.run_full == 'true'
+
+  # The images are built only to prove they still build; nothing is pushed or
+  # loaded. The layer cache lives in the Actions cache, one scope per image so
+  # the two do not overwrite each other, and mode=max keeps the intermediate
+  # build stage that holds the dependency install.
+  docker:
+    needs: scope
+    if: needs.scope.outputs.run_full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          tags: slashwho-web:ci
+          push: false
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.worker
+          tags: slashwho-worker:ci
+          push: false
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,scope=worker,mode=max
+
+  # The required check. It must report on every run, so it runs even when a
+  # job it needs failed or was skipped: without `always()`, a failure upstream
+  # would skip this job too, and GitHub treats a skipped required check as
+  # passing. It then decides for itself:
+  #
+  # - scope must have succeeded, because every other result depends on it;
+  # - each suite job must have succeeded, or have been skipped because scope
+  #   judged the change prose-only. A skip for any other reason is a failure.
+  #
+  # A run superseded by a newer push is cancelled by the concurrency group, and
+  # this job then fails that run's commit; the newer run reports for its own.
+  ci:
+    needs: [scope, static, integration, e2e, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - env:
+          RUN_FULL: ${{ needs.scope.outputs.run_full }}
+          SCOPE: ${{ needs.scope.result }}
+          STATIC: ${{ needs.static.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          E2E: ${{ needs.e2e.result }}
+          DOCKER: ${{ needs.docker.result }}
+        run: |
+          if [ "$SCOPE" != "success" ]; then
+            echo "scope: $SCOPE, so there is no telling what this change needs."
+            exit 1
+          fi
+
+          failed=0
+          for pair in "static=$STATIC" "integration=$INTEGRATION" \
+            "e2e=$E2E" "docker=$DOCKER"; do
+            job="${pair%%=*}"
+            result="${pair#*=}"
+            if [ "$result" = "success" ]; then
+              echo "$job: success"
+            elif [ "$result" = "skipped" ] && [ "$RUN_FULL" = "false" ]; then
+              echo "$job: skipped, as the change is prose-only"
+            else
+              echo "$job: $result"
+              failed=1
+            fi
+          done
+          exit "$failed"
