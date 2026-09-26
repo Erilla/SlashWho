@@ -28,7 +28,9 @@ it("shows and updates the provider reset countdown", () => {
     "Raider.IO limit resets in 2m 5s"
   );
 
-  act(() => vi.advanceTimersByTime(65_000));
+  act(() => {
+    vi.advanceTimersByTime(65_000);
+  });
 
   expect(screen.getByRole("status")).toHaveTextContent(
     "Raider.IO limit resets in 1m"

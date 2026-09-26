@@ -6,8 +6,10 @@
     "types": ["node"]
   },
   "include": [
+    "apps/web/next.config.ts",
     "playwright.config.ts",
     "scripts/**/*.mts",
+    "scripts/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.mts"
   ]

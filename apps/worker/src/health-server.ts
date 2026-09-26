@@ -1,4 +1,8 @@
-import { createServer } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse
+} from "node:http";
 
 export type WorkerHealth = {
   live: boolean;
@@ -23,11 +27,7 @@ export type HealthServer = {
   stop(): Promise<void>;
 };
 
-function json(
-  response: import("node:http").ServerResponse,
-  status: number,
-  body: object
-): void {
+function json(response: ServerResponse, status: number, body: object): void {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
 }
@@ -35,7 +35,10 @@ function json(
 export async function startHealthServer(
   options: HealthServerOptions
 ): Promise<HealthServer> {
-  const server = createServer(async (request, response) => {
+  const handle = async (
+    request: IncomingMessage,
+    response: ServerResponse
+  ): Promise<void> => {
     if (request.method !== "GET") {
       json(response, 404, { status: "not_found" });
       return;
@@ -71,6 +74,9 @@ export async function startHealthServer(
       return;
     }
     json(response, 404, { status: "not_found" });
+  };
+  const server = createServer((request, response) => {
+    void handle(request, response);
   });
 
   await new Promise<void>((resolve, reject) => {

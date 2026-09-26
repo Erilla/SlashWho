@@ -1,4 +1,9 @@
-import { createServer, type Server } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse
+} from "node:http";
 
 /**
  * The one character ID the fake knows: Ryun-Silvermoon (EU), a character no
@@ -24,7 +29,10 @@ async function listen(server: Server): Promise<number> {
 }
 
 export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
-  const server = createServer(async (request, response) => {
+  const handle = async (
+    request: IncomingMessage,
+    response: ServerResponse
+  ): Promise<void> => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     response.setHeader("content-type", "application/json");
     if (request.method === "POST" && url.pathname === "/oauth/token") {
@@ -173,6 +181,9 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
     }
     response.statusCode = 404;
     response.end(JSON.stringify({ status: 404 }));
+  };
+  const server = createServer((request, response) => {
+    void handle(request, response);
   });
   const port = await listen(server);
   return {
