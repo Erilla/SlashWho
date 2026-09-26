@@ -26,7 +26,9 @@ it("shows and updates the provider reset countdown", () => {
 
   expect(screen.getByText("Raider.IO limit resets in 2m 5s")).toBeVisible();
 
-  act(() => vi.advanceTimersByTime(65_000));
+  act(() => {
+    vi.advanceTimersByTime(65_000);
+  });
 
   expect(screen.getByText("Raider.IO limit resets in 1m")).toBeVisible();
 });
@@ -56,13 +58,17 @@ it("announces the countdown when it starts and when it finishes, not every tick"
   });
 
   try {
-    act(() => vi.advanceTimersByTime(65_000));
+    act(() => {
+      vi.advanceTimersByTime(65_000);
+    });
     expect(changes).not.toHaveBeenCalled();
     expect(status).toHaveTextContent(
       "Warcraft Logs limit reached. It resets in 2m 5s."
     );
 
-    act(() => vi.advanceTimersByTime(60_000));
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
     expect(screen.getByRole("status")).toBe(status);
     expect(status).toHaveTextContent("Warcraft Logs limit has reset.");
     expect(screen.queryByText(/limit resets in/)).not.toBeInTheDocument();
@@ -90,7 +96,9 @@ it("announces a limit hit again with its new reset time", () => {
       source="raiderio"
     />
   );
-  act(() => vi.advanceTimersByTime(30_000));
+  act(() => {
+    vi.advanceTimersByTime(30_000);
+  });
   expect(screen.getByRole("status")).toHaveTextContent(
     "Raider.IO limit has reset."
   );
