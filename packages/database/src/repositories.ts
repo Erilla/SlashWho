@@ -722,6 +722,13 @@ export type EvidenceRunCost = Readonly<{
     zoneRankings: number;
     fightParses: number;
     rankingIdentities: number;
+    /**
+     * Requests sent to the two other upstreams. Absent is zero: a run that
+     * never asked them spent nothing there.
+     */
+    raiderIoHistoric?: number;
+    raiderIoRankings?: number;
+    blizzardAchievements?: number;
   }>;
   /**
    * What attendance recovery was asked to do and what it yielded, so its cost

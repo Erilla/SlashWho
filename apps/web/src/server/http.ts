@@ -85,17 +85,14 @@ function errorName(error: unknown): string {
   return raw.replaceAll(/[^A-Za-z0-9_]/g, "").slice(0, 64) || "unknown";
 }
 
-async function publicResponseCount(
-  response: Response
-): Promise<number | undefined> {
-  if (!response.headers.get("content-type")?.includes("application/json")) {
+function publicResponseCount(body: string): number | undefined {
+  let value: Record<string, unknown> | null;
+  try {
+    value = JSON.parse(body) as Record<string, unknown> | null;
+  } catch {
     return undefined;
   }
-  const value = (await response
-    .clone()
-    .json()
-    .catch(() => null)) as Record<string, unknown> | null;
-  if (!value) return undefined;
+  if (typeof value !== "object" || value === null) return undefined;
   const character = value.kind === "character" ? value.character : value;
   if (typeof character === "object" && character !== null) {
     const snapshot = (character as Record<string, unknown>).snapshot;
@@ -107,6 +104,32 @@ async function publicResponseCount(
   if (Array.isArray(value.items)) return value.items.length;
   if (Array.isArray(value.characters)) return value.characters.length;
   return undefined;
+}
+
+/**
+ * Reads a JSON response's body once and returns a fresh response carrying it,
+ * so the count can be taken without `clone()`. Node's bundled undici registers
+ * a clone's finaliser against the original's tee branch, so collecting a
+ * discarded clone cancels the body the caller has yet to read.
+ */
+async function countedResponse(
+  response: Response
+): Promise<{ response: Response; count: number | undefined }> {
+  if (
+    response.body === null ||
+    !response.headers.get("content-type")?.includes("application/json")
+  ) {
+    return { response, count: undefined };
+  }
+  const body = await response.text();
+  return {
+    response: new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    }),
+    count: publicResponseCount(body)
+  };
 }
 
 export async function withHttpRequest(
@@ -127,7 +150,14 @@ export async function withHttpRequest(
     response = apiError("search_failed");
   }
   response.headers.set("x-request-id", correlationId);
-  const count = await publicResponseCount(response);
+  let count: number | undefined;
+  try {
+    ({ response, count } = await countedResponse(response));
+  } catch (error) {
+    failure ??= errorName(error);
+    response = apiError("search_failed");
+    response.headers.set("x-request-id", correlationId);
+  }
   logger.info({
     event: "http_request",
     correlationId,

@@ -9,7 +9,7 @@ import { withHttpRequest } from "../../../../server/http";
 export async function POST(request: Request): Promise<Response> {
   return withHttpRequest("account_password", async () => {
     const { accountOrigin, accountTokens, accountAuth } = await getContainer();
-    const body = await accountMutation(request.clone(), accountOrigin);
+    const body = await accountMutation(request, accountOrigin);
     if (!body) return accountFailure("Invalid request.");
     if (typeof body.token === "string") {
       if (
@@ -29,7 +29,7 @@ export async function POST(request: Request): Promise<Response> {
         ? accountReply("Password changed. Sign in again.")
         : accountFailure("This recovery link is invalid or expired.");
     }
-    const result = await accountAuth.changePassword(request);
+    const result = await accountAuth.changePassword(request, body);
     return result.accepted
       ? new Response(
           JSON.stringify({ message: "Password changed. Sign in again." }),

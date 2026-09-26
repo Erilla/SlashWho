@@ -6797,6 +6797,41 @@ describe("PostgreSQL repositories", () => {
       });
     });
 
+    it("records what Raider.IO and Blizzard cost, and zero for a run that asked neither", async () => {
+      // A row from before these were counted reads null, which is not this:
+      // a run that never asked Raider.IO or Blizzard spent nothing there.
+      const silent = await reserveRun(rootKey, new Date());
+      await repositories.evidence.recordRunCost(cost(silent));
+      await pool.query(
+        `UPDATE character_evidence_runs SET status = 'failed' WHERE id = $1`,
+        [silent]
+      );
+      const asked = await reserveRun(rootKey, new Date());
+
+      await repositories.evidence.recordRunCost(
+        cost(asked, {
+          requests: {
+            ...cost(asked).requests,
+            raiderIoHistoric: 17,
+            raiderIoRankings: 6,
+            blizzardAchievements: 1
+          }
+        })
+      );
+
+      const recorded = await rows();
+      expect(recorded.find((row) => row.run_id === silent)).toMatchObject({
+        raiderio_historic_requests: 0,
+        raiderio_rankings_requests: 0,
+        blizzard_achievements_requests: 0
+      });
+      expect(recorded.find((row) => row.run_id === asked)).toMatchObject({
+        raiderio_historic_requests: 17,
+        raiderio_rankings_requests: 6,
+        blizzard_achievements_requests: 1
+      });
+    });
+
     it("keeps a recovery step that did not run null rather than zero", async () => {
       // Raider.IO not asked is not Raider.IO asked and answering with nothing
       // to search, and no attendance search is not one that recovered
@@ -6953,8 +6988,52 @@ describe("PostgreSQL repositories", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the four queries the document describes", () => {
-        expect(queries).toHaveLength(4);
+      it("finds exactly the five queries the document describes", () => {
+        expect(queries).toHaveLength(5);
+      });
+
+      it("reports what Raider.IO and Blizzard cost, apart from rows nothing counted", async () => {
+        const uncounted = await reserveRun(rootKey, new Date());
+        const counted = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(cost(uncounted));
+        // What a row recorded before #298 looks like: nothing counted either
+        // provider, which is not a run that asked neither.
+        await pool.query(
+          `UPDATE character_evidence_run_costs
+           SET raiderio_historic_requests = NULL,
+               raiderio_rankings_requests = NULL,
+               blizzard_achievements_requests = NULL
+           WHERE run_id = $1`,
+          [uncounted]
+        );
+        await repositories.evidence.recordRunCost(
+          cost(counted, {
+            requests: {
+              ...cost(counted).requests,
+              raiderIoHistoric: 17,
+              raiderIoRankings: 6,
+              blizzardAchievements: 1
+            }
+          })
+        );
+
+        const result = await pool.query(queries[4] as string);
+
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            mode: "full",
+            attempts: "2",
+            counted: "1",
+            mean_raiderio_historic: "17.0",
+            max_raiderio_historic: 17,
+            mean_raiderio_rankings: "6.0",
+            max_raiderio_rankings: 6,
+            mean_blizzard: "1.0",
+            max_blizzard: 1,
+            // 12 + 4 + 2 + 3 + 24 + 1, over the counted row alone.
+            mean_warcraft_logs: "46.0"
+          })
+        ]);
       });
 
       it("reports what tier searches spent and found, apart from other runs", async () => {
