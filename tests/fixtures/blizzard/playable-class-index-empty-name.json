@@ -1,0 +1,9 @@
+{
+  "status": 200,
+  "body": {
+    "classes": [
+      { "id": 8, "name": "" },
+      { "id": 2, "name": "Paladin" }
+    ]
+  }
+}

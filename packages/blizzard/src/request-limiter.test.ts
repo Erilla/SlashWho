@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBlizzardClient } from "./index";
 import { createRequestLimiter } from "./request-limiter";
+import { fixtureResponse, readFixture } from "./test-fixtures";
 
 function busiestSecond(starts: readonly number[]): number {
   const sorted = [...starts].sort((left, right) => left - right);
@@ -180,10 +181,10 @@ describe("a Blizzard client with request limits", () => {
     let release!: () => void;
     const fetch = (async (input: RequestInfo | URL) => {
       if (String(input).endsWith("/token")) {
-        return Response.json({ access_token: "token", expires_in: 3600 });
+        return fixtureResponse("token-valid");
       }
       await new Promise<void>((resolve) => (release = resolve));
-      return Response.json({ achievements: [] });
+      return fixtureResponse("achievements-empty");
     }) as typeof globalThis.fetch;
     const client = createBlizzardClient({
       fetch,
@@ -241,6 +242,14 @@ describe("a Blizzard client with request limits", () => {
       (_, index) =>
         `member${String.fromCharCode(97 + (index % 26))}${index >= 26 ? "x" : ""}`
     );
+    // Generated at a scale no fixture holds: a guild-roster.json member renamed
+    // 40 times, and 250 entries carrying only the #23 fields.
+    const [memberTemplate] = (
+      readFixture("guild-roster").body as {
+        members: { character: Record<string, unknown> }[];
+      }
+    ).members;
+    if (!memberTemplate) throw new Error("guild-roster.json has no member");
     const achievements = {
       achievements: Array.from({ length: 250 }, (_, id) => ({
         id: id + 1,
@@ -253,7 +262,7 @@ describe("a Blizzard client with request limits", () => {
     const fetch = (async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.pathname === "/token") {
-        return Response.json({ access_token: "token", expires_in: 3600 });
+        return fixtureResponse("token-valid");
       }
       starts.push(Date.now());
       inFlight += 1;
@@ -263,22 +272,15 @@ describe("a Blizzard client with request limits", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       inFlight -= 1;
       if (url.pathname.endsWith("/character/silvermoon/root")) {
-        return Response.json({
-          guild: { name: "A Guild", realm: { slug: "silvermoon" } }
-        });
+        return fixtureResponse("profile-guild");
       }
       if (url.pathname === "/data/wow/playable-class/index") {
-        return Response.json({ classes: [{ id: 8, name: "Mage" }] });
+        return fixtureResponse("playable-class-index");
       }
       if (url.pathname.endsWith("/roster")) {
         return Response.json({
           members: members.map((name) => ({
-            character: {
-              name,
-              realm: { slug: "silvermoon" },
-              playable_class: { id: 8 },
-              level: 80
-            }
+            character: { ...memberTemplate.character, name }
           }))
         });
       }

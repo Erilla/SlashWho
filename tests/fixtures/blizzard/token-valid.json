@@ -1,0 +1,4 @@
+{
+  "status": 200,
+  "body": { "access_token": "fixture-access-token", "expires_in": 3600 }
+}
