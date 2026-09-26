@@ -1133,14 +1133,21 @@ a {
   font-size: 0.75rem;
 }
 
-.dossier-guild-timeline-tier line {
+/* Each tier is a band of background, alternating so a reader can tell at a
+   glance which tier a bar starts and ends in. */
+.dossier-guild-timeline-band {
+  fill: transparent;
+}
+
+.dossier-guild-timeline-band--shaded {
+  fill: var(--surface-raised);
+}
+
+.dossier-guild-timeline-tier {
   stroke: var(--muted);
   stroke-dasharray: 3 3;
   stroke-opacity: 0.55;
-}
-
-.dossier-guild-timeline-tier:hover line {
-  stroke-opacity: 1;
+  pointer-events: none;
 }
 
 .dossier-guild-timeline-year line {
