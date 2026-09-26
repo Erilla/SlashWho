@@ -80,6 +80,14 @@ describe("layoutGuildTimeline", () => {
     expect(layout.bars.map((bar) => bar.lane)).toEqual([0, 1]);
   });
 
+  it("leaves room past today for the current-guild markers in late December", () => {
+    const layout = layoutGuildTimeline(
+      [span("Rancour", "2025-01-01", "2026-12-20")],
+      { ...options, today: "2026-12-30" }
+    );
+    expect(layout.width).toBeGreaterThanOrEqual(layout.x("2026-12-30") + 48);
+  });
+
   it("keeps a single-night stretch visible", () => {
     const [bar] = layoutGuildTimeline(
       [span("Rancour", "2025-01-01", "2025-01-01")],

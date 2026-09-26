@@ -37,6 +37,7 @@ const YEAR_MS = 365.25 * DAY_MS;
 const MINIMUM_BAR_WIDTH = 4;
 const LABEL_INSET = 6;
 const LANE_GAP = 8;
+const TODAY_MARKER_ROOM = 48;
 
 function dayMs(date: string): number {
   return Date.parse(`${date}T00:00:00.000Z`);
@@ -87,7 +88,12 @@ export function layoutGuildTimeline(
   return {
     bars,
     lanes: Math.max(1, laneEnds.length),
-    width: Math.ceil(Math.max(x(endsOn), ...laneEnds) + padding),
+    // Room past today for the markers of guilds held now, which sit just
+    // right of the present even in late December.
+    width: Math.ceil(
+      Math.max(x(endsOn), x(options.today) + TODAY_MARKER_ROOM, ...laneEnds) +
+        padding
+    ),
     startsOn,
     endsOn,
     x
