@@ -127,6 +127,13 @@ export function DossierSectionNavigation({
     setActiveId(id);
   };
 
+  const backToTop = () => {
+    const { pathname, search } = window.location;
+    window.history.pushState(null, "", `${pathname}${search}`);
+    window.scrollTo({ top: 0, behavior: "instant" });
+    setActiveId(sections[0]?.id);
+  };
+
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
   useEffect(() => {
@@ -282,6 +289,25 @@ export function DossierSectionNavigation({
       onPointerDown={startDrag}
     >
       <p className="dossier-section-navigation-title">On this page</p>
+      <button
+        type="button"
+        className="dossier-section-navigation-top"
+        aria-label="Back to top"
+        title="Back to top"
+        onClick={backToTop}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m6 15 6-6 6 6" />
+        </svg>
+      </button>
       <ol>
         {sections.map((section) => (
           <li key={section.id}>
