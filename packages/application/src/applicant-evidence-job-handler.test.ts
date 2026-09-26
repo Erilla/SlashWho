@@ -4773,6 +4773,30 @@ describe("applicant evidence job handler", () => {
 
         expect(evidence.published).toHaveLength(1);
       });
+
+      it("sends no queued lookup once a lookup has thrown", async () => {
+        // Break caught: the pool kept working through its queue after the
+        // phase had already been marked unavailable.
+        const evidence = store();
+        const getMythicBossRankings = vi.fn(async () => {
+          throw new Error("raiderio_down");
+        });
+        const handler = handlerFor(
+          evidence,
+          response(
+            ["A", "B", "C", "D", "E", "F"].map((guild, index) =>
+              rankedKill(guild, index + 1)
+            )
+          ),
+          {},
+          { raiderio: { getMythicBossRankings } }
+        );
+
+        await handler.execute(run.id);
+
+        expect(getMythicBossRankings).toHaveBeenCalledTimes(4);
+        expect(evidence.published).toHaveLength(1);
+      });
     });
 
     it("remembers the resolved Warcraft Logs ID and reads the character by it", async () => {

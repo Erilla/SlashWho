@@ -2002,19 +2002,30 @@ export function createApplicantEvidenceJobHandler(
                   ? "request_cap"
                   : undefined;
               // A pool rather than batches: a batch waited for its slowest
-              // lookup before the next could start.
+              // lookup before the next could start. A thrown lookup fails the
+              // phase at once, as a failed batch did, and the lookups still
+              // queued behind it are abandoned rather than sent for nothing.
               const limiter = createConcurrencyLimiter(
                 RAIDER_IO_RANKING_CONCURRENCY
               );
+              let abandoned = false;
               const settled = await Promise.all(
                 cappedRequests.map(([key, request]) =>
-                  limiter.run(async () => ({
-                    key,
-                    result: await options.raiderio!.getMythicBossRankings(
-                      request,
-                      activeContext.signal
-                    )
-                  }))
+                  limiter.run(async () => {
+                    if (abandoned) throw new Error("rank_lookup_abandoned");
+                    try {
+                      return {
+                        key,
+                        result: await options.raiderio!.getMythicBossRankings(
+                          request,
+                          activeContext.signal
+                        )
+                      };
+                    } catch (error) {
+                      abandoned = true;
+                      throw error;
+                    }
+                  })
                 )
               );
               for (const item of settled) {
