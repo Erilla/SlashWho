@@ -1,4 +1,5 @@
 import { Logo } from "../components/logo";
+import { RecentDossierSearches } from "../components/recent-dossier-searches";
 
 export default function Home() {
   return (
@@ -8,10 +9,7 @@ export default function Home() {
           <Logo className="wordmark-mark" />
           <span>Who</span>
         </h1>
-        <p className="home-introduction">
-          Research a World of Warcraft applicant from a Raider.IO or Warcraft
-          Logs character URL, or by character name and realm.
-        </p>
+        <RecentDossierSearches />
       </section>
     </main>
   );

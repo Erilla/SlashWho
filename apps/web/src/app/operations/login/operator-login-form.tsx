@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { notifyAccountSessionChanged } from "../../../lib/account-session-events";
 
@@ -12,6 +12,9 @@ export function OperatorLoginForm() {
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
   const feedbackRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (failed) feedbackRef.current?.focus();
+  }, [failed]);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,7 +46,6 @@ export function OperatorLoginForm() {
       setFailed(true);
     } finally {
       setPending(false);
-      requestAnimationFrame(() => feedbackRef.current?.focus());
     }
   }
 

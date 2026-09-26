@@ -4243,6 +4243,133 @@ describe("applicant evidence job handler", () => {
           "historyScanResumeBoundaryReportCode"
         );
       });
+
+      describe("with a former name", () => {
+        const alias = {
+          region: "eu",
+          realm: "old-realm",
+          name: "former"
+        } as const;
+        const storedAliasProgress = {
+          key: alias,
+          pendingParseFightUrls: [
+            "https://www.warcraftlogs.com/reports/oldreport#fight=7"
+          ],
+          historyScanResumePage: 7,
+          historyScanResumeBoundaryReportCode: "alias-proved-report",
+          historyComplete: false,
+          parseWorkOutstanding: true
+        };
+        // The alias's turn: an unchanged handler gives it the light run's
+        // single request.
+        const withAlias = (
+          evidence: ReturnType<typeof store>,
+          historicAliasProgress: NonNullable<
+            Awaited<
+              ReturnType<ApplicantEvidenceStore["storedEvidenceTiers"]>
+            >["historicAliasProgress"]
+          >
+        ) => {
+          evidence.historicAliases = async () => [alias];
+          evidence.storedEvidenceTiers = async () => ({
+            kills: [],
+            wipes: [],
+            historicAliasProgress,
+            identityScanTurn: 1
+          });
+          return evidence;
+        };
+
+        it("creates no bookmark for a former name that had none", async () => {
+          // Break caught: the alias's turn gave it the one request, and its
+          // capped page-one scan published "resume at page 2". The next full
+          // run resumed it, never published complete (#437), and a third run
+          // read the former name's whole history again.
+          const evidence = withAlias(store(), []);
+          const getFirstKillReports = cappedAfterPageOne();
+          const handler = lightHandler(evidence, getFirstKillReports);
+
+          await handler.execute(light, context);
+
+          expect(getFirstKillReports).not.toHaveBeenCalledWith(
+            alias,
+            expect.anything()
+          );
+          expect(evidence.published[0]?.result.historicAliasProgress).toEqual(
+            []
+          );
+        });
+
+        it("carries a former name's stored bookmark forward unchanged", async () => {
+          const evidence = withAlias(store(), [storedAliasProgress]);
+          const handler = lightHandler(evidence, cappedAfterPageOne());
+
+          await handler.execute(light, context);
+
+          // Carried, not omitted, exactly as the main identity's bookmark is.
+          expect(evidence.published[0]?.result.historicAliasProgress).toEqual([
+            storedAliasProgress
+          ]);
+        });
+
+        it("leaves a former name's outstanding parse work as it was", async () => {
+          // No bookmark, so an unchanged handler admits the alias with one
+          // request and rewrites its progress from that capped page.
+          const pendingOnly = {
+            key: alias,
+            pendingParseFightUrls: storedAliasProgress.pendingParseFightUrls,
+            historyComplete: true,
+            parseWorkOutstanding: true
+          };
+          const evidence = withAlias(store(), [pendingOnly]);
+          const handler = lightHandler(evidence, cappedAfterPageOne());
+
+          await handler.execute(light, context);
+
+          expect(evidence.published[0]?.result.historicAliasProgress).toEqual([
+            pendingOnly
+          ]);
+        });
+
+        it("carries a former name's bookmark forward when its one page fails", async () => {
+          const evidence = withAlias(store(), [storedAliasProgress]);
+          const handler = lightHandler(
+            evidence,
+            vi.fn(async () => ({
+              kind: "limitation" as const,
+              code: "unavailable" as const
+            }))
+          );
+
+          await handler.execute(light, context);
+
+          expect(evidence.published[0]?.result).toMatchObject({
+            state: "partial",
+            limitationCode: "unavailable",
+            historicAliasProgress: [storedAliasProgress]
+          });
+        });
+
+        it("spends its one request on the newest page of the current name", async () => {
+          const evidence = withAlias(store(), []);
+          const getFirstKillReports = finished();
+          const handler = lightHandler(evidence, getFirstKillReports);
+
+          await handler.execute(light, context);
+
+          expect(getFirstKillReports).toHaveBeenCalledTimes(1);
+          expect(getFirstKillReports).toHaveBeenCalledWith(
+            run.key,
+            expect.objectContaining({ requestCap: 1 })
+          );
+          // The former name went unread, so the run cannot be complete: a
+          // complete publish would drop the kills only that name holds.
+          expect(evidence.published[0]?.result).toMatchObject({
+            state: "partial",
+            limitationCode: "request_cap"
+          });
+        });
+      });
     });
 
     it("publishes timestamp omissions as completed history metadata", async () => {
