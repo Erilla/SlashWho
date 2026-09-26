@@ -46,10 +46,10 @@ jobs:
       # action runs. The action then restores `.claude` from the default branch,
       # since a pull request's own head is untrusted — so an edit to the skill
       # takes effect only once it is merged, exactly like the workflow itself.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: "/pr-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
