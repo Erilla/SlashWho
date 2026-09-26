@@ -1,0 +1,28 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.character",
+  "recordedOn": "2026-09-14",
+  "status": 200,
+  "body": {
+    "characterDetails": {
+      "user": {
+        "name": "fixture-owner"
+      },
+      "isTournamentProfile": false,
+      "character": {
+        "class": {
+          "name": "Priest"
+        },
+        "realm": {
+          "realmType": "live",
+          "slug": "silvermoon"
+        },
+        "region": {
+          "slug": "eu"
+        },
+        "name": "Retail",
+        "level": 90
+      }
+    }
+  }
+}

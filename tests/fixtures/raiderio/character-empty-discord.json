@@ -11,8 +11,6 @@
       },
       "user": null,
       "characterCustomizations": {
-        "isClaimed": false,
-        "biography": "",
         "discord_profile": "",
         "main_character": null
       }

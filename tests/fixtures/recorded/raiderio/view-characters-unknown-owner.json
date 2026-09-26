@@ -1,0 +1,11 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.view-characters",
+  "recordedOn": "2026-09-26",
+  "status": 404,
+  "body": {
+    "statusCode": 404,
+    "error": "Not Found",
+    "message": "Cannot find user"
+  }
+}
