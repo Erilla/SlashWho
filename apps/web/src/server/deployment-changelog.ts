@@ -94,13 +94,14 @@ function parseDate(input: string | null, fallback: number): Date {
 function normalizeReferences(text: string): string[] {
   const matchSet = new Set<string>();
   for (const match of text.matchAll(/#(\d+)/g)) {
-    matchSet.add(match[1]);
+    // The pattern's one capture group always participates in a match.
+    matchSet.add(match[1]!);
   }
   return [...matchSet];
 }
 
 function buildSummary(message: string): string {
-  const [firstLine] = message.split("\n");
+  const [firstLine = ""] = message.split("\n");
   const trimmed = firstLine.trim();
   if (trimmed.length > 0) return trimmed;
   return "Deployment";
@@ -313,7 +314,13 @@ async function loadForEnvironment(
 
   return chosen
     .map(({ deployment, status }, index) =>
-      toEntry(repository, environment, deployment, status, messages[index])
+      toEntry(
+        repository,
+        environment,
+        deployment,
+        status,
+        messages[index] ?? null
+      )
     )
     .sort(compareEntries);
 }
