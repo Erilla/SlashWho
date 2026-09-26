@@ -1,15 +1,10 @@
 import {
   collectionPhaseSchema,
-  type CollectionPhase,
-  type DossierLimitationCode
+  type CollectionPhase
 } from "@slashwho/contracts";
 import type { EvidenceRunPhase } from "@slashwho/database";
 
-export function contractLimitationCode(code: string): DossierLimitationCode {
-  return code === "schema_drift"
-    ? "schema_changed"
-    : (code as DossierLimitationCode);
-}
+import { contractLimitationCode } from "./dossier-limitations";
 
 /**
  * The ledger as the dossier contract speaks it. A step or code the contract
@@ -22,17 +17,12 @@ export function collectionProgress(
   return phases.flatMap((phase) => {
     const limitationCode = phase.limitationCode
       ? contractLimitationCode(phase.limitationCode)
-      : undefined;
-    const withCode = collectionPhaseSchema.safeParse({
+      : null;
+    const parsed = collectionPhaseSchema.safeParse({
       id: phase.id,
       state: phase.state,
       ...(limitationCode ? { limitationCode } : {})
     });
-    if (withCode.success) return [withCode.data];
-    const withoutCode = collectionPhaseSchema.safeParse({
-      id: phase.id,
-      state: phase.state
-    });
-    return withoutCode.success ? [withoutCode.data] : [];
+    return parsed.success ? [parsed.data] : [];
   });
 }
