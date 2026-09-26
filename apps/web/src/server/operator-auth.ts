@@ -18,6 +18,10 @@ import { isIP } from "node:net";
 export const operatorSessionCookieName = "__Host-slashwho-operator";
 const idleLifetimeMs = 30 * 60_000;
 const absoluteLifetimeMs = 8 * 60 * 60_000;
+// Account sessions last until sign-out or revocation (#534). The idle window
+// slides on every use and matches the 400-day ceiling browsers put on cookie
+// lifetimes, so only a browser left unused that long is signed out.
+const accountIdleLifetimeMs = 400 * 24 * 60 * 60_000;
 const loginWindowMs = 15 * 60_000;
 const scryptCost = 16_384;
 // Version 1 fixes r=8, p=1 and a 64-byte derived key; N is stored separately.
@@ -465,7 +469,7 @@ export function createAccountAuth(options: {
       new Date(
         Math.min(
           session.idleExpiresAt.getTime(),
-          session.absoluteExpiresAt.getTime()
+          session.absoluteExpiresAt?.getTime() ?? Infinity
         )
       ),
       at
@@ -478,7 +482,7 @@ export function createAccountAuth(options: {
             sessionId: cookie.sessionId,
             secretDigest: digest(cookie.secret),
             at,
-            idleExpiresAt: new Date(at.getTime() + idleLifetimeMs)
+            idleExpiresAt: new Date(at.getTime() + accountIdleLifetimeMs)
           })
         : null;
     return { cookie, used };
@@ -608,8 +612,8 @@ export function createAccountAuth(options: {
       credentialVersion: account.credentialVersion,
       issuedAt: at,
       lastUsedAt: at,
-      idleExpiresAt: new Date(at.getTime() + idleLifetimeMs),
-      absoluteExpiresAt: new Date(at.getTime() + absoluteLifetimeMs)
+      idleExpiresAt: new Date(at.getTime() + accountIdleLifetimeMs),
+      absoluteExpiresAt: null
     });
     if (!session) {
       await repository.appendEvent({

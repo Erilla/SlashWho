@@ -141,7 +141,7 @@ describe("database migrations", () => {
     expect(wipeFights.prevId).toBe(historicalWipes.id);
     expect(parses.prevId).toBe(wipeFights.id);
     expect(
-      journal.entries.slice(-27).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-28).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 27, tag: "0028_evidence_run_costs" },
       { idx: 28, tag: "0029_parse_only_scan_state" },
@@ -169,7 +169,8 @@ describe("database migrations", () => {
       { idx: 50, tag: "0051_omitted_invalid_fight_timestamp" },
       { idx: 51, tag: "0052_tier_search_publication_scope" },
       { idx: 52, tag: "0053_other_upstream_run_costs" },
-      { idx: 53, tag: "0054_evidence_run_timings" }
+      { idx: 53, tag: "0054_evidence_run_timings" },
+      { idx: 54, tag: "0055_persistent_account_sessions" }
     ]);
     expect(
       wipeFights.tables["public.character_mythic_wipes"]?.indexes
@@ -480,6 +481,75 @@ describe("database migrations", () => {
       expect.arrayContaining([
         "account_credential_owner_id",
         "account_credential_version"
+      ])
+    );
+  });
+
+  it("lifts the absolute lifetime from live account sessions only", async () => {
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+    await pool.query("DROP SCHEMA drizzle CASCADE");
+
+    const migrationSource = new URL(
+      "../../packages/database/drizzle/",
+      import.meta.url
+    );
+    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
+    try {
+      mkdirSync(join(folder, "meta"));
+      for (const file of readdirSync(migrationSource).filter(
+        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0054"
+      )) {
+        copyFileSync(new URL(file, migrationSource), join(folder, file));
+      }
+      const journal = JSON.parse(
+        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
+      ) as { entries: Array<{ idx: number }> };
+      journal.entries = journal.entries.filter(({ idx }) => idx <= 53);
+      writeFileSync(
+        join(folder, "meta", "_journal.json"),
+        JSON.stringify(journal)
+      );
+      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
+      try {
+        await runMigrations(pool);
+      } finally {
+        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+
+    const account = await pool.query<{ id: string }>(
+      `INSERT INTO accounts
+        (canonical_email, email, password_hash, password_salt, scrypt_version, scrypt_cost, verified_at)
+       VALUES ('lifetime@example.com', 'lifetime@example.com', 'hash', 'salt', 1, 16384, now())
+       RETURNING id`
+    );
+    const revokedAt = new Date("2026-09-25T12:00:00Z");
+    const absolute = new Date("2026-09-25T20:00:00Z");
+    const insert = (revoked: Date | null) =>
+      pool.query<{ id: string }>(
+        `INSERT INTO account_sessions
+          (secret_digest, account_id, credential_version, issued_at, last_used_at,
+           idle_expires_at, absolute_expires_at, revoked_at)
+         VALUES ('digest', $1, 1, now(), now(), now() + interval '30 minutes', $2, $3)
+         RETURNING id`,
+        [account.rows[0]!.id, absolute, revoked]
+      );
+    const live = (await insert(null)).rows[0]!.id;
+    const revoked = (await insert(revokedAt)).rows[0]!.id;
+
+    await runMigrations(pool);
+
+    const sessions = await pool.query<{
+      id: string;
+      absolute_expires_at: Date | null;
+    }>("SELECT id, absolute_expires_at FROM account_sessions");
+    expect(sessions.rows).toEqual(
+      expect.arrayContaining([
+        { id: live, absolute_expires_at: null },
+        { id: revoked, absolute_expires_at: absolute }
       ])
     );
   });

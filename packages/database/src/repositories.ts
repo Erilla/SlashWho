@@ -1303,7 +1303,7 @@ export interface AccountAuthRepository {
     issuedAt: Date;
     lastUsedAt: Date;
     idleExpiresAt: Date;
-    absoluteExpiresAt: Date;
+    absoluteExpiresAt: Date | null;
   }): Promise<AccountSession | null>;
   useSession(input: {
     sessionId: string;
@@ -1373,7 +1373,8 @@ export type AccountSession = Readonly<{
   issuedAt: Date;
   lastUsedAt: Date;
   idleExpiresAt: Date;
-  absoluteExpiresAt: Date;
+  /** Null when the session has no absolute lifetime. */
+  absoluteExpiresAt: Date | null;
   revokedAt: Date | null;
 }>;
 export interface AccountMailRepository {

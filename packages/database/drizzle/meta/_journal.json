@@ -379,6 +379,13 @@
       "when": 1792011600005,
       "tag": "0054_evidence_run_timings",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792011600006,
+      "tag": "0055_persistent_account_sessions",
+      "breakpoints": true
     }
   ]
 }
