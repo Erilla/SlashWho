@@ -114,6 +114,22 @@ describe("database migrations", () => {
       { indexname: "character_mythic_wipes_run_fight_idx" }
     ]);
 
+    // Each evidence table's unique index leads with evidence_run_id, so a
+    // separate index on that column alone only added write cost.
+    const evidenceRunIndexes = await pool.query<{ indexname: string }>(`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename IN ('character_mythic_kills', 'character_tier_best_parses', 'character_mythic_wipes')
+        AND indexdef LIKE '%(evidence_run_id%'
+      ORDER BY indexname
+    `);
+    expect(evidenceRunIndexes.rows).toEqual([
+      { indexname: "character_mythic_kills_source_fight_idx" },
+      { indexname: "character_mythic_wipes_run_fight_idx" },
+      { indexname: "character_tier_best_parses_encounter_idx" }
+    ]);
+
     const damageParseState = await pool.query<{ column_name: string }>(`
       SELECT column_name
       FROM information_schema.columns
@@ -154,7 +170,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-30).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 29, tag: "0030_unstick_schema_drift_runs" },
       { idx: 30, tag: "0031_partial_scan_skipped" },
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
@@ -183,7 +198,8 @@ describe("database migrations", () => {
       { idx: 55, tag: "0056_persistent_account_sessions" },
       { idx: 56, tag: "0057_evidence_run_light_refresh" },
       { idx: 57, tag: "0058_snapshot_character_lookup_index" },
-      { idx: 58, tag: "0059_applicant_parser_version" }
+      { idx: 58, tag: "0059_applicant_parser_version" },
+      { idx: 59, tag: "0060_drop_redundant_evidence_run_indexes" }
     ]);
   });
 

@@ -414,6 +414,13 @@
       "when": 1792011600010,
       "tag": "0059_applicant_parser_version",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792011600011,
+      "tag": "0060_drop_redundant_evidence_run_indexes",
+      "breakpoints": true
     }
   ]
 }
