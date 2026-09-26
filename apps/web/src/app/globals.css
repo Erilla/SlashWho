@@ -2740,17 +2740,10 @@ td > .collection-progress {
   font-size: 0.9rem;
 }
 
-.operator-login-form [role="alert"],
-.operator-logout [role="alert"] {
+.operator-login-form [role="alert"] {
   margin: 0;
   color: var(--danger);
   font-size: 0.85rem;
-}
-
-.operator-logout {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
 }
 
 .state-badge[data-state="failed"] {
