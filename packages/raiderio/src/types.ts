@@ -58,6 +58,8 @@ export type HistoricMythicKillOptions = Readonly<{
   tierOrdinals: readonly number[];
   requestCap?: number;
   signal?: AbortSignal;
+  /** Called once per tier request actually sent, so a run can count its cost. */
+  onPhysicalRequest?: RaiderIoPhysicalRequestObserver;
 }>;
 
 export type MythicBossRanking = Readonly<{

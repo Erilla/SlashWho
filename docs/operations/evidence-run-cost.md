@@ -367,9 +367,66 @@ collections, so their points include the history scan and the other providers.
 `history_requests` tells the two apart, because it is zero for a targeted
 search. To compare them, filter `recorded_at` on either side of the deploy.
 
+## What Raider.IO and Blizzard cost
+
+Everything above measures Warcraft Logs, which is where the scarce budget is.
+A run also asks two other providers, and #298 asks whether retaining their
+answers for concluded tiers is worth doing. That turns on what they cost, so
+since #298 each attempt counts its physical requests to them:
+
+- `raiderio_historic_requests` — Raider.IO `raid-progress`, one per tier
+  asked. It runs only when the history scan does in earnest.
+- `raiderio_rankings_requests` — Raider.IO boss rankings for the run's kills.
+  A guild query costs two requests, the world rankings one.
+- `blizzard_achievements_requests` — the Blizzard achievements profile, for
+  Cutting Edge.
+
+A request counts when it is sent, whether or not it succeeds. OAuth token
+requests are not counted. A tier search asks neither provider, so it reads
+zero.
+
+**Null is a row recorded before these were counted**, not a zero: those runs
+did ask both providers, and nothing counted what it cost. The query counts
+those rows apart rather than averaging them in.
+
+```sql
+SELECT mode,
+       count(*) AS attempts,
+       count(raiderio_historic_requests) AS counted,
+       round(avg(raiderio_historic_requests)::numeric, 1) AS mean_raiderio_historic,
+       max(raiderio_historic_requests) AS max_raiderio_historic,
+       round(avg(raiderio_rankings_requests)::numeric, 1) AS mean_raiderio_rankings,
+       max(raiderio_rankings_requests) AS max_raiderio_rankings,
+       round(avg(blizzard_achievements_requests)::numeric, 1) AS mean_blizzard,
+       max(blizzard_achievements_requests) AS max_blizzard,
+       round(
+         avg(
+           history_scan_requests + character_guilds_requests
+           + guild_attendance_requests + report_hydration_requests
+           + zone_rankings_requests + fight_parses_requests
+           + ranking_identities_requests
+         ) FILTER (WHERE raiderio_historic_requests IS NOT NULL)::numeric, 1
+       ) AS mean_warcraft_logs
+FROM character_evidence_run_costs
+WHERE recorded_at >= now() - interval '7 days'
+GROUP BY mode
+ORDER BY attempts DESC;
+```
+
+`mean_warcraft_logs` is taken over the same counted rows, so the three
+providers are compared per run on the same sample.
+
+Two things these counts do not cover. The web process reads Blizzard
+achievements and Raider.IO boss rankings for the dossier too, behind its own
+15-minute caches (`docs/dossier-cache-policy.md`), and nothing here counts
+those. And `BLIZZARD_HOURLY_REQUEST_BUDGET` governs discovery's fingerprint
+sweep only: an evidence run's achievements request is not charged against it.
+Weigh `blizzard_achievements_requests` against that budget by hand, not as if
+the budget already accounted for it.
+
 ## Keeping this honest
 
-`tests/integration/repositories.test.ts` extracts all four queries from this file
+`tests/integration/repositories.test.ts` extracts every query from this file
 and runs them verbatim against a seeded database. A column renamed out from
 under them fails the integration suite rather than leaving a document that
 silently stopped being true.
