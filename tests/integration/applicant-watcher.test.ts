@@ -385,6 +385,9 @@ it("admits every distinct supported link in a bounded multi-link cell", async ()
 
 it("returns the new response's own details without persisting them", async () => {
   const characterUrl = "https://raider.io/characters/eu/example/ivy";
+  // Distinctive enough that it cannot turn up by chance in the stored row's
+  // sequence numbers or timestamps, which a short numeric ID like "222" did.
+  const discordId = "discord-fixture-7f3a9c";
   const result = await pollApplicantSheet({
     pool,
     readRows: async () => [
@@ -398,7 +401,7 @@ it("returns the new response's own details without persisting them", async () =>
       {
         row: 3,
         battletag: "Ivy#456",
-        discordId: "222",
+        discordId,
         characterName: "Ivy",
         linkCell: characterUrl
       }
@@ -408,7 +411,7 @@ it("returns the new response's own details without persisting them", async () =>
   expect(result.newApplicants).toEqual([
     {
       battletag: "Ivy#456",
-      discordId: "222",
+      discordId,
       characterName: "Ivy",
       characterUrl,
       dossierPath: "/dossiers/eu/example/ivy"
@@ -417,8 +420,9 @@ it("returns the new response's own details without persisting them", async () =>
   const stored = await pool.query<{ text: string }>(
     "SELECT row_to_json(t)::text AS text FROM applicant_source_intents t WHERE identity LIKE '%ivy%'"
   );
+  expect(stored.rows).toHaveLength(1);
   expect(stored.rows[0]?.text).not.toContain("Ivy#456");
-  expect(stored.rows[0]?.text).not.toContain("222");
+  expect(stored.rows[0]?.text).not.toContain(discordId);
 });
 
 it("attributes a repeated character submission to the later response", async () => {
