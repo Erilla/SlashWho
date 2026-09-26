@@ -8682,6 +8682,49 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toEqual({ kind: "not_due" });
   });
 
+  it("treats a character that has never published a sweep as due for a visit", async () => {
+    // Break caught: with no sweep-state row, the check dereferenced the
+    // missing row and threw, so a visit never scheduled the first sweep.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "neversweptroot"
+    } as const;
+    const cadenceCutoff = new Date("2026-08-01T12:00:00.000Z");
+
+    await expect(
+      repositories.fingerprintSweeps.isDueForVisit!(key, cadenceCutoff)
+    ).resolves.toBe(true);
+
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const at = new Date("2026-08-08T12:00:00.000Z");
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: run.id,
+      key,
+      requestCap: 1,
+      hourlyBudget: 2,
+      cadenceCutoff,
+      at
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+    await repositories.fingerprintSweeps.finish(admission.reservationId, {
+      at,
+      published: true,
+      limitationCode: null
+    });
+
+    await expect(
+      repositories.fingerprintSweeps.isDueForVisit!(key, cadenceCutoff)
+    ).resolves.toBe(false);
+    await expect(
+      repositories.fingerprintSweeps.isDueForVisit!(
+        key,
+        new Date("2026-08-15T12:00:00.000Z")
+      )
+    ).resolves.toBe(true);
+  });
+
   it("persists and clears the fingerprint sweep cursor", async () => {
     const key = {
       region: "eu",

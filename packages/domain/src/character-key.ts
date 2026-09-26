@@ -50,12 +50,13 @@ function parseCharacterPath(url: URL, expectedPrefix: string): CharacterKey {
   } catch {
     return invalidCharacterUrl();
   }
-  if (parts.length !== 4 || parts[0].toLowerCase() !== expectedPrefix) {
+  const [prefix, ...rest] = parts;
+  if (parts.length !== 4 || prefix?.toLowerCase() !== expectedPrefix) {
     return invalidCharacterUrl();
   }
-  const [region, accentedRealm, name] = parts
-    .slice(1)
-    .map((part) => part.toLocaleLowerCase("en-US"));
+  const [region, accentedRealm, name] = rest.map((part) =>
+    part.toLocaleLowerCase("en-US")
+  ) as [string, string, string];
   // Raider.IO slugs keep a realm's accents ("aggra-português"); Blizzard's,
   // which every lookup uses, drop them ("aggra-portugues").
   const realm = accentedRealm.normalize("NFD").replace(/\p{M}/gu, "");
@@ -105,15 +106,17 @@ export function parseWarcraftLogsCharacterIdUrl(
   }
   if (url.hostname !== "www.warcraftlogs.com") return undefined;
   const parts = url.pathname.split("/").filter(Boolean);
+  const [kind, idSegment, idText] = parts;
   if (
     parts.length !== 3 ||
-    parts[0].toLowerCase() !== "character" ||
-    parts[1].toLowerCase() !== "id" ||
-    !/^[1-9][0-9]*$/.test(parts[2])
+    kind?.toLowerCase() !== "character" ||
+    idSegment?.toLowerCase() !== "id" ||
+    idText === undefined ||
+    !/^[1-9][0-9]*$/.test(idText)
   ) {
     return undefined;
   }
-  const id = Number(parts[2]);
+  const id = Number(idText);
   return Number.isSafeInteger(id) ? id : undefined;
 }
 

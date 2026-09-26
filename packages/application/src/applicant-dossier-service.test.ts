@@ -17,10 +17,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { applicationConfigSchema } from "./config";
 import { decryptCredential } from "./credential-encryption";
-import {
-  createApplicantDossierService,
-  limitationRecovery
-} from "./applicant-dossier-service";
+import { createApplicantDossierService } from "./applicant-dossier-service";
+import { limitationRecovery } from "./dossier-limitations";
 import { retryDelayMsFor } from "./limitation-retry-policy";
 import { createMeasurementScope } from "./measurement";
 import { createSearchService } from "./search-service";

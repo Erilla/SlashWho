@@ -81,7 +81,7 @@ describe("GitHub Actions", () => {
         const match = /^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/.exec(line);
         if (!match) continue;
 
-        const [, reference, rest] = match;
+        const [, reference = "", rest = ""] = match;
         if (reference.startsWith("./")) continue;
 
         if (

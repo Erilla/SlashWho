@@ -120,18 +120,24 @@ describe("layoutGuildTimeline", () => {
     ]);
   });
 
-  it("counts a label beside a narrow bar as part of the room it takes", () => {
-    // The 2018 bar is too short for its name, so the name sits to its right
-    // and the next bar, which starts under that name, drops a row.
+  it("shortens a label to fit inside a narrow bar rather than beside it", () => {
+    // Break caught: a label drawn beside the short 2018 bar claimed the row
+    // and pushed the long bar after it down to the next one.
     const layout = layoutGuildTimeline(
       [
         span("SeriouslyCasual", "2018-03-14", "2018-07-18"),
-        span("SeriouslyCasual", "2018-10-01", "2019-06-01")
+        span("SeriouslyCasual", "2019-10-16", "2024-06-19"),
+        span("do u need", "2022-08-14", "2023-12-10")
       ],
       options
     );
-    expect(layout.bars[0]?.labelInside).toBe(false);
-    expect(layout.bars.map((bar) => bar.lane)).toEqual([0, 1]);
+    expect(
+      layout.bars.map((bar) => [bar.guild.name, bar.lane, bar.label])
+    ).toEqual([
+      ["SeriouslyCasual", 0, "Ser…"],
+      ["SeriouslyCasual", 0, "SeriouslyCasual"],
+      ["do u need", 1, "do u need"]
+    ]);
   });
 
   it("leaves room past today for the current-guild markers in late December", () => {
@@ -142,6 +148,14 @@ describe("layoutGuildTimeline", () => {
     expect(layout.width).toBeGreaterThanOrEqual(
       Math.floor(layout.x("2026-12-30") + 48)
     );
+  });
+
+  it("leaves a bar too narrow for even one letter unlabelled", () => {
+    const [bar] = layoutGuildTimeline(
+      [span("Rancour", "2025-01-01", "2025-01-03")],
+      options
+    ).bars;
+    expect(bar?.label).toBe("");
   });
 
   it("keeps a single-night stretch visible", () => {
