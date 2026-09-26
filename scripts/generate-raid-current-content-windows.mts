@@ -1,16 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-
-import {
-  fetchRaidCurrentContentWindows,
-  isDirectExecution
-} from "./raid-current-content-windows.mts";
-
-function requiredEnvironment(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name.toLocaleLowerCase("en-US")}_required`);
-  return value;
-}
+import { requiredEnvironment, runIfMain } from "./lib/cli.mts";
+import { writeSnapshot } from "./lib/snapshot.mts";
+import { fetchRaidCurrentContentWindows } from "./raid-current-content-windows.mts";
 
 async function main() {
   const output = requiredEnvironment(
@@ -31,14 +21,11 @@ async function main() {
       }),
     baseUrl
   });
-  const snapshot = {
+  const outputPath = await writeSnapshot(output, {
     source: "raiderio-raiding-static-data",
     generatedAt: new Date().toISOString(),
     windows
-  };
-  const outputPath = resolve(output);
-  await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  });
   console.log(
     JSON.stringify({
       output: outputPath,
@@ -47,13 +34,4 @@ async function main() {
   );
 }
 
-if (isDirectExecution(import.meta.url, process.argv[1] ?? "")) {
-  void main().catch((error: unknown) => {
-    console.error(
-      error instanceof Error
-        ? error.message
-        : "raid_current_content_windows_failed"
-    );
-    process.exitCode = 1;
-  });
-}
+runIfMain(import.meta.url, main, "raid_current_content_windows_failed");

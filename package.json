@@ -7,6 +7,7 @@
     "capture:demo-dossier": "tsx scripts/capture-demo-dossier.mts",
     "generate:cutting-edge-catalogue": "tsx scripts/generate-cutting-edge-catalogue.mts",
     "generate:dungeon-catalogue": "tsx scripts/generate-dungeon-catalogue.mts",
+    "generate:raid-catalogue": "tsx scripts/generate-raid-catalogue.mts",
     "generate:raid-current-content-windows": "tsx scripts/generate-raid-current-content-windows.mts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

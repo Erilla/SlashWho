@@ -1,3 +1,5 @@
+import { nonEmptyString, positiveInteger, record } from "./lib/json.mts";
+
 type JsonRecord = Record<string, unknown>;
 
 export type GeneratedCuttingEdgeAchievement = Readonly<{
@@ -70,24 +72,6 @@ export function sortCuttingEdgeAchievementsChronologically(
       historicalOrder.get(a.achievementId)! -
       historicalOrder.get(b.achievementId)!
   );
-}
-
-function record(value: unknown): JsonRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : null;
-}
-
-function positiveInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-    ? value
-    : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
 }
 
 async function jsonRequest(
