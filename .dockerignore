@@ -12,3 +12,7 @@ test-results
 .env
 .env.*
 !.env.example
+.claude
+docs
+tests
+**/*.md
