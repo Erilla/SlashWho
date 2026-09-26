@@ -229,6 +229,12 @@ export type WarcraftLogsRankedBackfillCursor = Readonly<{
   zoneIds: readonly number[];
   /** Aligned with zoneIds; absent only on a cursor saved before partition scans. */
   partitionIds?: readonly number[];
+  /**
+   * Aligned with zoneIds: the only encounters to walk in a zone shared by
+   * several raids, or null for a zone that is the raid's alone. Absent on a
+   * cursor saved before shared zones were recognised, which could not have selected one.
+   */
+  zoneEncounterIds?: readonly (readonly number[] | null)[];
   /** Public fights already accepted by a capped scan, for resumed deduplication. */
   acceptedFightKeys?: readonly string[];
   zonesLoaded: boolean;

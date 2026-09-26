@@ -185,7 +185,7 @@ const reportByCodeQuery = `
 
 const historicRaidZonesQuery = `
   query HistoricRaidZones {
-    worldData { zones { id name partitions { id } } }
+    worldData { zones { id name partitions { id } encounters { id name } } }
   }
 `;
 
@@ -702,19 +702,46 @@ function decodedHydratedReport(
   );
 }
 
+/**
+ * The zones and partitions whose rankings can hold a journal raid's kills.
+ *
+ * A zone that names the raid is walked whole, as it always was. A zone that
+ * names no raid at all -- Warcraft Logs files the opening Midnight raids under
+ * one `VS / DR / MQD` zone -- is walked only when one of its encounters is the
+ * raid's boss, and then only for those encounters, so a Voidspire walk does not
+ * spend its cap hydrating Dreamrift fights the decoder would discard. A zone
+ * that names a different raid is never taken on the strength of its bosses:
+ * older single-raid tiers keep exactly the zones they had.
+ */
 function historicZoneIds(
   value: unknown,
   journalRaidId: string
-): { zoneIds: number[]; partitionIds: number[] } | null {
+): {
+  zoneIds: number[];
+  partitionIds: number[];
+  zoneEncounterIds: (number[] | null)[];
+} | null {
   const zones = record(record(record(value)?.data)?.worldData)?.zones;
   if (!Array.isArray(zones)) return null;
   const scopes = new Set<string>();
+  const encounterFilters = new Map<number, number[] | null>();
   for (const value of zones) {
     const zone = record(value);
     const id = positiveInteger(zone?.id);
     const name = nonEmptyString(zone?.name);
     if (!id || !name) return null;
-    if (lookupRaidByName(name)?.raidId !== journalRaidId) continue;
+    const named = lookupRaidByName(name);
+    let filter: number[] | null = null;
+    if (named === null) {
+      const members = raidEncountersInZone(
+        zone?.encounters,
+        name,
+        journalRaidId
+      );
+      if (!members) return null;
+      if (members.length === 0) continue;
+      filter = members;
+    } else if (named.raidId !== journalRaidId) continue;
     if (!Array.isArray(zone?.partitions)) return null;
     const partitions = zone.partitions.length ? zone.partitions : [{ id: -1 }];
     for (const value of partitions) {
@@ -722,14 +749,48 @@ function historicZoneIds(
       if (!Number.isSafeInteger(partitionId) || partitionId === 0) return null;
       scopes.add(`${id}:${partitionId}`);
     }
+    encounterFilters.set(id, filter);
   }
   const ordered = [...scopes]
     .map((scope) => scope.split(":").map(Number) as [number, number])
     .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return {
     zoneIds: ordered.map(([zoneId]) => zoneId),
-    partitionIds: ordered.map(([, partitionId]) => partitionId)
+    partitionIds: ordered.map(([, partitionId]) => partitionId),
+    zoneEncounterIds: ordered.map(
+      ([zoneId]) => encounterFilters.get(zoneId) ?? null
+    )
   };
+}
+
+/**
+ * The encounters of a raid-less zone that belong to the journal raid, resolved
+ * boss by boss exactly as a kill in that zone is (`lookupRaidForEvidence`), so
+ * the walk selects precisely the fights the decoder will keep.
+ */
+function raidEncountersInZone(
+  value: unknown,
+  zoneName: string,
+  journalRaidId: string
+): number[] | null {
+  // Dungeon, Mythic+ and PvP zones also name no raid; one without an encounter
+  // list simply has none of the raid's bosses.
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return null;
+  const members: number[] = [];
+  for (const item of value) {
+    const encounter = record(item);
+    const id = positiveInteger(encounter?.id);
+    const bossName = nonEmptyString(encounter?.name);
+    if (!id || !bossName) return null;
+    const raid = lookupRaidForEvidence({
+      raidName: zoneName,
+      bossName,
+      journalBossId: null
+    });
+    if (raid?.raidId === journalRaidId) members.push(id);
+  }
+  return members.sort((a, b) => a - b);
 }
 
 function historicEncounterIds(
@@ -882,7 +943,8 @@ function decodedRankedKill(
       kill.reportCode === expected.code &&
       kill.fightId === expected.fightId &&
       kill.bossId === String(expected.encounterId) &&
-      lookupRaidByName(kill.raidName)?.raidId === expected.journalRaidId &&
+      // A combined zone's fights name no raid, so the boss has to place them.
+      lookupRaidForEvidence(kill)?.raidId === expected.journalRaidId &&
       currentContentEligibilityByRaidId(
         kill.killedAt,
         expected.journalRaidId
@@ -2181,10 +2243,13 @@ export function createWarcraftLogsClient(
         const found = historicEncounterIds(ranking.value, options.characterId);
         if (!found)
           return limited({ kind: "limitation", code: "schema_drift" });
+        const only = progress.zoneEncounterIds?.[progress.zoneIndex] ?? null;
         progress = {
           ...progress,
           characterId: found.id,
-          encounterIds: found.encounters,
+          encounterIds: only
+            ? found.encounters.filter((id) => only.includes(id))
+            : found.encounters,
           encountersLoaded: true
         };
       }

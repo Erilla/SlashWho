@@ -602,6 +602,7 @@ export type StoredRankedBackfillCursor = Readonly<{
   characterId?: number;
   zoneIds: readonly number[];
   partitionIds?: readonly number[];
+  zoneEncounterIds?: readonly (readonly number[] | null)[];
   acceptedFightKeys?: readonly string[];
   zonesLoaded: boolean;
   zoneIndex: number;
