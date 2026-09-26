@@ -3300,6 +3300,46 @@ describe("applicant evidence job handler", () => {
         expect(costs[0]?.timings?.durationMs).toBeGreaterThan(0);
       });
 
+      it.each([
+        "hydratedFightUrls",
+        "collectedTierZones",
+        "terminalTiers",
+        "storedEvidenceTiers",
+        "historicAliases"
+      ] as const)(
+        "counts the planning read %s in the run's database time",
+        async (method) => {
+          // Break caught: the budget-planning reads called the unwrapped store,
+          // so their time never reached dbMs and every run read low (#568).
+          let clock = 0;
+          const defaults = evidenceStore();
+          const slow = {
+            ...defaults,
+            async historicAliases() {
+              return [];
+            }
+          };
+          const { costs, store: evidence } = recordingStore({
+            [method]: async (...args: unknown[]) => {
+              clock += 60_000;
+              return (slow[method] as (...inner: unknown[]) => unknown)(
+                ...args
+              );
+            }
+          });
+          const handler = createApplicantEvidenceJobHandler({
+            ...baseOptions(),
+            evidence,
+            monotonic: () => (clock += 5)
+          });
+
+          await handler.execute("run-cost-planning");
+
+          expect(costs[0]?.timings?.dbMaxCallName).toBe(`evidence.${method}`);
+          expect(costs[0]?.timings?.dbMs).toBeGreaterThanOrEqual(60_000);
+        }
+      );
+
       it("says why a run fell short, not merely that it did", async () => {
         // Correlating a limitation against its spend by hand was the thing
         // asked for most often while settling the budget: what a run that hit

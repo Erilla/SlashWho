@@ -543,11 +543,47 @@ describe("worker runtime", () => {
     });
     expect(integration.fingerprint).toEqual({
       requestCap: 300,
+      readConcurrency: 6,
       hourlyBudget: 28_800,
       cadenceMs: 604_800_000,
       minimumCommon: 200,
       minimumIdenticalPercent: 20
     });
+  });
+
+  it("bounds the worker's shared Blizzard client, not each caller", async () => {
+    // Break caught: the worker composition root could stop passing the request
+    // limits to the one client that sweeps and evidence runs share, and every
+    // caller would again be free to overrun Blizzard's per-second allowance.
+    const releases: (() => void)[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/token")) {
+        return Response.json({ access_token: "token", expires_in: 3600 });
+      }
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return Response.json({ achievements: [] });
+    }) as typeof globalThis.fetch;
+    try {
+      const integration = createFingerprintIntegration(config);
+      const reads = Array.from({ length: 10 }, (_, index) =>
+        integration.blizzardGateway!.getCompletedAchievements({
+          region: "eu",
+          realm: "silvermoon",
+          name: `sentinel${String.fromCharCode(97 + index)}`
+        })
+      );
+      await vi.waitFor(() => expect(releases).toHaveLength(6));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(releases).toHaveLength(6);
+
+      for (const release of releases.splice(0)) release();
+      await vi.waitFor(() => expect(releases).toHaveLength(4));
+      for (const release of releases.splice(0)) release();
+      await expect(Promise.all(reads)).resolves.toHaveLength(10);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("routes a throttled Blizzard response through the worker's own upstream_throttle record", async () => {
