@@ -65,10 +65,26 @@ export {
 export type { CallerIdentity } from "./auth";
 export {
   applicationConfigSchema,
+  loadSharedConfig,
+  parseFingerprintSweepCadenceHours,
+  parseFreshnessHours,
   parseNegativeCacheTtlMs,
   NEGATIVE_CACHE_TTL_DEFAULT_MS
 } from "./config";
-export type { ApplicationConfig } from "./config";
+export type { ApplicationConfig, SharedConfig } from "./config";
+export {
+  integerInRange,
+  optionalEncryptionKey,
+  optionalHttpUrl,
+  optionalSecret,
+  parseDatabaseUrl,
+  positiveInteger,
+  positiveNumber,
+  requiredEncryptionKey,
+  requiredPositiveInteger,
+  requiredSecret
+} from "./environment";
+export type { Environment } from "./environment";
 export { createApplicantDossierService } from "./applicant-dossier-service";
 export type {
   ApplicantDossierService,
