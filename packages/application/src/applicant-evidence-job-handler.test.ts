@@ -12,6 +12,7 @@ import {
   createWarcraftLogsClient,
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
+import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
 import { supportedRaidCatalogue, type CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
@@ -3034,7 +3035,10 @@ describe("applicant evidence job handler", () => {
               reportHydration: 0,
               zoneRankings: 1,
               fightParses: 1,
-              rankingIdentities: 1
+              rankingIdentities: 1,
+              raiderIoHistoric: 0,
+              raiderIoRankings: 0,
+              blizzardAchievements: 0
             },
             // No Raider.IO client, so recovery never ran: null, not zero.
             recovery: {
@@ -3499,7 +3503,9 @@ describe("applicant evidence job handler", () => {
         >
       > = {},
       integrations: {
-        raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings">;
+        raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings"> &
+          Partial<Pick<RaiderIoGateway, "getHistoricMythicKills">>;
+        blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
       } = {}
     ) {
       return createApplicantEvidenceJobHandler({
@@ -4798,6 +4804,71 @@ describe("applicant evidence job handler", () => {
       ).toBe(true);
     });
 
+    it("counts what Raider.IO and Blizzard cost the run on its cost row", async () => {
+      // Break caught: the cost row counted Warcraft Logs alone, so whether
+      // retaining Raider.IO or Blizzard evidence would save anything could
+      // not be measured (#298). Each provider reports its own physical
+      // requests, which a cache hit or a guild query's second call would
+      // otherwise hide.
+      const evidence = store();
+      const handler = handlerFor(
+        evidence,
+        {
+          kind: "evidence" as const,
+          parsedFightUrls: [],
+          kills: [
+            {
+              ...concludedKill,
+              raidName: "The Venomous Abyss",
+              bossName: "Sszorak",
+              guild: { name: "Guild", region: "eu", realm: "Silvermoon" }
+            }
+          ],
+          wipes: [],
+          tierBests: [],
+          troubledRaidIds: { parses: [], tierBests: [] }
+        },
+        {},
+        {
+          raiderio: {
+            getHistoricMythicKills: vi.fn(async (_key, options) => {
+              options.onPhysicalRequest?.();
+              options.onPhysicalRequest?.();
+              options.onPhysicalRequest?.();
+              return { kind: "evidence" as const, kills: [] };
+            }),
+            getMythicBossRankings: vi.fn(
+              async (_request, _signal, onPhysicalRequest) => {
+                onPhysicalRequest?.();
+                onPhysicalRequest?.();
+                return { kind: "rankings" as const, rows: [] };
+              }
+            )
+          },
+          blizzard: {
+            getCompletedAchievements: vi.fn(
+              async (_key, _signal, onProfileRequest) => {
+                await onProfileRequest?.();
+                return [];
+              }
+            )
+          }
+        }
+      );
+
+      await handler.execute(run.id);
+
+      expect(evidence.costs).toEqual([
+        expect.objectContaining({
+          requests: expect.objectContaining({
+            raiderIoHistoric: 3,
+            raiderIoRankings: 2,
+            blizzardAchievements: 1
+          })
+        })
+      ]);
+    });
+
     it("records a successful Raider.IO no-match answer without inventing a rank", async () => {
       const evidence = store();
       const handler = handlerFor(
@@ -4831,6 +4902,125 @@ describe("applicant evidence job handler", () => {
       expect(evidence.published[0]?.result.kills[0]).toMatchObject({
         historicWorldRank: null,
         historicRankCheckedAt: expect.any(String)
+      });
+    });
+
+    describe("Raider.IO rank lookups", () => {
+      const rankedKill = (guildName: string, fight: number) => ({
+        ...concludedKill,
+        raidName: "The Venomous Abyss",
+        bossName: "Sszorak",
+        killedAt: "2026-09-12T20:00:00.000Z",
+        fightUrl: `https://www.warcraftlogs.com/reports/abc#fight=${fight}`,
+        guild: { name: guildName, region: "eu", realm: "Silvermoon" }
+      });
+      const response = (
+        kills: ReadonlyArray<ReturnType<typeof rankedKill>>
+      ) => ({
+        kind: "evidence" as const,
+        parsedFightUrls: [],
+        kills,
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      });
+
+      it("does not ask again for a rank a published run already holds", async () => {
+        // Break caught: every full run re-asked Raider.IO for up to 50 ranks,
+        // although publishing keeps a stored rank whatever the lookup says.
+        const evidence = store();
+        const ranked = rankedKill("Ranked", 1);
+        const unranked = rankedKill("Unranked", 2);
+        evidence.storedEvidenceTiers = async () => ({
+          kills: [],
+          wipes: [],
+          // A stored no-match is null, and is worth asking about again.
+          parseOnlyKills: [
+            { ...ranked, historicWorldRank: 7 },
+            { ...unranked, historicWorldRank: null }
+          ] as never
+        });
+        const getMythicBossRankings = vi.fn(async () => ({
+          kind: "rankings" as const,
+          rows: []
+        }));
+        const handler = handlerFor(
+          evidence,
+          response([ranked, unranked]),
+          {},
+          { raiderio: { getMythicBossRankings } }
+        );
+
+        await handler.execute(run.id);
+
+        expect(getMythicBossRankings).toHaveBeenCalledTimes(1);
+        expect(getMythicBossRankings).toHaveBeenCalledWith(
+          expect.objectContaining({
+            guild: expect.objectContaining({ name: "Unranked" })
+          }),
+          expect.anything(),
+          expect.any(Function)
+        );
+        const published = evidence.published[0]?.result.kills ?? [];
+        // Left unset, so publishing carries the stored rank forward.
+        expect(published[0]?.historicWorldRank).toBeUndefined();
+        expect(published[1]).toMatchObject({ historicWorldRank: null });
+      });
+
+      it("starts the next lookup as soon as any lookup finishes", async () => {
+        // Break caught: lookups ran in batches of four, each waiting for its
+        // slowest call before the next batch could start.
+        const evidence = store();
+        const guilds = ["A", "B", "C", "D", "E"];
+        const answers = new Map<string, () => void>();
+        const started: string[] = [];
+        const getMythicBossRankings = vi.fn(
+          async (request: { guild?: { name: string } }) => {
+            const name = request.guild!.name;
+            started.push(name);
+            await new Promise<void>((resolve) => answers.set(name, resolve));
+            return { kind: "rankings" as const, rows: [] };
+          }
+        );
+        const handler = handlerFor(
+          evidence,
+          response(guilds.map((guild, index) => rankedKill(guild, index + 1))),
+          {},
+          { raiderio: { getMythicBossRankings } as never }
+        );
+
+        const execution = handler.execute(run.id);
+        await vi.waitFor(() => expect(started).toEqual(["A", "B", "C", "D"]));
+        answers.get("A")!();
+        await vi.waitFor(() => expect(started).toContain("E"));
+        for (const guild of ["B", "C", "D", "E"]) answers.get(guild)!();
+        await execution;
+
+        expect(evidence.published).toHaveLength(1);
+      });
+
+      it("sends no queued lookup once a lookup has thrown", async () => {
+        // Break caught: the pool kept working through its queue after the
+        // phase had already been marked unavailable.
+        const evidence = store();
+        const getMythicBossRankings = vi.fn(async () => {
+          throw new Error("raiderio_down");
+        });
+        const handler = handlerFor(
+          evidence,
+          response(
+            ["A", "B", "C", "D", "E", "F"].map((guild, index) =>
+              rankedKill(guild, index + 1)
+            )
+          ),
+          {},
+          { raiderio: { getMythicBossRankings } }
+        );
+
+        await handler.execute(run.id);
+
+        expect(getMythicBossRankings).toHaveBeenCalledTimes(4);
+        expect(evidence.published).toHaveLength(1);
       });
     });
 

@@ -6385,11 +6385,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              mode, character_guilds_requests, tier_search_raid_id,
              tier_search_outcome, tier_search_requests, tier_search_guilds,
              tier_search_reports_hydrated, tier_search_recovered_kills,
-             tier_search_recovered_wipes
+             tier_search_recovered_wipes,
+             raiderio_historic_requests, raiderio_rankings_requests,
+             blizzard_achievements_requests
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                   $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+                   $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
+                   $33, $34, $35)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -6421,7 +6424,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              tier_search_guilds = EXCLUDED.tier_search_guilds,
              tier_search_reports_hydrated = EXCLUDED.tier_search_reports_hydrated,
              tier_search_recovered_kills = EXCLUDED.tier_search_recovered_kills,
-             tier_search_recovered_wipes = EXCLUDED.tier_search_recovered_wipes`,
+             tier_search_recovered_wipes = EXCLUDED.tier_search_recovered_wipes,
+             raiderio_historic_requests = EXCLUDED.raiderio_historic_requests,
+             raiderio_rankings_requests = EXCLUDED.raiderio_rankings_requests,
+             blizzard_achievements_requests =
+               EXCLUDED.blizzard_achievements_requests`,
           [
             cost.runId,
             cost.attempt,
@@ -6454,7 +6461,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             cost.tierSearch?.guilds ?? null,
             cost.tierSearch?.reportsHydrated ?? null,
             cost.tierSearch?.recoveredKills ?? null,
-            cost.tierSearch?.recoveredWipes ?? null
+            cost.tierSearch?.recoveredWipes ?? null,
+            cost.requests.raiderIoHistoric ?? 0,
+            cost.requests.raiderIoRankings ?? 0,
+            cost.requests.blizzardAchievements ?? 0
           ]
         );
       },

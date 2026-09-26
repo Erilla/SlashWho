@@ -153,6 +153,77 @@ describe("summarize", () => {
     );
   });
 
+  it("breaks http_request percentiles down per endpoint, then per status", () => {
+    const requests = [
+      { endpoint: "dossier", status: 200, durationMs: 900 },
+      { endpoint: "dossier", status: 200, durationMs: 1100 },
+      { endpoint: "dossier", status: 500, durationMs: 30 },
+      { endpoint: "account", status: 200, durationMs: 10 },
+      { endpoint: "account", status: 200, durationMs: 12 }
+    ].map((fields) => JSON.stringify({ event: "http_request", ...fields }));
+    const summary = summarize(requests, "http_request");
+
+    // The overall summary is still reported alongside the breakdown.
+    expect(summary.count).toBe(5);
+    expect(summary.fields.durationMs!.max).toBe(1100);
+
+    const dossier = summary.byEndpoint.dossier!;
+    const account = summary.byEndpoint.account!;
+    expect(dossier.count).toBe(3);
+    expect(account.count).toBe(2);
+    // A fast endpoint must not be dragged up by a slow one.
+    expect(account.fields.durationMs!.p95).toBe(11.9);
+    expect(dossier.fields.durationMs!.max).toBe(1100);
+
+    // A fast failure must not drag a successful endpoint's p50 down.
+    expect(dossier.byStatus["200"]).toMatchObject({ count: 2 });
+    expect(dossier.byStatus["200"]!.fields.durationMs!.p50).toBe(1000);
+    expect(dossier.byStatus["500"]).toMatchObject({ count: 1 });
+    expect(dossier.byStatus["500"]!.fields.durationMs!.max).toBe(30);
+    expect(Object.keys(account.byStatus)).toEqual(["200"]);
+
+    // http_request carries no outcome, so it forms no outcome groups.
+    expect(summary.byOutcome).toEqual({});
+  });
+
+  it("counts an endpoint record with no status only at endpoint level", () => {
+    const summary = summarize(
+      [JSON.stringify({ event: "http_request", endpoint: "dossier" })],
+      "http_request"
+    );
+    expect(summary.byEndpoint.dossier).toEqual({
+      count: 1,
+      fields: {},
+      byStatus: {}
+    });
+  });
+
+  it("forms no endpoint groups for outcome-bearing events", () => {
+    const summary = summarize(
+      [
+        JSON.stringify({
+          event: "evidence_job",
+          outcome: "complete",
+          durationMs: 1000
+        }),
+        JSON.stringify({
+          event: "discovery_run",
+          outcome: "snapshot",
+          durationMs: 5
+        })
+      ],
+      "evidence_job"
+    );
+    expect(summary.byEndpoint).toEqual({});
+    expect(summary.byOutcome).toEqual({
+      complete: {
+        count: 1,
+        fields: { durationMs: { p50: 1000, p95: 1000, max: 1000 } }
+      }
+    });
+    expect(summarize(lines, "discovery_run").byEndpoint).toEqual({});
+  });
+
   it("keeps an outcome group even when it has no numeric fields", () => {
     const summary = summarize(
       [JSON.stringify({ event: "discovery_run", outcome: "cancelled" })],

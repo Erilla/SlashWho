@@ -34,6 +34,7 @@ import type {
   WarcraftLogsTierSearchOutcome
 } from "@slashwho/warcraftlogs";
 
+import { createConcurrencyLimiter } from "./concurrency";
 import { decryptCredential } from "./credential-encryption";
 import { errorFields } from "./error-fields";
 import {
@@ -1514,7 +1515,9 @@ export function createApplicantEvidenceJobHandler(
                   {
                     storedKills: storedEvidence.kills,
                     ...(killScanFloor ? { killScanFloor } : {}),
-                    signal: activeContext.signal
+                    signal: activeContext.signal,
+                    onPhysicalRequest: () =>
+                      scope.increment("raiderIoHistoricRequests")
                   }
                 )
               )
@@ -1984,8 +1987,18 @@ export function createApplicantEvidenceJobHandler(
           ? response.parsedFightUrls.filter((url) => allKills.has(url))
           : response.parsedFightUrls;
         if (options.raiderio && !targeted) {
+          // A kill's world rank is fixed once found, and publishing keeps a
+          // stored rank whatever a new lookup returns, so a kill the last
+          // published run already ranked is not worth a request. A stored
+          // null is a no-match, which a later lookup can still resolve.
+          const storedRanks = new Set(
+            (storedEvidence.parseOnlyKills ?? [])
+              .filter((kill) => kill.historicWorldRank != null)
+              .map((kill) => kill.fightUrl)
+          );
           const requests = new Map<string, MythicBossRankingsOptions>();
           for (const kill of publishedKills) {
+            if (storedRanks.has(kill.fightUrl)) continue;
             const request = raiderIoRankingRequest(kill, run.key.region);
             if (request) requests.set(rankingRequestKey(request), request);
           }
@@ -2003,32 +2016,42 @@ export function createApplicantEvidenceJobHandler(
                 requests.size > cappedRequests.length
                   ? "request_cap"
                   : undefined;
-              for (
-                let offset = 0;
-                offset < cappedRequests.length;
-                offset += RAIDER_IO_RANKING_CONCURRENCY
-              ) {
-                const batch = cappedRequests.slice(
-                  offset,
-                  offset + RAIDER_IO_RANKING_CONCURRENCY
-                );
-                const settled = await Promise.all(
-                  batch.map(async ([key, request]) => ({
-                    key,
-                    result: await options.raiderio!.getMythicBossRankings(
-                      request,
-                      activeContext.signal
-                    )
-                  }))
-                );
-                for (const item of settled) {
-                  if (item.result.kind === "rankings")
-                    results.set(item.key, item.result.rows);
-                  else limitationCode ??= item.result.code;
-                }
+              // A pool rather than batches: a batch waited for its slowest
+              // lookup before the next could start. A thrown lookup fails the
+              // phase at once, as a failed batch did, and the lookups still
+              // queued behind it are abandoned rather than sent for nothing.
+              const limiter = createConcurrencyLimiter(
+                RAIDER_IO_RANKING_CONCURRENCY
+              );
+              let abandoned = false;
+              const settled = await Promise.all(
+                cappedRequests.map(([key, request]) =>
+                  limiter.run(async () => {
+                    if (abandoned) throw new Error("rank_lookup_abandoned");
+                    try {
+                      return {
+                        key,
+                        result: await options.raiderio!.getMythicBossRankings(
+                          request,
+                          activeContext.signal,
+                          () => scope.increment("raiderIoRankingsRequests")
+                        )
+                      };
+                    } catch (error) {
+                      abandoned = true;
+                      throw error;
+                    }
+                  })
+                )
+              );
+              for (const item of settled) {
+                if (item.result.kind === "rankings")
+                  results.set(item.key, item.result.rows);
+                else limitationCode ??= item.result.code;
               }
               for (let index = 0; index < publishedKills.length; index += 1) {
                 const kill = publishedKills[index]!;
+                if (storedRanks.has(kill.fightUrl)) continue;
                 const request = raiderIoRankingRequest(kill, run.key.region);
                 const rows = request
                   ? results.get(rankingRequestKey(request))
@@ -2067,7 +2090,8 @@ export function createApplicantEvidenceJobHandler(
             cuttingEdges = (
               await options.blizzard.getCompletedAchievements(
                 run.key,
-                activeContext.signal
+                activeContext.signal,
+                () => scope.increment("blizzardAchievementsRequests")
               )
             )
               .filter((achievement) =>
@@ -2380,7 +2404,12 @@ export function createApplicantEvidenceJobHandler(
                 fightParses: requests(REQUEST_COUNTER_PREFIX.fight_parses),
                 rankingIdentities: requests(
                   REQUEST_COUNTER_PREFIX.ranking_identities
-                )
+                ),
+                // The other two upstreams, counted so their cost can be
+                // weighed before any of it is retained (#298).
+                raiderIoHistoric: requests("raiderIoHistoric"),
+                raiderIoRankings: requests("raiderIoRankings"),
+                blizzardAchievements: requests("blizzardAchievements")
               },
               recovery: {
                 raiderIoOutcome: record.raiderIoHistoricOutcome as

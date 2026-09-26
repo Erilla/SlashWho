@@ -111,6 +111,11 @@ skipped suite is not a passing suite, and `test:integration` and `test:e2e`
 silently need Docker running. Never open a pull request on the strength of the
 subset of tests you happened to run while implementing.
 
+`test:e2e` runs the web app's production build (`next start`), not `next dev`.
+Running `build` first means it reuses that build; run on its own, it rebuilds
+the web app whenever a source file is newer than the last build, so it never
+tests stale code.
+
 ### Review the work
 
 #### Claude Code
