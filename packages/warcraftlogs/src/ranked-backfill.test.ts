@@ -681,6 +681,106 @@ describe("ranked Mythic backfill", () => {
     expect(requests).toHaveLength(6);
   });
 
+  describe("a metric Warcraft Logs answers with an error object", () => {
+    const zoneRankingsClient = (healing: unknown) =>
+      createWarcraftLogsClient({
+        fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(
+            typeof input === "string" || input instanceof URL
+              ? input
+              : input.url
+          );
+          if (url.pathname === "/oauth/token")
+            return Response.json({ access_token: "token", expires_in: 3600 });
+          const { query, variables } = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: Record<string, number | string>;
+          };
+          if (query.includes("HistoricRaidZones"))
+            return Response.json({
+              data: {
+                worldData: {
+                  zones: [
+                    {
+                      id: 17,
+                      name: "Antorus, The Burning Throne",
+                      partitions: [{ id: 1 }]
+                    }
+                  ]
+                }
+              }
+            });
+          if (query.includes("HistoricZoneRankings"))
+            return Response.json({
+              data: {
+                characterData: {
+                  character: {
+                    id: 40989140,
+                    damage: {
+                      rankings: [{ encounterID: 2092, totalKills: 1 }]
+                    },
+                    healing
+                  }
+                }
+              }
+            });
+          if (query.includes("HistoricEncounterRankings"))
+            return Response.json({
+              data: {
+                characterData: {
+                  character: {
+                    encounterRankings: query.includes("metric: hps")
+                      ? null
+                      : {
+                          ranks: [
+                            {
+                              report: { code: "one", fightID: 10 },
+                              spec: "Holy"
+                            }
+                          ]
+                        }
+                  }
+                }
+              }
+            });
+          return Response.json(
+            report(String(variables.code), Number(variables.fightId))
+          );
+        }) as typeof globalThis.fetch,
+        clientId: "id",
+        clientSecret: "secret"
+      });
+
+    // Recorded from a live zone-rankings read (Ryzn, Tomb of Sargeras,
+    // partition 1): the field carries the error in place of rankings, with no
+    // GraphQL `errors` entry, for a character that does heal.
+    it("reads the invalid class or spec error as not ranked in that metric", async () => {
+      const result = await zoneRankingsClient({
+        error: "Invalid class or spec number specified."
+      }).getRankedKillReports(key, { journalRaidId: "946", requestCap: 6 });
+
+      expect(result).toMatchObject({
+        kind: "evidence",
+        kills: [
+          { fightUrl: "https://www.warcraftlogs.com/reports/one#fight=10" }
+        ]
+      });
+      expect(result).not.toHaveProperty("limitation");
+    });
+
+    it("still reads any other error as schema drift", async () => {
+      const result = await zoneRankingsClient({
+        error: "Something else went wrong."
+      }).getRankedKillReports(key, { journalRaidId: "946", requestCap: 6 });
+
+      expect(result).toMatchObject({
+        kind: "evidence",
+        kills: [],
+        limitation: { kind: "limitation", code: "schema_drift" }
+      });
+    });
+  });
+
   it.each([
     ["a different canonical character", 999, Date.UTC(2018, 0, 1), "Holy"],
     [

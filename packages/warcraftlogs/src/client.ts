@@ -804,6 +804,8 @@ function raidEncountersInZone(
   return members.sort((a, b) => a - b);
 }
 
+const UNRANKED_METRIC_ERROR = "Invalid class or spec number specified.";
+
 function historicEncounterIds(
   value: unknown,
   characterId?: number
@@ -819,6 +821,11 @@ function historicEncounterIds(
     // A metric a character never ranked in may be null (for example hps on
     // a damage-only character). That is an empty result, not schema drift.
     if (entry?.[metric] === null) continue;
+    // Warcraft Logs can also answer a metric with an error object in place of
+    // its rankings, and no GraphQL `errors` entry. This one arrives for
+    // characters that do rank in the metric, so it says only that the metric
+    // has no rankings here. Any other error still reads as drift.
+    if (record(entry?.[metric])?.error === UNRANKED_METRIC_ERROR) continue;
     const rankings = record(entry?.[metric])?.rankings;
     if (!Array.isArray(rankings)) return null;
     for (const value of rankings) {
