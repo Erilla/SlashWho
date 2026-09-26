@@ -222,6 +222,29 @@ it("requires worker-only Warcraft Logs credentials and a bounded evidence cap", 
   });
 });
 
+it("defaults the cap retry to half an hour and still honours its old name", () => {
+  // Break caught: #345. A 20-minute value lived only on Railway, so the
+  // default in the repository no longer described what ran. The default is
+  // the considered value; renaming the variable must not quietly drop an
+  // operator's setting under the name it was first deployed as.
+  expect(loadWorkerConfig(environment)).toMatchObject({
+    evidenceCapRetryMs: 30 * 60_000
+  });
+  expect(
+    loadWorkerConfig({ ...environment, EVIDENCE_PARSE_CAP_RETRY_MS: "600000" })
+  ).toMatchObject({ evidenceCapRetryMs: 600_000 });
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      EVIDENCE_CAP_RETRY_MS: "900000",
+      EVIDENCE_PARSE_CAP_RETRY_MS: "600000"
+    })
+  ).toMatchObject({ evidenceCapRetryMs: 900_000 });
+  expect(() =>
+    loadWorkerConfig({ ...environment, EVIDENCE_CAP_RETRY_MS: "0" })
+  ).toThrow("invalid_evidence_cap_retry_ms");
+});
+
 it("accepts a local Blizzard endpoint only when explicitly configured", () => {
   // Break caught: e2e could not direct its fake credentials and sweep requests
   // to its deterministic local fixture.
