@@ -470,3 +470,46 @@ it("shows a collecting character's current step beneath its name instead of the 
     screen.queryByRole("status", { name: /research gathering/i })
   ).not.toBeInTheDocument();
 });
+
+it("leads each row with the viewer's eye and dims a hidden character", () => {
+  const ryalts = { region: "eu", realm: "draenor", name: "ryalts" } as const;
+  render(
+    <DossierCharacterList
+      canAddCharacters={false}
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: "Mage",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted"
+        },
+        {
+          key: ryalts,
+          displayName: "Ryalts",
+          className: "Priest",
+          raiderIoUrl: "https://raider.io/characters/eu/draenor/ryalts",
+          source: "fingerprint_derived"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+      visibility={{
+        hidden: new Set(["eu/draenor/ryalts"]),
+        isHidden: (key) => key.name === "ryalts",
+        toggle: vi.fn(),
+        showOnly: vi.fn(),
+        hideOnly: vi.fn(),
+        showAll: vi.fn()
+      }}
+    />
+  );
+
+  const [ryiiRow, ryaltsRow] = screen.getAllByRole("listitem");
+  const ryaltsEye = within(ryaltsRow!).getByRole("button", {
+    name: "Show Ryalts in the evidence"
+  });
+  expect(within(ryaltsRow!).getAllByRole("button")[0]).toBe(ryaltsEye);
+  expect(ryaltsEye).toHaveAttribute("aria-pressed", "false");
+  expect(ryaltsRow).toHaveClass("dossier-character-row--hidden");
+  expect(ryiiRow).not.toHaveClass("dossier-character-row--hidden");
+});

@@ -14,12 +14,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { credentialHeadersForRequest } from "../../../../../lib/api-credentials";
+import { evidenceFilter } from "../../../../../lib/character-visibility";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
   type PollReadResult,
   retryAfterMilliseconds,
   useAuthoritativePoll
 } from "../../../../../lib/use-authoritative-poll";
+import { useCharacterVisibility } from "../../../../../lib/use-character-visibility";
 import { DossierCharacterList } from "../../../../../components/dossier-character-list";
 import {
   DossierCharacterName,
@@ -150,6 +152,12 @@ function DossierPageState({
   canAddCharacters = true
 }: DossierPageClientProps) {
   const [dossier, setDossier] = useState(initialDossier);
+  const characters = dossier?.characters;
+  const visibility = useCharacterVisibility(identity, characters ?? []);
+  const filter = useMemo(
+    () => evidenceFilter(characters ?? [], visibility.hidden),
+    [characters, visibility.hidden]
+  );
   const [activeJobId, setActiveJobId] = useState(jobId);
   const [initialError, setInitialError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -781,12 +789,15 @@ function DossierPageState({
                   void refreshDossier();
                 }}
                 root={dossier.root}
+                visibility={visibility}
               />
               <DossierCuttingEdgeList
                 cuttingEdges={dossier.cuttingEdges}
                 limitations={dossier.limitations}
               />
               <DossierRaidList
+                filter={filter}
+                onShowAllCharacters={visibility.showAll}
                 raids={dossier.raids}
                 loading={hasLiveEvidence(dossier)}
                 limitations={dossier.limitations}

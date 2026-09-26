@@ -5,6 +5,11 @@ import type {
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import {
+  filterBoss,
+  type EvidenceFilter,
+  type VisibleBoss
+} from "../lib/character-visibility";
 import { reportKey, sortWipes } from "../lib/dossier-wipes";
 import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
@@ -36,6 +41,10 @@ type DossierRaidListProps = Readonly<{
    * (#435). Absent where the dossier is read-only, and then no tier offers it.
    */
   onSearchTier?: (raidId: string) => Promise<DossierTierSearchResponse>;
+  /** The viewer's character filter; absent or `null` shows everything. */
+  filter?: EvidenceFilter | null;
+  /** Clears the viewer's character filter. */
+  onShowAllCharacters?: () => void;
 }>;
 
 function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
@@ -596,7 +605,13 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
   );
 }
 
-function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
+function BossEvidence({
+  boss,
+  loading
+}: {
+  boss: VisibleBoss;
+  loading: boolean;
+}) {
   switch (boss.state) {
     case "kill":
       return <KillEvidence boss={boss} loading={loading} />;
@@ -651,6 +666,18 @@ function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
           </div>
         </div>
       );
+    case "hidden":
+      return (
+        <div className="dossier-boss-heading dossier-boss-heading--muted">
+          <BossArtwork bossName={boss.bossName} imageUrl={boss.imageUrl} />
+          <div>
+            <h4>{boss.bossName}</h4>
+            <p className="dossier-boss-state">
+              Evidence found only for hidden characters
+            </p>
+          </div>
+        </div>
+      );
   }
 }
 
@@ -679,7 +706,9 @@ export function DossierRaidList({
   raids,
   limitations = [],
   loading = false,
-  onSearchTier
+  onSearchTier,
+  filter = null,
+  onShowAllCharacters
 }: DossierRaidListProps) {
   const tierSearch = (raid: Raid) =>
     onSearchTier ? (
@@ -703,6 +732,23 @@ export function DossierRaidList({
       <h2 className="section-heading" id="historic-mythic-evidence-heading">
         Historic Mythic boss evidence
       </h2>
+      {filter ? (
+        <p className="dossier-evidence-filter" role="status">
+          <span>
+            Showing evidence for {filter.visibleCount} of {filter.totalCount}{" "}
+            {filter.totalCount === 1 ? "character" : "characters"}.
+          </span>
+          {onShowAllCharacters ? (
+            <button
+              className="search-button"
+              onClick={onShowAllCharacters}
+              type="button"
+            >
+              Show all
+            </button>
+          ) : null}
+        </p>
+      ) : null}
       {raids.length === 0 ? (
         <p className="empty-state">
           {legacy
@@ -716,9 +762,10 @@ export function DossierRaidList({
       ) : (
         <div className="dossier-raid-list">
           {raids.map((raid) => {
+            const bosses = raid.bosses.map((boss) => filterBoss(boss, filter));
             const hasNoLogs =
-              raid.bosses.length > 0 &&
-              raid.bosses.every((boss) => boss.state === "no_logs");
+              bosses.length > 0 &&
+              bosses.every((boss) => boss.state === "no_logs");
             if (hasNoLogs) {
               return (
                 <section
@@ -750,7 +797,7 @@ export function DossierRaidList({
                 </h3>
                 {tierSearch(raid)}
                 <div className="dossier-boss-list">
-                  {[...raid.bosses].reverse().map((boss) => (
+                  {[...bosses].reverse().map((boss) => (
                     <article
                       aria-label={`${boss.bossName} evidence`}
                       className={`dossier-boss dossier-boss--${boss.state}`}

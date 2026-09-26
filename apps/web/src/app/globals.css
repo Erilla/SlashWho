@@ -1174,6 +1174,88 @@ a {
   color: #ed405b;
 }
 
+/* The eye leads the row. It is the viewer's own filter over the evidence, so
+   a hidden row dims like an excluded one but keeps no badge: nothing about
+   the dossier has changed. */
+.dossier-character-lead {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dossier-character-visibility {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+
+.dossier-character-visibility-trigger {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.dossier-character-visibility-trigger[aria-pressed="false"],
+.dossier-character-visibility-trigger:disabled {
+  color: var(--muted);
+}
+
+.dossier-character-visibility-trigger:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.dossier-character-visibility-trigger:hover:not(:disabled),
+.dossier-character-visibility-trigger:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.dossier-character-visibility-trigger svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+}
+
+.dossier-character-visibility-items {
+  right: auto;
+  left: 0;
+  min-width: 11rem;
+}
+
+.dossier-character-row--hidden .dossier-character-identity,
+.dossier-character-row--hidden .source-badge,
+.dossier-character-row--hidden .profile-links {
+  opacity: 0.55;
+}
+
+.dossier-evidence-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
 .dossier-character-menu-error {
   position: absolute;
   top: calc(100% + 0.25rem);
