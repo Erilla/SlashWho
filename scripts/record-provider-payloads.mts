@@ -38,9 +38,7 @@ const outputRoot = resolve(import.meta.dirname, "../tests/fixtures/recorded");
 
 function usage(message: string): never {
   process.stderr.write(
-    `${message}
-usage: record-provider-payloads.mts <raiderio|blizzard> <endpoint>:<label>=<target>... [--show-unrecognised]
-`
+    `${message}\nusage: record-provider-payloads.mts <raiderio|blizzard> <endpoint>:<label>=<target>... [--show-unrecognised]\n`
   );
   process.exit(2);
 }
