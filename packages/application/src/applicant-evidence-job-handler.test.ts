@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createApplicantEvidenceJobHandler,
+  type ApplicantEvidenceJobHandlerOptions,
   type ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";
 import { encryptCredential, parseEncryptionKey } from "./credential-encryption";
@@ -49,6 +50,30 @@ const openGate = {
     pointsResetInSeconds: 949
   })
 };
+
+// The configuration every test runs under unless it says otherwise. A test
+// names only what it is about, so an option added to the handler is one edit
+// here rather than one in every test.
+const DEFAULT_HANDLER_OPTIONS = {
+  requestCap: 500,
+  parseRequestCap: 24,
+  capRetryMs: 1_800_000,
+  transientRetryMs: 900_000,
+  pointsReserve: 1_500,
+  killSettleMs: 7 * 24 * 60 * 60 * 1000,
+  retryCostCeiling: 250,
+  failureCooldownMs: 1_800_000
+} satisfies Partial<ApplicantEvidenceJobHandlerOptions>;
+
+function handlerFor(
+  overrides: Partial<ApplicantEvidenceJobHandlerOptions> &
+    Pick<ApplicantEvidenceJobHandlerOptions, "evidence" | "warcraftLogs">
+) {
+  return createApplicantEvidenceJobHandler({
+    ...DEFAULT_HANDLER_OPTIONS,
+    ...overrides
+  });
+}
 
 function store(
   activeRun: typeof run = run,
@@ -192,17 +217,10 @@ describe("applicant evidence job handler", () => {
           wipes: []
         })
       );
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { ...openGate, getFirstKillReports },
-        requestCap: 500,
         parseRequestCap: 8,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
         now: () => new Date("2026-09-19T12:00:00.000Z")
       });
 
@@ -268,20 +286,13 @@ describe("applicant evidence job handler", () => {
         }
       ]
     }));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
       >,
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -376,17 +387,10 @@ describe("applicant evidence job handler", () => {
       parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] }
     }));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
     await handler.execute(run.id, {
@@ -429,17 +433,11 @@ describe("applicant evidence job handler", () => {
       parsedFightUrls: [],
       troubledRaidIds: { parses: [], tierBests: [] }
     }));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports },
       requestCap: 1,
       parseRequestCap: 0,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
     await handler.execute(run.id);
@@ -536,17 +534,11 @@ describe("applicant evidence job handler", () => {
           : {})
       })
     );
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports },
       requestCap: 4,
       parseRequestCap: 2,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
     await handler.execute(run.id);
@@ -648,7 +640,7 @@ describe("applicant evidence job handler", () => {
       clientId: "test-id",
       clientSecret: "test-secret"
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         getRateLimit: openGate.getRateLimit,
@@ -656,12 +648,6 @@ describe("applicant evidence job handler", () => {
       },
       requestCap: 2,
       parseRequestCap: 4,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
     await handler.execute(run.id);
@@ -718,17 +704,11 @@ describe("applicant evidence job handler", () => {
           }
         : { kind: "limitation" as const, code: "not_found" as const }
     );
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports },
       requestCap: 4,
       parseRequestCap: 2,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
     await handler.execute(run.id);
@@ -744,7 +724,7 @@ describe("applicant evidence job handler", () => {
     // Break caught: a rate-limit response could erase the last complete scan
     // instead of retaining its evidence and honestly marking the new run partial.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -756,14 +736,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -797,7 +770,7 @@ describe("applicant evidence job handler", () => {
     // Break caught: gateway-only ranking data could leak into persistence, or
     // a parse-specific partial limitation could be replaced by scan metadata.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -837,14 +810,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -901,7 +867,7 @@ describe("applicant evidence job handler", () => {
     // Lost here, the fight is re-requested on every later run -- and since
     // #350 raises a retryable limitation each time, it never settles (#297).
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -941,14 +907,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -970,7 +929,7 @@ describe("applicant evidence job handler", () => {
     // `isEvidenceFresh` reads as "never" -- an upstream blip stranded the
     // character until an evidence version bump or a manual refresh.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -978,14 +937,7 @@ describe("applicant evidence job handler", () => {
           return { kind: "limitation" as const, code: "unavailable" as const };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1002,7 +954,7 @@ describe("applicant evidence job handler", () => {
 
   it("leaves drift with no retry, because waiting does not fix a decoding bug", async () => {
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -1010,14 +962,7 @@ describe("applicant evidence job handler", () => {
           return { kind: "limitation" as const, code: "schema_drift" as const };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1039,7 +984,7 @@ describe("applicant evidence job handler", () => {
     // the rule: the limitation that earns a retry drives, and the rest are
     // recorded rather than discarded.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -1068,14 +1013,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1098,7 +1036,7 @@ describe("applicant evidence job handler", () => {
     // parse budget masking it. Usually a character who was in the fight and
     // simply unranked, so a day-long stall is the wrong answer.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -1123,14 +1061,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1151,7 +1082,7 @@ describe("applicant evidence job handler", () => {
     // 90-second Retry-After with a 15-minute guess. Upstream knows better than
     // we do about when upstream will be ready.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -1163,14 +1094,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1190,7 +1114,7 @@ describe("applicant evidence job handler", () => {
     // work outstanding, so the partial path needs the same default as the
     // limitation-only one.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         ...openGate,
@@ -1209,14 +1133,7 @@ describe("applicant evidence job handler", () => {
           };
         }
       },
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1271,19 +1188,13 @@ describe("applicant evidence job handler", () => {
       terminalTiers: vi.fn().mockResolvedValue([]),
       markTerminalTiers: vi.fn().mockResolvedValue(undefined)
     };
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports: vi.fn() }, // must NOT be called
       createWarcraftLogsGateway,
       decryptionKey: encryptionKey,
       requestCap: 80,
-      parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      parseRequestCap: 8
     });
 
     await handler.execute("run-1", {
@@ -1339,19 +1250,13 @@ describe("applicant evidence job handler", () => {
               version: resolvedVersion
             }
       );
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { ...openGate, getFirstKillReports: shared },
         createWarcraftLogsGateway,
         resolveAccountWarcraftLogs,
         requestCap: 80,
-        parseRequestCap: 8,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        parseRequestCap: 8
       });
       await handler.execute(run.id);
       expect(resolveAccountWarcraftLogs).toHaveBeenCalledWith("alice", 4);
@@ -1377,20 +1282,13 @@ describe("applicant evidence job handler", () => {
       kills: [],
       wipes: []
     }));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
       >,
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1423,20 +1321,13 @@ describe("applicant evidence job handler", () => {
       kills: [],
       wipes: []
     }));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
       >,
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1463,20 +1354,13 @@ describe("applicant evidence job handler", () => {
       kills: [],
       wipes: []
     }));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
       >,
-      requestCap: 500,
       parseRequestCap: 8,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
 
@@ -1522,17 +1406,9 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 17_500.5,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
-      warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      warcraftLogs
     });
 
     await expect(
@@ -1554,22 +1430,14 @@ describe("applicant evidence job handler", () => {
     // Break caught: requestedRetryDelaySeconds returns null above 1800, the job
     // falls back to retryDelay 1 with backoff, and retries straight into another
     // refusal. pointsResetIn reaches 3600.
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence: store(),
       warcraftLogs: budgetGateway({
         kind: "rate_limit",
         limitPerHour: 18_000,
         pointsSpentThisHour: 17_999,
         pointsResetInSeconds: 3_600
-      }),
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      })
     });
 
     await expect(
@@ -1589,22 +1457,14 @@ describe("applicant evidence job handler", () => {
     // completed run and the deferral copy was unreachable. A reader saw an
     // unexplained "collecting" state for as long as the allowance stayed spent.
     const evidence = store();
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: budgetGateway({
         kind: "rate_limit",
         limitPerHour: 18_000,
         pointsSpentThisHour: 17_500.5,
         pointsResetInSeconds: 949
-      }),
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      })
     });
 
     await expect(
@@ -1632,17 +1492,9 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 17_500.5,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
-      warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      warcraftLogs
     });
 
     await expect(
@@ -1664,22 +1516,14 @@ describe("applicant evidence job handler", () => {
     // updateActiveRetryDelay, whose `AND state = 'active'` matches no row once
     // the job is failing. It throws, replacing the refusal, and the real cause
     // is lost from the logs.
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence: store(),
       warcraftLogs: budgetGateway({
         kind: "rate_limit",
         limitPerHour: 18_000,
         pointsSpentThisHour: 17_500.5,
         pointsResetInSeconds: 949
-      }),
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      })
     });
 
     const error = await handler
@@ -1704,17 +1548,9 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 1_000.25,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
-      warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      warcraftLogs
     });
 
     await handler.execute(run.id);
@@ -1736,17 +1572,10 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 13_500,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 5_000
     });
 
     await expect(
@@ -1795,7 +1624,7 @@ describe("applicant evidence job handler", () => {
       wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
       wclClientSecretEncrypted: encryptCredential("user-secret", encryptionKey)
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports: vi.fn() },
       createWarcraftLogsGateway: () =>
@@ -1804,14 +1633,8 @@ describe("applicant evidence job handler", () => {
           "getFirstKillReports" | "getRateLimit"
         >,
       decryptionKey: encryptionKey,
-      requestCap: 500,
       parseRequestCap: 48,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 5_000
     });
 
     await handler.execute(run.id);
@@ -1835,17 +1658,11 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 0,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs,
-      requestCap: 500,
       parseRequestCap: 48,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 5_000
     });
 
     await handler.execute(run.id);
@@ -1869,17 +1686,11 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 0,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence: store(),
       warcraftLogs,
-      requestCap: 500,
       parseRequestCap: 48,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
       pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       logger: { info: (record) => records.push(record) }
     });
 
@@ -1900,17 +1711,11 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 0,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence: store(),
       warcraftLogs,
-      requestCap: 500,
       parseRequestCap: 48,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 5_000
     });
 
     await handler.execute(run.id);
@@ -1930,17 +1735,11 @@ describe("applicant evidence job handler", () => {
       kind: "limitation",
       code: "unavailable"
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence: store(),
       warcraftLogs,
-      requestCap: 500,
       parseRequestCap: 48,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 5_000
     });
 
     await handler.execute(run.id);
@@ -1965,17 +1764,10 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 1_500,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 5_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 5_000
     });
 
     await handler.execute(run.id);
@@ -1994,17 +1786,9 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 3_400,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
-      warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      warcraftLogs
     });
 
     await expect(
@@ -2029,17 +1813,10 @@ describe("applicant evidence job handler", () => {
       pointsSpentThisHour: 18_058.65,
       pointsResetInSeconds: 949
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 0,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      pointsReserve: 0
     });
 
     await handler.execute(run.id);
@@ -2063,7 +1840,7 @@ describe("applicant evidence job handler", () => {
         pointsResetInSeconds: 949
       })
       .mockRejectedValueOnce(new Error("aborted"));
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         getRateLimit,
@@ -2078,15 +1855,7 @@ describe("applicant evidence job handler", () => {
       } as unknown as Pick<
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
-      >,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      >
     });
 
     await handler.execute(run.id);
@@ -2102,17 +1871,9 @@ describe("applicant evidence job handler", () => {
       kind: "limitation",
       code: "unavailable"
     });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
-      warcraftLogs,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000
+      warcraftLogs
     });
 
     await handler.execute(run.id);
@@ -2139,7 +1900,7 @@ describe("applicant evidence job handler", () => {
         pointsSpentThisHour: 1_950.75,
         pointsResetInSeconds: 900
       });
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence: store(),
       warcraftLogs: {
         getRateLimit,
@@ -2155,14 +1916,6 @@ describe("applicant evidence job handler", () => {
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
       >,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 1_500,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
       logger: { info: (value) => infos.push(value) }
     });
 
@@ -2222,17 +1975,9 @@ describe("applicant evidence job handler", () => {
         if (published++ === 0) throw new RangeError("collection_broke");
         await publishing(runId, result);
       };
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: scanningGateway(),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
         now: () => new Date("2026-09-18T09:43:26.000Z")
       });
 
@@ -2258,17 +2003,9 @@ describe("applicant evidence job handler", () => {
         throw new Error("the database went away");
       };
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: scanningGateway(0, 2_523.24),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
         logger: { info: (record) => records.push(record) }
       });
 
@@ -2291,17 +2028,9 @@ describe("applicant evidence job handler", () => {
       evidence.publish = async () => {
         throw failure;
       };
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
-        warcraftLogs: scanningGateway(0, 12),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        warcraftLogs: scanningGateway(0, 12)
       });
 
       await expect(handler.execute(run.id, context)).rejects.toBe(failure);
@@ -2322,17 +2051,9 @@ describe("applicant evidence job handler", () => {
         completedAt: "2026-09-18T09:43:26.000Z"
       });
       const warcraftLogs = scanningGateway();
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
-        warcraftLogs,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        warcraftLogs
       });
 
       await expect(handler.execute(run.id, context)).resolves.toBeUndefined();
@@ -2387,17 +2108,9 @@ describe("applicant evidence job handler", () => {
         completedAt: "2026-09-18T09:43:26.000Z",
         troubledRaidIds: { parses: ["42"], tierBests: [] }
       });
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
-        warcraftLogs: scanningGateway(),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        warcraftLogs: scanningGateway()
       });
 
       await handler.execute(run.id, context);
@@ -2443,17 +2156,9 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         completedAt: "2026-09-18T09:43:26.000Z"
       });
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
-        warcraftLogs: scanningGateway(),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        warcraftLogs: scanningGateway()
       });
 
       await handler.execute(run.id, context);
@@ -2468,7 +2173,7 @@ describe("applicant evidence job handler", () => {
       // the process that collected them.
       const evidence = store();
       const troubledRaidIds = { parses: ["42"], tierBests: ["43"] };
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: scanningGateway(
           0,
@@ -2481,15 +2186,7 @@ describe("applicant evidence job handler", () => {
             tierBests: [],
             troubledRaidIds
           }))
-        ),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        )
       });
 
       await handler.execute(run.id, context);
@@ -2504,17 +2201,9 @@ describe("applicant evidence job handler", () => {
       // window this is for -- a scan paid for and a publication that failed --
       // with nothing to resume from.
       const evidence = store();
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: scanningGateway(),
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
         now: () => new Date("2026-09-18T09:43:26.000Z")
       });
 
@@ -2580,14 +2269,7 @@ describe("applicant evidence job handler", () => {
             wipes: []
           })
         },
-        requestCap: 500,
-        parseRequestCap: 8,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        parseRequestCap: 8
       };
     }
 
@@ -2595,7 +2277,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: the evidence job could run without ever recording its
       // duration, outcome, or queue wait, leaving it invisible in production.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         logger: { info: (record) => records.push(record) },
         monotonic: (() => {
@@ -2634,7 +2316,7 @@ describe("applicant evidence job handler", () => {
       const options = baseOptions();
       const collect = options.warcraftLogs.getFirstKillReports;
       let throttleLine: Record<string, unknown> | undefined;
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...options,
         warcraftLogs: {
           ...options.warcraftLogs,
@@ -2679,7 +2361,7 @@ describe("applicant evidence job handler", () => {
         // trace beyond the phase ledger's timestamps.
         const records: Array<Record<string, unknown>> = [];
         let now = 0;
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           logger: { info: (record) => records.push(record) },
           monotonic: () => now,
@@ -2714,7 +2396,7 @@ describe("applicant evidence job handler", () => {
       // upstream requests, so there was no way to tell whether a run's points
       // went on re-scanning history or on ranking requests.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         warcraftLogs: {
           ...openGate,
@@ -2772,7 +2454,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: `warcraftLogsMs` was one bucket, so a slow run showed
       // what it asked for but not which part of the collection was slow.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         warcraftLogs: {
           ...openGate,
@@ -2818,7 +2500,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: a rate-limited run could be recorded with no way to
       // tell it apart from a successful one.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         warcraftLogs: {
           ...openGate,
@@ -2842,7 +2524,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: a run another worker already claimed could disappear
       // from observability instead of being recorded as skipped.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         evidence: evidenceStore({ claim: async () => null }),
         logger: { info: (record) => records.push(record) }
@@ -2856,7 +2538,7 @@ describe("applicant evidence job handler", () => {
     it("emits nothing when no logger is supplied", async () => {
       // Break caught: adding the record could accidentally require a logger,
       // breaking existing callers that construct the handler without one.
-      const handler = createApplicantEvidenceJobHandler(baseOptions());
+      const handler = handlerFor(baseOptions());
       await expect(handler.execute("run-4")).resolves.toBeUndefined();
     });
 
@@ -2865,7 +2547,7 @@ describe("applicant evidence job handler", () => {
       // be recorded with a stale "unknown" outcome, or emitted twice, if an
       // added early return or a duplicated logger call crept into this path.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         warcraftLogs: {
           ...openGate,
@@ -2907,7 +2589,7 @@ describe("applicant evidence job handler", () => {
       const records: Array<Record<string, unknown>> = [];
       const controller = new AbortController();
       controller.abort(new Error("aborted"));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         logger: { info: (record) => records.push(record) }
       });
@@ -2931,7 +2613,7 @@ describe("applicant evidence job handler", () => {
       // that recurs -- so this attempt stops instead (#292).
       const records: Array<Record<string, unknown>> = [];
       const failure = new Error("publish_failed");
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         evidence: evidenceStore({
           publish: async () => {
@@ -2968,7 +2650,7 @@ describe("applicant evidence job handler", () => {
       // was nowhere in the logs, because the record named the outcome and
       // nothing else.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         evidence: evidenceStore({
           publish: async () => {
@@ -2993,7 +2675,7 @@ describe("applicant evidence job handler", () => {
       // code-authored identifier -- a snake_case literal or a SQLSTATE --
       // is allowed through; anything else is reported by class alone.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         evidence: evidenceStore({
           publish: async () => {
@@ -3020,7 +2702,7 @@ describe("applicant evidence job handler", () => {
       // message that quotes the offending row. `23514` is the check-constraint
       // violation that would name a publication the database refused.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         evidence: evidenceStore({
           publish: async () => {
@@ -3048,7 +2730,7 @@ describe("applicant evidence job handler", () => {
       // the one place where an observability record and a user credential
       // meet, so it is asserted rather than assumed.
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...baseOptions(),
         evidence: evidenceStore({
           claim: async (id) => ({
@@ -3118,7 +2800,7 @@ describe("applicant evidence job handler", () => {
             pointsSpentThisHour: 1_950.75,
             pointsResetInSeconds: 900
           });
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           warcraftLogs: {
@@ -3238,7 +2920,7 @@ describe("applicant evidence job handler", () => {
         const { costs, store: evidence } = recordingStore();
         const records: Array<Record<string, unknown>> = [];
         let clock = 0;
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           warcraftLogs: {
@@ -3289,7 +2971,7 @@ describe("applicant evidence job handler", () => {
         // no time at all.
         const { costs, store: evidence } = recordingStore();
         let clock = 0;
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           monotonic: () => (clock += 10)
@@ -3327,7 +3009,7 @@ describe("applicant evidence job handler", () => {
               );
             }
           });
-          const handler = createApplicantEvidenceJobHandler({
+          const handler = handlerFor({
             ...baseOptions(),
             evidence,
             monotonic: () => (clock += 5)
@@ -3345,7 +3027,7 @@ describe("applicant evidence job handler", () => {
         // asked for most often while settling the budget: what a run that hit
         // drift costs is not what a clean one costs.
         const { costs, store: evidence } = recordingStore();
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           warcraftLogs: {
@@ -3373,7 +3055,7 @@ describe("applicant evidence job handler", () => {
         // claim the run was free, and a reserve set from a distribution full
         // of those would be set from runs that were never measured.
         const { costs, store: evidence } = recordingStore();
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           warcraftLogs: {
@@ -3415,7 +3097,7 @@ describe("applicant evidence job handler", () => {
             )
           })
         });
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           createWarcraftLogsGateway: () => ({
@@ -3448,7 +3130,7 @@ describe("applicant evidence job handler", () => {
         const { costs, store: evidence } = recordingStore({
           claim: async () => null
         });
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence
         });
@@ -3467,7 +3149,7 @@ describe("applicant evidence job handler", () => {
         const controller = new AbortController();
         controller.abort(new Error("aborted"));
         const records: Array<Record<string, unknown>> = [];
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence,
           logger: { info: (record) => records.push(record) }
@@ -3492,7 +3174,7 @@ describe("applicant evidence job handler", () => {
         // A measurement that could not be written is not a run that failed.
         const published: string[] = [];
         const records: Array<Record<string, unknown>> = [];
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence: evidenceStore({
             async publish(runId) {
@@ -3519,7 +3201,7 @@ describe("applicant evidence job handler", () => {
         // shutdown path must not lose, so the extra write goes last on every
         // path that takes it.
         const order: string[] = [];
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           ...baseOptions(),
           evidence: evidenceStore({
             async recordRunCost() {
@@ -3589,14 +3271,7 @@ describe("applicant evidence job handler", () => {
             wipes: []
           })
         },
-        requestCap: 500,
-        parseRequestCap: 8,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 1_500,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000
+        parseRequestCap: 8
       };
     }
 
@@ -3621,7 +3296,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: announcing before `claim` would post for a run this
       // worker does not own, and would have no character key to name.
       const notifier = recordingNotifier();
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...announcingOptions(),
         evidenceRunNotifier: notifier.notifier
       });
@@ -3647,7 +3322,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: the announcement could drift from the logged outcome,
       // so a watcher sees success while the record says the run was limited.
       const notifier = recordingNotifier();
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...announcingOptions(),
         warcraftLogs: {
           ...openGate,
@@ -3679,7 +3354,7 @@ describe("applicant evidence job handler", () => {
       // allowance drain, so a run that spent points must say how many.
       const notifier = recordingNotifier();
       let call = 0;
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...announcingOptions(),
         warcraftLogs: {
           getRateLimit: async () => ({
@@ -3712,7 +3387,7 @@ describe("applicant evidence job handler", () => {
       // Break caught: a run another worker owns would be announced twice —
       // once by each worker — and this one has no character key to name.
       const notifier = recordingNotifier();
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...announcingOptions(),
         evidence: announcingStore({ claim: async () => null }),
         evidenceRunNotifier: notifier.notifier
@@ -3729,7 +3404,7 @@ describe("applicant evidence job handler", () => {
       // stall evidence collection. Resilience belongs at the call site.
       const published: Array<unknown> = [];
       const records: Array<Record<string, unknown>> = [];
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         ...announcingOptions(),
         evidence: announcingStore({
           async publish(_runId, result) {
@@ -3781,7 +3456,7 @@ describe("applicant evidence job handler", () => {
       }
     };
 
-    function handlerFor(
+    function terminalHandler(
       evidence: ReturnType<typeof store>,
       response: Record<string, unknown>,
       warcraftLogsOverrides: Partial<
@@ -3796,7 +3471,7 @@ describe("applicant evidence job handler", () => {
         blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
       } = {}
     ) {
-      return createApplicantEvidenceJobHandler({
+      return handlerFor({
         evidence,
         ...integrations,
         warcraftLogs: {
@@ -3807,21 +3482,14 @@ describe("applicant evidence job handler", () => {
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
         pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000,
         now: () => new Date("2026-09-18T12:00:00.000Z")
       });
     }
 
     it("marks a concluded tier terminal after a run reads it cleanly", async () => {
       const evidence = store();
-      await handlerFor(evidence, {
+      await terminalHandler(evidence, {
         kind: "evidence" as const,
         parsedFightUrls: [],
         kills: [concludedKill],
@@ -3839,7 +3507,7 @@ describe("applicant evidence job handler", () => {
 
     it("marks nothing when the history scan reported a limitation", async () => {
       const evidence = store();
-      await handlerFor(evidence, {
+      await terminalHandler(evidence, {
         kind: "evidence" as const,
         parsedFightUrls: [],
         kills: [concludedKill],
@@ -3854,7 +3522,7 @@ describe("applicant evidence job handler", () => {
 
     it("withholds the parses mark for a raid troubled for parses", async () => {
       const evidence = store();
-      await handlerFor(evidence, {
+      await terminalHandler(evidence, {
         kind: "evidence" as const,
         parsedFightUrls: [],
         kills: [concludedKill],
@@ -3871,7 +3539,7 @@ describe("applicant evidence job handler", () => {
 
     it("withholds the tier bests mark for a raid troubled for tier bests", async () => {
       const evidence = store();
-      await handlerFor(evidence, {
+      await terminalHandler(evidence, {
         kind: "evidence" as const,
         parsedFightUrls: [],
         kills: [concludedKill],
@@ -3900,20 +3568,13 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -3953,20 +3614,13 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4003,20 +3657,13 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { getFirstKillReports, ...openGate } as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4040,7 +3687,7 @@ describe("applicant evidence job handler", () => {
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: {
           ...openGate,
@@ -4061,14 +3708,7 @@ describe("applicant evidence job handler", () => {
             };
           }
         },
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4098,7 +3738,7 @@ describe("applicant evidence job handler", () => {
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: {
           ...openGate,
@@ -4109,14 +3749,7 @@ describe("applicant evidence job handler", () => {
             };
           }
         },
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4141,7 +3774,7 @@ describe("applicant evidence job handler", () => {
         }) as unknown as Awaited<
           ReturnType<typeof evidence.storedEvidenceTiers>
         >;
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: {
           ...openGate,
@@ -4156,14 +3789,7 @@ describe("applicant evidence job handler", () => {
             };
           }
         },
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4179,20 +3805,13 @@ describe("applicant evidence job handler", () => {
         evidence: ReturnType<typeof store>,
         getFirstKillReports: WarcraftLogsGateway["getFirstKillReports"]
       ) =>
-        createApplicantEvidenceJobHandler({
+        handlerFor({
           evidence,
           warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
             WarcraftLogsGateway,
             "getFirstKillReports" | "getRateLimit"
           >,
-          requestCap: 500,
-          parseRequestCap: 24,
-          capRetryMs: 1_800_000,
-          transientRetryMs: 900_000,
-          pointsReserve: 0,
-          retryCostCeiling: 250,
-          failureCooldownMs: 1_800_000,
-          killSettleMs: 7 * 24 * 60 * 60 * 1000
+          pointsReserve: 0
         });
       const withBookmark = (evidence: ReturnType<typeof store>) => {
         evidence.storedEvidenceTiers = async () =>
@@ -4456,7 +4075,7 @@ describe("applicant evidence job handler", () => {
 
     it("publishes timestamp omissions as completed history metadata", async () => {
       const evidence = store();
-      const handler = handlerFor(evidence, {
+      const handler = terminalHandler(evidence, {
         kind: "evidence" as const,
         omittedInvalidTimestamp: true,
         parsedFightUrls: [],
@@ -4505,20 +4124,13 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4555,20 +4167,13 @@ describe("applicant evidence job handler", () => {
           code: "parse_request_cap" as const
         }
       }));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4591,20 +4196,13 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = createApplicantEvidenceJobHandler({
+      const handler = handlerFor({
         evidence,
         warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
           WarcraftLogsGateway,
           "getFirstKillReports" | "getRateLimit"
         >,
-        requestCap: 500,
-        parseRequestCap: 24,
-        capRetryMs: 1_800_000,
-        transientRetryMs: 900_000,
-        pointsReserve: 0,
-        retryCostCeiling: 250,
-        failureCooldownMs: 1_800_000,
-        killSettleMs: 7 * 24 * 60 * 60 * 1000
+        pointsReserve: 0
       });
 
       await handler.execute(run.id);
@@ -4617,7 +4215,7 @@ describe("applicant evidence job handler", () => {
 
     it("asks for hydrated fights only as far back as the settle threshold", async () => {
       const evidence = store();
-      await handlerFor(evidence, {
+      await terminalHandler(evidence, {
         kind: "evidence" as const,
         parsedFightUrls: [],
         kills: [],
@@ -4664,7 +4262,7 @@ describe("applicant evidence job handler", () => {
       evidence.recordPhaseTransitions = async (_runId, phases) => {
         transitions.push(...phases.map(({ id, state }) => ({ id, state })));
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {
           kind: "evidence" as const,
@@ -4736,7 +4334,7 @@ describe("applicant evidence job handler", () => {
       evidence.recordPhaseTransitions = async (_runId, phases) => {
         transitions.push(...phases.map(({ id, state }) => ({ id, state })));
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -4792,7 +4390,7 @@ describe("applicant evidence job handler", () => {
       evidence.recordPhaseTransitions = async (_runId, phases) => {
         transitions.push(...phases.map(({ id, state }) => ({ id, state })));
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -4851,7 +4449,7 @@ describe("applicant evidence job handler", () => {
       evidence.recordPhaseTransitions = async () => {
         throw new Error("progress unavailable");
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -4912,7 +4510,7 @@ describe("applicant evidence job handler", () => {
       evidence.recordPhaseTransitions = async () => {
         throw new Error("progress unavailable");
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -4972,7 +4570,7 @@ describe("applicant evidence job handler", () => {
           Object.assign(phase, update);
         }
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -5088,7 +4686,7 @@ describe("applicant evidence job handler", () => {
         let collectionAttempts = 0;
         let identityAttempts = 0;
         let currentTime = new Date("2026-09-18T12:00:00.000Z");
-        const handler = createApplicantEvidenceJobHandler({
+        const handler = handlerFor({
           evidence,
           warcraftLogs: {
             ...openGate,
@@ -5132,14 +4730,7 @@ describe("applicant evidence job handler", () => {
               };
             }
           },
-          requestCap: 500,
-          parseRequestCap: 24,
-          capRetryMs: 1_800_000,
-          transientRetryMs: 900_000,
           pointsReserve: 0,
-          retryCostCeiling: 250,
-          failureCooldownMs: 1_800_000,
-          killSettleMs: 7 * 24 * 60 * 60 * 1000,
           now: () => new Date(currentTime)
         });
 
@@ -5243,7 +4834,7 @@ describe("applicant evidence job handler", () => {
           }
         ]
       }));
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {
           kind: "evidence" as const,
@@ -5279,7 +4870,7 @@ describe("applicant evidence job handler", () => {
       // requests, which a cache hit or a guild query's second call would
       // otherwise hide.
       const evidence = store();
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {
           kind: "evidence" as const,
@@ -5339,7 +4930,7 @@ describe("applicant evidence job handler", () => {
 
     it("records a successful Raider.IO no-match answer without inventing a rank", async () => {
       const evidence = store();
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {
           kind: "evidence" as const,
@@ -5412,7 +5003,7 @@ describe("applicant evidence job handler", () => {
           kind: "rankings" as const,
           rows: []
         }));
-        const handler = handlerFor(
+        const handler = terminalHandler(
           evidence,
           response([ranked, unranked]),
           {},
@@ -5450,7 +5041,7 @@ describe("applicant evidence job handler", () => {
             return { kind: "rankings" as const, rows: [] };
           }
         );
-        const handler = handlerFor(
+        const handler = terminalHandler(
           evidence,
           response(guilds.map((guild, index) => rankedKill(guild, index + 1))),
           {},
@@ -5474,7 +5065,7 @@ describe("applicant evidence job handler", () => {
         const getMythicBossRankings = vi.fn(async () => {
           throw new Error("raiderio_down");
         });
-        const handler = handlerFor(
+        const handler = terminalHandler(
           evidence,
           response(
             ["A", "B", "C", "D", "E", "F"].map((guild, index) =>
@@ -5513,7 +5104,7 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -5557,7 +5148,7 @@ describe("applicant evidence job handler", () => {
         tierBests: [],
         troubledRaidIds: { parses: [], tierBests: [] }
       }));
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {},
         {
@@ -5589,7 +5180,7 @@ describe("applicant evidence job handler", () => {
       evidence.recordWarcraftLogsCharacterId = async () => {
         throw new Error("database_unavailable");
       };
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {
           kind: "evidence" as const,
@@ -5644,7 +5235,7 @@ describe("applicant evidence job handler", () => {
         displayName: "Rinn-Silvermoon",
         characterId: 40989140
       }));
-      const handler = handlerFor(
+      const handler = terminalHandler(
         evidence,
         {
           kind: "evidence" as const,
@@ -5690,7 +5281,7 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
     getFirstKillReports: ReturnType<typeof vi.fn>,
     getHistoricMythicKills: ReturnType<typeof vi.fn>
   ) =>
-    createApplicantEvidenceJobHandler({
+    handlerFor({
       evidence,
       warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
         WarcraftLogsGateway,
@@ -5700,14 +5291,7 @@ describe("searching attendance only for Raider.IO-verified kills", () => {
         getMythicBossRankings: vi.fn(),
         getHistoricMythicKills
       } as never,
-      requestCap: 500,
-      parseRequestCap: 24,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 0,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      pointsReserve: 0
     });
 
   it("hands the scan the verified kills stored evidence does not hold", async () => {
@@ -5971,7 +5555,7 @@ describe("searching one tier from the dossier", () => {
     evidence: ReturnType<typeof store>,
     getFirstKillReports: ReturnType<typeof vi.fn>
   ) =>
-    createApplicantEvidenceJobHandler({
+    handlerFor({
       evidence,
       warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
         WarcraftLogsGateway,
@@ -5984,15 +5568,8 @@ describe("searching one tier from the dossier", () => {
           kills: [verifiedAzshara]
         }))
       } as never,
-      requestCap: 500,
-      parseRequestCap: 24,
       tierSearchRequestCap: 60,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 0,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      pointsReserve: 0
     });
   const withStoredTier = (evidence: ReturnType<typeof store>) => {
     evidence.storedKills.push({
@@ -6336,7 +5913,7 @@ describe("searching one tier from the dossier", () => {
   it("records a search its budget could not afford as capped, not as never asked", async () => {
     const evidence = withStoredTier(store(tierRun as typeof run));
     const getFirstKillReports = vi.fn(evidenceFound);
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: {
         getFirstKillReports,
@@ -6350,15 +5927,8 @@ describe("searching one tier from the dossier", () => {
         WarcraftLogsGateway,
         "getFirstKillReports" | "getRateLimit"
       >,
-      requestCap: 500,
-      parseRequestCap: 24,
       tierSearchRequestCap: 60,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 0,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      pointsReserve: 0
     });
 
     await handler.execute(run.id);
@@ -6466,7 +6036,7 @@ describe("searching one tier from the dossier", () => {
         };
       }
     );
-    const handler = createApplicantEvidenceJobHandler({
+    const handler = handlerFor({
       evidence,
       warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
         WarcraftLogsGateway,
@@ -6474,15 +6044,8 @@ describe("searching one tier from the dossier", () => {
       >,
       raiderio: { getMythicBossRankings, getHistoricMythicKills } as never,
       blizzard: { getCompletedAchievements } as never,
-      requestCap: 500,
-      parseRequestCap: 24,
       tierSearchRequestCap: 60,
-      capRetryMs: 1_800_000,
-      transientRetryMs: 900_000,
-      pointsReserve: 0,
-      retryCostCeiling: 250,
-      failureCooldownMs: 1_800_000,
-      killSettleMs: 7 * 24 * 60 * 60 * 1000
+      pointsReserve: 0
     });
 
     await handler.execute(run.id);
