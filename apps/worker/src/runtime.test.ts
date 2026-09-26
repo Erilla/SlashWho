@@ -1464,8 +1464,143 @@ describe("worker runtime", () => {
       event: "evidence_resume_sweep",
       resumed: 0,
       released: 1,
-      republished: 0
+      republished: 0,
+      durationMs: expect.any(Number)
     });
+    await runtime.stop();
+  });
+
+  // Every reading of the injected clock advances 25ms, so a cycle that reads
+  // it once at the start and once for its record reports exactly 25.
+  function steppingClock() {
+    let now = 0;
+    return () => (now += 25);
+  }
+
+  it("times each resume sweep and names the error of one that fails", async () => {
+    // Break caught (#507): a slow sweep that delayed the next five-minute tick
+    // was invisible, and a failed one logged nothing at all before the queue
+    // retried it.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      { ...fakes.dependencies, clock: steppingClock() },
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+    fakes.listResumable.mockRejectedValueOnce(new TypeError("private-value"));
+    await expect(fakes.evidenceResumeHandler?.()).rejects.toThrow(TypeError);
+
+    const sweeps = logger.info.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.event === "evidence_resume_sweep");
+    expect(sweeps).toEqual([
+      {
+        event: "evidence_resume_sweep",
+        resumed: 0,
+        released: 0,
+        republished: 0,
+        durationMs: 25
+      },
+      {
+        event: "evidence_resume_sweep",
+        released: 0,
+        republished: 0,
+        durationMs: 25,
+        errorName: "TypeError"
+      }
+    ]);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
+    await runtime.stop();
+  });
+
+  it("times the hourly cleanup across the whole cycle and names a failure", async () => {
+    // Break caught (#507): the cleanup record carried counts but no duration,
+    // and a cycle that threw logged nothing before its retry.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      { ...fakes.dependencies, clock: steppingClock() },
+      logger
+    );
+
+    await fakes.maintenanceHandler?.();
+    fakes.cleanup.evidenceRunCosts.mockRejectedValueOnce(
+      new RangeError("private-value")
+    );
+    await expect(fakes.maintenanceHandler?.()).rejects.toThrow(RangeError);
+
+    const cleanups = logger.info.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.event === "evidence_cache_cleanup");
+    expect(cleanups).toEqual([
+      {
+        event: "evidence_cache_cleanup",
+        removedEvidenceRuns: 6,
+        removedCollectionStages: expect.any(Number),
+        removedRunCosts: 7,
+        durationMs: 25
+      },
+      // What had been removed before the failure is still reported.
+      expect.objectContaining({
+        event: "evidence_cache_cleanup",
+        removedEvidenceRuns: 6,
+        removedRunCosts: undefined,
+        durationMs: 25,
+        errorName: "RangeError"
+      })
+    ]);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
+    await runtime.stop();
+  });
+
+  it("writes one timed record per fingerprint admission, however it ends", async () => {
+    // Break caught (#507): a successful admission logged nothing, so the only
+    // sign the cycle ran at all was a run blocked for fifteen minutes.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000051";
+    const brokenRunId = "00000000-0000-4000-8000-000000000052";
+    const admitWaiting = fakes.repositories.fingerprintSweeps.admitWaiting;
+    fakes.repositories.fingerprintSweeps.admitWaiting = async (runId, at) => {
+      if (runId === brokenRunId) throw new SyntaxError(brokenRunId);
+      return admitWaiting(runId, at);
+    };
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      { ...fakes.dependencies, clock: steppingClock() },
+      logger
+    );
+
+    // A waiting run throws only to schedule its retry: not a failure.
+    await expect(fakes.admissionHandler?.(waitingRunId)).rejects.toMatchObject({
+      retryable: true
+    });
+    await expect(fakes.admissionHandler?.(brokenRunId)).rejects.toThrow(
+      SyntaxError
+    );
+
+    const admissions = logger.info.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.event === "fingerprint_admission");
+    expect(admissions).toEqual([
+      { event: "fingerprint_admission", outcome: "waiting", durationMs: 25 },
+      {
+        event: "fingerprint_admission",
+        durationMs: 25,
+        errorName: "SyntaxError"
+      }
+    ]);
+    // Neither the run id nor the error message reaches a record.
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(brokenRunId);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(waitingRunId);
     await runtime.stop();
   });
 
@@ -1511,7 +1646,8 @@ describe("worker runtime", () => {
       event: "evidence_resume_sweep",
       resumed: 0,
       released: 0,
-      republished: 1
+      republished: 1,
+      durationMs: expect.any(Number)
     });
     expect(fakes.releaseAbandoned).not.toHaveBeenCalled();
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain(

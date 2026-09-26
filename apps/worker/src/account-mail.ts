@@ -1,11 +1,19 @@
 import { decryptAccountMail } from "@slashwho/application";
 import type { AccountMailRepository } from "@slashwho/database";
+import { type Clock, elapsedMs, errorName, monotonicClock } from "./cycle-log";
 
 export type AccountMailConfig = {
   resendApiKey: string;
   accountEmailFrom: string;
   accountCredentialEncryptionKey: Buffer;
 };
+
+/** Named so a failed tick's `errorName` separates the provider from storage. */
+export class AccountMailDeliveryError extends Error {
+  constructor() {
+    super("account_mail_delivery_failed");
+  }
+}
 
 export async function sendResend(
   message: string,
@@ -32,7 +40,7 @@ export async function sendResend(
     await response.body?.cancel();
     if (!response.ok) throw new Error();
   } catch {
-    throw new Error("account_mail_delivery_failed");
+    throw new AccountMailDeliveryError();
   }
 }
 
@@ -77,21 +85,36 @@ export class AccountMailStopTimeoutError extends Error {
 export function startAccountMailWorker(
   repository: AccountMailRepository,
   config: AccountMailConfig,
-  logger?: { info(event: Record<string, unknown>): void }
+  logger?: { info(event: Record<string, unknown>): void },
+  options: { clock?: Clock } = {}
 ): { stop(timeoutMs?: number): Promise<void> } {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: Promise<void> = Promise.resolve();
   const controller = new AbortController();
+  const clock = options.clock ?? monotonicClock;
   const tick = () => {
     pending = (async () => {
+      const startedAt = clock();
       let delivered = false;
       try {
         delivered = await dispatchAccountMail(repository, config, {
           signal: controller.signal
         });
-      } catch {
-        logger?.info({ event: "account_mail_delivery_failed" });
+      } catch (error) {
+        logger?.info({
+          event: "account_mail_delivery_failed",
+          durationMs: elapsedMs(clock, startedAt),
+          errorName: errorName(error)
+        });
+      }
+      // An idle tick claims nothing and recurs every five seconds, so only a
+      // tick that sent something earns a record.
+      if (delivered) {
+        logger?.info({
+          event: "account_mail_delivered",
+          durationMs: elapsedMs(clock, startedAt)
+        });
       }
       if (!stopped) {
         timer = setTimeout(tick, delivered ? 0 : 5_000);
