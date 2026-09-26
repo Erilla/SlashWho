@@ -190,8 +190,8 @@ gh pr view --comments
 
 `ci` is a required check, so it always runs and always reports. On a pull
 request that changes only markdown, `docs/`, `LICENSE`, issue templates, or a
-workflow other than `ci.yml`, it skips its steps and goes green in well under a
-minute. A fast green `ci` on such a branch means the suite was correctly
+workflow other than `ci.yml`, it skips the suite's jobs and goes green in about
+a minute. A fast green `ci` on such a branch means the suite was correctly
 judged irrelevant, not that it ran — so it is no substitute for the local gate
 in step 5. Anything the check cannot classify runs in full.
 
