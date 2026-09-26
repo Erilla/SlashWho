@@ -196,6 +196,49 @@ describe("verifyRecording", () => {
   });
 });
 
+describe("ignored-field baseline", () => {
+  const body = {
+    characterDetails: {
+      character: {
+        name: "Realname",
+        realm: { slug: "silvermoon" },
+        gear: { items: { head: { item_id: 1 } } }
+      },
+      "silvermoon-eu": { rank: 1 },
+      "42": true,
+      mythicPlusScores: [{ all: 3000 }]
+    },
+    _links: {}
+  };
+
+  it("names the root of every subtree the allow-list drops, never a value", () => {
+    expect(record(body, "raiderio.character").ignored).toEqual([
+      "_links",
+      "characterDetails.<key>",
+      "characterDetails.character.gear",
+      "characterDetails.mythicPlusScores"
+    ]);
+  });
+
+  it("is verified like the body", () => {
+    const recording = record(body, "raiderio.character");
+    const withIgnored = (ignored: unknown) => ({ ...recording, ignored });
+    expect(verifyRecording(recording)).toEqual([]);
+    expect(verifyRecording(withIgnored(["b", "a"]))).toEqual([
+      { path: "ignored", problem: "not sorted and unique" }
+    ]);
+    expect(
+      verifyRecording(withIgnored(["characterDetails.Real Name"]))
+    ).toEqual([{ path: "ignored", problem: "entry is not a field path" }]);
+    expect(verifyRecording(withIgnored(["characterDetails.user"]))).toEqual([
+      { path: "ignored", problem: "entry is on the allow-list" }
+    ]);
+    expect(verifyRecording(withIgnored("gear"))).toEqual([
+      { path: "ignored", problem: "not a list of paths" }
+    ]);
+  });
+});
+
 describe("recordPayload", () => {
   it("drops every field the allow-list does not name", () => {
     const recording = record(
