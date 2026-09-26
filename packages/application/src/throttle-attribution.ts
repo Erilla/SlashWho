@@ -37,21 +37,35 @@ export const throttleFields: readonly string[] = Object.values(
  * receive a scope, so the unit of work it belongs to can only be recovered
  * from the async context the call is running in. Unlike a shared mutable
  * scope, async-local storage keeps concurrent units apart.
+ *
+ * The slot is opened by whoever dispatches the unit and filled by the unit
+ * once it has created its scope, so a handler binds with one line instead of
+ * running its whole body inside a callback.
  */
-const units = new AsyncLocalStorage<
-  Readonly<{ scope: MeasurementScope; unit: ThrottleUnit }>
->();
+type Slot = { readonly unit: ThrottleUnit; scope: MeasurementScope | null };
+
+const slots = new AsyncLocalStorage<Slot>();
 
 /**
- * Runs `work` as `unit`, so any upstream throttle it encounters is counted on
- * `scope`. The innermost enclosing unit wins.
+ * Runs `work` as `unit`: any upstream throttle it encounters names the unit
+ * on its standalone line, and is counted on the scope `work` binds with
+ * `bindThrottleScope`. The innermost enclosing unit wins.
  */
 export function attributeThrottlesTo<T>(
-  scope: MeasurementScope,
   unit: ThrottleUnit,
   work: () => Promise<T>
 ): Promise<T> {
-  return units.run({ scope, unit }, work);
+  return slots.run({ unit, scope: null }, work);
+}
+
+/**
+ * Makes `scope` the one the enclosing unit's throttles are counted on. A
+ * no-op outside any unit: the throttle line is then still emitted, without an
+ * id, and nothing is counted.
+ */
+export function bindThrottleScope(scope: MeasurementScope): void {
+  const slot = slots.getStore();
+  if (slot) slot.scope = scope;
 }
 
 /**
@@ -62,14 +76,14 @@ export function recordThrottle(
   provider: ThrottledProvider,
   retryAfterMs: number | undefined
 ): ThrottleUnit | null {
-  const current = units.getStore();
-  if (!current) return null;
+  const slot = slots.getStore();
+  if (!slot) return null;
   const prefix = fieldPrefix[provider];
-  current.scope.increment(`${prefix}Throttles`);
+  slot.scope?.increment(`${prefix}Throttles`);
   if (retryAfterMs !== undefined) {
-    current.scope.observeMax(`${prefix}RetryAfterMaxMs`, retryAfterMs);
+    slot.scope?.observeMax(`${prefix}RetryAfterMaxMs`, retryAfterMs);
   }
-  return current.unit;
+  return slot.unit;
 }
 
 /**

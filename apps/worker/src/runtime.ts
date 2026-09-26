@@ -7,6 +7,7 @@ import {
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
+  attributeThrottlesTo,
   decryptCredential,
   upstreamThrottleRecord,
   type DiscoveryJobHandler,
@@ -1141,18 +1142,22 @@ export async function createWorkerRuntime(
       record();
     });
     await initializedQueue.work(async (payload, context) => {
-      await handler.execute(
-        payload.runId,
-        {
-          ...context,
-          correlationId: payload.correlationId,
-          enqueuedAt: payload.enqueuedAt
-        },
-        payload
+      await attributeThrottlesTo({ runId: payload.runId }, () =>
+        handler.execute(
+          payload.runId,
+          {
+            ...context,
+            correlationId: payload.correlationId,
+            enqueuedAt: payload.enqueuedAt
+          },
+          payload
+        )
       );
     });
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
-      await evidenceHandler.execute(payload, context);
+      await attributeThrottlesTo({ runId: payload.runId }, () =>
+        evidenceHandler.execute(payload, context)
+      );
     });
     if (config.accountMail) {
       mailWorker = (

@@ -1,24 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import { createMeasurementScope } from "./measurement";
+import { createMeasurementScope, type MeasurementScope } from "./measurement";
 import {
   attributeThrottlesTo,
+  bindThrottleScope,
   throttleFields,
-  upstreamThrottleRecord
+  upstreamThrottleRecord,
+  type ThrottleUnit
 } from "./throttle-attribution";
+
+/** Opens `unit` and binds `scope` to it, as a dispatcher and handler do. */
+function asUnit<T>(
+  unit: ThrottleUnit,
+  scope: MeasurementScope,
+  work: () => Promise<T>
+): Promise<T> {
+  return attributeThrottlesTo(unit, async () => {
+    bindThrottleScope(scope);
+    return work();
+  });
+}
 
 describe("throttle attribution", () => {
   it("counts a throttle on the enclosing unit and names it on the line", async () => {
     const scope = createMeasurementScope(() => 0);
 
-    const line = await attributeThrottlesTo(
-      scope,
-      { runId: "run-1" },
-      async () => {
-        upstreamThrottleRecord("warcraftlogs", { retryAfterMs: 2_000 });
-        return upstreamThrottleRecord("warcraftlogs", { retryAfterMs: 500 });
-      }
-    );
+    const line = await asUnit({ runId: "run-1" }, scope, async () => {
+      upstreamThrottleRecord("warcraftlogs", { retryAfterMs: 2_000 });
+      return upstreamThrottleRecord("warcraftlogs", { retryAfterMs: 500 });
+    });
 
     expect(scope.totals()).toEqual({
       warcraftLogsThrottles: 2,
@@ -35,7 +45,7 @@ describe("throttle attribution", () => {
   it("counts a throttle without Retry-After but records no delay", async () => {
     const scope = createMeasurementScope(() => 0);
 
-    await attributeThrottlesTo(scope, { correlationId: "c-1" }, async () => {
+    await asUnit({ correlationId: "c-1" }, scope, async () => {
       upstreamThrottleRecord("raiderio", { retryAfterMs: undefined });
     });
 
@@ -44,24 +54,18 @@ describe("throttle attribution", () => {
 
   it("keeps concurrent units apart", async () => {
     // Break caught: a process-wide "current scope" would charge both
-    // throttles to whichever unit started last.
+    // throttles to whichever unit bound last.
     const first = createMeasurementScope(() => 0);
     const second = createMeasurementScope(() => 0);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
 
-    const firstRun = attributeThrottlesTo(
-      first,
-      { correlationId: "first" },
-      async () => {
-        await gate;
-        return upstreamThrottleRecord("blizzard", { retryAfterMs: 100 });
-      }
-    );
-    const secondRun = attributeThrottlesTo(
-      second,
-      { correlationId: "second" },
-      async () => upstreamThrottleRecord("raiderio", { retryAfterMs: 300 })
+    const firstRun = asUnit({ correlationId: "first" }, first, async () => {
+      await gate;
+      return upstreamThrottleRecord("blizzard", { retryAfterMs: 100 });
+    });
+    const secondRun = asUnit({ correlationId: "second" }, second, async () =>
+      upstreamThrottleRecord("raiderio", { retryAfterMs: 300 })
     );
     release();
 
@@ -81,14 +85,33 @@ describe("throttle attribution", () => {
     const outer = createMeasurementScope(() => 0);
     const inner = createMeasurementScope(() => 0);
 
-    await attributeThrottlesTo(outer, { correlationId: "outer" }, () =>
-      attributeThrottlesTo(inner, { runId: "inner" }, async () => {
+    await asUnit({ correlationId: "outer" }, outer, () =>
+      asUnit({ runId: "inner" }, inner, async () => {
         upstreamThrottleRecord("blizzard", { retryAfterMs: undefined });
       })
     );
 
     expect(outer.totals()).toEqual({});
     expect(inner.totals()).toEqual({ blizzardThrottles: 1 });
+  });
+
+  it("names a unit that has not bound a scope yet, counting nothing", async () => {
+    // A throttle can arrive between the dispatcher opening the unit and the
+    // handler creating its scope; the line must still say whose it was.
+    const line = await attributeThrottlesTo({ runId: "run-2" }, async () =>
+      upstreamThrottleRecord("blizzard", { retryAfterMs: 1_000 })
+    );
+
+    expect(line).toMatchObject({ runId: "run-2" });
+  });
+
+  it("ignores a bind outside any unit", async () => {
+    const scope = createMeasurementScope(() => 0);
+
+    bindThrottleScope(scope);
+    upstreamThrottleRecord("blizzard", { retryAfterMs: 1_000 });
+
+    expect(scope.totals()).toEqual({});
   });
 
   it("still produces a line, without an id, outside any unit", () => {
@@ -103,7 +126,7 @@ describe("throttle attribution", () => {
 
   it("lists every field it can write", async () => {
     const scope = createMeasurementScope(() => 0);
-    await attributeThrottlesTo(scope, { runId: "run" }, async () => {
+    await asUnit({ runId: "run" }, scope, async () => {
       for (const provider of [
         "raiderio",
         "blizzard",

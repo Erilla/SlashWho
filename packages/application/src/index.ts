@@ -81,6 +81,7 @@ export { createMeasurementScope } from "./measurement";
 export type { MeasurementScope } from "./measurement";
 export {
   attributeThrottlesTo,
+  bindThrottleScope,
   throttleFields,
   upstreamThrottleRecord
 } from "./throttle-attribution";
