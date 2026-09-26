@@ -1,10 +1,14 @@
 import { useEffect, useRef } from "react";
 
+const cappedDelayMs = 10_000;
 /** How long each successive read waits, holding at the last delay. */
 export const pollDelaysMs: readonly number[] = [
-  1_000, 2_000, 4_000, 8_000, 10_000
+  1_000,
+  2_000,
+  4_000,
+  8_000,
+  cappedDelayMs
 ];
-const cappedDelayMs = pollDelaysMs[pollDelaysMs.length - 1];
 
 /**
  * A backoff over `delays`: each `next()` returns the following delay, and the
@@ -16,7 +20,8 @@ export function createBackoff(delays: readonly number[] = pollDelaysMs): {
   let attempt = 0;
   return {
     next() {
-      const delay = delays[Math.min(attempt, delays.length - 1)];
+      const delay =
+        delays[Math.min(attempt, delays.length - 1)] ?? cappedDelayMs;
       attempt += 1;
       return delay;
     }

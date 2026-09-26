@@ -6062,7 +6062,10 @@ describe("searching one tier from the dossier", () => {
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
 
     const options = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
-      terminalRaidIds: Record<string, ReadonlySet<string>>;
+      terminalRaidIds: Record<
+        "kills" | "parses" | "tierBests",
+        ReadonlySet<string>
+      >;
     };
     expect(options.terminalRaidIds.kills.has("23")).toBe(true);
     expect(options.terminalRaidIds.parses.has("23")).toBe(false);
@@ -6274,7 +6277,10 @@ describe("searching one tier from the dossier", () => {
     );
     const options = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
       requestCap: number;
-      terminalRaidIds: Record<string, ReadonlySet<string>>;
+      terminalRaidIds: Record<
+        "kills" | "parses" | "tierBests",
+        ReadonlySet<string>
+      >;
     };
     expect(options.requestCap).toBe(300);
     expect(options.terminalRaidIds.parses.has("23")).toBe(true);
