@@ -15,7 +15,8 @@ function newestModification(path: string): number {
   // A directory's own time records deletions, which leave no file to date.
   let newest = stats.mtimeMs;
   for (const entry of readdirSync(path, { withFileTypes: true })) {
-    if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
+    // By name alone: pnpm can make node_modules a link, which is no directory.
+    if (ignoredDirectories.has(entry.name)) continue;
     newest = Math.max(newest, newestModification(join(path, entry.name)));
   }
   return newest;
