@@ -334,7 +334,8 @@ describe("DossierPageClient live evidence", () => {
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(`${dossierPath}/refresh`, {
-      method: "POST"
+      method: "POST",
+      headers: {}
     });
     expect(reads).toBe(3);
   });
@@ -1905,6 +1906,87 @@ describe("DossierPageClient staged research", () => {
           "x-blizzard-client-id": "id",
           "x-blizzard-client-secret": "secret"
         })
+      })
+    );
+  });
+});
+
+describe("DossierPageClient saved credentials", () => {
+  const savedCredentials = {
+    blizzardClientId: "id",
+    blizzardClientSecret: "secret",
+    raiderIoAccessKey: "",
+    wclClientId: "wcl-id",
+    wclClientSecret: "wcl-secret"
+  };
+  const credentialHeaders = expect.objectContaining({
+    "x-blizzard-client-id": "id",
+    "x-blizzard-client-secret": "secret",
+    "x-wcl-client-id": "wcl-id",
+    "x-wcl-client-secret": "wcl-secret"
+  });
+
+  it("attaches them to the current read of a direct visit", async () => {
+    // Break caught: the read that decides whether research has to start was
+    // the one dossier GET sent without them, so it ran on the shared keys.
+    writeStoredCredentials(savedCredentials);
+    const fetchMock = vi.fn((input: string) => {
+      if (input === "/api/account/session")
+        return Promise.resolve(Response.json({ account: null }));
+      if (input === dossierPath)
+        return Promise.resolve(
+          Response.json(withEvidenceState(expanded, "complete"))
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Expanded evidence")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      dossierPath,
+      expect.objectContaining({ headers: credentialHeaders })
+    );
+  });
+
+  it("attaches them to the refresh request", async () => {
+    // Break caught: Refresh posted with no headers, so the evidence run it
+    // queued carried the shared Warcraft Logs credentials instead.
+    const user = userEvent.setup();
+    writeStoredCredentials(savedCredentials);
+    const fetchMock = vi.fn((input: string) => {
+      if (input === "/api/account/session")
+        return Promise.resolve(Response.json({ account: null }));
+      if (input === `${dossierPath}/refresh`)
+        return Promise.resolve(Response.json({ mode: "full" }));
+      if (input === dossierPath)
+        return Promise.resolve(
+          Response.json(withEvidenceState(expanded, "complete"))
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(expanded, "complete")}
+        jobId={null}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`${dossierPath}/refresh`, {
+        method: "POST",
+        headers: credentialHeaders
       })
     );
   });

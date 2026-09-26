@@ -13,7 +13,7 @@ import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { credentialHeadersForRequest } from "../../../../../lib/api-credentials";
+import { dossierFetch } from "../../../../../lib/dossier-fetch";
 import { evidenceFilter } from "../../../../../lib/character-visibility";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
@@ -203,9 +203,8 @@ function DossierPageState({
   // back rather than reloading the page and discarding the polls in flight.
   const refreshDossier = useCallback(async () => {
     const sequence = ++requestSequence.current;
-    const response = await fetch(dossierPath, {
-      cache: "no-store",
-      headers: await credentialHeadersForRequest()
+    const response = await dossierFetch(dossierPath, {
+      cache: "no-store"
     });
     if (!response.ok) return;
     const body: unknown = await response.json().catch(() => null);
@@ -229,10 +228,9 @@ function DossierPageState({
     }
 
     async function readInitialDossier() {
-      const response = await fetch(`${dossierPath}?scope=initial`, {
+      const response = await dossierFetch(`${dossierPath}?scope=initial`, {
         cache: "no-store",
-        signal: controller.signal,
-        headers: await credentialHeadersForRequest()
+        signal: controller.signal
       });
       const body = await readJson(response);
       if (controller.signal.aborted || hasExpandedDossier.current) return;
@@ -255,10 +253,9 @@ function DossierPageState({
     // initial view in place.
     async function readKnownDossier() {
       const sequence = ++requestSequence.current;
-      const response = await fetch(dossierPath, {
+      const response = await dossierFetch(dossierPath, {
         cache: "no-store",
-        signal: controller.signal,
-        headers: await credentialHeadersForRequest()
+        signal: controller.signal
       });
       if (!response.ok) return;
       const body = await readJson(response);
@@ -299,10 +296,9 @@ function DossierPageState({
 
     async function readCompletedDossier() {
       const sequence = ++requestSequence.current;
-      const response = await fetch(dossierPath, {
+      const response = await dossierFetch(dossierPath, {
         cache: "no-store",
-        signal: controller.signal,
-        headers: await credentialHeadersForRequest()
+        signal: controller.signal
       });
       const body = await readJson(response);
       if (controller.signal.aborted || sequence < appliedSequence.current)
@@ -327,7 +323,7 @@ function DossierPageState({
 
     async function startResearch(researchRoot = identity) {
       try {
-        const response = await fetch("/api/dossiers", {
+        const response = await dossierFetch("/api/dossiers", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -368,7 +364,7 @@ function DossierPageState({
 
     async function readCurrentOrStartResearch() {
       try {
-        const response = await fetch(dossierPath, {
+        const response = await dossierFetch(dossierPath, {
           cache: "no-store",
           signal: controller.signal
         });
@@ -450,10 +446,9 @@ function DossierPageState({
 
     async function readExpandedDossier() {
       const sequence = ++requestSequence.current;
-      const response = await fetch(dossierPath, {
+      const response = await dossierFetch(dossierPath, {
         cache: "no-store",
-        signal: controller.signal,
-        headers: await credentialHeadersForRequest()
+        signal: controller.signal
       });
       const body = await readJson(response);
       if (controller.signal.aborted || sequence < appliedSequence.current)
@@ -484,10 +479,13 @@ function DossierPageState({
 
     async function pollJob() {
       try {
-        const response = await fetch(`/api/dossiers/jobs/${activeJobId}`, {
-          cache: "no-store",
-          signal: controller.signal
-        });
+        const response = await dossierFetch(
+          `/api/dossiers/jobs/${activeJobId}`,
+          {
+            cache: "no-store",
+            signal: controller.signal
+          }
+        );
         const body = await readJson(response);
         if (controller.signal.aborted) return;
         if (!response.ok) {
@@ -541,10 +539,9 @@ function DossierPageState({
       const sequence = ++requestSequence.current;
       let response: Response;
       try {
-        response = await fetch(dossierPath, {
+        response = await dossierFetch(dossierPath, {
           cache: "no-store",
-          signal,
-          headers: await credentialHeadersForRequest()
+          signal
         });
       } catch (caught) {
         if (!signal.aborted && sequence >= appliedSequence.current)
@@ -742,7 +739,7 @@ function DossierPageState({
                 lastCollectedAt={dossier?.lastCollectedAt ?? null}
                 onRefresh={async () => {
                   setAnnouncement("");
-                  const response = await fetch(
+                  const response = await dossierFetch(
                     `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/refresh`,
                     { method: "POST" }
                   );
@@ -837,7 +834,7 @@ function DossierPageState({
                 {...(canAddCharacters
                   ? {
                       onSearchTier: async (raidId: string) => {
-                        const response = await fetch(
+                        const response = await dossierFetch(
                           `/api/dossiers/${identity.region}/${identity.realm}/${encodeURIComponent(identity.name)}/tiers/${encodeURIComponent(raidId)}/search`,
                           { method: "POST" }
                         );
