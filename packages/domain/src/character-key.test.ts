@@ -20,8 +20,31 @@ describe("Raider.IO character identity", () => {
     );
   });
 
+  // Raider.IO keeps the accents in these realms' slugs; Blizzard's slugs drop them.
+  it.each([
+    ["aggra-portugu%C3%AAs", "aggra-portugues"],
+    ["pozzo-delleternit%C3%A0", "pozzo-delleternita"],
+    ["chants-%C3%A9ternels", "chants-eternels"],
+    ["Chants-%C3%89ternels", "chants-eternels"],
+    ["confr%C3%A9rie-du-thorium", "confrerie-du-thorium"],
+    ["mar%C3%A9cage-de-zangar", "marecage-de-zangar"]
+  ])("folds the accented realm %s to %s", (realm, expected) => {
+    expect(
+      parseRaiderIoCharacterUrl(`https://raider.io/characters/eu/${realm}/Ryii`)
+    ).toEqual({ region: "eu", realm: expected, name: "ryii" });
+  });
+
+  it("keeps the accents in a character name", () => {
+    expect(
+      parseRaiderIoCharacterUrl(
+        "https://raider.io/characters/eu/silvermoon/R%C3%BF%C3%AFi"
+      ).name
+    ).toBe("rÿïi");
+  });
+
   it.each([
     "https://example.com/characters/eu/silvermoon/ryii",
+    "https://raider.io/characters/eu/%D0%B3%D0%BE%D1%80%D0%B4%D1%83%D0%BD%D0%BD%D0%B8/ryii",
     "https://raider.io/guilds/eu/silvermoon/example",
     "https://raider.io/characters/xx/silvermoon/ryii",
     "https://user@raider.io/characters/eu/silvermoon/ryii",
@@ -40,6 +63,14 @@ describe("applicant character identity", () => {
         "https://www.warcraftlogs.com/character/eu/silvermoon/Ryii"
       )
     ).toEqual({ region: "eu", realm: "silvermoon", name: "ryii" });
+  });
+
+  it("folds an accented realm in a Warcraft Logs character URL", () => {
+    expect(
+      parseApplicantCharacterUrl(
+        "https://www.warcraftlogs.com/character/eu/aggra-portugu%C3%AAs/Ryii"
+      )
+    ).toEqual({ region: "eu", realm: "aggra-portugues", name: "ryii" });
   });
 
   it.each([
