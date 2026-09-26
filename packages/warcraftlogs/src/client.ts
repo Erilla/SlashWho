@@ -1358,7 +1358,16 @@ function toParseLimitation(
       };
     case "schema_drift":
       return { kind: "limitation", code: "parse_schema_drift" };
-    default:
+    case "not_found":
+    case "points_budget_low":
+    case "request_cap":
+    case "unavailable":
+    case "parse_private":
+    case "parse_rate_limited":
+    case "parse_request_cap":
+    case "parse_unavailable":
+    case "parse_identity_unmatched":
+    case "parse_schema_drift":
       return { kind: "limitation", code: "parse_unavailable" };
   }
 }

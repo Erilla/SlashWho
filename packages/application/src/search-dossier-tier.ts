@@ -136,7 +136,10 @@ function outcomeOf(
         outcome: "searched",
         searchableAgainAt: outcome.searchableAgainAt.toISOString()
       };
-    default:
+    case "queued":
+    case "failed":
+    case "no_evidence":
+    case "over_limit":
       return { outcome: outcome.kind, searchableAgainAt: null };
   }
 }
