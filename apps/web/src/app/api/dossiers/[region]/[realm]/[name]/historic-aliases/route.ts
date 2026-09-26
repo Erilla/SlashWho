@@ -1,10 +1,14 @@
-import { characterKeySchema } from "@slashwho/contracts";
+import {
+  characterKeySchema,
+  dossierStartResponseSchema
+} from "@slashwho/contracts";
 import { parseApplicantCharacterUrl } from "@slashwho/domain";
 
 import { getContainer } from "../../../../../../../server/container";
 import {
   apiError,
-  parseCharacterRoute,
+  jsonNoStore,
+  resolveCharacterRoute,
   withHttpRequest
 } from "../../../../../../../server/http";
 
@@ -25,21 +29,19 @@ function parseBody(value: unknown) {
   return { character: character.data, name: body.name, realm: body.realm };
 }
 
-type CharacterParams = { region: string; realm: string; name: string };
+type CharacterContext =
+  RouteContext<"/api/dossiers/[region]/[realm]/[name]/historic-aliases">;
 
 async function change(
   method: "POST" | "DELETE",
   request: Request,
-  context: { params: Promise<CharacterParams> }
+  context: CharacterContext
 ): Promise<Response> {
   return withHttpRequest("dossier_historic_alias", async (scope) => {
-    let root: ReturnType<typeof parseCharacterRoute>;
-    try {
-      root = parseCharacterRoute(await context.params);
-    } catch {
-      return apiError("invalid_character_url");
-    }
-    if (!root.canonical) return apiError("invalid_character_url");
+    const root = await resolveCharacterRoute(context, {
+      requireCanonical: true
+    });
+    if ("refusal" in root) return root.refusal;
     const body = parseBody(await request.json().catch(() => null));
     if (!body) return apiError("invalid_character_url");
     let alias: ReturnType<typeof parseApplicantCharacterUrl>;
@@ -66,12 +68,7 @@ async function change(
             scope
           );
     if (result === "added" || result === "removed") {
-      return Response.json(
-        { kind: "ready" },
-        {
-          headers: { "cache-control": "no-store" }
-        }
-      );
+      return jsonNoStore(dossierStartResponseSchema, { kind: "ready" });
     }
     if (result === "duplicate") return apiError("historic_alias_duplicate");
     if (result === "self") return apiError("historic_alias_self");
@@ -81,12 +78,8 @@ async function change(
   });
 }
 
-export const POST = (
-  request: Request,
-  context: { params: Promise<CharacterParams> }
-) => change("POST", request, context);
+export const POST = (request: Request, context: CharacterContext) =>
+  change("POST", request, context);
 
-export const DELETE = (
-  request: Request,
-  context: { params: Promise<CharacterParams> }
-) => change("DELETE", request, context);
+export const DELETE = (request: Request, context: CharacterContext) =>
+  change("DELETE", request, context);

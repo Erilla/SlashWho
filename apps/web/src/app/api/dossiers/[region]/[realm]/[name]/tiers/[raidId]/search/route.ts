@@ -9,23 +9,14 @@ import { loadWebConfig } from "../../../../../../../../../server/config";
 import { resolveCredentialOverrides } from "../../../../../../../../../server/credential-headers";
 import {
   apiError,
-  parseCharacterRoute,
+  jsonNoStore,
   publicReadAuthorizationResponse,
+  resolveCharacterRoute,
   withHttpRequest
 } from "../../../../../../../../../server/http";
 
-type TierParams = {
-  region: string;
-  realm: string;
-  name: string;
-  raidId: string;
-};
-
 function respond(body: DossierTierSearchResponse, status = 200): Response {
-  return Response.json(dossierTierSearchResponseSchema.parse(body), {
-    status,
-    headers: { "cache-control": "no-store" }
-  });
+  return jsonNoStore(dossierTierSearchResponseSchema, body, { status });
 }
 
 /**
@@ -36,20 +27,16 @@ function respond(body: DossierTierSearchResponse, status = 200): Response {
  */
 export async function POST(
   request: Request,
-  context: { params: Promise<TierParams> }
+  context: RouteContext<"/api/dossiers/[region]/[realm]/[name]/tiers/[raidId]/search">
 ): Promise<Response> {
   return withHttpRequest("dossier_tier_search", async (scope) => {
-    const params = await context.params;
-    let character: ReturnType<typeof parseCharacterRoute>;
-    try {
-      character = parseCharacterRoute(params);
-    } catch {
-      return apiError("invalid_character_url");
-    }
-    if (!character.canonical) return apiError("invalid_character_url");
+    const character = await resolveCharacterRoute(context, {
+      requireCanonical: true
+    });
+    if ("refusal" in character) return character.refusal;
     let raidId: string;
     try {
-      raidId = decodeURIComponent(params.raidId);
+      raidId = decodeURIComponent((await context.params).raidId);
     } catch {
       return apiError("tier_not_found");
     }

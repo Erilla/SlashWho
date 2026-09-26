@@ -7,24 +7,34 @@ import {
 import { getContainer } from "../../../../../../../server/container";
 import {
   apiError,
-  parseCharacterRoute,
+  jsonNoStore,
+  resolveCharacterRoute,
+  startResultResponse,
   withHttpRequest
 } from "../../../../../../../server/http";
 
-type CharacterParams = { region: string; realm: string; name: string };
+type CharacterContext =
+  RouteContext<"/api/dossiers/[region]/[realm]/[name]/connected-characters">;
+
+const changed = () =>
+  jsonNoStore(dossierStartResponseSchema, { kind: "ready" });
+
+/** A guard rather than an inline check, which cannot narrow a union `kind`. */
+function isLinked(result: {
+  kind: string;
+}): result is { kind: "linked" | "duplicate" } {
+  return result.kind === "linked" || result.kind === "duplicate";
+}
 
 export async function POST(
   request: Request,
-  context: { params: Promise<CharacterParams> }
+  context: CharacterContext
 ): Promise<Response> {
   return withHttpRequest("dossier_connection", async (scope, correlationId) => {
-    let root: ReturnType<typeof parseCharacterRoute>;
-    try {
-      root = parseCharacterRoute(await context.params);
-    } catch {
-      return apiError("invalid_character_url");
-    }
-    if (!root.canonical) return apiError("invalid_character_url");
+    const root = await resolveCharacterRoute(context, {
+      requireCanonical: true
+    });
+    if ("refusal" in root) return root.refusal;
     const body = createDossierRequestSchema.safeParse(
       await request.json().catch(() => null)
     );
@@ -42,59 +52,20 @@ export async function POST(
     if ("joinedExistingRun" in result && result.joinedExistingRun) {
       scope.mark("runJoined");
     }
-    if (result.kind === "linked" || result.kind === "duplicate") {
-      return Response.json(
-        dossierStartResponseSchema.parse({ kind: "ready" }),
-        {
-          headers: { "cache-control": "no-store" }
-        }
-      );
-    }
-    if (result.kind === "job") {
-      return Response.json(
-        dossierStartResponseSchema.parse({
-          kind: "job",
-          jobId: result.jobId,
-          status: result.status
-        }),
-        { status: 202, headers: { "cache-control": "no-store" } }
-      );
-    }
+    if (isLinked(result)) return changed();
     if (result.kind === "character") return apiError("search_failed");
-    if (result.kind === "rate_limited")
-      return apiError("rate_limited", {
-        retryAfterSeconds: result.retryAfterSeconds
-      });
-    return apiError("code" in result ? result.code : "search_failed");
+    return startResultResponse(result);
   });
 }
-
-/** The dossier the link belongs to, or the refusal that stops the request. */
-async function resolveRoot(context: {
-  params: Promise<CharacterParams>;
-}): Promise<
-  { key: ReturnType<typeof parseCharacterRoute>["key"] } | { refusal: Response }
-> {
-  try {
-    const root = parseCharacterRoute(await context.params);
-    if (!root.canonical) return { refusal: apiError("invalid_character_url") };
-    return { key: root.key };
-  } catch {
-    return { refusal: apiError("invalid_character_url") };
-  }
-}
-
-const changed = () =>
-  Response.json(dossierStartResponseSchema.parse({ kind: "ready" }), {
-    headers: { "cache-control": "no-store" }
-  });
 
 export async function PATCH(
   request: Request,
-  context: { params: Promise<CharacterParams> }
+  context: CharacterContext
 ): Promise<Response> {
   return withHttpRequest("dossier_connection_exclusion", async (scope) => {
-    const root = await resolveRoot(context);
+    const root = await resolveCharacterRoute(context, {
+      requireCanonical: true
+    });
     if ("refusal" in root) return root.refusal;
     const body = connectedCharacterExclusionRequestSchema.safeParse(
       await request.json().catch(() => null)
@@ -117,10 +88,12 @@ export async function PATCH(
 
 export async function DELETE(
   request: Request,
-  context: { params: Promise<CharacterParams> }
+  context: CharacterContext
 ): Promise<Response> {
   return withHttpRequest("dossier_connection_removal", async (scope) => {
-    const root = await resolveRoot(context);
+    const root = await resolveCharacterRoute(context, {
+      requireCanonical: true
+    });
     if ("refusal" in root) return root.refusal;
     const body = createDossierRequestSchema.safeParse(
       await request.json().catch(() => null)
