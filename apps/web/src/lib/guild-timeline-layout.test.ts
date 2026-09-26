@@ -56,21 +56,40 @@ function span(
 
 const options = {
   today: "2026-09-26",
-  pixelsPerYear: 120,
+  minimumPixelsPerYear: 120,
   labelWidth: (text: string) => text.length * 7,
   padding: 0
 };
 
 describe("layoutGuildTimeline", () => {
-  it("runs from the first night's year to the year after today", () => {
+  it("runs from the first night's year to today", () => {
     const layout = layoutGuildTimeline(
       [span("Rancour", "2024-09-22", "2026-09-24")],
       options
     );
     expect(layout.startsOn).toBe("2024-01-01");
-    expect(layout.endsOn).toBe("2027-01-01");
+    expect(layout.endsOn).toBe("2026-09-27");
     expect(layout.x("2025-01-01")).toBeCloseTo(120, 0);
-    expect(layout.width).toBeGreaterThanOrEqual(360);
+  });
+
+  it("stretches a short history to fill the width it is given", () => {
+    const layout = layoutGuildTimeline(
+      [span("Rancour", "2024-09-22", "2026-09-24")],
+      { ...options, fitWidth: 1300 }
+    );
+    expect(layout.width).toBe(1300);
+    // The latest bar ends within the room kept for today's markers.
+    const [bar] = layout.bars;
+    expect(1300 - (bar!.x + bar!.width)).toBeLessThan(60);
+  });
+
+  it("keeps its minimum scale, and scrolls, when the width is too narrow", () => {
+    const layout = layoutGuildTimeline(
+      [span("SeriouslyCasual", "2018-03-14", "2026-09-24")],
+      { ...options, fitWidth: 300 }
+    );
+    expect(layout.x("2019-01-01")).toBeCloseTo(120, 0);
+    expect(layout.width).toBeGreaterThan(300);
   });
 
   it("gives overlapping guilds their own rows", () => {
@@ -120,7 +139,9 @@ describe("layoutGuildTimeline", () => {
       [span("Rancour", "2025-01-01", "2026-12-20")],
       { ...options, today: "2026-12-30" }
     );
-    expect(layout.width).toBeGreaterThanOrEqual(layout.x("2026-12-30") + 48);
+    expect(layout.width).toBeGreaterThanOrEqual(
+      Math.floor(layout.x("2026-12-30") + 48)
+    );
   });
 
   it("keeps a single-night stretch visible", () => {

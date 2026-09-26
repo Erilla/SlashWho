@@ -16,7 +16,7 @@ export type GuildTimelineLayout = Readonly<{
   width: number;
   /** The first day drawn, `YYYY-MM-DD`. */
   startsOn: string;
-  /** The last day drawn, `YYYY-MM-DD`. */
+  /** The day after the last day drawn (today), `YYYY-MM-DD`. */
   endsOn: string;
   /** Where a `YYYY-MM-DD` day falls, in pixels from the left edge. */
   x: (date: string) => number;
@@ -25,7 +25,10 @@ export type GuildTimelineLayout = Readonly<{
 export type GuildTimelineLayoutOptions = Readonly<{
   /** Today, so the timeline runs to the present rather than the last night. */
   today: string;
-  pixelsPerYear: number;
+  /** Below this a year's labels crowd, so the timeline scrolls instead. */
+  minimumPixelsPerYear: number;
+  /** The width available; a shorter history is stretched to fill it. */
+  fitWidth?: number;
   /** The width a guild's name takes when drawn. */
   labelWidth: (text: string) => number;
   padding?: number;
@@ -76,9 +79,11 @@ function dayMs(date: string): number {
 
 /**
  * Where each stretch is drawn. The axis starts on 1 January of the first
- * year with a night and ends on 1 January after today. Each bar takes the
- * highest row with room for it and its label, so overlapping guilds get rows
- * of their own while a guild that follows another shares its row.
+ * year with a night and ends today, so the latest bar sits against the
+ * right edge. It is stretched to fill `fitWidth` when that is wider than
+ * `minimumPixelsPerYear` allows, and scrolls when it is not. Each bar takes
+ * the highest row with room for it and its label, so overlapping guilds get
+ * rows of their own while a guild that follows another shares its row.
  */
 export function layoutGuildTimeline(
   spans: readonly GuildTimelineSpan[],
@@ -90,17 +95,25 @@ export function layoutGuildTimeline(
     Number(options.today.slice(0, 4))
   );
   const startsOn = `${firstYear}-01-01`;
-  const endsOn = `${Number(options.today.slice(0, 4)) + 1}-01-01`;
+  // The day after today, so today's own tier band and bars are drawn.
+  const endsOn = new Date(dayMs(options.today) + DAY_MS)
+    .toISOString()
+    .slice(0, 10);
   const origin = dayMs(startsOn);
+  const years = (dayMs(endsOn) - origin) / YEAR_MS;
+  const pixelsPerYear = Math.max(
+    options.minimumPixelsPerYear,
+    ((options.fitWidth ?? 0) - padding * 2 - TODAY_MARKER_ROOM) / years
+  );
   const x = (date: string) =>
-    padding + ((dayMs(date) - origin) / YEAR_MS) * options.pixelsPerYear;
+    padding + ((dayMs(date) - origin) / YEAR_MS) * pixelsPerYear;
   const laneEnds: number[] = [];
   const bars = spans.map((span): GuildTimelineBar => {
     const start = x(span.firstNight);
     // A bar covers its last night, so it ends the following day.
     const width = Math.max(
       MINIMUM_BAR_WIDTH,
-      x(span.lastNight) + options.pixelsPerYear / 365.25 - start
+      x(span.lastNight) + pixelsPerYear / 365.25 - start
     );
     const labelWidth = options.labelWidth(span.guild.name);
     const labelInside = width >= labelWidth + LABEL_INSET * 2;
@@ -120,10 +133,10 @@ export function layoutGuildTimeline(
     bars,
     lanes: Math.max(1, laneEnds.length),
     // Room past today for the markers of guilds held now, which sit just
-    // right of the present even in late December.
-    width: Math.ceil(
-      Math.max(x(endsOn), x(options.today) + TODAY_MARKER_ROOM, ...laneEnds) +
-        padding
+    // right of the present. Floored so rounding never adds a scrollbar to a
+    // timeline stretched to fit exactly.
+    width: Math.floor(
+      Math.max(x(endsOn) + TODAY_MARKER_ROOM, ...laneEnds) + padding
     ),
     startsOn,
     endsOn,

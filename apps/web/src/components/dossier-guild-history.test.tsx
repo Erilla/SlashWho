@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen
+} from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
 
@@ -155,6 +161,50 @@ it("shades alternate tiers across the background and names a tier on hover", () 
   );
   fireEvent.mouseEnter(bands[1]!);
   expect(screen.getByText(/^Tier: /)).toBeInTheDocument();
+});
+
+it("stretches to fill the section, and re-fits when the section resizes", () => {
+  let width = 1300;
+  const clientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get() {
+      return width;
+    }
+  });
+  const observers: (() => void)[] = [];
+  const original = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(callback: () => void) {
+      observers.push(callback);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  try {
+    const { container } = render(
+      <DossierGuildHistory
+        characters={characters}
+        guildHistory={guildHistory}
+        today="2026-09-26"
+      />
+    );
+    const svgWidth = () =>
+      container.querySelector("svg")?.getAttribute("width");
+    expect(svgWidth()).toBe("1300");
+    width = 1600;
+    act(() => observers.forEach((callback) => callback()));
+    expect(svgWidth()).toBe("1600");
+  } finally {
+    globalThis.ResizeObserver = original;
+    if (clientWidth) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidth);
+    }
+  }
 });
 
 it("scrolls horizontally in a keyboard-reachable region", () => {

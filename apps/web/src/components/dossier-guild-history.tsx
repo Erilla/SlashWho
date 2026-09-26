@@ -23,7 +23,8 @@ type DossierGuildHistoryProps = Readonly<{
   today?: string;
 }>;
 
-const PIXELS_PER_YEAR = 120;
+// A year's label needs about this much room; below it the timeline scrolls.
+const MINIMUM_PIXELS_PER_YEAR = 100;
 const LANE_HEIGHT = 28;
 const BAR_HEIGHT = 20;
 const TOP = 8;
@@ -119,6 +120,9 @@ export function DossierGuildHistory({
       ])
     );
   }, [guildHistory, tiers]);
+  // The width the timeline has to fill, so a short history stretches across
+  // the section instead of stopping part-way along it.
+  const [fitWidth, setFitWidth] = useState(0);
   const layout = useMemo(() => {
     const spans = guildTimelineSpans(guildHistory, {
       tiers,
@@ -128,10 +132,22 @@ export function DossierGuildHistory({
       ? null
       : layoutGuildTimeline(spans, {
           today,
-          pixelsPerYear: PIXELS_PER_YEAR,
+          minimumPixelsPerYear: MINIMUM_PIXELS_PER_YEAR,
+          fitWidth,
           labelWidth: (text) => text.length * CHARACTER_WIDTH
         });
-  }, [guildHistory, tiers, filter, today]);
+  }, [guildHistory, tiers, filter, today, fitWidth]);
+  const hasLayout = layout !== null;
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const measure = () => setFitWidth(scroll.clientWidth);
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroll);
+    return () => observer.disconnect();
+  }, [hasLayout]);
 
   // The guilds the latest snapshot places the visible characters in, marked
   // at the present on the row where that guild's history ends.
@@ -151,22 +167,24 @@ export function DossierGuildHistory({
   useEffect(() => {
     const scroll = scrollRef.current;
     if (scroll) scroll.scrollLeft = scroll.scrollWidth;
-  }, [width]);
+  }, [width, fitWidth]);
 
   const height = layout ? TOP + layout.lanes * LANE_HEIGHT + AXIS_HEIGHT : 0;
   const laneY = (lane: number) => TOP + lane * LANE_HEIGHT;
   const lastLane = new Map<string, number>();
   for (const bar of layout?.bars ?? []) lastLane.set(bar.guildId, bar.lane);
   const ringsInLane = new Map<number, number>();
+  // Every year that opens on the axis, the current one included.
   const years = layout
     ? Array.from(
         {
           length:
             Number(layout.endsOn.slice(0, 4)) -
-            Number(layout.startsOn.slice(0, 4))
+            Number(layout.startsOn.slice(0, 4)) +
+            1
         },
         (_, index) => Number(layout.startsOn.slice(0, 4)) + index
-      )
+      ).filter((year) => `${year}-01-01` < layout.endsOn)
     : [];
   const bands = layout ? tierBands(tiers, layout.startsOn, layout.endsOn) : [];
   const visibleTiers = layout
