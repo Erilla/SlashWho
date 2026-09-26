@@ -14,6 +14,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/raiderio/package.json packages/raiderio/package.json
+COPY packages/upstream-http/package.json packages/upstream-http/package.json
 COPY packages/warcraftlogs/package.json packages/warcraftlogs/package.json
 # Corepack reads the pnpm version from packageManager in package.json.
 RUN corepack install

@@ -19,7 +19,8 @@ import {
   type CharacterKey,
   type RaiderIoCharacter
 } from "@slashwho/domain";
-import { isRaiderIoFailure, type RaiderIoGateway } from "@slashwho/raiderio";
+import type { RaiderIoGateway } from "@slashwho/raiderio";
+import { isUpstreamFailure } from "@slashwho/upstream-http";
 
 import {
   AuthenticationError,
@@ -328,7 +329,7 @@ export function createSearchService(options: {
       try {
         rootCharacter = await readRootCharacter(key, scope);
       } catch (error) {
-        if (isRaiderIoFailure(error) && error.kind === "not_found") {
+        if (isUpstreamFailure(error) && error.kind === "not_found") {
           await repositories.negativeCache.put(
             key,
             new Date(now().getTime() + options.config.NEGATIVE_CACHE_TTL_MS)

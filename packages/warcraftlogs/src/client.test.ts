@@ -5742,8 +5742,10 @@ describe("Warcraft Logs gateway", () => {
 
   it("reports a non-429 response carrying Retry-After as throttling", async () => {
     // "Upstream asked us to back off" is the definition shared with Blizzard
-    // and Raider.IO, so a 503 with Retry-After must fire onThrottle even
-    // though it still returns the unavailable limitation, unchanged.
+    // and Raider.IO, so a 503 with Retry-After must fire onThrottle. It is
+    // still unavailable rather than rate limited, but keeps the delay: Blizzard
+    // and Raider.IO always did, and without it the character was retried on
+    // the configured default however long upstream had asked for (#577).
     const throttles: Array<{ retryAfterMs: number | undefined }> = [];
     const client = createWarcraftLogsClient({
       fetch: (async (input: RequestInfo | URL) => {
@@ -5765,7 +5767,11 @@ describe("Warcraft Logs gateway", () => {
     });
 
     expect(throttles).toEqual([{ retryAfterMs: 30_000 }]);
-    expect(result).toEqual({ kind: "limitation", code: "unavailable" });
+    expect(result).toEqual({
+      kind: "limitation",
+      code: "unavailable",
+      retryAfterMs: 30_000
+    });
   });
 
   it("does not report a response without Retry-After as throttling", async () => {

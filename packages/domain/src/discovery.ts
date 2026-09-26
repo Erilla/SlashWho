@@ -1,3 +1,5 @@
+import { isUpstreamFailure } from "@slashwho/upstream-http";
+
 import {
   toRaiderIoUrl,
   type CharacterGuild,
@@ -185,10 +187,8 @@ function discoveredCharacter(
 }
 
 function failureOutcome(error: unknown): DiscoveryOutcome {
-  const kind =
-    typeof error === "object" && error !== null && "kind" in error
-      ? error.kind
-      : undefined;
+  const failure = isUpstreamFailure(error) ? error : undefined;
+  const kind = failure?.kind;
 
   if (kind === "not_found") {
     return { kind: "failure", code: "character_not_found", retryable: false };
@@ -201,13 +201,11 @@ function failureOutcome(error: unknown): DiscoveryOutcome {
     };
   }
   const retryAfterMs =
-    typeof error === "object" &&
-    error !== null &&
-    "retryAfterMs" in error &&
-    typeof error.retryAfterMs === "number" &&
-    Number.isFinite(error.retryAfterMs) &&
-    error.retryAfterMs >= 0
-      ? error.retryAfterMs
+    failure?.kind === "transient" &&
+    failure.retryAfterMs !== undefined &&
+    Number.isFinite(failure.retryAfterMs) &&
+    failure.retryAfterMs >= 0
+      ? failure.retryAfterMs
       : undefined;
   return {
     kind: "failure",

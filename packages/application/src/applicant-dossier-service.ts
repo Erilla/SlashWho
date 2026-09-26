@@ -40,6 +40,7 @@ import type {
   MythicBossRankingsOptions,
   MythicBossRankingsResult
 } from "@slashwho/raiderio";
+import { isUpstreamFailure } from "@slashwho/upstream-http";
 
 import type { ApplicationConfig } from "./config";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
@@ -463,8 +464,7 @@ function awaitWithAbort<T>(
 function blizzardLimitationCode(
   error: unknown
 ): "not_found" | "schema_drift" | "unavailable" {
-  if (typeof error !== "object" || error === null || !("kind" in error))
-    return "unavailable";
+  if (!isUpstreamFailure(error)) return "unavailable";
   if (error.kind === "not_found" || error.kind === "schema_drift")
     return error.kind;
   return "unavailable";

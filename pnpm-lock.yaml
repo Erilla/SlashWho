@@ -178,6 +178,9 @@ importers:
       '@slashwho/raiderio':
         specifier: workspace:*
         version: link:../raiderio
+      '@slashwho/upstream-http':
+        specifier: workspace:*
+        version: link:../upstream-http
       '@slashwho/warcraftlogs':
         specifier: workspace:*
         version: link:../warcraftlogs
@@ -190,6 +193,9 @@ importers:
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../domain
+      '@slashwho/upstream-http':
+        specifier: workspace:*
+        version: link:../upstream-http
 
   packages/contracts:
     dependencies:
@@ -222,22 +228,34 @@ importers:
         specifier: ^8.20.3
         version: 8.20.3
 
-  packages/domain: {}
+  packages/domain:
+    dependencies:
+      '@slashwho/upstream-http':
+        specifier: workspace:*
+        version: link:../upstream-http
 
   packages/raiderio:
     dependencies:
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../domain
+      '@slashwho/upstream-http':
+        specifier: workspace:*
+        version: link:../upstream-http
       zod:
         specifier: ^4.3.5
         version: 4.4.3
+
+  packages/upstream-http: {}
 
   packages/warcraftlogs:
     dependencies:
       '@slashwho/domain':
         specifier: workspace:*
         version: link:../domain
+      '@slashwho/upstream-http':
+        specifier: workspace:*
+        version: link:../upstream-http
 
 packages:
 

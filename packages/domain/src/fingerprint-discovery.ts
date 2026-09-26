@@ -1,3 +1,5 @@
+import { isUpstreamFailure } from "@slashwho/upstream-http";
+
 import {
   toRaiderIoUrl,
   type CharacterGuild,
@@ -104,12 +106,7 @@ function readConcurrency(value: number | undefined): number {
 }
 
 function isNotFound(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "kind" in error &&
-    error.kind === "not_found"
-  );
+  return isUpstreamFailure(error) && error.kind === "not_found";
 }
 
 function isCapReached(error: unknown): boolean {
@@ -232,10 +229,8 @@ function discoveredCharacter(
 }
 
 function failureOutcome(error: unknown): FingerprintSweepOutcome {
-  const kind =
-    typeof error === "object" && error !== null && "kind" in error
-      ? error.kind
-      : undefined;
+  const failure = isUpstreamFailure(error) ? error : undefined;
+  const kind = failure?.kind;
 
   if (kind === "schema_drift") {
     return {
@@ -246,13 +241,11 @@ function failureOutcome(error: unknown): FingerprintSweepOutcome {
   }
 
   const retryAfterMs =
-    typeof error === "object" &&
-    error !== null &&
-    "retryAfterMs" in error &&
-    typeof error.retryAfterMs === "number" &&
-    Number.isFinite(error.retryAfterMs) &&
-    error.retryAfterMs >= 0
-      ? error.retryAfterMs
+    failure?.kind === "transient" &&
+    failure.retryAfterMs !== undefined &&
+    Number.isFinite(failure.retryAfterMs) &&
+    failure.retryAfterMs >= 0
+      ? failure.retryAfterMs
       : undefined;
 
   return {

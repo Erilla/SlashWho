@@ -1,4 +1,5 @@
 export {
+  isValidCharacterKey,
   parseApplicantCharacterUrl,
   parseRaiderIoCharacterUrl,
   parseWarcraftLogsCharacterIdUrl,

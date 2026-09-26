@@ -18,6 +18,24 @@ export type CharacterGuild = Readonly<{
   realm: string;
 }>;
 
+const realmSlugPattern = /^[a-z0-9-]+$/;
+const characterNamePattern = /^[\p{L}\p{M}'-]+$/u;
+
+/**
+ * Whether a key is in the canonical form every lookup uses: a supported
+ * region, and a realm slug and name already lower-cased. Provider clients
+ * check this before putting a key into a request.
+ */
+export function isValidCharacterKey(key: CharacterKey): boolean {
+  return (
+    supportedRegions.includes(key.region) &&
+    realmSlugPattern.test(key.realm) &&
+    characterNamePattern.test(key.name) &&
+    key.realm === key.realm.toLocaleLowerCase("en-US") &&
+    key.name === key.name.toLocaleLowerCase("en-US")
+  );
+}
+
 function invalidCharacterUrl(): never {
   throw new Error("invalid_character_url");
 }
@@ -61,8 +79,8 @@ function parseCharacterPath(url: URL, expectedPrefix: string): CharacterKey {
   const realm = accentedRealm.normalize("NFD").replace(/\p{M}/gu, "");
   if (
     !supportedRegions.includes(region as Region) ||
-    !/^[a-z0-9-]+$/.test(realm) ||
-    !/^[\p{L}\p{M}'-]+$/u.test(name)
+    !realmSlugPattern.test(realm) ||
+    !characterNamePattern.test(name)
   ) {
     return invalidCharacterUrl();
   }

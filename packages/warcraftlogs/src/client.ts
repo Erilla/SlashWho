@@ -2,12 +2,22 @@ import {
   currentContentEligibility,
   currentContentEligibilityByRaidId,
   isNonRaidZone,
+  isValidCharacterKey,
   lookupRaidByName,
   lookupRaidForEvidence,
   raidOffersMythicRankings,
   supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
+import {
+  classifyResponse,
+  createClientCredentialsTokenSource,
+  isUpstreamFailure,
+  nonEmptyString,
+  record,
+  type ThrottleObserver,
+  type UpstreamFailure
+} from "@slashwho/upstream-http";
 
 import type {
   WarcraftLogsFirstKillEvidence,
@@ -324,31 +334,16 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   clientSecret: string;
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
-  onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  onThrottle?: ThrottleObserver;
   /** Times each request for `onRequest`. Injected so tests control it. */
   monotonic?: () => number;
-}>;
-
-type AccessToken = Readonly<{
-  value: string;
-  expiresAt: number;
 }>;
 
 type GraphqlSuccess = Readonly<{ kind: "success"; value: unknown }>;
 type GraphqlResult = GraphqlSuccess | WarcraftLogsLimitation;
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function isLimitation(value: unknown): value is WarcraftLogsLimitation {
   return record(value)?.kind === "limitation";
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function positiveInteger(value: unknown): number | null {
@@ -385,71 +380,42 @@ function validTimestampMilliseconds(value: unknown): number | null {
 }
 
 function validCharacterKey(value: CharacterKey): CharacterKey {
-  const valid =
-    supportedRegions.includes(value.region) &&
-    /^[a-z0-9-]+$/.test(value.realm) &&
-    /^[\p{L}\p{M}'-]+$/u.test(value.name) &&
-    value.realm === value.realm.toLocaleLowerCase("en-US") &&
-    value.name === value.name.toLocaleLowerCase("en-US");
-  if (!valid) throw new Error("invalid_character_key");
+  if (!isValidCharacterKey(value)) throw new Error("invalid_character_key");
   return value;
 }
 
-function retryAfterMs(response: Response): number | undefined {
-  const value = response.headers.get("Retry-After")?.trim();
-  if (!value) return undefined;
-  if (/^\d+$/.test(value)) return Number(value) * 1_000;
-
-  const retryAt = Date.parse(value);
-  return Number.isFinite(retryAt)
-    ? Math.max(0, retryAt - Date.now())
-    : undefined;
-}
-
 /**
- * A reporting callback must never change what this client returns. If the
- * logger behind `onThrottle` throws, the raw thrown value would otherwise
- * replace the failure being built here, degrading a genuine rate limit into an
- * unavailable upstream. Swallowed silently: there is no safe place to report a
- * failure of the reporting path itself, and it must not become a second
- * failure.
+ * Reads an upstream failure as the limitation this client reports. A
+ * `Retry-After` rides along whatever the status, so a 503 that says when to
+ * come back is waited out as long as upstream asked, like a 429.
  */
-function reportThrottle(
-  onThrottle:
-    ((event: { retryAfterMs: number | undefined }) => void) | undefined,
-  retryAfterMs: number | undefined
-): void {
-  try {
-    onThrottle?.({ retryAfterMs });
-  } catch {
-    // Intentionally ignored; see above.
+function failureLimitation(failure: UpstreamFailure): WarcraftLogsLimitation {
+  switch (failure.kind) {
+    case "not_found":
+      return { kind: "limitation", code: "not_found" };
+    case "forbidden":
+      return { kind: "limitation", code: "private" };
+    case "schema_drift":
+      return { kind: "limitation", code: "schema_drift" };
+    case "transient":
+      return {
+        kind: "limitation",
+        code: failure.status === 429 ? "rate_limited" : "unavailable",
+        ...(failure.retryAfterMs === undefined
+          ? {}
+          : { retryAfterMs: failure.retryAfterMs })
+      };
   }
 }
 
+// Only 403 speaks for the thing asked about. A 401 is our token being
+// refused, which says nothing about the character, and reads as
+// `unavailable` (#563).
 function responseLimitation(
   response: Response,
-  onThrottle?: (event: { retryAfterMs: number | undefined }) => void
+  onThrottle?: ThrottleObserver
 ): WarcraftLogsLimitation {
-  if (response.status === 404) return { kind: "limitation", code: "not_found" };
-  // Only 403 speaks for the thing asked about. A 401 is our token being
-  // refused, which says nothing about the character, and falls through to
-  // `unavailable` below (#563).
-  if (response.status === 403) return { kind: "limitation", code: "private" };
-  // Upstream asking us to back off is throttling whether or not it also sent
-  // 429 — a 503 carrying Retry-After is the same signal. This affects only
-  // when onThrottle fires, never the limitation this function returns.
-  const retryAfter = retryAfterMs(response);
-  if (response.status === 429 || retryAfter !== undefined) {
-    reportThrottle(onThrottle, retryAfter);
-  }
-  if (response.status === 429) {
-    return {
-      kind: "limitation",
-      code: "rate_limited",
-      ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter })
-    };
-  }
-  return { kind: "limitation", code: "unavailable" };
+  return failureLimitation(classifyResponse(response, onThrottle));
 }
 
 function firstGraphQlError(
@@ -2049,8 +2015,14 @@ export function createWarcraftLogsClient(
   const monotonic = options.monotonic ?? (() => performance.now());
   const elapsedSince = (startedAt: number) =>
     Math.max(0, Math.round(monotonic() - startedAt));
-  let cachedToken: AccessToken | undefined;
-  let tokenRequest: Promise<string | WarcraftLogsLimitation> | undefined;
+  const tokens = createClientCredentialsTokenSource({
+    provider: "warcraftlogs",
+    fetch: options.fetch,
+    url: new URL("/oauth/token", baseUrl ?? "https://www.warcraftlogs.com"),
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    onThrottle: options.onThrottle
+  });
   // The zone catalogue is Warcraft Logs' own static data, the same for every
   // character, and each ranked walk used to ask for it afresh.
   let sharedZones: { value: unknown; at: number } | undefined;
@@ -2069,81 +2041,21 @@ export function createWarcraftLogsClient(
     { pages: ReadonlyMap<number, unknown>; at: number }
   >();
 
-  function tokenUrl(): URL {
-    return new URL("/oauth/token", baseUrl ?? "https://www.warcraftlogs.com");
-  }
-
   function graphqlUrl(): URL {
     return new URL("/api/v2/client", baseUrl ?? "https://www.warcraftlogs.com");
   }
 
+  // The token endpoint answers for our credentials, never for a character, so
+  // the source never reports `not_found` or `forbidden` (#563). A caller's
+  // own abort is not an upstream failure, and still throws.
   async function accessToken(
     signal?: AbortSignal
   ): Promise<string | WarcraftLogsLimitation> {
-    signal?.throwIfAborted();
-    tokenRequest ??= fetchAccessToken(AbortSignal.timeout(15_000)).finally(
-      () => {
-        tokenRequest = undefined;
-      }
-    );
-    const token = await tokenRequest;
-    signal?.throwIfAborted();
-    return token;
-  }
-
-  // The signal is the token request's own deadline, never a caller's: the
-  // request is shared, so its expiry is an upstream failure, not a
-  // cancellation, and is reported like any other.
-  async function fetchAccessToken(
-    signal?: AbortSignal
-  ): Promise<string | WarcraftLogsLimitation> {
-    if (cachedToken && cachedToken.expiresAt > Date.now()) {
-      return cachedToken.value;
-    }
-
-    let response: Response;
     try {
-      response = await options.fetch(tokenUrl().toString(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${Buffer.from(
-            `${options.clientId}:${options.clientSecret}`
-          ).toString("base64")}`
-        },
-        body: "grant_type=client_credentials",
-        signal
-      });
-    } catch {
-      return { kind: "limitation", code: "unavailable" };
-    }
-
-    if (signal?.aborted) return { kind: "limitation", code: "unavailable" };
-    if (!response.ok) {
-      // The token endpoint answers for our credentials, never for a
-      // character: a refusal here is ours, so it must not read as `private`
-      // or `not_found`, which are statements about the player (#563).
-      const limitation = responseLimitation(response, options.onThrottle);
-      return limitation.code === "rate_limited"
-        ? limitation
-        : { kind: "limitation", code: "unavailable" };
-    }
-    try {
-      const body = record(await response.json());
-      if (signal?.aborted) return { kind: "limitation", code: "unavailable" };
-      const value = body && nonEmptyString(body.access_token);
-      const expiresIn = body && nonNegativeFiniteNumber(body.expires_in);
-      if (!value || expiresIn === null || expiresIn <= 0) {
-        return { kind: "limitation", code: "schema_drift" };
-      }
-      cachedToken = {
-        value,
-        expiresAt: Date.now() + Math.max(0, expiresIn * 1_000 - 60_000)
-      };
-      return value;
-    } catch {
-      if (signal?.aborted) return { kind: "limitation", code: "unavailable" };
-      return { kind: "limitation", code: "schema_drift" };
+      return await tokens.token(signal);
+    } catch (error) {
+      if (!isUpstreamFailure(error)) throw error;
+      return failureLimitation(error);
     }
   }
 
@@ -2179,7 +2091,7 @@ export function createWarcraftLogsClient(
     const rejected = () => {
       // Only the token this request carried. A concurrent request may
       // already have replaced it with a fresh one.
-      if (cachedToken?.value === token) cachedToken = undefined;
+      tokens.invalidate(token);
       return "auth_rejected" as const;
     };
 

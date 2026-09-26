@@ -58,14 +58,3 @@ export interface BlizzardGateway {
     waitForSlot?: BlizzardSlotWait
   ): Promise<readonly CompletedAchievement[]>;
 }
-
-export type BlizzardFailure =
-  | { kind: "not_found" }
-  | {
-      kind: "transient";
-      status?: number;
-      retryAfterMs?: number;
-    }
-  | { kind: "schema_drift" };
-
-export type BlizzardError = Error & BlizzardFailure;

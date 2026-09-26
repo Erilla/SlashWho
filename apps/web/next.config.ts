@@ -6,7 +6,8 @@ const nextConfig: NextConfig = {
     "@slashwho/application",
     "@slashwho/contracts",
     "@slashwho/database",
-    "@slashwho/domain"
+    "@slashwho/domain",
+    "@slashwho/upstream-http"
   ]
 };
 
