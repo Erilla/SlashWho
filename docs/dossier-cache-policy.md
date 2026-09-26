@@ -66,7 +66,9 @@ known, and `none` where waiting changes nothing. The Data limitations section
 shows it beside what the shortfall `affects` and, where it can name them, the
 raids and bosses it covers. A completed run's limitations stop being listed
 once a newer full collection for that character is in flight, because that
-collection is re-reading exactly what they describe.
+collection is re-reading exactly what they describe. A light refresh (one page
+of history, the bookmark untouched) and a tier search re-read none of it, so
+they leave the limitations listed.
 
 Such a run carries its shortfall in `parse_limitation_code` alone:
 `limitation_code` reports the history scan, which finished, and the negative

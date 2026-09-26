@@ -103,6 +103,8 @@ function fixture(
     refreshingCharacter?: CharacterKey | null;
     /** What the run collecting right now was reserved to do. */
     activeMode?: "full" | "tier_search";
+    /** The run collecting right now was reserved as a light refresh. */
+    activeLightRefresh?: boolean;
     /** The phase ledger `listPhases` returns for the active run. */
     activePhases?: readonly EvidenceRunPhase[];
     onCacheEvent?: (source: string, event: string) => void;
@@ -208,6 +210,7 @@ function fixture(
                 limitationCode: options.activeLimitationCode ?? null,
                 parseLimitationCode: null,
                 mode: options.activeMode ?? "full",
+                ...(options.activeLightRefresh ? { lightRefresh: true } : {}),
                 errorCode: null,
                 createdAt: new Date("2026-09-11T12:00:00.000Z"),
                 startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -1701,6 +1704,25 @@ describe("applicant dossier service", () => {
       ).toEqual(["request_cap"]);
     });
 
+    it("keeps the last run's shortfalls while only a light refresh is collecting", async () => {
+      // Break caught (#541 review): a manual refresh inside the cooldown reads
+      // one page and leaves the bookmark alone, yet it was treated as a full
+      // collection -- so pressing refresh made a deep-history gap vanish.
+      const { dossiers } = fixture({
+        evidenceStatus: "partial",
+        evidenceLimitationCode: "request_cap",
+        omittedInvalidTimestamp: true,
+        refreshingCharacter: root,
+        activeLightRefresh: true
+      });
+
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(
+        rootLimitations(result.dossier.limitations).map((item) => item.code)
+      ).toEqual(["request_cap", "invalid_fight_timestamp"]);
+    });
+
     it("keeps the last run's shortfalls when nothing newer is collecting", async () => {
       const { dossiers } = fixture({
         evidenceStatus: "partial",
@@ -1727,7 +1749,33 @@ describe("applicant dossier service", () => {
       evidenceStatus: "partial",
       evidenceLimitationCode: null,
       evidenceParseLimitationCode: "parse_request_cap",
-      evidenceParseLimitationCodesSeen: ["parse_private", "parse_request_cap"]
+      evidenceParseLimitationCodesSeen: ["parse_private", "parse_request_cap"],
+      // A DPS kill with a good damage parse. Its healing and boss-damage
+      // metrics stay unavailable because nothing ranks them, and it must not
+      // be listed as missing parses (#541 review).
+      additionalKills: [
+        {
+          id: "10000000-0000-4000-8000-000000000099",
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          bossId: "1233",
+          bossName: "The Silken Court",
+          journalBossId: null,
+          bossOrder: 7,
+          killedAt: "2024-09-30T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/example",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=8",
+          guild: { name: "Example Guild", realm: "silvermoon" },
+          historicWorldRank: 2,
+          historicRankCheckedAt: null,
+          parsesReadAt: null,
+          performance: {
+            damage: { state: "available", percentile: 91 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }
+      ]
     });
 
     const result = await dossiers.read(root);

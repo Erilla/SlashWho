@@ -392,10 +392,15 @@ function limitation(
   };
 }
 
-/** A stored kill any of whose parse metrics could not be read. */
-function hasUnavailableParse(kill: StoredCharacterMythicKill): boolean {
+/**
+ * A stored kill the dossier shows no parse for. Not "any metric unavailable":
+ * every fight starts all three unavailable and only a ranking row makes one
+ * available, so a DPS kill with a good damage parse still carries an
+ * unavailable healing metric. Counting that would name nearly every kill.
+ */
+function hasNoParse(kill: StoredCharacterMythicKill): boolean {
   const { damage, healing, bossDamage } = kill.performance;
-  return [damage, healing, bossDamage].some(
+  return [damage, healing, bossDamage].every(
     (metric) => metric.state === "unavailable"
   );
 }
@@ -572,11 +577,13 @@ async function gatherCharacterEvidence(
   // starts re-reading it. From then the row shows that collection and its
   // steps, and repeating the old shortfall beside it reads as today's news
   // about a read already being redone (#526). A tier search re-reads none of
-  // it, so it supersedes nothing.
+  // it, and neither does a light refresh -- one page of history, bookmark
+  // untouched -- so neither supersedes anything.
   const superseded =
     !!activeRun &&
     activeRun.id !== completed?.run.id &&
-    activeRun.mode !== "tier_search";
+    activeRun.mode !== "tier_search" &&
+    activeRun.lightRefresh !== true;
   const lastRun = superseded ? undefined : completed?.run;
   if (lastRun?.limitationCode) {
     limitations.push(
@@ -621,7 +628,7 @@ async function gatherCharacterEvidence(
     // kills are the ones whose parses are missing, which no single reason
     // owns, so each reason names them all.
     const missingParses = summarizeLimitationEncounters(
-      (completed?.kills ?? []).filter(hasUnavailableParse)
+      (completed?.kills ?? []).filter(hasNoParse)
     );
     for (const code of new Set([
       lastRun.parseLimitationCode,
