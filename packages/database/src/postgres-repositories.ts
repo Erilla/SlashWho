@@ -8,6 +8,7 @@ import {
 } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import { withAccountMailClient } from "./account-mail-query";
+import { one, withTransaction } from "./sql";
 import type {
   CallerClass,
   CharacterEvidenceRun,
@@ -454,7 +455,7 @@ async function admitFingerprintWaitingRun(
     [at]
   );
   if (
-    Number(usage.rows[0]!.commitment) + candidate.request_cap >
+    Number(one(usage).commitment) + candidate.request_cap >
     candidate.hourly_budget
   ) {
     return {
@@ -479,10 +480,9 @@ async function admitFingerprintWaitingRun(
   );
   return {
     kind: "admitted",
-    reservationId: reservation.rows[0]!.id,
+    reservationId: one(reservation).id,
     requestCap: candidate.request_cap,
-    committedRequests:
-      Number(usage.rows[0]!.commitment) + candidate.request_cap,
+    committedRequests: Number(one(usage).commitment) + candidate.request_cap,
     hourlyBudget: candidate.hourly_budget
   };
 }
@@ -1384,7 +1384,7 @@ async function upsertCharacters(
         character.raiderIoUrl
       ]
     );
-    characterIds.set(characterIdentity(character.key), result.rows[0]!.id);
+    characterIds.set(characterIdentity(character.key), one(result).id);
   }
   return characterIds;
 }
@@ -1463,7 +1463,7 @@ async function createSnapshot(
       input.characters.length
     ]
   );
-  const snapshotId = snapshotResult.rows[0]!.id;
+  const snapshotId = one(snapshotResult).id;
 
   await client.query(
     `UPDATE discovery_runs SET root_character_id = $2 WHERE id = $1`,
@@ -1680,9 +1680,7 @@ async function mutateAccountAdmin(
   input: { actorId: string; targetId: string; at: Date },
   mutation: AdminMutation
 ): Promise<"updated" | "last_admin" | "forbidden" | "missing"> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  return withTransaction(pool, async (client) => {
     // Serialize admin changes even when separate requests target different rows.
     await client.query(
       "SELECT pg_advisory_xact_lock(hashtextextended('account-admin', 1))"
@@ -1703,7 +1701,6 @@ async function mutateAccountAdmin(
       !actor.rows[0].verified_at ||
       actor.rows[0].password_change_required
     ) {
-      await client.query("COMMIT");
       return "forbidden";
     }
     const target = await client.query<{
@@ -1715,7 +1712,6 @@ async function mutateAccountAdmin(
       [input.targetId]
     );
     if (!target.rows[0]) {
-      await client.query("COMMIT");
       return "missing";
     }
     if (
@@ -1725,7 +1721,6 @@ async function mutateAccountAdmin(
           mutation.active &&
           target.rows[0].role === "admin"))
     ) {
-      await client.query("COMMIT");
       return "forbidden";
     }
     const removesAdmin =
@@ -1738,8 +1733,7 @@ async function mutateAccountAdmin(
       const count = await client.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM accounts WHERE role = 'admin' AND active AND verified_at IS NOT NULL"
       );
-      if (count.rows[0]!.count <= 1) {
-        await client.query("COMMIT");
+      if (one(count).count <= 1) {
         return "last_admin";
       }
     }
@@ -1772,23 +1766,15 @@ async function mutateAccountAdmin(
        VALUES ($1, $2, 'success', $3)`,
       [input.targetId, mutation.kind, input.at]
     );
-    await client.query("COMMIT");
     return "updated";
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
     accountTokens: {
       async admitRequest(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await client.query(
             input.purpose === "verify"
               ? "SELECT pg_advisory_xact_lock(hashtextextended('account-registration', 1))"
@@ -1806,22 +1792,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
             [purpose, input.subjectHash, input.at]
           );
-          if (Number(count.rows[0]!.count) >= input.limit) {
-            await client.query("COMMIT");
+          if (Number(one(count).count) >= input.limit) {
             return false;
           }
           await client.query(
             "INSERT INTO account_request_attempts (purpose, subject_hash, expires_at) VALUES ($1, $2, $3)",
             [purpose, input.subjectHash, input.expiresAt]
           );
-          await client.query("COMMIT");
           return true;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async findAccountById(id) {
         const result = await pool.query<AccountCredentialRow>(
@@ -1848,15 +1827,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? mapAccountCredential(result.rows[0]) : null;
       },
       async confirmVerification(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const lookup = await client.query<{ account_id: string }>(
             "SELECT account_id FROM account_mail_tokens WHERE token_digest = $1 AND purpose = 'verify'",
             [input.digest]
           );
           if (!lookup.rows[0]) {
-            await client.query("COMMIT");
             return false;
           }
           const account = await client.query(
@@ -1864,7 +1840,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [lookup.rows[0].account_id, input.passwordHash, input.at]
           );
           if (!account.rows[0]) {
-            await client.query("COMMIT");
             return false;
           }
           const result = await client.query<{ account_id: string }>(
@@ -1876,7 +1851,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.digest, input.passwordHash, input.at]
           );
           if (!result.rows[0]) {
-            await client.query("COMMIT");
             return false;
           }
           await client.query(
@@ -1887,25 +1861,16 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose = 'verify' AND consumed_at IS NULL",
             [result.rows[0].account_id, input.at]
           );
-          await client.query("COMMIT");
           return true;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async completeReset(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const lookup = await client.query<{ account_id: string }>(
             "SELECT account_id FROM account_mail_tokens WHERE token_digest = $1 AND purpose = 'reset'",
             [input.digest]
           );
           if (!lookup.rows[0]) {
-            await client.query("COMMIT");
             return false;
           }
           const account = await client.query(
@@ -1913,7 +1878,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [lookup.rows[0].account_id, input.at]
           );
           if (!account.rows[0]) {
-            await client.query("COMMIT");
             return false;
           }
           const token = await client.query<{ account_id: string }>(
@@ -1924,7 +1888,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.digest, input.at]
           );
           if (!token.rows[0]) {
-            await client.query("COMMIT");
             return false;
           }
           const id = token.rows[0].account_id;
@@ -1950,19 +1913,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             "UPDATE account_sessions SET revoked_at = $2 WHERE account_id = $1 AND revoked_at IS NULL",
             [id, input.at]
           );
-          await client.query("COMMIT");
           return true;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async issueEmailChange(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           // One lock covers all three buckets and their inserts, including
           // requests from different accounts targeting the same destination.
           await client.query(
@@ -1980,7 +1935,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]
           );
           if (!account.rows[0] || input.expiresAt <= input.at) {
-            await client.query("COMMIT");
             return false;
           }
           const buckets = [
@@ -2009,8 +1963,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
               [bucket.purpose, bucket.subject, input.at]
             );
-            if (Number(usage.rows[0]!.count) >= bucket.limit) {
-              await client.query("COMMIT");
+            if (Number(one(usage).count) >= bucket.limit) {
               return false;
             }
           }
@@ -2019,7 +1972,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.canonicalEmail]
           );
           if (occupied.rowCount) {
-            await client.query("COMMIT");
             return false;
           }
           // Admission and both outbox rows commit together: a rejected request
@@ -2053,7 +2005,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 input.accountId,
                 purpose,
                 proof.digest,
-                flow.rows[0]!.id,
+                one(flow).id,
                 input.canonicalEmail,
                 input.email,
                 input.expiresAt,
@@ -2063,33 +2015,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await client.query(
               `INSERT INTO account_mail_outbox (token_id, encrypted_message, idempotency_key, expires_at, next_attempt_at, created_at)
                VALUES ($1, $2, gen_random_uuid()::text, $3, $4, $4)`,
-              [
-                token.rows[0]!.id,
-                proof.encryptedMessage,
-                input.expiresAt,
-                input.at
-              ]
+              [one(token).id, proof.encryptedMessage, input.expiresAt, input.at]
             );
           }
-          await client.query("COMMIT");
           return true;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async confirmEmailChange(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const lookup = await client.query<{ account_id: string }>(
             "SELECT account_id FROM account_mail_tokens WHERE token_digest = $1 AND purpose = $2",
             [input.digest, input.purpose]
           );
           if (!lookup.rows[0]) {
-            await client.query("COMMIT");
             return "invalid";
           }
           const account = await client.query<{ id: string }>(
@@ -2097,7 +2035,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [lookup.rows[0].account_id]
           );
           if (!account.rows[0]) {
-            await client.query("COMMIT");
             return "invalid";
           }
           const proof = await client.query<{
@@ -2110,7 +2047,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.digest, input.purpose, input.at]
           );
           if (!proof.rows[0]) {
-            await client.query("COMMIT");
             return "invalid";
           }
           const partner = await client.query<{ count: string }>(
@@ -2124,8 +2060,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.at
             ]
           );
-          if (Number(partner.rows[0]!.count) !== 1) {
-            await client.query("COMMIT");
+          if (Number(one(partner).count) !== 1) {
             return "pending";
           }
           const updated = await client.query(
@@ -2139,7 +2074,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]
           );
           if (!updated.rowCount) {
-            await client.query("COMMIT");
             return "invalid";
           }
           await client.query(
@@ -2154,21 +2088,17 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             "UPDATE account_mail_tokens SET consumed_at = $2 WHERE account_id = $1 AND purpose IN ('email_change_current', 'email_change_new') AND consumed_at IS NULL",
             [account.rows[0].id, input.at]
           );
-          await client.query("COMMIT");
           return "changed";
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
+        }).catch((error: unknown) => {
           if (
             (error as { code?: string; constraint?: string }).code ===
               "23505" &&
             (error as { constraint?: string }).constraint ===
               "accounts_canonical_email_idx"
           )
-            return "invalid";
+            return "invalid" as const;
           throw error;
-        } finally {
-          client.release();
-        }
+        });
       }
     },
     accountMail: {
@@ -2177,9 +2107,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           throw new Error("account_mail_expired");
         if (input.purpose === "reset" && !input.expectedCanonicalEmail)
           throw new Error("account_reset_expected_email_required");
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           if (input.purpose === "reset") {
             const account = await client.query(
               `SELECT id FROM accounts WHERE id = $1 AND canonical_email = $2
@@ -2187,7 +2115,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               [input.accountId, input.expectedCanonicalEmail, input.at]
             );
             if (!account.rows[0]) {
-              await client.query("COMMIT");
               return;
             }
           }
@@ -2207,20 +2134,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `INSERT INTO account_mail_outbox
              (token_id, encrypted_message, idempotency_key, expires_at, next_attempt_at, created_at)
              VALUES ($1, $2, gen_random_uuid()::text, $3, $4, $4)`,
-            [
-              token.rows[0]!.id,
-              input.encryptedMessage,
-              input.expiresAt,
-              input.at
-            ]
+            [one(token).id, input.encryptedMessage, input.expiresAt, input.at]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK");
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async claimDue(at, signal) {
         return withAccountMailClient(pool, signal, async (client, signal) => {
@@ -2374,9 +2290,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         return result.rows[0] ? mapAccountCredential(result.rows[0]) : null;
       },
       async admitLoginAttempt(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await client.query(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 2))",
             [`account-login-${input.subjectHash}`]
@@ -2385,22 +2299,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             "SELECT count(*)::text AS count FROM account_request_attempts WHERE purpose = 'login' AND subject_hash = $1 AND expires_at > $2",
             [input.subjectHash, input.at]
           );
-          if (Number(count.rows[0]!.count) >= input.limit) {
-            await client.query("COMMIT");
+          if (Number(one(count).count) >= input.limit) {
             return { kind: "throttled" as const, retryAt: input.expiresAt };
           }
           await client.query(
             "INSERT INTO account_request_attempts (purpose, subject_hash, expires_at) VALUES ('login', $1, $2)",
             [input.subjectHash, input.expiresAt]
           );
-          await client.query("COMMIT");
           return { kind: "admitted" as const };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async appendEvent(input) {
         await pool.query(
@@ -2492,9 +2399,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
       },
       async changePassword(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const updated = await client.query<{ id: string }>(
             `UPDATE accounts SET password_hash = $5, password_salt = $6, scrypt_version = $7, scrypt_cost = $8,
                password_change_required = false, credential_version = credential_version + 1, updated_at = $9
@@ -2518,19 +2423,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               "UPDATE account_sessions SET revoked_at = $2 WHERE account_id = $1 AND revoked_at IS NULL",
               [input.accountId, input.at]
             );
-          await client.query("COMMIT");
           return Boolean(updated.rows[0]);
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async provisionAdmin(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const result = await client.query<AccountRow>(
             `INSERT INTO accounts
                (canonical_email, email, role, verified_at, password_change_required,
@@ -2549,20 +2446,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.at
             ]
           );
-          const account = mapAccount(result.rows[0]!);
+          const account = mapAccount(one(result));
           await client.query(
             `INSERT INTO account_auth_events (account_id, action, outcome, occurred_at)
              VALUES ($1, 'provision_admin', 'success', $2)`,
             [account.id, input.at]
           );
-          await client.query("COMMIT");
           return account;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       setRole(input) {
@@ -2605,9 +2496,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       },
 
       async registerPending(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           // A limited batch makes progress on old pending registrations without
           // turning a signup into an unbounded table sweep. Remove the target
           // first so a backlog cannot keep an expired address unavailable.
@@ -2644,22 +2533,14 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.at
             ]
           );
-          await client.query("COMMIT");
           return result.rows[0]
             ? { kind: "created" as const, accountId: result.rows[0].id }
             : { kind: "existing" as const };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async admitRegistration(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           // The global lock serializes all admission buckets, including the
           // missing-IP fallback, so concurrent requests cannot over-admit.
           await client.query(
@@ -2698,8 +2579,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                WHERE purpose = $1 AND subject_hash = $2 AND expires_at > $3`,
               [bucket.purpose, bucket.subject, input.at]
             );
-            if (Number(usage.rows[0]!.count) >= bucket.limit) {
-              await client.query("COMMIT");
+            if (Number(one(usage).count) >= bucket.limit) {
               return "throttled";
             }
           }
@@ -2714,14 +2594,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               ]
             );
           }
-          await client.query("COMMIT");
           return "admitted";
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       }
     },
     operatorAuth: {
@@ -2738,9 +2612,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       },
 
       async provision(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const result = await client.query<OperatorRow>(
             `INSERT INTO operators
               (canonical_login, display_login, password_hash, password_salt,
@@ -2758,27 +2630,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.at
             ]
           );
-          const operator = mapOperator(result.rows[0]!);
+          const operator = mapOperator(one(result));
           await client.query(
             `INSERT INTO operator_auth_events
               (operator_id, action, outcome, occurred_at)
              VALUES ($1, 'provision', 'success', $2)`,
             [operator.id, input.at]
           );
-          await client.query("COMMIT");
           return operator;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async rotateCredential(input) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const result = await client.query<OperatorRow>(
             `UPDATE operators
              SET password_hash = $2,
@@ -2800,7 +2664,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]
           );
           if (!result.rows[0]) {
-            await client.query("COMMIT");
             return null;
           }
           const operator = mapOperator(result.rows[0]);
@@ -2816,20 +2679,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              VALUES ($1, 'rotate', 'success', $2)`,
             [operator.id, input.at]
           );
-          await client.query("COMMIT");
           return operator;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async disable(operatorId, at) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const result = await client.query<OperatorRow>(
             `UPDATE operators
              SET active = false, updated_at = $2
@@ -2839,7 +2694,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [operatorId, at]
           );
           if (!result.rows[0]) {
-            await client.query("COMMIT");
             return null;
           }
           const operator = mapOperator(result.rows[0]);
@@ -2855,14 +2709,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              VALUES ($1, 'disable', 'success', $2)`,
             [operator.id, at]
           );
-          await client.query("COMMIT");
           return operator;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async list() {
@@ -2882,9 +2730,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (input.expiresAt <= input.at) {
           throw new RangeError("operator_login_expiry_out_of_range");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await client.query(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 1))",
             [input.subjectHash]
@@ -2898,10 +2744,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              WHERE subject_hash = $1 AND expires_at > $2`,
             [input.subjectHash, input.at]
           );
-          if (Number(usage.rows[0]!.count) >= input.limit) {
-            const retryAt = usage.rows[0]!.retry_at;
+          if (Number(one(usage).count) >= input.limit) {
+            const retryAt = one(usage).retry_at;
             if (!retryAt) throw new Error("operator_login_retry_missing");
-            await client.query("COMMIT");
             return { kind: "throttled" as const, retryAt };
           }
           await client.query(
@@ -2909,14 +2754,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              VALUES ($1, $2)`,
             [input.subjectHash, input.expiresAt]
           );
-          await client.query("COMMIT");
           return { kind: "admitted" as const };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async appendEvent(input) {
@@ -2948,7 +2787,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             input.absoluteExpiresAt
           ]
         );
-        return mapOperatorSession(result.rows[0]!);
+        return mapOperatorSession(one(result));
       },
 
       async useSession(input) {
@@ -3016,9 +2855,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           throw new RangeError("rate_limit_expiry_out_of_range");
         }
 
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const rootLock = `root:${input.key.region}:${input.key.realm}:${input.key.name}`;
           await client.query(
             `SELECT pg_advisory_xact_lock(lock_id)
@@ -3038,7 +2875,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.key.region, input.key.realm, input.key.name, input.at]
           );
           if (suppression.rowCount === 1) {
-            await client.query("COMMIT");
             return { kind: "suppressed" };
           }
 
@@ -3061,7 +2897,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             ]
           );
           if (current.rowCount === 1) {
-            await client.query("COMMIT");
             return { kind: "fresh" };
           }
 
@@ -3074,7 +2909,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               [input.key.region, input.key.realm, input.key.name, input.at]
             );
             if (negative.rowCount === 1) {
-              await client.query("COMMIT");
               return { kind: "negative" };
             }
           }
@@ -3089,7 +2923,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [input.key.region, input.key.realm, input.key.name]
           );
           if (active.rows[0]) {
-            await client.query("COMMIT");
             return { kind: "active", run: mapRun(active.rows[0]) };
           }
 
@@ -3102,10 +2935,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              WHERE caller_bucket_hash = $1 AND expires_at > $2`,
             [input.callerBucketHash, input.at]
           );
-          if (Number(usage.rows[0]!.count) >= input.limit) {
-            const retryAt = usage.rows[0]!.retry_at;
+          if (Number(one(usage).count) >= input.limit) {
+            const retryAt = one(usage).retry_at;
             if (!retryAt) throw new Error("rate_limit_retry_missing");
-            await client.query("COMMIT");
             return { kind: "rate_limited", retryAt };
           }
 
@@ -3121,27 +2953,19 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               input.callerClass
             ]
           );
-          const run = mapRun(runResult.rows[0]!);
+          const run = mapRun(one(runResult));
           await client.query(
             `INSERT INTO rate_limit_events
               (caller_bucket_hash, discovery_run_id, expires_at)
              VALUES ($1, $2, $3)`,
             [input.callerBucketHash, run.id, input.expiresAt]
           );
-          await client.query("COMMIT");
           return { kind: "reserved", run };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async cancel(runId) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const failure = await client.query(
             `UPDATE discovery_runs
              SET status = 'failed', error_code = 'search_failed',
@@ -3160,13 +2984,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           if (charge.rowCount !== 1) {
             throw new Error("search_reservation_charge_missing");
           }
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async listPending(limit = 100) {
@@ -3222,7 +3040,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            RETURNING *`,
           [key.region, key.realm, key.name, caller]
         );
-        return mapRun(result.rows[0]!);
+        return mapRun(one(result));
       },
 
       async claim(id, attempt) {
@@ -3357,20 +3175,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
     snapshots: {
       async create(input, options) {
-        const client = await pool.connect();
-        try {
-          options?.signal?.throwIfAborted();
-          await client.query("BEGIN");
+        options?.signal?.throwIfAborted();
+        return withTransaction(pool, async (client) => {
           await lockRoot(client, input.rootKey);
           const snapshot = await createSnapshot(client, input, options);
-          await client.query("COMMIT");
           return snapshot;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async createAndFinishFingerprintSweep(
@@ -3382,10 +3192,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (Number.isNaN(fingerprint.finishedAt.valueOf())) {
           throw new RangeError("fingerprint_finish_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          options?.signal?.throwIfAborted();
-          await client.query("BEGIN");
+        options?.signal?.throwIfAborted();
+        return withTransaction(pool, async (client) => {
           await lockRoot(client, input.rootKey);
           await lockFingerprintSweeps(client);
           const snapshot = await createSnapshot(client, input, options);
@@ -3405,14 +3213,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             }
           });
           options?.signal?.throwIfAborted();
-          await client.query("COMMIT");
           return snapshot;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async amendAndFinishFingerprintSweep(
@@ -3425,11 +3227,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (Number.isNaN(fingerprint.finishedAt.valueOf())) {
           throw new RangeError("fingerprint_finish_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          options?.signal?.throwIfAborted();
-          await client.query("BEGIN");
-
+        options?.signal?.throwIfAborted();
+        return withTransaction(pool, async (client) => {
           const rootResult = await client.query<{
             region: CharacterKey["region"];
             realm_slug: string;
@@ -3475,7 +3274,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             owner.resume_snapshot_id !== snapshotId ||
             owner.discovery_run_id !== fingerprint.runId
           ) {
-            await client.query("ROLLBACK");
             return null;
           }
 
@@ -3517,7 +3315,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           await insertMembership(
             client,
             snapshotId,
-            Number(orderResult.rows[0]!.next_order),
+            Number(one(orderResult).next_order),
             additions,
             characterIds
           );
@@ -3555,14 +3353,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           const snapshot = await loadSnapshot(client, snapshotId);
           if (!snapshot) throw new Error("snapshot_not_found");
           options?.signal?.throwIfAborted();
-          await client.query("COMMIT");
           return snapshot;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async getCurrent(key) {
@@ -3959,9 +3751,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
     suppressions: {
       async suppress(key, reason, expiresAt) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockRoot(client, key);
           await client.query(
             `INSERT INTO suppressed_characters
@@ -3974,13 +3764,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                expires_at = EXCLUDED.expires_at`,
             [key.region, key.realm, key.name, reason, expiresAt]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async isActive(key, at = new Date()) {
@@ -4014,9 +3798,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (expiresAt <= at) {
           throw new RangeError("rate_limit_expiry_out_of_range");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await client.query(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 1))",
             [callerBucketHash]
@@ -4030,11 +3812,10 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              WHERE caller_bucket_hash = $1 AND expires_at > $2`,
             [callerBucketHash, at]
           );
-          if (Number(usage.rows[0]!.count) >= limit) {
-            await client.query("COMMIT");
+          if (Number(one(usage).count) >= limit) {
             return {
               allowed: false,
-              retryAt: usage.rows[0]!.retry_at
+              retryAt: one(usage).retry_at
             };
           }
           await client.query(
@@ -4042,14 +3823,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              VALUES ($1, $2)`,
             [callerBucketHash, expiresAt]
           );
-          await client.query("COMMIT");
           return { allowed: true, retryAt: null };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async record(callerBucketHash, expiresAt) {
@@ -4066,7 +3841,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
            WHERE caller_bucket_hash = $1 AND expires_at > $2`,
           [callerBucketHash, at]
         );
-        return Number(result.rows[0]!.count);
+        return Number(one(result).count);
       },
 
       async cleanupExpired(at = new Date()) {
@@ -4099,9 +3874,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
       async requestAdmission(input): Promise<FingerprintAdmission> {
         assertFingerprintAdmissionInput(input);
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockFingerprintSweeps(client);
 
           const existingAdmission = await client.query<{
@@ -4122,7 +3895,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           );
           const existing = existingAdmission.rows[0];
           if (existing) {
-            await client.query("COMMIT");
             return {
               kind: "admitted",
               reservationId: existing.reservation_id,
@@ -4147,7 +3919,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                WHERE discovery_run_id = $1 AND status = 'waiting'`,
               [input.runId]
             );
-            await client.query("COMMIT");
             return { kind: "not_due" };
           }
 
@@ -4191,7 +3962,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                 input.at
               ]
             );
-            admissionId = admission.rows[0]!.id;
+            admissionId = one(admission).id;
           }
 
           const result = await admitFingerprintWaitingRun(
@@ -4217,14 +3988,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               throw new Error("fingerprint_waiting_run_not_running");
             }
           }
-          await client.query("COMMIT");
           return result;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async recordRequest(reservationId, count, at) {
@@ -4234,9 +3999,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("fingerprint_request_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockFingerprintSweeps(client);
           const result = await client.query(
             `UPDATE fingerprint_sweep_reservations
@@ -4256,44 +4019,28 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              SELECT $1, $3::timestamptz FROM generate_series(1, $2)`,
             [reservationId, count, at]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async finish(reservationId, input) {
         if (Number.isNaN(input.at.valueOf())) {
           throw new RangeError("fingerprint_finish_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockFingerprintSweeps(client);
           // No cursor argument: this caller finishes a reservation without any
           // knowledge of the sweep chain, so it must not clear a cursor it does
           // not own. Only the create/amend paths, which computed the cursor
           // themselves, may write those columns.
           await finishFingerprintSweep(client, reservationId, input);
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async release(reservationId, at) {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("fingerprint_release_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockFingerprintSweeps(client);
           const result = await client.query<{ admission_id: string }>(
             `UPDATE fingerprint_sweep_reservations
@@ -4310,13 +4057,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              WHERE id = $1`,
             [row.admission_id]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async getResumeState(key) {
@@ -4423,9 +4164,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("fingerprint_admission_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockFingerprintSweeps(client);
           const waiting = await client.query<{
             id: string;
@@ -4444,7 +4183,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           );
           const admission = waiting.rows[0];
           if (!admission) {
-            await client.query("COMMIT");
             return { kind: "settled" };
           }
 
@@ -4475,7 +4213,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                WHERE id = $1`,
               [admission.id]
             );
-            await client.query("COMMIT");
             return { kind: "not_due" };
           }
 
@@ -4485,14 +4222,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             at,
             liveContinuation ? admission.id : undefined
           );
-          await client.query("COMMIT");
           return result.kind === "admitted" ? { kind: "admitted" } : result;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async cleanupExpired(at = new Date()) {
@@ -4535,9 +4266,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }));
       },
       async addHistoricAlias(key, alias) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockCharacterEvidence(client, key);
           const result = await client.query(
             `INSERT INTO character_historic_aliases
@@ -4568,23 +4297,15 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                     [key.region, key.realm, key.name]
                   )
                 ).rowCount === 1;
-          await client.query("COMMIT");
           return result.rowCount === 1
             ? "added"
             : exists
               ? "duplicate"
               : "missing";
-        } catch (error) {
-          await client.query("ROLLBACK");
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async removeHistoricAlias(key, alias) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockCharacterEvidence(client, key);
           const result = await client.query(
             `DELETE FROM character_historic_aliases alias USING characters character
@@ -4606,14 +4327,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             await invalidateHistoricAliasKillScan(client, key);
             await requestHistoricAliasRecollection(client, key);
           }
-          await client.query("COMMIT");
           return result.rowCount === 1 ? "removed" : "missing";
-        } catch (error) {
-          await client.query("ROLLBACK");
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
       async reserve({
         key,
@@ -4629,9 +4344,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         ) {
           throw new RangeError("character_evidence_reservation_time_invalid");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockCharacterEvidence(client, key);
           const aliasRecollection = await client.query(
             `SELECT 1 FROM character_alias_recollections
@@ -4709,7 +4422,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               at
             )
           ) {
-            await client.query("COMMIT");
             return {
               kind: "fresh",
               run: completed.run,
@@ -4719,7 +4431,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           }
 
           if (activeRun) {
-            await client.query("COMMIT");
             return {
               kind: "active",
               run: activeRun,
@@ -4770,7 +4481,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               continuationRaidId === null && lightRefresh === true
             ]
           );
-          const reservedRun = mapEvidenceRun(inserted.rows[0]!);
+          const reservedRun = mapEvidenceRun(one(inserted));
           if (phasePlan && phasePlan.length > 0) {
             await client.query(
               `INSERT INTO character_evidence_run_phases
@@ -4781,7 +4492,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               [reservedRun.id, phasePlan]
             );
           }
-          await client.query("COMMIT");
           return {
             kind: "reserved",
             run: reservedRun,
@@ -4791,12 +4501,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               completed?.evidenceVersion !== undefined &&
               completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
           } satisfies EvidenceReservationResult;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async latestTierSearches(keys, since) {
@@ -4892,9 +4597,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         if (raidId.length === 0) {
           throw new RangeError("character_evidence_tier_search_raid_invalid");
         }
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockCharacterEvidence(client, key);
           const columns = evidenceRunColumns();
           // One run per character at a time, whatever its mode: the unique
@@ -4910,7 +4613,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [key.region, key.realm, key.name]
           );
           if (active.rows[0]) {
-            await client.query("COMMIT");
             return { kind: "active", run: mapEvidenceRun(active.rows[0]) };
           }
           // Whatever became of it: a search that failed or found nothing was
@@ -4927,7 +4629,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [key.region, key.realm, key.name, raidId, searchedSince]
           );
           if (recent.rows[0]) {
-            await client.query("COMMIT");
             return { kind: "recent", run: mapEvidenceRun(recent.rows[0]) };
           }
           // A tier search adds to evidence the character already has. With
@@ -4940,7 +4641,6 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             [key.region, key.realm, key.name]
           );
           if (completed.rowCount === 0) {
-            await client.query("COMMIT");
             return { kind: "no_evidence" };
           }
           const inserted = await client.query<EvidenceRunRow>(
@@ -4958,7 +4658,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               credentials?.credentialVersion ?? null
             ]
           );
-          const run = mapEvidenceRun(inserted.rows[0]!);
+          const run = mapEvidenceRun(one(inserted));
           if (phasePlan && phasePlan.length > 0) {
             await client.query(
               `INSERT INTO character_evidence_run_phases
@@ -4969,14 +4669,8 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               [run.id, phasePlan]
             );
           }
-          await client.query("COMMIT");
           return { kind: "reserved", run };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async find(id) {
@@ -5143,9 +4837,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             performance: parsePerformanceValues(kill.performance)
           };
         });
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const active = await client.query<{
             id: string;
             region: CharacterKey["region"];
@@ -5164,7 +4856,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           if (active.rowCount !== 1) {
             throw new Error("character_evidence_run_not_active");
           }
-          const activeRun = active.rows[0]!;
+          const activeRun = one(active);
           const activeKey = {
             region: activeRun.region,
             realm: activeRun.realm_slug,
@@ -5575,13 +5267,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             `DELETE FROM character_evidence_collections WHERE run_id = $1`,
             [runId]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async stageCollection(runId, payload) {
@@ -5623,9 +5309,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
       async fail(id, code) {
         if (code.length === 0)
           throw new RangeError("character_evidence_error_invalid");
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           const result = await client.query<{ completed_at: Date }>(
             `UPDATE character_evidence_runs
              SET status = 'failed', error_code = $2, completed_at = now(),
@@ -5643,15 +5327,9 @@ export function createPostgresRepositories(pool: Pool): Repositories {
                     completed_at = $2,
                     limitation_code = $3
               WHERE run_id = $1 AND phase_id = 'publication'`,
-            [id, result.rows[0]!.completed_at, code]
+            [id, one(result).completed_at, code]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async getCompleted(key) {
@@ -6600,9 +6278,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
 
     negativeCache: {
       async put(key, expiresAt) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
+        return withTransaction(pool, async (client) => {
           await lockRoot(client, key);
           await client.query(
             `INSERT INTO negative_character_cache
@@ -6612,20 +6288,12 @@ export function createPostgresRepositories(pool: Pool): Repositories {
              DO UPDATE SET expires_at = EXCLUDED.expires_at, created_at = now()`,
             [key.region, key.realm, key.name, expiresAt]
           );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async putAndFailRun(key, expiresAt, runId, options) {
-        const client = await pool.connect();
-        try {
-          options?.signal?.throwIfAborted();
-          await client.query("BEGIN");
+        options?.signal?.throwIfAborted();
+        return withTransaction(pool, async (client) => {
           await lockRoot(client, key);
           const cacheResult = await client.query(
             `INSERT INTO negative_character_cache
@@ -6655,13 +6323,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             throw new Error("discovery_run_not_active");
           }
           options?.signal?.throwIfAborted();
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        });
       },
 
       async find(key, at = new Date()) {
