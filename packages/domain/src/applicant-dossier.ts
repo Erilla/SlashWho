@@ -77,12 +77,22 @@ export type DossierWipeEvidence = Readonly<{
   /** Absent on evidence collected before Warcraft Logs exposed the owner. */
   uploader?: string | null;
 }>;
+export type DossierLimitationEncounter = Readonly<{
+  raidName: string;
+  /** Null when the shortfall is about the raid as a whole. */
+  bossName: string | null;
+  kills: number;
+}>;
 export type DossierLimitation = Readonly<{
   source: "raiderio" | "warcraft_logs" | "blizzard";
   character: CharacterKey | null;
   code: string;
   observedAt?: string;
   retryAt?: string;
+  /** The raids and bosses affected, when the shortfall can name them. */
+  encounters?: readonly DossierLimitationEncounter[];
+  /** Overrides the recovery the code alone implies, where the cause differs. */
+  recovery?: "automatic" | "none";
 }>;
 export type DossierCuttingEdgeEvidence = Readonly<{
   achievementId: string;
@@ -478,6 +488,46 @@ function aggregateBossParses(
   return aggregateEventParses(events.flat(), characters, tierBests);
 }
 
+type EncounterTally = Map<
+  string,
+  { raidName: string; bossName: string | null; kills: number }
+>;
+
+function tallyEncounter(
+  tally: EncounterTally,
+  raidName: string,
+  bossName: string | null
+): void {
+  const key = `${raidName}\0${bossName ?? ""}`;
+  const entry = tally.get(key) ?? { raidName, bossName, kills: 0 };
+  entry.kills += 1;
+  tally.set(key, entry);
+}
+
+/** Most kills first, then by raid and boss, so the list reads stably. */
+function encounterList(
+  tally: EncounterTally
+): readonly DossierLimitationEncounter[] {
+  return [...tally.values()].sort(
+    (a, b) =>
+      b.kills - a.kills ||
+      text(a.raidName, b.raidName) ||
+      text(a.bossName ?? "", b.bossName ?? "")
+  );
+}
+
+/**
+ * The raids and bosses a set of kills covers, with how many kills each. Used
+ * wherever a limitation can name what it affects (#526).
+ */
+export function summarizeLimitationEncounters(
+  kills: readonly Readonly<{ raidName: string; bossName: string | null }>[]
+): readonly DossierLimitationEncounter[] {
+  const tally: EncounterTally = new Map();
+  for (const kill of kills) tallyEncounter(tally, kill.raidName, kill.bossName);
+  return encounterList(tally);
+}
+
 export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
@@ -509,7 +559,28 @@ export function buildApplicantDossier(
   // One row per character and reason, not per discarded kill. A farming alt
   // produces hundreds of out-of-window kills, and repeating the same sentence
   // for each of them buries every other limitation in the dossier.
-  const withheldKillReasons = new Map<string, DossierLimitation>();
+  // The sentence stays one per character and reason; which raids and bosses
+  // it covers, and how many kills, ride along on it (#526).
+  const withheldKillReasons = new Map<
+    string,
+    { limitation: DossierLimitation; encounters: EncounterTally }
+  >();
+  const withhold = (
+    code: string,
+    kill: Readonly<{
+      character: CharacterKey;
+      raidName: string;
+      bossName: string;
+    }>
+  ) => {
+    const key = `${code}\0${canonicalCharacterId(kill.character)}`;
+    const entry = withheldKillReasons.get(key) ?? {
+      limitation: { source: "warcraft_logs", character: kill.character, code },
+      encounters: new Map()
+    };
+    tallyEncounter(entry.encounters, kill.raidName, kill.bossName);
+    withheldKillReasons.set(key, entry);
+  };
   for (const suppliedKill of input.kills) {
     const metadata = catalogueEncounter(suppliedKill);
     if (metadata === null) {
@@ -517,14 +588,7 @@ export function buildApplicantDossier(
       // raid-shaped zone the catalogue cannot place is evidence going missing,
       // and silence there reads as "never killed it".
       if (!isNonRaidZone(suppliedKill.raidName)) {
-        withheldKillReasons.set(
-          `unmatched_encounter\0${canonicalCharacterId(suppliedKill.character)}`,
-          {
-            source: "warcraft_logs",
-            character: suppliedKill.character,
-            code: "unmatched_encounter"
-          }
-        );
+        withhold("unmatched_encounter", suppliedKill);
       }
       continue;
     }
@@ -536,15 +600,17 @@ export function buildApplicantDossier(
         eligible === false
           ? "current_content_evidence_withheld"
           : "current_content_window_unknown";
-      withheldKillReasons.set(
-        `${code}\0${canonicalCharacterId(kill.character)}`,
-        { source: "warcraft_logs", character: kill.character, code }
-      );
+      withhold(code, kill);
       continue;
     }
     allKills.push(kill);
   }
-  limitations.push(...withheldKillReasons.values());
+  limitations.push(
+    ...[...withheldKillReasons.values()].map(({ limitation, encounters }) => ({
+      ...limitation,
+      encounters: encounterList(encounters)
+    }))
+  );
   // Keyed by the catalogue's raid and boss, exactly as the kills are, so a
   // tier best lands on the boss card its zone rankings describe. An encounter
   // the catalogue cannot place is dropped rather than guessed at: unlike a

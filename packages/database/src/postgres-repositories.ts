@@ -228,6 +228,7 @@ interface EvidenceRunRow {
   limitation_code: string | null;
   parse_limitation_code: string | null;
   omitted_invalid_timestamp: boolean;
+  parse_limitation_codes_seen?: string[] | null;
   retry_after_at: Date | null;
   error_code: string | null;
   created_at: Date;
@@ -573,7 +574,7 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
 // What a run was reserved to do. Selected everywhere a run is mapped, so a
 // re-claimed tier search is still a tier search.
 function evidenceRunModeSql(alias = "character_evidence_runs"): string {
-  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp`;
+  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen`;
 }
 
 function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
@@ -590,6 +591,9 @@ function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     limitationCode: row.limitation_code,
     parseLimitationCode: row.parse_limitation_code,
     omittedInvalidTimestamp: row.omitted_invalid_timestamp,
+    ...(row.parse_limitation_codes_seen?.length
+      ? { parseLimitationCodesSeen: row.parse_limitation_codes_seen }
+      : {}),
     retryAfterAt: row.retry_after_at,
     errorCode: row.error_code,
     createdAt: row.created_at,

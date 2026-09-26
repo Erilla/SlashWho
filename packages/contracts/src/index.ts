@@ -33,7 +33,9 @@ export {
   dossierCuttingEdgeSchema,
   dossierFirstKillSchema,
   dossierGuildSchema,
+  dossierLimitationAffectsSchema,
   dossierLimitationCodeSchema,
+  dossierLimitationEncounterSchema,
   dossierLimitationSchema,
   dossierResearchSchema,
   dossierRaidSchema,
@@ -56,6 +58,8 @@ export type {
   DossierEvidenceState,
   DossierCuttingEdge,
   DossierLimitation,
+  DossierLimitationAffects,
+  DossierLimitationEncounter,
   DossierLimitationCode,
   DossierResearch,
   DossierSourceLabel

@@ -269,12 +269,38 @@ export const dossierCuttingEdgeSchema = z
   })
   .strict();
 
+export const dossierLimitationAffectsSchema = z.enum([
+  "kill_history",
+  "parses",
+  "world_ranks",
+  "cutting_edge",
+  "hidden_kills"
+]);
+
+export const dossierLimitationEncounterSchema = z
+  .object({
+    raidName: z.string().min(1),
+    /** Null when the shortfall is about the raid as a whole. */
+    bossName: z.string().min(1).nullable(),
+    kills: z.number().int().positive()
+  })
+  .strict();
+
 export const dossierLimitationSchema = z
   .object({
     source: z.enum(["raiderio", "warcraft_logs", "blizzard"]),
     character: characterKeySchema.nullable(),
     code: dossierLimitationCodeSchema,
     message: z.string().min(1),
+    /** The part of the dossier this shortfall leaves incomplete. */
+    affects: dossierLimitationAffectsSchema,
+    /**
+     * Whether collection clears this on its own (`automatic`, at `retryAt`
+     * when one is known) or waiting changes nothing (`none`).
+     */
+    recovery: z.enum(["automatic", "none"]),
+    /** The raids and bosses affected, when the shortfall can name them. */
+    encounters: z.array(dossierLimitationEncounterSchema).optional(),
     observedAt: z.iso.datetime(),
     retryAt: z.iso.datetime().optional()
   })
@@ -347,6 +373,12 @@ export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
 export type DossierCuttingEdge = z.infer<typeof dossierCuttingEdgeSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;
 export type DossierLimitationCode = z.infer<typeof dossierLimitationCodeSchema>;
+export type DossierLimitationAffects = z.infer<
+  typeof dossierLimitationAffectsSchema
+>;
+export type DossierLimitationEncounter = z.infer<
+  typeof dossierLimitationEncounterSchema
+>;
 export type CollectionPhase = z.infer<typeof collectionPhaseSchema>;
 export type DossierResearch = z.infer<typeof dossierResearchSchema>;
 export type ApplicantDossierParseMetric = z.infer<

@@ -264,6 +264,11 @@ export interface CharacterEvidenceRun {
   attempt: number;
   limitationCode: string | null;
   parseLimitationCode: string | null;
+  /**
+   * Every parse shortfall the run met, of which `parseLimitationCode` is the
+   * one it is judged by. Absent when there were none.
+   */
+  parseLimitationCodesSeen?: readonly string[];
   /** Finished collection omitted fights whose timestamps could not be used. */
   omittedInvalidTimestamp?: boolean;
   retryAfterAt: Date | null;

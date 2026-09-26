@@ -129,6 +129,8 @@ const rateLimited = {
       character: null,
       code: "rate_limited" as const,
       message: "Raider.IO is temporarily rate limited.",
+      affects: "world_ranks" as const,
+      recovery: "automatic" as const,
       observedAt: "2026-09-15T12:00:00.000Z",
       retryAt: "2026-09-15T12:02:05.000Z"
     }

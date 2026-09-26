@@ -24,7 +24,10 @@ export type {
   RaidEvidenceIdentity,
   RaidTierConclusion
 } from "./raid-catalogue";
-export { buildApplicantDossier } from "./applicant-dossier";
+export {
+  buildApplicantDossier,
+  summarizeLimitationEncounters
+} from "./applicant-dossier";
 export type {
   ApplicantDossier,
   ApplicantDossierBoss,
@@ -37,6 +40,7 @@ export type {
   DossierCuttingEdgeEvidence,
   DossierKillEvidence,
   DossierLimitation,
+  DossierLimitationEncounter,
   DossierTierBestParse,
   DossierWipeEvidence
 } from "./applicant-dossier";

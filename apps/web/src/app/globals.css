@@ -1958,13 +1958,113 @@ td > .collection-progress {
   grid-column: 1 / -1;
 }
 
-.dossier-limitations li {
+.dossier-limitations-intro {
+  margin: -0.5rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.dossier-limitation {
   color: var(--muted);
   line-height: 1.5;
 }
 
-.dossier-limitations li + li {
-  margin-top: 0.55rem;
+.dossier-limitation + .dossier-limitation {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.dossier-limitation-message {
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}
+
+.dossier-limitation-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.dossier-limitation-facts > div {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.dossier-limitation-facts dt {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dossier-limitation-facts dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  color: var(--text);
+}
+
+.dossier-limitations .dossier-limitation-subjects {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.dossier-limitation-subject {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  font-size: 0.85rem;
+}
+
+.dossier-limitation-character {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 7rem;
+  color: var(--text);
+}
+
+.dossier-limitations .dossier-limitation-encounters {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface-raised);
+  font-size: 0.85rem;
+}
+
+.dossier-limitation-encounters li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.dossier-limitation-encounters li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.dossier-limitation-kills {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.dossier-limitation-more {
+  font-style: italic;
 }
 
 .dossier-rate-limit-countdown {
