@@ -34,7 +34,20 @@ export const applicationConfigSchema = z.object({
   TIER_SEARCHES_PER_HOUR: z.coerce.number().int().positive().default(6),
   FRESHNESS_HOURS: z.coerce.number().positive().default(24),
   FINGERPRINT_SWEEP_CADENCE_HOURS: z.coerce.number().positive().default(168),
-  DOSSIER_CHARACTER_CAP: z.coerce.number().int().min(1).max(30).default(12),
+  // A backstop against a pathological roster, not a display cap: every
+  // included character is researched and listed up to it (#555). The largest
+  // real roster was 23 when this was set; Warcraft Logs cost is paced by the
+  // points allowance and the queue, not by how many characters a dossier has.
+  // Renamed from DOSSIER_CHARACTER_CAP so a deployment still setting the old
+  // limit of 12 stops applying it rather than silently keeping it.
+  DOSSIER_CHARACTER_CEILING: z.coerce
+    .number()
+    .int()
+    .min(1)
+    // Held to the tier search's per-press limit by its test, so a press
+    // always reaches every listed character.
+    .max(50)
+    .default(50),
   DOSSIER_PROVIDER_CONCURRENCY: z.coerce
     .number()
     .int()

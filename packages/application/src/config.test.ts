@@ -9,10 +9,23 @@ const required = {
 
 describe("dossier application configuration", () => {
   it("applies bounded dossier defaults", () => {
-    // Break caught: omitted deployment configuration could allow too many linked characters per dossier.
+    // Break caught: omitted deployment configuration could allow an unbounded
+    // roster per dossier -- or, as the old default of 12 did, hide real
+    // characters from the reviewer (#555).
     expect(applicationConfigSchema.parse(required)).toMatchObject({
-      DOSSIER_CHARACTER_CAP: 12
+      DOSSIER_CHARACTER_CEILING: 50
     });
+  });
+
+  it("no longer applies the retired character cap", () => {
+    // Break caught (#555): Railway still sets DOSSIER_CHARACTER_CAP=12. Were it
+    // read, removing the cap in code would change nothing in production.
+    const config = applicationConfigSchema.parse({
+      ...required,
+      DOSSIER_CHARACTER_CAP: "12"
+    });
+    expect(config.DOSSIER_CHARACTER_CEILING).toBe(50);
+    expect(config).not.toHaveProperty("DOSSIER_CHARACTER_CAP");
   });
 
   it("shares the negative-cache TTL with the worker rather than redefining it", () => {
@@ -36,8 +49,8 @@ describe("dossier application configuration", () => {
   });
 
   it.each([
-    ["DOSSIER_CHARACTER_CAP", 0],
-    ["DOSSIER_CHARACTER_CAP", 31]
+    ["DOSSIER_CHARACTER_CEILING", 0],
+    ["DOSSIER_CHARACTER_CEILING", 51]
   ])("rejects invalid %s values", (name, value) => {
     // Break caught: a malformed cap could cause a request to exceed its intended upstream bound.
     expect(() =>
