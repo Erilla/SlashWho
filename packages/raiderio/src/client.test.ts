@@ -752,6 +752,124 @@ describe("Raider.IO gateway", () => {
     expect(calls).toBe(0);
   });
 
+  describe("historic kill tiers in parallel", () => {
+    const valid = JSON.parse(
+      readFileSync(
+        resolve(fixtureDirectory, "raid-progress-valid.json"),
+        "utf8"
+      )
+    ) as Fixture;
+
+    // Each tier's response waits until the test answers it, so the test sees
+    // exactly which tiers are in flight at once.
+    function heldFetch() {
+      const started: number[] = [];
+      const answers = new Map<number, (status: number) => void>();
+      let inFlight = 0;
+      let peak = 0;
+      const fetch: typeof globalThis.fetch = async (input) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        const tier = Number(url.searchParams.get("tier"));
+        started.push(tier);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        const status = await new Promise<number>((resolve) =>
+          answers.set(tier, resolve)
+        );
+        inFlight -= 1;
+        return status === 200
+          ? new Response(JSON.stringify(valid.body), {
+              status,
+              headers: { "Content-Type": "application/json" }
+            })
+          : new Response("{}", {
+              status,
+              headers: { "Retry-After": "30" }
+            });
+      };
+      const settle = async () => {
+        for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+      };
+      return {
+        fetch,
+        started,
+        peak: () => peak,
+        async answer(tier: number, status = 200) {
+          await settle();
+          answers.get(tier)!(status);
+          await settle();
+        },
+        settle
+      };
+    }
+
+    function heldClient(held: ReturnType<typeof heldFetch>) {
+      return createRaiderIoClient({
+        fetch: held.fetch,
+        baseUrl: "https://fixtures.invalid",
+        timeoutMs: 1_000
+      });
+    }
+
+    it("asks for at most three tiers at once and still asks for every tier", async () => {
+      // Break caught: seventeen tiers one after another made every full run
+      // wait on seventeen round trips; unbounded, they would burst Raider.IO.
+      const held = heldFetch();
+      const tiers = [19, 20, 21, 22, 23, 24, 25];
+      const request = heldClient(held).getHistoricMythicKills(sentinel, {
+        tierOrdinals: tiers
+      });
+
+      await held.settle();
+      expect(held.started).toEqual([19, 20, 21]);
+      for (const tier of tiers) await held.answer(tier);
+
+      await expect(request).resolves.toMatchObject({ kind: "evidence" });
+      expect(held.started).toEqual(tiers);
+      expect(held.peak()).toBe(3);
+    });
+
+    it("reports the earliest failing tier, as a serial walk would", async () => {
+      // Break caught: whichever tier failed first in time decided the
+      // limitation, so the result depended on network timing.
+      const held = heldFetch();
+      const request = heldClient(held).getHistoricMythicKills(sentinel, {
+        tierOrdinals: [19, 20, 21]
+      });
+
+      await held.answer(21, 503);
+      await held.answer(20, 429);
+      await held.answer(19);
+
+      await expect(request).resolves.toEqual({
+        kind: "limitation",
+        code: "rate_limited",
+        retryAfterMs: 30_000
+      });
+    });
+
+    it("starts no further tier once one has failed", async () => {
+      // Break caught: a rate-limited walk kept asking for the remaining tiers,
+      // spending requests on a result that was already a limitation.
+      const held = heldFetch();
+      const request = heldClient(held).getHistoricMythicKills(sentinel, {
+        tierOrdinals: [19, 20, 21, 22, 23]
+      });
+
+      await held.answer(19, 429);
+      await held.answer(20);
+      await held.answer(21);
+
+      await expect(request).resolves.toMatchObject({
+        kind: "limitation",
+        code: "rate_limited"
+      });
+      expect(held.started).toEqual([19, 20, 21]);
+    });
+  });
+
   it("returns schema_drift for a malformed historic-kill payload", async () => {
     await expect(
       clientFor("raid-progress-schema-drift").getHistoricMythicKills(sentinel, {

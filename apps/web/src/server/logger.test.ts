@@ -1,4 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 import { allowedFields, createWebLogger } from "./logger";
@@ -25,6 +28,9 @@ const baseFields = new Set([
 // per-field logging below fails independently if that field never survives
 // serialization.
 const expectedPerformanceFields = [
+  "raiderIoMs",
+  "raiderIoCalls",
+  "raiderIoMaxCallMs",
   "raiderIoRankingsMs",
   "raiderIoRankingsCalls",
   "raiderIoRankingsMaxCallMs",
@@ -174,4 +180,58 @@ it("allows the slowest-call name, which is a static method identifier", () => {
     "applicantSnapshots.getByCharacterKey"
   );
   expect(serialized).not.toHaveProperty("characterName");
+});
+
+// Job handlers run only in the worker and log through the worker logger, so
+// nothing they measure can reach an `http_request` record. Excluded by file,
+// not by field name, so a new worker counter never tempts anyone into
+// allowlisting a field the web path does not emit.
+const workerOnlySources = new Set([
+  "applicant-evidence-job-handler.ts",
+  "discovery-job-handler.ts"
+]);
+
+function measurementSources(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return measurementSources(path);
+    }
+    return /\.tsx?$/.test(entry.name) &&
+      !/\.test\.tsx?$/.test(entry.name) &&
+      !workerOnlySources.has(entry.name)
+      ? [path]
+      : [];
+  });
+}
+
+it("allowlists every measurement field a web request can emit", () => {
+  // Break caught: a new `scope.time` prefix on the web path is dropped before
+  // serialization with no error, so its timings silently vanish from
+  // `http_request` records (#499). This scans the sources that measure web
+  // requests for literal field names and asserts each is allowlisted. Names
+  // built at runtime -- template literals, `cacheField` lookups -- and the
+  // `<prefix>MaxCallName` label are not caught by the scan.
+  const roots = ["../../../../packages/application/src", "../../src"].map(
+    (relative) => fileURLToPath(new URL(relative, import.meta.url))
+  );
+  const call =
+    /scope\??\.(time|observe|observeMax|increment|mark)\(\s*"([A-Za-z]+)"/g;
+  const emitted = new Set<string>();
+  for (const file of roots.flatMap(measurementSources)) {
+    for (const [, method, name] of readFileSync(file, "utf8").matchAll(call)) {
+      if (method !== "time") {
+        emitted.add(name!);
+      } else {
+        emitted.add(`${name}Ms`);
+        emitted.add(`${name}Calls`);
+        emitted.add(`${name}MaxCallMs`);
+      }
+    }
+  }
+
+  // Guard against a vacuous pass: a broken path or regex would find nothing.
+  expect(emitted).toContain("dbMs");
+  expect(emitted).toContain("limiterWaitMs");
+  expect([...emitted].filter((field) => !allowedFields.has(field))).toEqual([]);
 });

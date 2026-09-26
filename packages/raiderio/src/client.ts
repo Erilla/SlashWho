@@ -39,6 +39,11 @@ export const raiderIoHistoricTierOrdinals: readonly number[] = Object.freeze(
 export const maximumHistoricMythicKillTiers =
   raiderIoHistoricTierOrdinals.length;
 
+// How many historic tiers are asked at once. Small, because the endpoint is
+// undocumented and this client has no rate limiter of its own: it only reports
+// throttling once Raider.IO has already applied it.
+const historicMythicKillTierConcurrency = 3;
+
 /**
  * What this client calls itself upstream. Raider.IO rejects requests without
  * an identifying agent, which
@@ -476,25 +481,59 @@ export function createRaiderIoClient(
     ]
       .map(encodeURIComponent)
       .join("/");
-    const earliestKills = new Map<string, HistoricMythicKill>();
+    // Tiers are asked a few at a time rather than one after another: every
+    // full run asks for all of them, so a serial walk made each run wait on
+    // seventeen round trips. The result is still what a serial walk would
+    // give. Tiers start in order and none starts after a failure, so every
+    // tier below the earliest failure has been answered, and that failure is
+    // the limitation reported. Kills merge in tier order, so an overlapping
+    // duplicate resolves exactly as before.
+    const outcomes: Array<
+      | { kind: "kills"; kills: readonly HistoricMythicKill[] }
+      | { kind: "failed"; error: unknown }
+      | undefined
+    > = [];
+    let next = 0;
+    let failed = false;
+    const worker = async () => {
+      while (!failed && next < tiers.length) {
+        const index = next;
+        next += 1;
+        const url = new URL(`/${path}`, baseUrl);
+        url.searchParams.set("tier", String(tiers[index]));
+        try {
+          outcomes[index] = {
+            kind: "kills",
+            kills: await request(
+              url,
+              normalizeHistoricRaidProgress,
+              options.signal,
+              options.onPhysicalRequest
+            )
+          };
+        } catch (error) {
+          failed = true;
+          outcomes[index] = { kind: "failed", error };
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(historicMythicKillTierConcurrency, tiers.length) },
+        worker
+      )
+    );
+    if (options.signal?.aborted) throw options.signal.reason;
 
-    for (const tier of tiers) {
-      const url = new URL(`/${path}`, baseUrl);
-      url.searchParams.set("tier", String(tier));
-      let kills: readonly HistoricMythicKill[];
-      try {
-        kills = await request(
-          url,
-          normalizeHistoricRaidProgress,
-          options.signal,
-          options.onPhysicalRequest
-        );
-      } catch (error) {
-        if (options.signal?.aborted) throw options.signal.reason;
-        return historicKillLimitation(error);
+    const earliestKills = new Map<string, HistoricMythicKill>();
+    for (const outcome of outcomes) {
+      // Tiers after a failure were never started.
+      if (!outcome) break;
+      if (outcome.kind === "failed") {
+        return historicKillLimitation(outcome.error);
       }
 
-      for (const kill of kills) {
+      for (const kill of outcome.kills) {
         const identifier = `${kill.raidSlug}\u0000${kill.bossSlug}`;
         const existing = earliestKills.get(identifier);
         if (!existing || kill.firstDefeated < existing.firstDefeated) {
