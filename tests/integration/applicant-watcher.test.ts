@@ -574,3 +574,75 @@ it("keeps a deferred submission when the parser version changes", async () => {
   expect(second).toMatchObject({ rebaselined: true, created: 1 });
   await poll([deferred, deferred]);
 });
+
+it("keeps a deferred duplicate's own details across a parser version change", async () => {
+  const characterUrl = "https://raider.io/characters/eu/example/uma";
+  const rows = [
+    {
+      row: 2,
+      battletag: "First#333",
+      discordId: "333",
+      characterName: "Uma One",
+      linkCell: characterUrl
+    },
+    {
+      row: 3,
+      battletag: "Second#444",
+      discordId: "444",
+      characterName: "Uma Two",
+      linkCell: characterUrl
+    }
+  ];
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [],
+    backlogLimit: 1000,
+    parserVersion: 3_000
+  });
+  let calls = 0;
+  const first = await pollApplicantSheet({
+    pool,
+    readRows: async () => rows,
+    isSuppressed: async () => (++calls === 1 ? "defer" : false),
+    backlogLimit: 1000,
+    parserVersion: 3_000
+  });
+  expect(first.newApplicants.map((applicant) => applicant.battletag)).toEqual([
+    "Second#444"
+  ]);
+  const second = await pollApplicantSheet({
+    pool,
+    readRows: async () => rows,
+    isSuppressed: async () => false,
+    backlogLimit: 1000,
+    parserVersion: 3_001
+  });
+  expect(second).toMatchObject({ rebaselined: true, created: 1 });
+  expect(second.newApplicants.map((applicant) => applicant.battletag)).toEqual([
+    "First#333"
+  ]);
+  await poll(rows.map((row) => row.linkCell));
+});
+
+it("records a count a new parser version no longer reads without announcing it", async () => {
+  const dropped = "https://raider.io/characters/eu/example/vera";
+  const pollAt = (cells: unknown[], parserVersion: number) =>
+    pollApplicantSheet({
+      pool,
+      readColumn: async () => cells,
+      backlogLimit: 1000,
+      parserVersion
+    });
+  await pollAt([dropped, dropped], 4_000);
+  expect(await pollAt([dropped], 4_001)).toMatchObject({
+    rebaselined: true,
+    created: 0,
+    newApplicants: []
+  });
+  // The count is now 1, so a second response is a genuine new submission.
+  expect(await pollAt([dropped, dropped], 4_001)).toMatchObject({
+    rebaselined: false,
+    created: 1
+  });
+  await poll([dropped, dropped]);
+});

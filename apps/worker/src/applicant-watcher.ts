@@ -133,23 +133,22 @@ export async function reconcileApplicantCounts(
     for (const identity of new Set([...previous.keys(), ...counts.keys()])) {
       const current = counts.get(identity) ?? 0;
       const deferred = deferredAt.get(identity) ?? [];
-      const before = rebaselined
-        ? Math.max(previous.get(identity) ?? 0, current - deferred.length)
-        : (previous.get(identity) ?? 0);
+      const counted = previous.get(identity) ?? 0;
+      // Occurrences the new parser reads for the first time, taken to sit
+      // ahead of the deferred ones, whose stored indexes shift past them.
+      const shift = rebaselined
+        ? Math.max(0, current - counted - deferred.length)
+        : 0;
+      const before = counted + shift;
       const pendingTimes =
         current < before
           ? []
           : deferred
               .slice(0, current - before)
               .map((value, index): DeferredObservation =>
-                typeof value === "string" || rebaselined
-                  ? {
-                      at: new Date(
-                        typeof value === "string" ? value : value.at
-                      ),
-                      index: before + index
-                    }
-                  : { at: new Date(value.at), index: value.index }
+                typeof value === "string"
+                  ? { at: new Date(value), index: before + index }
+                  : { at: new Date(value.at), index: value.index + shift }
               );
       while (pendingTimes.length < current - before)
         pendingTimes.push({ at, index: before + pendingTimes.length });
