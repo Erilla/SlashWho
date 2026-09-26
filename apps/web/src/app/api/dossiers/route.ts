@@ -4,7 +4,12 @@ import {
 } from "@slashwho/contracts";
 
 import { getContainer } from "../../../server/container";
-import { apiError, withHttpRequest } from "../../../server/http";
+import {
+  apiError,
+  jsonNoStore,
+  startResultResponse,
+  withHttpRequest
+} from "../../../server/http";
 
 export async function POST(request: Request): Promise<Response> {
   return withHttpRequest("dossier_start", async (scope, correlationId) => {
@@ -24,35 +29,9 @@ export async function POST(request: Request): Promise<Response> {
     if ("joinedExistingRun" in result && result.joinedExistingRun) {
       scope.mark("runJoined");
     }
-    if (result.kind === "job") {
-      return Response.json(
-        dossierStartResponseSchema.parse({
-          kind: "job",
-          jobId: result.jobId,
-          status: result.status
-        }),
-        {
-          status: 202,
-          headers: {
-            "cache-control": "no-store",
-            location: `/api/dossiers/jobs/${result.jobId}`
-          }
-        }
-      );
-    }
     if (result.kind === "character") {
-      return Response.json(
-        dossierStartResponseSchema.parse({ kind: "ready" }),
-        {
-          headers: { "cache-control": "no-store" }
-        }
-      );
+      return jsonNoStore(dossierStartResponseSchema, { kind: "ready" });
     }
-    if (result.kind === "rate_limited") {
-      return apiError("rate_limited", {
-        retryAfterSeconds: result.retryAfterSeconds
-      });
-    }
-    return apiError(result.code);
+    return startResultResponse(result);
   });
 }

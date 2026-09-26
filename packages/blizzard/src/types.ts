@@ -23,27 +23,39 @@ export type BlizzardRosterCharacter = Readonly<{
 /** Called immediately before a request to the Blizzard profile API. */
 export type BlizzardProfileRequestObserver = () => Promise<void> | void;
 
+/**
+ * Wraps a request's wait for a slot in the client's request limiter, so a
+ * caller timing the request can tell queueing apart from Blizzard's latency.
+ * It must return what `wait` resolves to. Not called when the client has no
+ * limits.
+ */
+export type BlizzardSlotWait = <R>(wait: () => Promise<R>) => Promise<R>;
+
 export interface BlizzardGateway {
   getGuildRoster(
     root: CharacterKey,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<readonly BlizzardRosterCharacter[]>;
   /** Reads a roster from a previously observed public guild identity. */
   getGuildRosterByIdentity(
     guild: CharacterGuild,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<readonly BlizzardRosterCharacter[]>;
   getAchievementFingerprint(
     key: CharacterKey,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<AchievementFingerprint>;
   getCompletedAchievements(
     key: CharacterKey,
     signal?: AbortSignal,
-    onProfileRequest?: BlizzardProfileRequestObserver
+    onProfileRequest?: BlizzardProfileRequestObserver,
+    waitForSlot?: BlizzardSlotWait
   ): Promise<readonly CompletedAchievement[]>;
 }
 
