@@ -2621,6 +2621,52 @@ describe("applicant evidence job handler", () => {
       expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(1_900);
     });
 
+    it.each([
+      ["answers", async () => []],
+      [
+        "fails",
+        async () => {
+          throw new Error("Blizzard unavailable");
+        }
+      ]
+    ])(
+      "times the Blizzard achievements read when it %s",
+      async (_outcome, answer) => {
+        // Break caught: the achievements read ran untimed, so evidence_job
+        // carried no blizzardMs and a slow or timed-out Blizzard call left no
+        // trace beyond the phase ledger's timestamps.
+        const records: Array<Record<string, unknown>> = [];
+        let now = 0;
+        const handler = createApplicantEvidenceJobHandler({
+          ...baseOptions(),
+          logger: { info: (record) => records.push(record) },
+          monotonic: () => now,
+          blizzard: {
+            getCompletedAchievements: async () => {
+              now += 40;
+              return answer();
+            }
+          }
+        });
+
+        await handler.execute(
+          {
+            runId: "run-1",
+            correlationId: "c1",
+            enqueuedAt: new Date().toISOString()
+          },
+          { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+        );
+
+        expect(records[0]).toMatchObject({
+          event: "evidence_job",
+          blizzardMs: 40,
+          blizzardCalls: 1,
+          blizzardMaxCallMs: 40
+        });
+      }
+    );
+
     it("records the requests the collection issued, by query type", async () => {
       // Break caught: `warcraftLogsCalls=1` counts gateway invocations, not
       // upstream requests, so there was no way to tell whether a run's points
