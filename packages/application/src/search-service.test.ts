@@ -546,6 +546,24 @@ describe("search freshness policy", () => {
     });
   });
 
+  it("charges admission reservations to a supplied scope", async () => {
+    // Break caught: routes admit before their scoped service call, so an
+    // unwrapped reservation lands in durationMs and never in dbMs.
+    const fixture = policyFixture();
+    const read = createMeasurementScope();
+    const tier = createMeasurementScope();
+
+    await fixture.service.authorizePublicRead(fixture.command.headers, read);
+    await fixture.service.authorizeTierSearch(fixture.command.headers, tier);
+
+    for (const scope of [read, tier]) {
+      expect(scope.totals()).toMatchObject({
+        dbCalls: 1,
+        dbMaxCallName: "rateLimits.reserve"
+      });
+    }
+  });
+
   it("returns contract-mappable auth failures without touching persistence", async () => {
     // Break caught: invalid Bearer could downgrade or missing Railway identity could proceed.
     const fixture = policyFixture();

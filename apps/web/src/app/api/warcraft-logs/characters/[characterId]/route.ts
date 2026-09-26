@@ -26,23 +26,24 @@ export async function GET(
   request: Request,
   context: { params: Promise<CharacterIdParams> }
 ): Promise<Response> {
-  return withHttpRequest("warcraft_logs_character", async () => {
+  return withHttpRequest("warcraft_logs_character", async (scope) => {
     const characterId = parseCharacterId((await context.params).characterId);
     if (characterId === undefined) return apiError("invalid_character_url");
     const { characterIds, searches, accountAuth, accountCredentials } =
       await getContainer();
     const denied = publicReadAuthorizationResponse(
-      await searches.authorizePublicRead(request.headers)
+      await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
     const { principal } = accountAuth
-      ? await accountAuth.authenticate(request)
+      ? await accountAuth.authenticate(request, scope)
       : { principal: null };
     const { wclCredentials } = await resolveCredentialOverrides(
       request,
       principal,
       accountCredentials,
-      loadWebConfig()
+      loadWebConfig(),
+      scope
     );
     const result = await characterIds.resolve(
       characterId,

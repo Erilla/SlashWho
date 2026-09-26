@@ -1,4 +1,7 @@
-import { applicationConfigSchema } from "@slashwho/application";
+import {
+  applicationConfigSchema,
+  createMeasurementScope
+} from "@slashwho/application";
 import type {
   OperatorCredential,
   OperatorSession,
@@ -255,6 +258,14 @@ it("authenticates verified accounts and reads current role and required-change s
     passwordChangeRequired: true
   });
   expect(authorizes(live.principal, "admin")).toBe(false);
+  // Routes authenticate before their scoped service call; the session lookup
+  // must still reach the request's db totals, under its repository label.
+  const scope = createMeasurementScope();
+  await auth.authenticate(new Request(origin, { headers: { cookie } }), scope);
+  expect(scope.totals()).toMatchObject({
+    dbCalls: 1,
+    dbMaxCallName: "accountAuth.useSession"
+  });
   expect(
     (
       await auth.authenticate(

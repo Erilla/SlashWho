@@ -1,3 +1,4 @@
+import { createMeasurementScope } from "@slashwho/application";
 import { describe, expect, it } from "vitest";
 import type {
   AccountCredentialRepository,
@@ -73,6 +74,14 @@ describe("account credentials", () => {
       true
     );
     expect(await service.resolve("bob", "warcraftlogs")).toBeNull();
+    // Credential resolution runs before the route's scoped service call; the
+    // lookup must still reach the request's db totals.
+    const scope = createMeasurementScope();
+    await service.resolve("alice", "warcraftlogs", scope);
+    expect(scope.totals()).toMatchObject({
+      dbCalls: 1,
+      dbMaxCallName: "accountCredentials.get"
+    });
     expect(await service.resolve("alice", "warcraftlogs")).toEqual({
       values: { clientId: "id-a", clientSecret: "secret-a" },
       version: 1
