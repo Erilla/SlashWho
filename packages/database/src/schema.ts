@@ -524,9 +524,10 @@ export const accountSessions = pgTable(
     idleExpiresAt: timestamp("idle_expires_at", {
       withTimezone: true
     }).notNull(),
+    // NULL: no absolute lifetime; the sliding idle deadline alone applies.
     absoluteExpiresAt: timestamp("absolute_expires_at", {
       withTimezone: true
-    }).notNull(),
+    }),
     revokedAt: timestamp("revoked_at", { withTimezone: true })
   },
   (table) => [

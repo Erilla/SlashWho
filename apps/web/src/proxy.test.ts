@@ -42,18 +42,19 @@ it("renews the browser cookie during page-only navigation beyond its initial idl
   expect(first.headers.get("cache-control")).toBe("no-store");
   expect(first.headers.get("set-cookie")).toContain(cookie);
   expect(first.headers.get("set-cookie")).toContain(
-    "Expires=Mon, 21 Sep 2026 12:50:00 GMT"
+    "Expires=Tue, 26 Oct 2027 12:20:00 GMT"
   );
   expect(first.headers.get("set-cookie")).toContain(
     "HttpOnly; Secure; SameSite=Strict"
   );
 
-  vi.setSystemTime(new Date("2026-09-21T12:40:00.000Z"));
-  fixture.setTime(new Date("2026-09-21T12:40:00.000Z"));
+  // Past the 400-day deadline set at sign-in, inside the one renewed above.
+  vi.setSystemTime(new Date("2027-10-26T12:10:00.000Z"));
+  fixture.setTime(new Date("2027-10-26T12:10:00.000Z"));
   const second = await proxy(navigation({ cookie }));
   expect(second.headers.get("x-middleware-next")).toBe("1");
   expect(second.headers.get("set-cookie")).toContain(
-    "Expires=Mon, 21 Sep 2026 13:10:00 GMT"
+    "Expires=Wed, 29 Nov 2028 12:10:00 GMT"
   );
 });
 

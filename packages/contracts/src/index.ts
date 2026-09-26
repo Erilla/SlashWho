@@ -84,6 +84,7 @@ export {
   collectionMonitorCompletedLimitMax,
   collectionMonitorCompletedPageSize,
   collectionMonitorCompletedRunSchema,
+  collectionMonitorDiscoveryRunSchema,
   collectionMonitorFailedRunSchema,
   collectionMonitorInFlightRunSchema,
   collectionMonitorResponseSchema

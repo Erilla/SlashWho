@@ -1349,7 +1349,7 @@ export interface AccountAuthRepository {
     issuedAt: Date;
     lastUsedAt: Date;
     idleExpiresAt: Date;
-    absoluteExpiresAt: Date;
+    absoluteExpiresAt: Date | null;
   }): Promise<AccountSession | null>;
   useSession(input: {
     sessionId: string;
@@ -1419,7 +1419,8 @@ export type AccountSession = Readonly<{
   issuedAt: Date;
   lastUsedAt: Date;
   idleExpiresAt: Date;
-  absoluteExpiresAt: Date;
+  /** Null when the session has no absolute lifetime. */
+  absoluteExpiresAt: Date | null;
   revokedAt: Date | null;
 }>;
 export interface AccountMailRepository {
@@ -1648,6 +1649,8 @@ export interface Repositories {
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
+    /** The most recently requested runs, newest first, for the operator monitor. */
+    listRecent(limit: number): Promise<readonly DiscoveryRun[]>;
   };
   snapshots: SnapshotRepository;
   manualConnections: ManualConnectionRepository;

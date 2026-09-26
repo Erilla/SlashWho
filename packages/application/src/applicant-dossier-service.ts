@@ -1329,7 +1329,9 @@ async function assembleDossier(options: {
 // Sized for the achievement lookups made by one cold dossier and the number
 // of distinct rosters that should fit inside the TTL window without eviction.
 const DOSSIER_CACHE_TTL_MS = 15 * 60_000;
-const ACHIEVEMENT_KEYS_PER_DOSSIER = 10;
+// Every included character is read now, not the first 12 (#555); 25 covers
+// the largest roster seen (23) rather than the ceiling, which is a backstop.
+const ACHIEVEMENT_KEYS_PER_DOSSIER = 25;
 // The multiple is the number of concurrent cold reads of distinct rosters that
 // fit inside the 15-minute window before entries start evicting each other.
 //
@@ -1770,11 +1772,11 @@ export function createApplicantDossierService(options: {
     );
     const selected = includedOrdered.slice(
       0,
-      options.config.DOSSIER_CHARACTER_CAP
+      options.config.DOSSIER_CHARACTER_CEILING
     );
     const skipped = includedOrdered.slice(selected.length);
     // Excluded characters are ranked among themselves only, so one of them
-    // never costs a researchable character its place under the cap.
+    // never costs a researchable character its place under the ceiling.
     const excludedOrdered = [...excludedIdentities].sort(
       (left, right) =>
         right.level - left.level ||

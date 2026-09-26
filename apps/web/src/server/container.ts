@@ -1,6 +1,7 @@
 import {
   createApplicantDossierService,
   createSearchService,
+  upstreamThrottleRecord,
   type ApplicantDossierService,
   type ApplicationConfig,
   type SearchService
@@ -151,7 +152,8 @@ export async function createWebContainer(
           )
         : null;
     const collectionMonitor = createCollectionMonitorService({
-      evidence: repositories.evidence
+      evidence: repositories.evidence,
+      runs: repositories.runs
     });
     const initializedQueue = dependencies.createQueue(config.databaseUrl);
     queue = initializedQueue;
@@ -162,11 +164,7 @@ export async function createWebContainer(
       timeoutMs: config.dossier.raiderIoTimeoutMs,
       accessKey: config.dossier.raiderIoAccessKey,
       onThrottle: (event) =>
-        webLogger.info({
-          event: "upstream_throttle",
-          provider: "raiderio",
-          retryAfterMs: event.retryAfterMs ?? null
-        })
+        webLogger.info(upstreamThrottleRecord("raiderio", event))
     });
     const searches = dependencies.createSearchService({
       repositories,
@@ -183,11 +181,7 @@ export async function createWebContainer(
         clientId: config.dossier.blizzardClientId,
         clientSecret: config.dossier.blizzardClientSecret,
         onThrottle: (event) =>
-          webLogger.info({
-            event: "upstream_throttle",
-            provider: "blizzard",
-            retryAfterMs: event.retryAfterMs ?? null
-          })
+          webLogger.info(upstreamThrottleRecord("blizzard", event))
       }),
       raiderio,
       config: config.application,
@@ -204,11 +198,7 @@ export async function createWebContainer(
           fetch: globalThis.fetch,
           ...credentials,
           onThrottle: (event) =>
-            webLogger.info({
-              event: "upstream_throttle",
-              provider: "warcraftlogs",
-              retryAfterMs: event.retryAfterMs ?? null
-            })
+            webLogger.info(upstreamThrottleRecord("warcraftlogs", event))
         })
     });
     return {

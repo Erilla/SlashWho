@@ -379,7 +379,7 @@ function fixture(
     RATE_LIMIT_HASH_SECRET: "r".repeat(32),
     ...(options.characterCap === undefined
       ? {}
-      : { DOSSIER_CHARACTER_CAP: options.characterCap }),
+      : { DOSSIER_CHARACTER_CEILING: options.characterCap }),
     ...(options.warcraftLogsRequestCap === undefined
       ? {}
       : { DOSSIER_WARCRAFT_LOGS_REQUEST_CAP: options.warcraftLogsRequestCap }),
@@ -1064,6 +1064,9 @@ describe("applicant dossier service", () => {
         },
         async findActive() {
           return null;
+        },
+        async listRecent() {
+          return [];
         }
       },
       suppressions: {
@@ -2308,6 +2311,38 @@ describe("applicant dossier service", () => {
         keys[0]
       ]);
     }
+  });
+
+  it("researches and lists every character of the largest real roster by default", async () => {
+    // Break caught (#555): the default cap of 12 researched only the first
+    // twelve characters and dropped the rest from the dossier, so six of the
+    // test environment's 35 rosters (the largest has 23) hid real characters.
+    const alts = Array.from({ length: 22 }, (_, index) => {
+      const name = `alt${String(index + 1).padStart(2, "0")}`;
+      return {
+        characterId: `10000000-0000-4000-8000-${String(index + 200).padStart(12, "0")}`,
+        key: { region: "eu" as const, realm: "silvermoon", name },
+        displayName: name,
+        className: "Priest",
+        level: 80,
+        guild: null,
+        raiderIoUrl: `https://raider.io/characters/eu/silvermoon/${name}`,
+        source: "claimed" as const,
+        displayOrder: index + 1
+      };
+    });
+    const { dossiers, repositories } = fixture({
+      snapshot: storedSnapshot([storedSnapshot().characters[0]!, ...alts])
+    });
+
+    const result = await dossiers.read(root);
+
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    expect(result.dossier.characters).toHaveLength(23);
+    expect(repositories.evidence.reserve).toHaveBeenCalledTimes(23);
+    expect(
+      result.dossier.limitations.filter((item) => item.code === "request_cap")
+    ).toEqual([]);
   });
 
   it("reports every evidence stream skipped by the character cap", async () => {

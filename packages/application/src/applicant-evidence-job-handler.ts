@@ -49,6 +49,7 @@ import {
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope, type MeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+import { bindThrottleScope } from "./throttle-attribution";
 import {
   fromStagedCollection,
   terminalTiersFromStage,
@@ -880,6 +881,7 @@ export function createApplicantEvidenceJobHandler(
       const job = typeof input === "string" ? { runId: input } : input;
       const monotonic = options.monotonic ?? (() => performance.now());
       const scope = createMeasurementScope(monotonic);
+      bindThrottleScope(scope);
       const observedAt = monotonic();
       const activeContext = context ?? {
         attempt: 1,

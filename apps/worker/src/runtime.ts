@@ -7,7 +7,9 @@ import {
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
+  attributeThrottlesTo,
   decryptCredential,
+  upstreamThrottleRecord,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -268,11 +270,7 @@ export function createFingerprintIntegration(
       clientSecret: config.blizzardClientSecret,
       baseUrl: config.blizzardBaseUrl,
       onThrottle: (event) =>
-        logger?.info({
-          event: "upstream_throttle",
-          provider: "blizzard",
-          retryAfterMs: event.retryAfterMs ?? null
-        })
+        logger?.info(upstreamThrottleRecord("blizzard", event))
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,
@@ -534,11 +532,7 @@ export function createRaiderIoGateway(
     timeoutMs: config.raiderIoTimeoutMs,
     accessKey: config.raiderIoAccessKey,
     onThrottle: (event) =>
-      logger?.info({
-        event: "upstream_throttle",
-        provider: "raiderio",
-        retryAfterMs: event.retryAfterMs ?? null
-      })
+      logger?.info(upstreamThrottleRecord("raiderio", event))
   });
 }
 
@@ -595,11 +589,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       clientId: config.warcraftLogsClientId,
       clientSecret: config.warcraftLogsClientSecret,
       onThrottle: (event) =>
-        logger?.info({
-          event: "upstream_throttle",
-          provider: "warcraftlogs",
-          retryAfterMs: event.retryAfterMs ?? null
-        })
+        logger?.info(upstreamThrottleRecord("warcraftlogs", event))
     }),
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
@@ -753,11 +743,7 @@ export async function createWorkerRuntime(
           clientId: credentials.clientId,
           clientSecret: credentials.clientSecret,
           onThrottle: (event) =>
-            logger?.info({
-              event: "upstream_throttle",
-              provider: "warcraftlogs",
-              retryAfterMs: event.retryAfterMs ?? null
-            })
+            logger?.info(upstreamThrottleRecord("warcraftlogs", event))
         }),
       decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: config.evidenceRequestCap,
@@ -1156,18 +1142,22 @@ export async function createWorkerRuntime(
       record();
     });
     await initializedQueue.work(async (payload, context) => {
-      await handler.execute(
-        payload.runId,
-        {
-          ...context,
-          correlationId: payload.correlationId,
-          enqueuedAt: payload.enqueuedAt
-        },
-        payload
+      await attributeThrottlesTo({ runId: payload.runId }, () =>
+        handler.execute(
+          payload.runId,
+          {
+            ...context,
+            correlationId: payload.correlationId,
+            enqueuedAt: payload.enqueuedAt
+          },
+          payload
+        )
       );
     });
     await initializedQueue.workCharacterEvidence(async (payload, context) => {
-      await evidenceHandler.execute(payload, context);
+      await attributeThrottlesTo({ runId: payload.runId }, () =>
+        evidenceHandler.execute(payload, context)
+      );
     });
     if (config.accountMail) {
       mailWorker = (

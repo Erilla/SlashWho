@@ -76,7 +76,8 @@ const monitor: CollectionMonitorResponse = {
       errorCode: "warcraft_logs_unavailable",
       stoppedAt: "2026-09-20T10:00:00.000Z"
     }
-  ]
+  ],
+  discoveryRuns: []
 };
 
 afterEach(cleanup);

@@ -4,7 +4,12 @@ import {
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
-import type { EvidenceRepository } from "@slashwho/database";
+import type { EvidenceRepository, Repositories } from "@slashwho/database";
+
+/** How many discovery runs the monitor shows; the table is newest first. */
+export const monitorDiscoveryRunLimit = 50;
+
+const activeStatuses = new Set(["queued", "running", "retrying"]);
 
 export type CollectionMonitorService = Readonly<{
   list(options?: {
@@ -14,6 +19,7 @@ export type CollectionMonitorService = Readonly<{
 
 export function createCollectionMonitorService(options: {
   evidence: Pick<EvidenceRepository, "listForMonitor">;
+  runs: Pick<Repositories["runs"], "listRecent">;
   clock?: () => Date;
 }): CollectionMonitorService {
   const clock = options.clock ?? (() => new Date());
@@ -21,22 +27,32 @@ export function createCollectionMonitorService(options: {
     async list({ completedLimit = collectionMonitorCompletedPageSize } = {}) {
       const generatedAt = clock();
       // One row past the limit says whether older completed runs remain.
-      const rows = await options.evidence.listForMonitor({
-        completedLimit: completedLimit + 1
-      });
-      const hasActiveRuns = rows.some(
-        (row) =>
-          row.status === "queued" ||
-          row.status === "running" ||
-          row.status === "retrying"
-      );
+      const [rows, discoveryRuns] = await Promise.all([
+        options.evidence.listForMonitor({
+          completedLimit: completedLimit + 1
+        }),
+        options.runs.listRecent(monitorDiscoveryRunLimit)
+      ]);
+      const hasActiveRuns =
+        rows.some((row) => activeStatuses.has(row.status)) ||
+        discoveryRuns.some((run) => activeStatuses.has(run.status));
       const response: CollectionMonitorResponse = {
         generatedAt: generatedAt.toISOString(),
         hasActiveRuns,
         inFlight: [],
         completed: [],
         hasMoreCompleted: false,
-        failed: []
+        failed: [],
+        // The run id, queue job and snapshot stay server-side.
+        discoveryRuns: discoveryRuns.map((run) => ({
+          character: run.rootKey,
+          status: run.status,
+          attempt: run.attempt,
+          requestedAt: run.createdAt.toISOString(),
+          startedAt: run.startedAt?.toISOString() ?? null,
+          completedAt: run.completedAt?.toISOString() ?? null,
+          errorCode: run.errorCode
+        }))
       };
 
       for (const row of rows) {

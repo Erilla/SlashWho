@@ -6,7 +6,8 @@ import {
   cleanup,
   fireEvent,
   render,
-  screen
+  screen,
+  within
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,7 +47,8 @@ const inFlightMonitor: CollectionMonitorResponse = {
     }
   ],
   hasMoreCompleted: false,
-  failed: []
+  failed: [],
+  discoveryRuns: []
 };
 
 const partialMonitor: CollectionMonitorResponse = {
@@ -65,7 +67,8 @@ const partialMonitor: CollectionMonitorResponse = {
     ...inFlightMonitor.completed
   ],
   hasMoreCompleted: false,
-  failed: []
+  failed: [],
+  discoveryRuns: []
 };
 
 const completeMonitor: CollectionMonitorResponse = {
@@ -159,6 +162,61 @@ describe("CollectionMonitorClient", () => {
     ).not.toBeInTheDocument();
     // A table of runs polling together would otherwise read every one aloud.
     expect(withSteps?.querySelector('[role="status"]')).not.toBeInTheDocument();
+  });
+
+  it("lists discovery runs in the order served, newest first", () => {
+    render(
+      <CollectionMonitorClient
+        initialMonitor={{
+          ...completeMonitor,
+          discoveryRuns: [
+            {
+              character: { region: "eu", realm: "draenor", name: "newest" },
+              status: "running",
+              attempt: 1,
+              requestedAt: "2026-09-20T12:02:00.000Z",
+              startedAt: "2026-09-20T12:02:01.000Z",
+              completedAt: null,
+              errorCode: null
+            },
+            {
+              character: { region: "us", realm: "illidan", name: "oldest" },
+              status: "failed",
+              attempt: 3,
+              requestedAt: "2026-09-20T11:00:00.000Z",
+              startedAt: "2026-09-20T11:00:02.000Z",
+              completedAt: "2026-09-20T11:04:00.000Z",
+              errorCode: "upstream_unavailable"
+            }
+          ]
+        }}
+      />
+    );
+
+    const table = screen.getByRole("table", { name: "Discovery runs" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((row) => within(row).getByRole("rowheader"))).toEqual([
+      within(table).getByRole("rowheader", {
+        name: "newest — draenor (EU)"
+      }),
+      within(table).getByRole("rowheader", { name: "oldest — illidan (US)" })
+    ]);
+    expect(rows[0]).toHaveTextContent("running");
+    expect(rows[0]).toHaveTextContent("20 Sept 2026, 12:02:00");
+    expect(rows[1]).toHaveTextContent("upstream_unavailable");
+    expect(
+      within(table).getByRole("link", { name: /newest — draenor/i })
+    ).toHaveAttribute("href", "/dossiers/eu/draenor/newest");
+  });
+
+  it("says when no discovery runs have been requested", () => {
+    render(<CollectionMonitorClient initialMonitor={completeMonitor} />);
+
+    expect(
+      within(screen.getByRole("table", { name: "Discovery runs" })).getByText(
+        "No discovery runs have been requested."
+      )
+    ).toBeVisible();
   });
 
   it("links each run's character to its dossier", () => {
@@ -305,7 +363,8 @@ describe("CollectionMonitorClient", () => {
       inFlight: [],
       completed: completedRuns(50),
       hasMoreCompleted: true,
-      failed: []
+      failed: [],
+      discoveryRuns: []
     };
 
     const secondPage: CollectionMonitorResponse = {
