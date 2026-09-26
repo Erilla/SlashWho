@@ -639,11 +639,11 @@ describe("applicant dossier", () => {
         { source: "warcraft_logs", character: altKey, code: "private" }
       ]
     });
-    expect(dossier.raids[0].cuttingEdge).toBeNull();
+    expect(dossier.raids[0]?.cuttingEdge).toBeNull();
     expect(
       verifiedKill(dossier.raids[0]!.bosses[0]!).firstKill.characters
     ).toEqual([root, altKey]);
-    expect(dossier.limitations[0].code).toBe("private");
+    expect(dossier.limitations[0]?.code).toBe("private");
   });
 
   it("attaches all boss wipes after kill evidence from newest to oldest", () => {
@@ -751,7 +751,7 @@ describe("applicant dossier", () => {
       limitations: []
     });
 
-    expect(dossier.raids[0].bosses[0]).toMatchObject({
+    expect(dossier.raids[0]?.bosses[0]).toMatchObject({
       firstKills: [
         {
           killedAt: "2024-10-02T20:00:00.000Z",
@@ -974,7 +974,7 @@ describe("applicant dossier", () => {
         limitations: []
       });
     expect(make(reverse)).toEqual(make(forward));
-    expect(make(forward).raids[0].cuttingEdge).toBeNull();
+    expect(make(forward).raids[0]?.cuttingEdge).toBeNull();
   });
 
   it("distinguishes nullable evidence values when tied input is reversed", () => {

@@ -5436,7 +5436,7 @@ describe("Warcraft Logs gateway", () => {
           });
         }
         authorizations.push(
-          (init?.headers as Record<string, string>).Authorization
+          (init?.headers as { Authorization: string }).Authorization
         );
         return jsonResponse(reportPage);
       });

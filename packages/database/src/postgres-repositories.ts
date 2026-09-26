@@ -4063,9 +4063,11 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           [key.region, key.realm, key.name]
         );
         const state = result.rows[0];
+        // No row means this character has never published a sweep.
+        if (!state) return true;
         return (
-          (state?.resume_after ?? null) === null &&
-          (state?.last_published_at === null ||
+          state.resume_after === null &&
+          (state.last_published_at === null ||
             state.last_published_at <= cadenceCutoff)
         );
       },

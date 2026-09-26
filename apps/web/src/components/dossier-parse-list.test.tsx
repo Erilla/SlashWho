@@ -86,7 +86,7 @@ it("renders whole-number percentile values without the percentile suffix", () =>
       label="Best parses"
       parses={[
         {
-          ...parses[0],
+          ...parses[0]!,
           damage: {
             state: "available",
             percentile: 100,
@@ -111,7 +111,7 @@ it("rounds half-up fractional parse values in visible and accessible text", () =
       label="Best parses"
       parses={[
         {
-          ...parses[0],
+          ...parses[0]!,
           damage: {
             state: "available",
             percentile: 87.5,
@@ -135,7 +135,7 @@ it("shows a spinner for unavailable metrics while research is gathering", () => 
       loading
       parses={[
         {
-          ...parses[0],
+          ...parses[0]!,
           damage: { state: "unavailable" },
           healing: { state: "not_applicable" },
           bossDamage: { state: "unavailable" }

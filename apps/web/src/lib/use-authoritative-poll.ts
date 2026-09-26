@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
-const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
-const cappedDelayMs = pollDelaysMs[pollDelaysMs.length - 1];
+const cappedDelayMs = 10_000;
+const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, cappedDelayMs] as const;
 
 export type PollReadResult<T> =
   | { kind: "snapshot"; value: T }
@@ -73,7 +73,7 @@ export function useAuthoritativePoll<T>(
     }
 
     function nextPollDelay() {
-      const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
+      const delay = pollDelaysMs[attempt] ?? cappedDelayMs;
       attempt += 1;
       return delay;
     }
