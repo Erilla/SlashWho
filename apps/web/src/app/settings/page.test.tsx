@@ -410,7 +410,7 @@ describe("SettingsPage", () => {
   it("saves entered credentials to local storage", async () => {
     render(<SettingsPage />);
     const [blizzardClientId] = await screen.findAllByLabelText("Client ID");
-    await userEvent.type(blizzardClientId, "user-id");
+    await userEvent.type(blizzardClientId!, "user-id");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(readStoredCredentials().blizzardClientId).toBe("user-id")
@@ -420,7 +420,7 @@ describe("SettingsPage", () => {
   it("clears saved credentials from local storage", async () => {
     render(<SettingsPage />);
     const [blizzardClientId] = await screen.findAllByLabelText("Client ID");
-    await userEvent.type(blizzardClientId, "user-id");
+    await userEvent.type(blizzardClientId!, "user-id");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(readStoredCredentials().blizzardClientId).toBe("user-id")

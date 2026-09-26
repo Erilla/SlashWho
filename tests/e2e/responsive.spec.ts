@@ -710,11 +710,11 @@ test("keeps the source pill intact beside a long guild name", async ({
   // row overflow. A row with no guild is untouched.
   await page.setViewportSize({ width: 1855, height: 900 });
   const desktop = await rowGeometry();
-  expect(desktop[0].guildText).toBeNull();
-  expect(desktop[1].guildText).toBe("<Echoes of Eternity>");
-  expect(desktop[1].guildTruncated).toBe(false);
+  expect(desktop[0]?.guildText).toBeNull();
+  expect(desktop[1]?.guildText).toBe("<Echoes of Eternity>");
+  expect(desktop[1]?.guildTruncated).toBe(false);
   // The wider character panel can now show even the long-named row in full.
-  expect(desktop[2].guildTruncated).toBe(false);
+  expect(desktop[2]?.guildTruncated).toBe(false);
   for (const row of desktop) {
     expect(row.overflow).toBeLessThanOrEqual(0);
     expect(row.pillClipped).toBe(false);
