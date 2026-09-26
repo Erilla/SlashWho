@@ -70,6 +70,12 @@ export type WarcraftLogsRequestEvent = Readonly<{
   limited: boolean;
   /** The limitation returned by this request, when one was returned. */
   limitationCode?: WarcraftLogsLimitationCode;
+  /**
+   * Whole milliseconds from issuing the request to its result, token and
+   * body read included. Only the client sees one request start and end; the
+   * gateway call around it spans many.
+   */
+  durationMs: number;
 }>;
 
 export type WarcraftLogsIdentity = Readonly<{

@@ -6303,10 +6303,54 @@ describe("Warcraft Logs gateway", () => {
 
     expect(result.kind).toBe("evidence");
     expect(requests).toEqual([
-      { query: "history_scan", limited: false },
-      { query: "zone_rankings", limited: false },
-      { query: "fight_parses", limited: false },
-      { query: "ranking_identities", limited: false }
+      { query: "history_scan", limited: false, durationMs: expect.any(Number) },
+      {
+        query: "zone_rankings",
+        limited: false,
+        durationMs: expect.any(Number)
+      },
+      { query: "fight_parses", limited: false, durationMs: expect.any(Number) },
+      {
+        query: "ranking_identities",
+        limited: false,
+        durationMs: expect.any(Number)
+      }
+    ]);
+  });
+
+  it("times each request it issues on the injected clock", async () => {
+    // Break caught: request counts said what a slow run asked for but not
+    // which part was slow; only the client sees a single request start and end.
+    const requests: Array<{ query: string; durationMs: number }> = [];
+    let tick = 0;
+    const { fetch } = performanceClient(
+      performanceRankings({ damage: 91, healing: 12, bossDamage: 44 })
+    );
+    const client = createWarcraftLogsClient({
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      clientId: "id",
+      clientSecret: "client-secret-marker",
+      // Each reading advances further than the last, so a duration taken
+      // from the wrong pair of readings would not come out as these values.
+      monotonic: () => {
+        tick += 1;
+        return tick * tick;
+      }
+    });
+
+    await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 8,
+      onRequest: ({ query, durationMs }) => requests.push({ query, durationMs })
+    });
+
+    // Readings 1,4 | 9,16 | 25,36 | 49,64: one pair per request, nothing
+    // read between them.
+    expect(requests).toEqual([
+      { query: "history_scan", durationMs: 3 },
+      { query: "zone_rankings", durationMs: 7 },
+      { query: "fight_parses", durationMs: 11 },
+      { query: "ranking_identities", durationMs: 15 }
     ]);
   });
 
@@ -6342,7 +6386,8 @@ describe("Warcraft Logs gateway", () => {
     expect(requests).toContainEqual({
       query: "zone_rankings",
       limited: true,
-      limitationCode: "unavailable"
+      limitationCode: "unavailable",
+      durationMs: expect.any(Number)
     });
     expect(
       requests.filter((event) => event.query === "zone_rankings")
@@ -6371,7 +6416,12 @@ describe("Warcraft Logs gateway", () => {
 
     expect(result).toMatchObject({ kind: "limitation", code: "rate_limited" });
     expect(requests).toEqual([
-      { query: "history_scan", limited: true, limitationCode: "rate_limited" }
+      {
+        query: "history_scan",
+        limited: true,
+        limitationCode: "rate_limited",
+        durationMs: expect.any(Number)
+      }
     ]);
   });
 

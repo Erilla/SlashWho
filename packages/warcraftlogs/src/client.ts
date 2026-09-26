@@ -316,6 +316,8 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
   baseUrl?: string;
   onThrottle?(event: { retryAfterMs: number | undefined }): void;
+  /** Times each request for `onRequest`. Injected so tests control it. */
+  monotonic?: () => number;
 }>;
 
 type AccessToken = Readonly<{
@@ -1982,6 +1984,9 @@ export function createWarcraftLogsClient(
   if (baseUrl && !/^https?:$/.test(baseUrl.protocol)) {
     throw new Error("invalid_base_url");
   }
+  const monotonic = options.monotonic ?? (() => performance.now());
+  const elapsedSince = (startedAt: number) =>
+    Math.max(0, Math.round(monotonic() - startedAt));
   let cachedToken: AccessToken | undefined;
   let tokenRequest: Promise<string | WarcraftLogsLimitation> | undefined;
 
@@ -2199,7 +2204,9 @@ export function createWarcraftLogsClient(
       variables: Record<string, string | number>
     ): Promise<GraphqlResult | null> => {
       if (spent >= options.requestCap) return null;
+      const startedAt = monotonic();
       const result = await graphql(query, variables, options.signal);
+      const durationMs = elapsedSince(startedAt);
       spent += 1;
       try {
         options.onRequest?.({
@@ -2207,7 +2214,8 @@ export function createWarcraftLogsClient(
           limited: result.kind !== "success",
           ...(result.kind === "limitation"
             ? { limitationCode: result.code }
-            : {})
+            : {}),
+          durationMs
         });
       } catch {
         /* Observation never changes evidence. */
@@ -2466,19 +2474,24 @@ export function createWarcraftLogsClient(
     // Counted here rather than inside `graphql` so the observer stays scoped to
     // this call: the client is a process-wide singleton, so a
     // construction-level observer could not attribute a request to the run that
-    // issued it. Every call site passes its result through, limitation or not
-    // -- the request was issued and paid for either way.
-    const counted = <T extends GraphqlResult>(
+    // issued it. Every call site passes its request through, limitation or
+    // not -- the request was issued and paid for either way. It takes the
+    // request unissued so the clock starts with it.
+    const counted = async <T extends GraphqlResult>(
       query: WarcraftLogsQueryType,
-      result: T
-    ): T => {
+      issue: () => Promise<T>
+    ): Promise<T> => {
+      const startedAt = monotonic();
+      const result = await issue();
+      const durationMs = elapsedSince(startedAt);
       try {
         options.onRequest?.({
           query,
           limited: result.kind !== "success",
           ...(result.kind === "limitation"
             ? { limitationCode: result.code }
-            : {})
+            : {}),
+          durationMs
         });
       } catch {
         // A counter must never cost the collection it is measuring.
@@ -2521,9 +2534,8 @@ export function createWarcraftLogsClient(
       // backdated one). The final report code on the last proved page is an
       // anchor: any insertion above the resume point moves it. This probe is
       // a history request and therefore belongs to the same hard budget.
-      const probe = counted(
-        "history_scan",
-        await graphql(
+      const probe = await counted("history_scan", () =>
+        graphql(
           recentReportsQuery(lookup),
           { ...characterVariables(lookup), page: historyScanStartPage - 1 },
           options.signal
@@ -2575,9 +2587,8 @@ export function createWarcraftLogsClient(
       historyScanRequests < options.requestCap;
       page++
     ) {
-      const result = counted(
-        "history_scan",
-        await graphql(
+      const result = await counted("history_scan", () =>
+        graphql(
           recentReportsQuery(lookup),
           { ...characterVariables(lookup), page },
           options.signal
@@ -2692,9 +2703,8 @@ export function createWarcraftLogsClient(
       return covered ? [] : [{ verified, at }];
     });
     const hydrate = async (code: string) => {
-      const report = counted(
-        "report_hydration",
-        await graphql(reportByCodeQuery, { code }, options.signal)
+      const report = await counted("report_hydration", () =>
+        graphql(reportByCodeQuery, { code }, options.signal)
       );
       historyScanRequests += 1;
       if (report.kind !== "success") return report;
@@ -2797,9 +2807,8 @@ export function createWarcraftLogsClient(
       walk: for (let page = 1; ; page++) {
         if (historyScanRequests >= options.requestCap) break search;
         recoverySearched = true;
-        const attendance = counted(
-          "guild_attendance",
-          await graphql(
+        const attendance = await counted("guild_attendance", () =>
+          graphql(
             guildAttendanceQuery,
             {
               name: guild.name,
@@ -2930,9 +2939,8 @@ export function createWarcraftLogsClient(
       // that knows a guild no kill was attributed to. A failure to read it
       // leaves the guilds the caller knew about.
       if (spend()) {
-        const listed = counted(
-          "character_guilds",
-          await graphql(
+        const listed = await counted("character_guilds", () =>
+          graphql(
             characterGuildsQuery,
             { name: key.name, realm: key.realm, region: key.region },
             options.signal
@@ -2955,9 +2963,8 @@ export function createWarcraftLogsClient(
         ): Promise<Page | null | undefined> => {
           if (pages.has(number)) return pages.get(number);
           if (!spend()) return undefined;
-          const attendance = counted(
-            "guild_attendance",
-            await graphql(
+          const attendance = await counted("guild_attendance", () =>
+            graphql(
               guildAttendanceQuery,
               {
                 name: guild.name,
@@ -3046,13 +3053,8 @@ export function createWarcraftLogsClient(
               continue;
             }
             if (!spend()) break search;
-            const hydrated = counted(
-              "report_hydration",
-              await graphql(
-                reportByCodeQuery,
-                { code: report.code },
-                options.signal
-              )
+            const hydrated = await counted("report_hydration", () =>
+              graphql(reportByCodeQuery, { code: report.code }, options.signal)
             );
             scannedReportCodes.add(report.code);
             if (hydrated.kind !== "success") {
@@ -3229,9 +3231,8 @@ export function createWarcraftLogsClient(
     }
     for (const zone of pendingZones.slice(0, zoneRequestCap)) {
       parseRequests += 1;
-      const rankings = counted(
-        "zone_rankings",
-        await graphql(
+      const rankings = await counted("zone_rankings", () =>
+        graphql(
           characterZoneParsesQuery(lookup),
           { ...characterVariables(lookup), zoneID: zone.zoneId },
           options.signal
@@ -3417,9 +3418,8 @@ export function createWarcraftLogsClient(
         break;
       }
       parseRequests += 1;
-      const rankings = counted(
-        "fight_parses",
-        await graphql(
+      const rankings = await counted("fight_parses", () =>
+        graphql(
           reportFightParsesQuery,
           { code: group.reportCode, fightIDs: [...group.fights.keys()] },
           options.signal
@@ -3485,9 +3485,8 @@ export function createWarcraftLogsClient(
         troubleGroups(decodedGroups.map(({ group }) => group));
       } else {
         const canonicalIdentities = [...identities.values()];
-        const canonical = counted(
-          "ranking_identities",
-          await graphql(
+        const canonical = await counted("ranking_identities", () =>
+          graphql(
             rankingCharacterIdentityQuery(canonicalIdentities),
             Object.fromEntries(
               canonicalIdentities.map((identity, index) => [

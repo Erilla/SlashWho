@@ -2631,13 +2631,30 @@ describe("applicant evidence job handler", () => {
         warcraftLogs: {
           ...openGate,
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "zone_rankings", limited: true });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "zone_rankings",
+              limited: true,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             options.onRequest?.({
               query: "ranking_identities",
-              limited: false
+              limited: false,
+              durationMs: 0
             });
             return {
               kind: "evidence" as const,
@@ -2661,6 +2678,52 @@ describe("applicant evidence job handler", () => {
         warcraftLogsFightParsesRequests: 1,
         warcraftLogsRankingIdentitiesRequests: 1
       });
+    });
+
+    it("records request time by query type and names the slowest request", async () => {
+      // Break caught: `warcraftLogsMs` was one bucket, so a slow run showed
+      // what it asked for but not which part of the collection was slow.
+      const records: Array<Record<string, unknown>> = [];
+      const handler = createApplicantEvidenceJobHandler({
+        ...baseOptions(),
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (_key, options) => {
+            for (const [query, durationMs] of [
+              ["history_scan", 120],
+              ["history_scan", 80],
+              ["guild_attendance", 900],
+              ["report_hydration", 300],
+              ["fight_parses", 900]
+            ] as const) {
+              options.onRequest?.({ query, limited: false, durationMs });
+            }
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              troubledRaidIds: { parses: [], tierBests: [] },
+              tierBests: [],
+              kills: [],
+              wipes: []
+            };
+          }
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-timed");
+
+      expect(records[0]).toMatchObject({
+        warcraftLogsHistoryScanMs: 200,
+        warcraftLogsGuildAttendanceMs: 900,
+        warcraftLogsReportHydrationMs: 300,
+        warcraftLogsFightParsesMs: 900,
+        warcraftLogsMaxRequestMs: 900,
+        // The first to reach the maximum keeps the name, as `dbMaxCallName`.
+        warcraftLogsMaxRequestName: "guild_attendance"
+      });
+      // A kind the run never asked for leaves no field, as its count does not.
+      expect(records[0]).not.toHaveProperty("warcraftLogsZoneRankingsMs");
     });
 
     it("records a limitation outcome", async () => {
@@ -2978,16 +3041,34 @@ describe("applicant evidence job handler", () => {
                 onRequest?: (event: {
                   query: string;
                   limited: boolean;
+                  durationMs: number;
                 }) => void;
               }
             ) => {
-              options.onRequest?.({ query: "history_scan", limited: false });
-              options.onRequest?.({ query: "history_scan", limited: false });
-              options.onRequest?.({ query: "zone_rankings", limited: false });
-              options.onRequest?.({ query: "fight_parses", limited: false });
+              options.onRequest?.({
+                query: "history_scan",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
+                query: "history_scan",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
+                query: "zone_rankings",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
+                query: "fight_parses",
+                limited: false,
+                durationMs: 0
+              });
               options.onRequest?.({
                 query: "ranking_identities",
-                limited: false
+                limited: false,
+                durationMs: 0
               });
               return {
                 kind: "evidence" as const,
@@ -4261,7 +4342,11 @@ describe("applicant evidence job handler", () => {
         },
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
             await waiting;
             return {
               kind: "evidence" as const,
@@ -4322,7 +4407,11 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             return {
               kind: "evidence" as const,
               parsedFightUrls: [],
@@ -4374,8 +4463,16 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             return {
               kind: "evidence" as const,
               parsedFightUrls: [],
@@ -4425,8 +4522,16 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             return {
               kind: "evidence" as const,
               parsedFightUrls: [],
@@ -4478,8 +4583,16 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             throw new Error("gateway failed");
           }
         }
@@ -4530,14 +4643,31 @@ describe("applicant evidence job handler", () => {
         {},
         {
           getFirstKillReports: async (_key, options) => {
-            options.onRequest?.({ query: "history_scan", limited: false });
-            options.onRequest?.({ query: "zone_rankings", limited: false });
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "zone_rankings",
+              limited: false,
+              durationMs: 0
+            });
             options.onLimitation?.("zone_rankings", "parse_request_cap");
-            options.onRequest?.({ query: "zone_rankings", limited: false });
-            options.onRequest?.({ query: "fight_parses", limited: false });
+            options.onRequest?.({
+              query: "zone_rankings",
+              limited: false,
+              durationMs: 0
+            });
+            options.onRequest?.({
+              query: "fight_parses",
+              limited: false,
+              durationMs: 0
+            });
             options.onRequest?.({
               query: "ranking_identities",
-              limited: false
+              limited: false,
+              durationMs: 0
             });
             return {
               kind: "evidence" as const,
@@ -4648,7 +4778,11 @@ describe("applicant evidence job handler", () => {
             },
             async getFirstKillReports(_key, options) {
               collectionAttempts += 1;
-              options.onRequest?.({ query: "history_scan", limited: false });
+              options.onRequest?.({
+                query: "history_scan",
+                limited: false,
+                durationMs: 0
+              });
               if (collectionAttempts === 1) {
                 throw Object.assign(new Error("socket reset"), {
                   code: "ECONNRESET"
@@ -5987,7 +6121,11 @@ describe("searching one tier from the dossier", () => {
         _key: unknown,
         collection: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
       ) => {
-        collection.onRequest?.({ query: "guild_attendance", limited: false });
+        collection.onRequest?.({
+          query: "guild_attendance",
+          limited: false,
+          durationMs: 0
+        });
         return {
           ...(await evidenceFound()),
           kills: [foundKill("23", "The Eternal Palace", "foundReport")]

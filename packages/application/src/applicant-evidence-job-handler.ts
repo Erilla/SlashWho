@@ -30,6 +30,7 @@ import type {
   WarcraftLogsReportResult,
   WarcraftLogsLimitationCode,
   WarcraftLogsQueryType,
+  WarcraftLogsRequestEvent,
   WarcraftLogsRateLimit,
   WarcraftLogsTierSearchOutcome
 } from "@slashwho/warcraftlogs";
@@ -46,7 +47,7 @@ import {
   retryDelayMsFor
 } from "./limitation-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
-import { createMeasurementScope } from "./measurement";
+import { createMeasurementScope, type MeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
 import {
   fromStagedCollection,
@@ -464,6 +465,22 @@ const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
     fight_parses: "warcraftLogsFightParses",
     ranking_identities: "warcraftLogsRankingIdentities"
   };
+
+/**
+ * Counts and times one upstream Warcraft Logs request against its query kind.
+ * `warcraftLogsMs` times the gateway call, which is many requests; these say
+ * which of them the time went on. The slowest is named by its query kind, a
+ * closed set authored in source, so no request argument reaches the record.
+ */
+function observeRequest(
+  scope: MeasurementScope,
+  event: WarcraftLogsRequestEvent
+): void {
+  const prefix = REQUEST_COUNTER_PREFIX[event.query];
+  scope.increment(`${prefix}Requests`);
+  scope.observe(`${prefix}Ms`, event.durationMs);
+  scope.observeSlowest("warcraftLogsMaxRequest", event.durationMs, event.query);
+}
 
 // The queue's own ceiling. `requestedRetryDelaySeconds` rejects anything above
 // `retryDelayMax` and the job then falls back to `retryDelay: 1` with backoff,
@@ -1703,9 +1720,7 @@ export function createApplicantEvidenceJobHandler(
                 // rankings, rather than a total nobody can act on (#303).
                 onRequest: (event) => {
                   observePhase(event.query);
-                  scope.increment(
-                    `${REQUEST_COUNTER_PREFIX[event.query]}Requests`
-                  );
+                  observeRequest(scope, event);
                   if (event.limited) {
                     scope.increment(
                       `${REQUEST_COUNTER_PREFIX[event.query]}Limited`
@@ -1771,9 +1786,7 @@ export function createApplicantEvidenceJobHandler(
               },
               onRequest: (event) => {
                 observePhase(event.query);
-                scope.increment(
-                  `${REQUEST_COUNTER_PREFIX[event.query]}Requests`
-                );
+                observeRequest(scope, event);
               },
               signal: activeContext.signal
             })
