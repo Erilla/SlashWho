@@ -1,6 +1,9 @@
 import { createBlizzardClient } from "@slashwho/blizzard";
 import { createRaiderIoClient } from "@slashwho/raiderio";
-import type { DossierGatewayOverrides } from "@slashwho/application";
+import {
+  upstreamThrottleRecord,
+  type DossierGatewayOverrides
+} from "@slashwho/application";
 
 import type { WebConfig } from "./config";
 import type { ProviderCredentials } from "./account-credentials";
@@ -15,11 +18,7 @@ import { webLogger } from "./logger";
  */
 function throttleReporter(provider: "blizzard" | "raiderio") {
   return (event: { retryAfterMs: number | undefined }) =>
-    webLogger.info({
-      event: "upstream_throttle",
-      provider,
-      retryAfterMs: event.retryAfterMs ?? null
-    });
+    webLogger.info(upstreamThrottleRecord(provider, event));
 }
 
 export function readCredentialOverrides(

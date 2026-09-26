@@ -1,4 +1,5 @@
 import {
+  attributeThrottlesTo,
   createMeasurementScope,
   type MeasurementScope,
   type PublicReadAuthorizationResult
@@ -144,7 +145,9 @@ export async function withHttpRequest(
   let response: Response;
   let failure: string | undefined;
   try {
-    response = await action(scope, correlationId);
+    response = await attributeThrottlesTo(scope, { correlationId }, () =>
+      action(scope, correlationId)
+    );
   } catch (error) {
     failure = errorName(error);
     response = apiError("search_failed");

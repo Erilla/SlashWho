@@ -12,7 +12,7 @@ The worker emits a `discovery_run` record per attempt, containing the run id, th
 
 A `correlationId` links an `http_request` record to the `discovery_run` and `evidence_job` records it triggered, when one was emitted for that request.
 
-Because the API clients (Raider.IO, Blizzard, Warcraft Logs) are constructed once per process, a throttle response cannot be attributed back to the request that triggered it. Throttling is therefore reported by its own `upstream_throttle` record instead: `provider` (a fixed literal from a closed set) and the upstream's own `retryAfterMs`.
+The API clients (Raider.IO, Blizzard, Warcraft Logs) are constructed once per process and never receive a scope, so a throttle is attributed through async context instead: every `http_request`, `discovery_run` and `evidence_job` runs as an attributed unit of work, and a throttle it encounters is counted on its own record as `<provider>Throttles` together with the largest `<provider>RetryAfterMaxMs` (`raiderIo`, `blizzard`, `warcraftLogs`). Each throttle also still emits its own `upstream_throttle` record: `provider` (a fixed literal from a closed set), the upstream's own `retryAfterMs`, and the enclosing unit's `runId` (worker) or `correlationId` (web). A throttle outside any unit of work carries neither id, and is otherwise visible nowhere.
 
 These records carry the canonical public character key. They never carry an owner identifier, a profile guess, an upstream payload, a URL, a request body, or an IP address.
 

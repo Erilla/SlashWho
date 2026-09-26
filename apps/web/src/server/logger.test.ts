@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { throttleFields } from "@slashwho/application";
 import { expect, it } from "vitest";
 
 import { allowedFields, createWebLogger } from "./logger";
@@ -50,6 +51,12 @@ const expectedPerformanceFields = [
   "runJoined",
   "provider",
   "retryAfterMs",
+  "raiderIoThrottles",
+  "raiderIoRetryAfterMaxMs",
+  "blizzardThrottles",
+  "blizzardRetryAfterMaxMs",
+  "warcraftLogsThrottles",
+  "warcraftLogsRetryAfterMaxMs",
   "cacheHits",
   "cacheMisses",
   "cacheShared",
@@ -234,4 +241,14 @@ it("allowlists every measurement field a web request can emit", () => {
   expect(emitted).toContain("dbMs");
   expect(emitted).toContain("limiterWaitMs");
   expect([...emitted].filter((field) => !allowedFields.has(field))).toEqual([]);
+});
+
+it("allowlists every throttle field a web request can be charged", () => {
+  // Break caught: the throttle counts are built from template literals, which
+  // the source scan above cannot see, so a missing allowlist entry would drop
+  // them from `http_request` records without any error (#508).
+  expect(throttleFields.length).toBeGreaterThan(0);
+  expect(throttleFields.filter((field) => !allowedFields.has(field))).toEqual(
+    []
+  );
 });

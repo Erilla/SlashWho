@@ -22,6 +22,7 @@ import {
   type ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";
 import { encryptCredential, parseEncryptionKey } from "./credential-encryption";
+import { upstreamThrottleRecord } from "./throttle-attribution";
 
 const encryptionKey = parseEncryptionKey("a".repeat(64));
 const key = { region: "eu" as const, realm: "silvermoon", name: "rinn" };
@@ -2619,6 +2620,41 @@ describe("applicant evidence job handler", () => {
         warcraftLogsCalls: 1
       });
       expect(records[0]!.queueWaitMs).toBeGreaterThanOrEqual(1_900);
+    });
+
+    it("counts a Warcraft Logs throttle on the run that hit it", async () => {
+      // Break caught: the client's onThrottle hook runs with no scope in hand,
+      // so without the run's attribution a throttle reaches only the
+      // standalone line and never this record (#508).
+      const records: Array<Record<string, unknown>> = [];
+      const options = baseOptions();
+      const collect = options.warcraftLogs.getFirstKillReports;
+      let throttleLine: Record<string, unknown> | undefined;
+      const handler = createApplicantEvidenceJobHandler({
+        ...options,
+        warcraftLogs: {
+          ...options.warcraftLogs,
+          getFirstKillReports: async () => {
+            throttleLine = upstreamThrottleRecord("warcraftlogs", {
+              retryAfterMs: 30_000
+            });
+            return collect();
+          }
+        },
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute(
+        { runId: "run-1" },
+        { attempt: 1, maxAttempts: 3, signal: new AbortController().signal }
+      );
+
+      expect(records[0]).toMatchObject({
+        event: "evidence_job",
+        warcraftLogsThrottles: 1,
+        warcraftLogsRetryAfterMaxMs: 30_000
+      });
+      expect(throttleLine).toMatchObject({ runId: "run-1" });
     });
 
     it("records the requests the collection issued, by query type", async () => {

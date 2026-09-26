@@ -8,6 +8,7 @@ import {
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
   decryptCredential,
+  upstreamThrottleRecord,
   type DiscoveryJobHandler,
   type DiscoveryJobHandlerOptions,
   type DiscoveryLogger,
@@ -219,11 +220,7 @@ export function createFingerprintIntegration(
       clientSecret: config.blizzardClientSecret,
       baseUrl: config.blizzardBaseUrl,
       onThrottle: (event) =>
-        logger?.info({
-          event: "upstream_throttle",
-          provider: "blizzard",
-          retryAfterMs: event.retryAfterMs ?? null
-        })
+        logger?.info(upstreamThrottleRecord("blizzard", event))
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,
@@ -485,11 +482,7 @@ export function createRaiderIoGateway(
     timeoutMs: config.raiderIoTimeoutMs,
     accessKey: config.raiderIoAccessKey,
     onThrottle: (event) =>
-      logger?.info({
-        event: "upstream_throttle",
-        provider: "raiderio",
-        retryAfterMs: event.retryAfterMs ?? null
-      })
+      logger?.info(upstreamThrottleRecord("raiderio", event))
   });
 }
 
@@ -546,11 +539,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
       clientId: config.warcraftLogsClientId,
       clientSecret: config.warcraftLogsClientSecret,
       onThrottle: (event) =>
-        logger?.info({
-          event: "upstream_throttle",
-          provider: "warcraftlogs",
-          retryAfterMs: event.retryAfterMs ?? null
-        })
+        logger?.info(upstreamThrottleRecord("warcraftlogs", event))
     }),
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
@@ -703,11 +692,7 @@ export async function createWorkerRuntime(
           clientId: credentials.clientId,
           clientSecret: credentials.clientSecret,
           onThrottle: (event) =>
-            logger?.info({
-              event: "upstream_throttle",
-              provider: "warcraftlogs",
-              retryAfterMs: event.retryAfterMs ?? null
-            })
+            logger?.info(upstreamThrottleRecord("warcraftlogs", event))
         }),
       decryptionKey: config.evidenceJobCredentialEncryptionKey,
       requestCap: config.evidenceRequestCap,

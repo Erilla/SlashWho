@@ -79,6 +79,12 @@ export type {
 } from "./applicant-dossier-service";
 export { createMeasurementScope } from "./measurement";
 export type { MeasurementScope } from "./measurement";
+export {
+  attributeThrottlesTo,
+  throttleFields,
+  upstreamThrottleRecord
+} from "./throttle-attribution";
+export type { ThrottledProvider, ThrottleUnit } from "./throttle-attribution";
 export { measuredRepositories } from "./measured-repositories";
 export { queueWaitMs } from "./queue-wait";
 export { createRateLimiter } from "./rate-limit";

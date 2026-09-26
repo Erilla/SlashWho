@@ -44,6 +44,14 @@ const allowlist = new Set([
   // upstream's own Retry-After -- never user data.
   "provider",
   "retryAfterMs",
+  // Throttles counted on the request that hit them: counts and the largest
+  // Retry-After per provider. Pinned to `throttleFields` by the logger test.
+  "raiderIoThrottles",
+  "raiderIoRetryAfterMaxMs",
+  "blizzardThrottles",
+  "blizzardRetryAfterMaxMs",
+  "warcraftLogsThrottles",
+  "warcraftLogsRetryAfterMaxMs",
   "cacheHits",
   "cacheMisses",
   "cacheShared",
