@@ -3,6 +3,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applicantDossierSchema } from "@slashwho/contracts";
 
@@ -25,6 +27,16 @@ describe("demo page", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("keeps the captured dossier within its size budget", () => {
+    // Break caught: the capture was committed pretty-printed with every wiped
+    // pull unfolded, 9 MB that `/demo` serialised into every page load.
+    const bytes = statSync(
+      resolve(import.meta.dirname, "ryii-dossier.json")
+    ).size;
+
+    expect(bytes).toBeLessThan(2_000_000);
+  });
+
   it("redacts email-form identities from the frozen capture", () => {
     // Break caught: a public report's uploader field can contain a personal
     // email address, which must not become part of the committed demo data.
@@ -38,7 +50,7 @@ describe("demo page", () => {
 
     render(DemoPage());
 
-    // The captured fixture is a full real dossier (~150k lines of JSON),
+    // The captured fixture is a full real dossier (some 1.7 MB of JSON),
     // so mounting it is CPU-bound work that can run well past the default
     // timeouts on a loaded CI runner, even though nothing here is async.
     expect(
