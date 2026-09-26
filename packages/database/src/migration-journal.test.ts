@@ -31,6 +31,13 @@ describe("migration journal", () => {
     expect(new Set(numbers).size).toBe(numbers.length);
   });
 
+  it("holds no drizzle-kit snapshots", () => {
+    // Break caught: drizzle-kit generate diffs schema.ts against the newest
+    // snapshot, which does not describe the migrated database. Migrations are
+    // hand-written; a snapshot here means someone reintroduced generate.
+    expect(readdirSync(new URL("meta/", folder))).toEqual(["_journal.json"]);
+  });
+
   it("dates every entry strictly after the one before it", () => {
     for (let position = 1; position < journal.entries.length; position += 1) {
       expect(journal.entries[position]!.when).toBeGreaterThan(

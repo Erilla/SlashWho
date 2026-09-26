@@ -23,6 +23,20 @@ Branches should be short-lived and contain one coherent change. There is no `dev
 
 Use conventional commit prefixes such as `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, and `chore:`. Add a scope when it makes the affected area clearer, for example `feat(api): add character lookup`.
 
+## Database migrations
+
+Migrations in `packages/database/drizzle/` are written by hand. `drizzle-kit generate` is not used: `schema.ts` describes the tables the application queries, not the whole migrated database, which also holds trigger functions, applicant-watcher tables and foreign keys named differently from drizzle-kit's defaults. There is no drizzle-kit config and no snapshot under `drizzle/meta/`; the journal is the only file there.
+
+To add a migration:
+
+1. Write `drizzle/NNNN_<slug>.sql`, numbered one past the newest file. Separate statements with `--> statement-breakpoint`.
+2. Append an entry to `drizzle/meta/_journal.json` with the next `idx`, the same `tag` as the file name without `.sql`, `"version": "7"` and `"breakpoints": true`.
+3. Set `when` to `max(now, previous + 1)`: the current time in epoch milliseconds, or one more than the previous entry's `when` if that is later.
+
+The rule for `when` is not cosmetic. The migrator applies an entry only if its `when` is later than the newest `created_at` already recorded in `drizzle.__drizzle_migrations`. An entry dated before its predecessor applies on a fresh database, so every local test passes, and is silently skipped on every database that has already applied the predecessor. Older entries were dated in the future, so for now `previous + 1` is usually the larger value.
+
+`packages/database/src/migration-journal.test.ts` fails the build if `when` does not strictly increase, if a journal entry and a `.sql` file do not match one to one, or if a snapshot reappears.
+
 ## Production promotion
 
 Production is promoted only by fast-forwarding `prod` to a commit already validated on `main`:

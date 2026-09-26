@@ -3054,7 +3054,7 @@ export function createWarcraftLogsClient(
       type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
       search: for (const [guildKey, guild] of guilds) {
         const pages = new Map<number, Page | null>();
-        const walkKey = `${guildKey} ${earliestStart} ${latestStart}`;
+        const walkKey = `${guildKey}\u0000${earliestStart}\u0000${latestStart}`;
         const kept = sharedAttendanceWalks.get(walkKey);
         const replay =
           kept && monotonic() - kept.at < SHARED_ATTENDANCE_WALK_TTL_MS
@@ -3427,7 +3427,7 @@ export function createWarcraftLogsClient(
       { killedAt: string; fightUrl: string }
     >();
     for (const kill of kills.values()) {
-      const bossKey = `${kill.raidId} ${kill.bossId} ${kill.difficulty}`;
+      const bossKey = `${kill.raidId}\u0000${kill.bossId}\u0000${kill.difficulty}`;
       const seen = earliestByBoss.get(bossKey);
       if (!seen || kill.killedAt < seen.killedAt) {
         earliestByBoss.set(bossKey, {
