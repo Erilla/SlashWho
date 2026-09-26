@@ -993,6 +993,14 @@ export interface EvidenceRepository {
   ): Promise<StoredEvidenceTiers>;
   terminalTiers(key: CharacterKey): Promise<readonly TerminalTier[]>;
   /**
+   * When the newest published run whose Raider.IO lookup answered with
+   * evidence completed, or null if none has within the run-cost retention.
+   * Only such a run can recover a kill the character's own report history
+   * omits, through guild attendance, so this is how long that recovery has
+   * gone unasked.
+   */
+  lastRaiderIoRecoveryAt(key: CharacterKey): Promise<Date | null>;
+  /**
    * Records tiers as terminal, stamping each with its domain's current
    * collection version. Idempotent: a run that re-reads an already-settled
    * tier refreshes the mark rather than failing on the primary key.

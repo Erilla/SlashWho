@@ -591,6 +591,9 @@ function createMemoryRepositories(): Repositories {
       async storedEvidenceTiers() {
         return { kills: [], wipes: [] };
       },
+      async lastRaiderIoRecoveryAt() {
+        return null;
+      },
       async terminalTiers() {
         return [];
       },

@@ -179,6 +179,7 @@ function fixture(
       terminalTiers: vi.fn().mockResolvedValue([]),
       hydratedFightUrls: vi.fn().mockResolvedValue([]),
       collectedTierZones: vi.fn().mockResolvedValue([]),
+      lastRaiderIoRecoveryAt: vi.fn().mockResolvedValue(null),
       addHistoricAlias: vi.fn().mockResolvedValue("added"),
       removeHistoricAlias: vi.fn().mockResolvedValue("removed"),
       latestTierSearches: vi.fn().mockResolvedValue(options.tierSearches ?? []),
@@ -458,15 +459,32 @@ describe("a stale dossier read (#540)", () => {
       { raidId: "42", domain: "parses" },
       { raidId: "42", domain: "tier_bests" }
     ]);
-    evidence.storedEvidenceTiers!.mockResolvedValue({
-      kills: [],
-      wipes: [],
-      lastCleanKillScanAt
-    });
+    evidence.storedEvidenceTiers!.mockResolvedValue(
+      storedTiers({ lastCleanKillScanAt })
+    );
     evidence.hydratedFightUrls!.mockResolvedValue([settledFight]);
     evidence.collectedTierZones!.mockResolvedValue([
       ["42", "2024-11-01T00:00:00.000Z"]
     ]);
+    evidence.lastRaiderIoRecoveryAt!.mockResolvedValue(
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    );
+  }
+
+  /** The fixture's stored kill, as the scan floor sees it. */
+  function storedTiers(overrides: Record<string, unknown> = {}) {
+    return {
+      kills: [
+        {
+          raidId: "42",
+          raidName: "Nerub-ar Palace",
+          killedAt: "2024-10-01T20:00:00.000Z"
+        }
+      ],
+      wipes: [],
+      lastCleanKillScanAt: new Date(Date.now() - 60_000).toISOString(),
+      ...overrides
+    };
   }
 
   function queuedMode(enqueueCharacterEvidence: ReturnType<typeof vi.fn>) {
@@ -546,6 +564,87 @@ describe("a stale dossier read (#540)", () => {
 
     expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
   });
+
+  it.each([
+    ["a history scan still resuming", { historyScanResumePage: 3 }],
+    [
+      "a former name's history scan still resuming",
+      {
+        historicAliasProgress: [
+          {
+            key: { region: "eu", realm: "silvermoon", name: "ryiiold" },
+            historyScanResumePage: 2
+          }
+        ]
+      }
+    ],
+    // How a pending alias re-collection presents once `reserve` cleared it.
+    ["no clean history scan", { lastCleanKillScanAt: undefined }],
+    [
+      "a wipe in a raid that is not terminal for kills",
+      {
+        // A wipe-only night a tier search found (#435): a light run does not
+        // re-read it, so its first complete publish would drop it.
+        wipes: [
+          {
+            raidId: "44",
+            raidName: "Manaforge Omega",
+            attemptedAt: "2025-09-01T20:00:00.000Z"
+          }
+        ]
+      }
+    ]
+  ])("still queues a full run with %s", async (_label, overrides) => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+    vi.mocked(repositories.evidence.storedEvidenceTiers).mockResolvedValue(
+      storedTiers(overrides) as never
+    );
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it("still queues a full run when a tier's bests predate its newest kill", async () => {
+    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+    staleReservation(repositories);
+    settle(repositories);
+    vi.mocked(repositories.evidence.collectedTierZones).mockResolvedValue([
+      ["42", "2024-09-01T00:00:00.000Z"]
+    ]);
+
+    await dossiers.read(root);
+
+    expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+  });
+
+  it.each([
+    ["no run has asked Raider.IO", null],
+    [
+      "the last run that asked Raider.IO is over a week old",
+      new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000)
+    ]
+  ])(
+    "still queues a full run when %s",
+    async (_label, recoveredAt: Date | null) => {
+      // Break caught: a light run never asks Raider.IO, so a settled
+      // character's light runs stood in for full ones until the next tier
+      // opened, and a kill found only through guild attendance stayed
+      // missing for months.
+      const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+      staleReservation(repositories);
+      settle(repositories);
+      vi.mocked(repositories.evidence.lastRaiderIoRecoveryAt).mockResolvedValue(
+        recoveredAt
+      );
+
+      await dossiers.read(root);
+
+      expect(queuedMode(enqueueCharacterEvidence)).toBeUndefined();
+    }
+  );
 
   it("leaves a ranked continuation's mode to the continuation", async () => {
     const { dossiers, repositories, enqueueCharacterEvidence } = fixture();

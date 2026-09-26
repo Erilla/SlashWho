@@ -417,6 +417,9 @@ function policyFixture(
       async storedEvidenceTiers() {
         return { kills: [], wipes: [] };
       },
+      async lastRaiderIoRecoveryAt() {
+        return null;
+      },
       async terminalTiers() {
         return [];
       },

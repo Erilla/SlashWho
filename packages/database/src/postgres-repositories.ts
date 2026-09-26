@@ -5931,6 +5931,20 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         };
       },
 
+      async lastRaiderIoRecoveryAt(key) {
+        const result = await pool.query<{ completed_at: Date | null }>(
+          `SELECT max(run.completed_at) AS completed_at
+             FROM character_evidence_run_costs cost
+             JOIN character_evidence_runs run ON run.id = cost.run_id
+            WHERE run.region = $1 AND run.realm_slug = $2
+              AND run.normalized_name = $3
+              AND run.status IN ('complete', 'partial')
+              AND cost.raiderio_historic_outcome = 'evidence'`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rows[0]?.completed_at ?? null;
+      },
+
       async terminalTiers(key) {
         const result = await pool.query<{
           raid_id: string;

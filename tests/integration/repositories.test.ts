@@ -6808,6 +6808,53 @@ describe("PostgreSQL repositories", () => {
       return result.rows as ReadonlyArray<Record<string, unknown>>;
     }
 
+    it("dates the newest published run whose Raider.IO lookup answered", async () => {
+      // A stale dossier read goes light only while attendance recovery has
+      // been asked recently (#540), so a lookup that failed, a run that never
+      // asked, and a run that never published must not count.
+      async function publishedRun(
+        at: string,
+        raiderIoOutcome: string | null
+      ): Promise<void> {
+        const runId = await reserveRun(rootKey, new Date(at));
+        await repositories.evidence.recordRunCost(
+          cost(runId, {
+            recovery: { ...cost(runId).recovery, raiderIoOutcome }
+          })
+        );
+        await repositories.evidence.publish(runId, {
+          state: "complete",
+          limitationCode: null,
+          parseLimitationCode: null,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          completedAt: new Date(at)
+        });
+      }
+
+      await expect(
+        repositories.evidence.lastRaiderIoRecoveryAt(rootKey)
+      ).resolves.toBeNull();
+
+      await publishedRun("2026-09-10T12:00:00.000Z", "evidence");
+      await publishedRun("2026-09-11T12:00:00.000Z", "unavailable");
+      await publishedRun("2026-09-12T12:00:00.000Z", null);
+      // Asked and answered, but never published.
+      const unpublished = await reserveRun(
+        rootKey,
+        new Date("2026-09-13T12:00:00.000Z")
+      );
+      await repositories.evidence.recordRunCost(cost(unpublished));
+
+      await expect(
+        repositories.evidence.lastRaiderIoRecoveryAt(rootKey)
+      ).resolves.toEqual(new Date("2026-09-10T12:00:00.000Z"));
+      await expect(
+        repositories.evidence.lastRaiderIoRecoveryAt(altKey)
+      ).resolves.toBeNull();
+    });
+
     it("records what an attempt spent, with the caps it was given", async () => {
       const runId = await reserveRun(rootKey, new Date());
 

@@ -9,6 +9,16 @@ import {
   type CharacterKey
 } from "@slashwho/domain";
 
+/**
+ * How long a settled character may go without a run that asked Raider.IO.
+ *
+ * A light run never asks it, so it never walks guild attendance, and that walk
+ * is how a kill missing from the character's own report history is found. A
+ * week bounds how long such a kill can go unfound, and matches how long an
+ * empty attendance search is remembered before it is searched again.
+ */
+export const RAIDER_IO_RECOVERY_RECHECK_MS = 7 * 24 * 60 * 60 * 1_000;
+
 export type SettledCollectionEvidence = Pick<
   Repositories["evidence"],
   | "storedEvidenceTiers"
@@ -83,7 +93,17 @@ export async function killTiersAreSettled(options: {
  *   mark for anyone yet, so a character that looked settled before it opened
  *   is not settled about it;
  * - any tier the character holds kills in that is not finished in every
- *   domain.
+ *   domain;
+ * - any stored kill or wipe in a raid that is not terminal for kills. A
+ *   complete publish keeps such a row only if the run finds it again, and a
+ *   full run re-reads those reports by code where a light run does not -- a
+ *   wipe-only night a tier search found outside the character's own history
+ *   (#435) would otherwise be dropped by the first light run to publish
+ *   complete;
+ * - no run that asked Raider.IO and got an answer within
+ *   `RAIDER_IO_RECOVERY_RECHECK_MS`. Without this a settled character's light
+ *   runs would stand in for full ones indefinitely, and attendance recovery
+ *   would stop for it until the next tier opened.
  *
  * Read after the reservation, so it sees whatever the reservation itself
  * cleared. The light run cannot drop what it does not re-read: a page-capped
@@ -95,7 +115,8 @@ export async function staleReadNeedsOnlyNewestPage(options: {
   at: Date;
   completed: CompletedCharacterEvidence | null;
   completedVersionCurrent: boolean;
-  evidence: SettledCollectionEvidence;
+  evidence: SettledCollectionEvidence &
+    Pick<Repositories["evidence"], "lastRaiderIoRecoveryAt">;
 }): Promise<boolean> {
   const completed = options.completed;
   if (
@@ -106,11 +127,23 @@ export async function staleReadNeedsOnlyNewestPage(options: {
   )
     return false;
 
-  const [stored, terminal] = await Promise.all([
+  const [stored, terminal, recoveredAt] = await Promise.all([
     options.evidence.storedEvidenceTiers(options.key),
-    options.evidence.terminalTiers(options.key)
+    options.evidence.terminalTiers(options.key),
+    options.evidence.lastRaiderIoRecoveryAt(options.key)
   ]);
+  const terminalKillRaids = new Set(
+    terminal
+      .filter((tier) => tier.domain === "kills")
+      .map((tier) => tier.raidId)
+  );
   if (
+    recoveredAt === null ||
+    recoveredAt.getTime() <=
+      options.at.getTime() - RAIDER_IO_RECOVERY_RECHECK_MS ||
+    [...stored.kills, ...stored.wipes].some(
+      (held) => !terminalKillRaids.has(held.raidId)
+    ) ||
     stored.lastCleanKillScanAt === undefined ||
     stored.historyScanResumePage !== undefined ||
     (stored.historicAliasProgress ?? []).some(
