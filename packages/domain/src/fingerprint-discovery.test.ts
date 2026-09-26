@@ -525,4 +525,259 @@ describe("discoverFingerprintMatches", () => {
       })
     ).rejects.toBe(aborted.signal.reason);
   });
+  describe("with concurrent candidate reads", () => {
+    function namedKey(name: string): CharacterKey {
+      return { region: "eu", realm: "silvermoon", name };
+    }
+
+    const oldGuild = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "Old Guild"
+    } as const;
+
+    // A deterministic stand-in for a recorded sweep: matches, near misses,
+    // unreadable profiles, suppressed members, a historical guild that repeats
+    // part of the current roster, a cross-region member and the root itself.
+    function sweepFixture() {
+      const names = Array.from(
+        { length: 40 },
+        (_, index) => `member-${String(index).padStart(2, "0")}`
+      );
+      const fingerprints: Record<string, ReadonlyMap<number, number>> = {
+        [keyId(root)]: fingerprint(300)
+      };
+      for (const [index, name] of names.entries()) {
+        if (index % 7 === 3) continue; // no readable profile
+        fingerprints[keyId(namedKey(name))] =
+          index % 3 === 0 ? fingerprint(300) : fingerprint(300, 10);
+      }
+      const roster = [
+        ...names.slice(0, 30).map((name) => candidate(namedKey(name))),
+        candidate({ region: "us", realm: "area-52", name: "member-99" }),
+        candidate(root)
+      ];
+      const historical = names
+        .slice(20)
+        .map((name) => candidate(namedKey(name), oldGuild));
+      return {
+        gateway: gatewayFor(roster, fingerprints, {
+          "eu/silvermoon/Old Guild": historical
+        }),
+        historicalGuilds: [oldGuild],
+        isSuppressed: async (key: CharacterKey) =>
+          key.name.endsWith("5") || key.name.endsWith("8")
+      };
+    }
+
+    // Each read answers after a pseudo-random number of turns, so completion
+    // order differs from dispatch order.
+    function withShuffledLatency(gateway: FingerprintGateway) {
+      let seed = 7;
+      const read = gateway.getAchievementFingerprint.bind(gateway);
+      gateway.getAchievementFingerprint = async (key, signal) => {
+        seed = (seed * 48_271) % 2_147_483_647;
+        const delay = seed % 5;
+        for (let tick = 0; tick < delay; tick += 1) await Promise.resolve();
+        return read(key, signal);
+      };
+      return gateway;
+    }
+
+    async function settle(): Promise<void> {
+      for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+    }
+
+    it("admits exactly the serial sweep's membership, in the same order", async () => {
+      // Break caught: out-of-order completion reordering admission, dropping a
+      // match, or admitting a suppressed candidate.
+      const serialFixture = sweepFixture();
+      const serial = await discoverFingerprintMatches(
+        root,
+        serialFixture.gateway,
+        {
+          ...options,
+          requestCap: 1_000,
+          isSuppressed: serialFixture.isSuppressed,
+          historicalGuilds: serialFixture.historicalGuilds
+        }
+      );
+      expect(serial.kind).toBe("matched");
+      if (serial.kind !== "matched") return;
+      expect(serial.characters.length).toBeGreaterThan(5);
+
+      for (const readConcurrency of [2, 6, 64]) {
+        const fixture = sweepFixture();
+        const concurrent = await discoverFingerprintMatches(
+          root,
+          withShuffledLatency(fixture.gateway),
+          {
+            ...options,
+            requestCap: 1_000,
+            isSuppressed: fixture.isSuppressed,
+            historicalGuilds: fixture.historicalGuilds,
+            readConcurrency
+          }
+        );
+        expect(concurrent).toEqual(serial);
+      }
+    });
+
+    it("keeps reads outstanding up to the configured limit, and never more", async () => {
+      // Break caught: a sweep that stays serial, or one that dispatches the
+      // whole roster at once and overruns the client's slots.
+      const names = Array.from({ length: 20 }, (_, index) => `c-${index}`);
+      const gateway = gatewayFor(
+        names.map((name) => candidate(namedKey(name))),
+        { [keyId(root)]: fingerprint(300) }
+      );
+      let inFlight = 0;
+      let peak = 0;
+      const pending: (() => void)[] = [];
+      gateway.getAchievementFingerprint = (key) => {
+        if (keyId(key) === keyId(root)) {
+          return Promise.resolve(fingerprint(300));
+        }
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        return new Promise((resolve) => {
+          pending.push(() => {
+            inFlight -= 1;
+            resolve(fingerprint(300, 0));
+          });
+        });
+      };
+
+      const sweep = discoverFingerprintMatches(root, gateway, {
+        ...options,
+        requestCap: 1_000,
+        isSuppressed: async () => false,
+        readConcurrency: 4
+      });
+
+      await settle();
+      expect(inFlight).toBe(4);
+      while (pending.length > 0) {
+        // Release in reverse, so later dispatches finish first.
+        for (const release of pending.splice(0).reverse()) release();
+        await settle();
+        expect(inFlight).toBeLessThanOrEqual(4);
+      }
+      await expect(sweep).resolves.toMatchObject({
+        kind: "matched",
+        requestsUsed: 22
+      });
+      expect(peak).toBe(4);
+    });
+
+    it("resumes a budget that ran out mid-window with no candidate skipped or read twice", async () => {
+      // Break caught: a cursor that advances past a read the budget refused,
+      // skipping it forever, or one that trails a completed read, paying for
+      // it twice.
+      const names = Array.from(
+        { length: 12 },
+        (_, index) => `c-${String(index).padStart(2, "0")}`
+      );
+      const fingerprints: Record<string, ReadonlyMap<number, number>> = {
+        [keyId(root)]: fingerprint(300)
+      };
+      for (const name of names) {
+        fingerprints[keyId(namedKey(name))] = fingerprint(300);
+      }
+      const reads: string[] = [];
+      const inner = withShuffledLatency(
+        gatewayFor(
+          names.map((name) => candidate(namedKey(name))),
+          fingerprints
+        )
+      );
+      // Stands in for the fingerprint adapter's cap, which is how production
+      // ends a sweep: 1 roster + 1 root fingerprint + 7 candidates.
+      let budget = 9;
+      const gateway: FingerprintGateway = {
+        getGuildRoster: (key, signal) => {
+          budget -= 1;
+          return inner.getGuildRoster(key, signal);
+        },
+        getGuildRosterByIdentity: (guild, signal) =>
+          inner.getGuildRosterByIdentity(guild, signal),
+        getAchievementFingerprint: (key, signal) => {
+          if (budget === 0) {
+            return Promise.reject({ kind: "fingerprint_cap_reached" });
+          }
+          budget -= 1;
+          if (keyId(key) !== keyId(root)) reads.push(key.name);
+          return inner.getAchievementFingerprint(key, signal);
+        }
+      };
+      const sweepOptions = {
+        ...options,
+        requestCap: Number.MAX_SAFE_INTEGER,
+        isSuppressed: async () => false,
+        readConcurrency: 4
+      };
+
+      const first = await discoverFingerprintMatches(
+        root,
+        gateway,
+        sweepOptions
+      );
+      expect(first).toMatchObject({
+        kind: "capped",
+        requestsUsed: 9,
+        resumeAfter: JSON.stringify(["eu", "silvermoon", "c-06"])
+      });
+      if (first.kind !== "capped") return;
+
+      budget = 1_000;
+      const second = await discoverFingerprintMatches(root, gateway, {
+        ...sweepOptions,
+        resumeAfter: first.resumeAfter!
+      });
+      expect(second.kind).toBe("matched");
+      if (second.kind !== "matched") return;
+
+      expect(reads).toEqual(names);
+      expect(
+        [...first.characters, ...second.characters].map(
+          (match) => match.key.name
+        )
+      ).toEqual(names);
+    });
+
+    it("reports the earliest failing candidate after every read has settled", async () => {
+      // Break caught: returning while reads are still recording requests, or
+      // an outcome that depends on which failing read answered first.
+      const names = ["c-0", "c-1", "c-2", "c-3"];
+      const gateway = gatewayFor(
+        names.map((name) => candidate(namedKey(name))),
+        { [keyId(root)]: fingerprint(300) }
+      );
+      let outstanding = 0;
+      gateway.getAchievementFingerprint = async (key) => {
+        if (keyId(key) === keyId(root)) return fingerprint(300);
+        outstanding += 1;
+        const delay = key.name === "c-1" ? 6 : 1;
+        for (let tick = 0; tick < delay; tick += 1) await Promise.resolve();
+        outstanding -= 1;
+        if (key.name === "c-1") throw { kind: "schema_drift" };
+        if (key.name === "c-2") throw { kind: "transient", status: 503 };
+        return fingerprint(300);
+      };
+
+      const outcome = await discoverFingerprintMatches(root, gateway, {
+        ...options,
+        requestCap: 1_000,
+        isSuppressed: async () => false,
+        readConcurrency: 4
+      });
+
+      expect(outstanding).toBe(0);
+      expect(outcome).toEqual({
+        kind: "failure",
+        code: "upstream_schema_changed",
+        retryable: false
+      });
+    });
+  });
 });
