@@ -388,11 +388,11 @@ A run also asks two other providers, and #298 asks whether retaining their
 answers for concluded tiers is worth doing. That turns on what they cost, so
 since #298 each attempt counts its physical requests to them:
 
-- `raiderio_historic_requests` — Raider.IO `raid-progress`, one per tier
+- `raiderio_historic_requests` â€” Raider.IO `raid-progress`, one per tier
   asked. It runs only when the history scan does in earnest.
-- `raiderio_rankings_requests` — Raider.IO boss rankings for the run's kills.
+- `raiderio_rankings_requests` â€” Raider.IO boss rankings for the run's kills.
   A guild query costs two requests, the world rankings one.
-- `blizzard_achievements_requests` — the Blizzard achievements profile, for
+- `blizzard_achievements_requests` â€” the Blizzard achievements profile, for
   Cutting Edge.
 
 A request counts when it is sent, whether or not it succeeds. OAuth token
@@ -436,7 +436,9 @@ achievements and Raider.IO boss rankings for the dossier too, behind its own
 those. And `BLIZZARD_HOURLY_REQUEST_BUDGET` governs discovery's fingerprint
 sweep only: an evidence run's achievements request is not charged against it.
 Weigh `blizzard_achievements_requests` against that budget by hand, not as if
-the budget already accounted for it.
+the budget already accounted for it. The budget is hourly and the query above
+is per run, so the comparison also needs attempts per hour: bucket `count(*)`
+by `date_trunc('hour', recorded_at)`.
 
 ## Keeping this honest
 
