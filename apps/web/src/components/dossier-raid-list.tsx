@@ -2,9 +2,10 @@ import type {
   ApplicantDossier,
   DossierTierSearchResponse
 } from "@slashwho/contracts";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import { reportKey, sortWipes } from "../lib/dossier-wipes";
 import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
 import { DossierParseList } from "./dossier-parse-list";
@@ -362,23 +363,11 @@ function WipeEvidenceList({
   );
 }
 
-function reportKey(url: string): string {
-  return url.split("#", 1)[0] ?? url;
-}
-
 function killReportKeys(evidence: KillBoss["firstKill"]): Set<string> {
   return new Set(
     [evidence.reportUrl, ...(evidence.reportUrls ?? [])]
       .filter((url): url is string => url !== null)
       .map(reportKey)
-  );
-}
-
-function sortWipes(wipes: readonly WipeEvidence[]): WipeEvidence[] {
-  return [...wipes].sort(
-    (a, b) =>
-      b.attemptedAt.localeCompare(a.attemptedAt) ||
-      b.reportUrl.localeCompare(a.reportUrl)
   );
 }
 
@@ -435,6 +424,34 @@ function groupWipes(wipes: readonly WipeEvidence[]): WipeGroup[] {
       ),
       characters
     }));
+}
+
+/**
+ * A disclosure whose contents are built the first time it opens. A dossier has
+ * a closed evidence panel per boss, and building them all up front put tens of
+ * thousands of unseen nodes in the first render. Once opened the contents stay,
+ * so closing and reopening keeps any state inside them.
+ */
+function LazyDetails({
+  summary,
+  children
+}: {
+  summary: string;
+  children: ReactNode;
+}) {
+  const [opened, setOpened] = useState(false);
+  return (
+    <details
+      onToggle={(event) => {
+        if (event.currentTarget.open) setOpened(true);
+      }}
+    >
+      {/* The click builds the contents before the browser opens the panel,
+          so it never opens empty; toggle covers opening by other means. */}
+      <summary onClick={() => setOpened(true)}>{summary}</summary>
+      {opened ? children : null}
+    </details>
+  );
 }
 
 function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
@@ -497,8 +514,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
         loading={loading}
         parses={boss.bestParses}
       />
-      <details>
-        <summary>View kill evidence</summary>
+      <LazyDetails summary="View kill evidence">
         <section aria-label="Kill evidence" className="dossier-evidence-list">
           {killGroups.map(({ evidence, wipes }, index) => {
             const isChronologicalFirst = index === 0;
@@ -575,7 +591,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
             );
           })}
         </section>
-      </details>
+      </LazyDetails>
     </>
   );
 }
@@ -600,15 +616,14 @@ function BossEvidence({ boss, loading }: { boss: Boss; loading: boolean }) {
               </p>
             </div>
           </div>
-          <details>
-            <summary>View wipe evidence</summary>
+          <LazyDetails summary="View wipe evidence">
             <section
               aria-label="Wipe evidence"
               className="dossier-evidence-list"
             >
               <WipeEvidenceList wipes={sortWipes(boss.wipes ?? [boss.wipe])} />
             </section>
-          </details>
+          </LazyDetails>
         </>
       );
     case "no_logs":

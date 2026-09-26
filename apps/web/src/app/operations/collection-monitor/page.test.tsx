@@ -69,6 +69,7 @@ const monitor: CollectionMonitorResponse = {
       evidenceVersion: 13
     }
   ],
+  hasMoreCompleted: false,
   failed: [
     {
       character: { region: "eu", realm: "draenor", name: "broken" },
