@@ -824,13 +824,15 @@ export function createApplicantEvidenceJobHandler(
    * decrypted values are used to build the gateway and never leave this
    * function: nothing derived from them reaches the record.
    *
-   * Also says whose allowance the run spends. The scan share differs by this
-   * and not by how big the allowance turns out to be.
+   * Also records on `state` whose allowance the run spends, before anything
+   * is decrypted, so an attempt whose credentials fail to decrypt is still
+   * costed as a visitor's. The scan share differs by this and not by how big
+   * the allowance turns out to be.
    */
-  async function gatewayFor(run: ApplicantEvidenceRun): Promise<{
-    gateway: ApplicantEvidenceJobHandlerOptions["warcraftLogs"];
-    credentials: "own" | "visitor";
-  }> {
+  async function gatewayFor(
+    state: AttemptState,
+    run: ApplicantEvidenceRun
+  ): Promise<ApplicantEvidenceJobHandlerOptions["warcraftLogs"]> {
     const create = options.createWarcraftLogsGateway;
     const accountCredential =
       run.accountCredentialOwnerId &&
@@ -847,12 +849,8 @@ export function createApplicantEvidenceJobHandler(
         ? accountCredential.values
         : null;
     if (currentAccountCredential) {
-      return {
-        gateway: create
-          ? create(currentAccountCredential)
-          : options.warcraftLogs,
-        credentials: "visitor"
-      };
+      state.credentials = "visitor";
+      return create ? create(currentAccountCredential) : options.warcraftLogs;
     }
     if (
       run.wclClientIdEncrypted &&
@@ -860,21 +858,19 @@ export function createApplicantEvidenceJobHandler(
       create &&
       options.decryptionKey
     ) {
-      return {
-        gateway: create({
-          clientId: decryptCredential(
-            run.wclClientIdEncrypted,
-            options.decryptionKey
-          ),
-          clientSecret: decryptCredential(
-            run.wclClientSecretEncrypted,
-            options.decryptionKey
-          )
-        }),
-        credentials: "visitor"
-      };
+      state.credentials = "visitor";
+      return create({
+        clientId: decryptCredential(
+          run.wclClientIdEncrypted,
+          options.decryptionKey
+        ),
+        clientSecret: decryptCredential(
+          run.wclClientSecretEncrypted,
+          options.decryptionKey
+        )
+      });
     }
-    return { gateway: options.warcraftLogs, credentials: "own" };
+    return options.warcraftLogs;
   }
 
   /**
@@ -1298,8 +1294,7 @@ export function createApplicantEvidenceJobHandler(
 
         if (await republishStaged(state, run)) return;
 
-        const { gateway, credentials } = await gatewayFor(run);
-        state.credentials = credentials;
+        const gateway = await gatewayFor(state, run);
         const openingBudget = await admitOrRefuse(state, run, gateway);
 
         // Storage happens in two steps on purpose: the stage records that the

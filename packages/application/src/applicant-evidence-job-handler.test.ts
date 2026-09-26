@@ -3126,6 +3126,49 @@ describe("applicant evidence job handler", () => {
         expect(serialized).not.toContain("user-secret");
       });
 
+      it("names the allowance as a visitor's when their credentials fail to decrypt", async () => {
+        // Break caught: deciding whose allowance a run spends in the same
+        // step that decrypts it recorded a decryption failure as the
+        // worker's own spend.
+        const { costs, store: evidence } = recordingStore({
+          claim: async (id) => ({
+            ...run,
+            id,
+            wclClientIdEncrypted: encryptCredential("user-id", encryptionKey),
+            wclClientSecretEncrypted: encryptCredential(
+              "user-secret",
+              encryptionKey
+            )
+          })
+        });
+        const handler = handlerFor({
+          ...baseOptions(),
+          evidence,
+          createWarcraftLogsGateway: () => ({
+            ...openGate,
+            getFirstKillReports: async () => ({
+              kind: "evidence" as const,
+              troubledRaidIds: { parses: [], tierBests: [] },
+              parsedFightUrls: [],
+              tierBests: [],
+              kills: [],
+              wipes: []
+            })
+          }),
+          // Not the key the credentials were sealed with, as after a rotation.
+          decryptionKey: parseEncryptionKey("b".repeat(64))
+        });
+
+        await handler.execute("run-cost-5");
+
+        expect(costs).toEqual([
+          expect.objectContaining({
+            outcome: "unexpected_error",
+            credentials: "visitor"
+          })
+        ]);
+      });
+
       it("writes nothing for a run this attempt never claimed", async () => {
         const { costs, store: evidence } = recordingStore({
           claim: async () => null
