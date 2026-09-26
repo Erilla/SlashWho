@@ -178,6 +178,7 @@ describe("POST /api/dossiers", () => {
     expect(response.headers.get("location")).toBe(
       `/api/dossiers/jobs/${jobId}`
     );
+    expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toMatchObject({
       kind: "job",
       jobId
@@ -213,6 +214,7 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     expect(response.headers.get("location")).toBe(
       "/api/dossiers/eu/silvermoon/ryii?scope=initial"
     );
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(readInitialCalls).toBe(0);
     expect(readCalls).toBe(0);
   });

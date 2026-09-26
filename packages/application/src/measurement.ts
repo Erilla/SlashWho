@@ -54,12 +54,43 @@ export type MeasurementScope = {
   totals(): Readonly<Record<string, number | boolean | string>>;
 };
 
+export type MeasurementScopeOptions = {
+  /**
+   * How time is charged when timed calls overlap. `summed`, the default, adds
+   * every call's own elapsed time to its bucket, so overlapping calls count
+   * the same wall time more than once. `shared` splits each instant evenly
+   * between the calls in progress at that instant, so the buckets together
+   * never exceed the wall time the scope spanned; each call's own elapsed time
+   * is then also summed as `${prefix}CallMs`, which keeps the mean per-call
+   * duration readable. A scope that is only ever timed serially reads the
+   * same either way.
+   */
+  overlapping?: "summed" | "shared";
+};
+
+type Frame = { charged: number };
+
 export function createMeasurementScope(
-  monotonic: () => number = () => performance.now()
+  monotonic: () => number = () => performance.now(),
+  options: MeasurementScopeOptions = {}
 ): MeasurementScope {
   const values = new Map<string, number>();
   const names = new Map<string, string>();
   const flags = new Set<string>();
+  const shared = options.overlapping === "shared";
+  // Shared mode only: the frames charging at this instant, and when the
+  // elapsed time was last handed out between them.
+  const charging = new Set<Frame>();
+  const sharedTotals = new Map<string, number>();
+  let chargedUntil = 0;
+
+  const advance = (now: number) => {
+    if (charging.size > 0) {
+      const share = Math.max(0, now - chargedUntil) / charging.size;
+      for (const frame of charging) frame.charged += share;
+    }
+    chargedUntil = now;
+  };
 
   const add = (field: string, value: number) => {
     values.set(field, (values.get(field) ?? 0) + value);
@@ -79,13 +110,27 @@ export function createMeasurementScope(
   return {
     async time(prefix, work, label) {
       const startedAt = monotonic();
+      const frame: Frame = { charged: 0 };
+      if (shared) {
+        advance(startedAt);
+        charging.add(frame);
+      }
       let excludedMs = 0;
       const excluded: ExcludeFromBucket = async (inner) => {
         const innerStartedAt = monotonic();
+        if (shared) {
+          advance(innerStartedAt);
+          charging.delete(frame);
+        }
         try {
           return await inner();
         } finally {
-          excludedMs += Math.max(0, monotonic() - innerStartedAt);
+          const innerEndedAt = monotonic();
+          excludedMs += Math.max(0, innerEndedAt - innerStartedAt);
+          if (shared) {
+            advance(innerEndedAt);
+            charging.add(frame);
+          }
         }
       };
       try {
@@ -93,11 +138,22 @@ export function createMeasurementScope(
       } finally {
         // finally, not a catch: a timed-out or failed upstream call is the
         // expensive case and must still contribute its duration.
+        const endedAt = monotonic();
         const elapsed = Math.max(
           0,
-          Math.round(monotonic() - startedAt - excludedMs)
+          Math.round(endedAt - startedAt - excludedMs)
         );
-        add(`${prefix}Ms`, elapsed);
+        if (shared) {
+          advance(endedAt);
+          charging.delete(frame);
+          sharedTotals.set(
+            prefix,
+            (sharedTotals.get(prefix) ?? 0) + frame.charged
+          );
+          add(`${prefix}CallMs`, elapsed);
+        } else {
+          add(`${prefix}Ms`, elapsed);
+        }
         add(`${prefix}Calls`, 1);
         slowest(`${prefix}MaxCall`, elapsed, label);
       }
@@ -129,6 +185,14 @@ export function createMeasurementScope(
     totals() {
       return {
         ...Object.fromEntries(values),
+        // Rounded down, so the shared buckets together stay within the wall
+        // time they were split from.
+        ...Object.fromEntries(
+          [...sharedTotals].map(([prefix, charged]) => [
+            `${prefix}Ms`,
+            Math.floor(charged)
+          ])
+        ),
         ...Object.fromEntries(names),
         ...Object.fromEntries([...flags].map((field) => [field, true]))
       };

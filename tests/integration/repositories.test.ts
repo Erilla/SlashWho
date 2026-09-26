@@ -8915,6 +8915,113 @@ describe("PostgreSQL repositories", () => {
     ).resolves.toBeNull();
   });
 
+  it("does not deadlock an amend against a create that shares its characters", async () => {
+    // Break caught (#567): the amend upserted `characters` in input order while
+    // a create sorts them by canonical key. Neither takes the other's root
+    // lock, so the two could lock the same rows in opposite orders and
+    // PostgreSQL aborted one with a deadlock.
+    const key = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "lockorderroot"
+    } as const;
+    const alpha = {
+      region: "eu",
+      realm: "draenor",
+      name: "aaalockorder"
+    } as const;
+    const zulu = {
+      region: "eu",
+      realm: "draenor",
+      name: "zzzlockorder"
+    } as const;
+    const run = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    const first = await admitSweep(repositories, run.id, key);
+    const published =
+      await repositories.snapshots.createAndFinishFingerprintSweep(
+        {
+          runId: run.id,
+          rootKey: key,
+          state: "partial",
+          limitationCode: "fingerprint_sweep_capped",
+          refreshedAt: new Date(),
+          characters: [observation(key, "input")]
+        },
+        first,
+        {
+          resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
+          limitationCode: null,
+          advanced: true
+        }
+      );
+    const second = await admitSweep(repositories, run.id, key);
+    const other = await repositories.runs.createOrReuse(alpha, "anonymous");
+
+    await pool.query(`
+      CREATE FUNCTION test_pause_character_write() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_sleep(0.2);
+        RETURN NEW;
+      END
+      $$;
+      CREATE TRIGGER test_pause_character_write
+      AFTER INSERT OR UPDATE ON characters
+      FOR EACH ROW EXECUTE FUNCTION test_pause_character_write();
+    `);
+
+    let results: [
+      PromiseSettledResult<StoredSnapshot | null>,
+      PromiseSettledResult<StoredSnapshot>
+    ];
+    try {
+      results = await Promise.allSettled([
+        repositories.snapshots.amendAndFinishFingerprintSweep(
+          published.id,
+          [
+            observation(zulu, "Zulu", "fingerprint"),
+            observation(alpha, "Alpha", "fingerprint")
+          ],
+          { ...second, runId: run.id, limitationCode: null },
+          { resumeAfter: null, limitationCode: null, advanced: true }
+        ),
+        repositories.snapshots.create({
+          runId: other.id,
+          rootKey: alpha,
+          state: "complete",
+          limitationCode: null,
+          refreshedAt: new Date(),
+          characters: [
+            observation(alpha, "Alpha"),
+            observation(zulu, "Zulu", "claimed")
+          ]
+        })
+      ]);
+    } finally {
+      await pool.query("DROP TRIGGER test_pause_character_write ON characters");
+      await pool.query("DROP FUNCTION test_pause_character_write() CASCADE");
+    }
+
+    const [amended, created] = results;
+    expect(amended.status).toBe("fulfilled");
+    expect(created.status).toBe("fulfilled");
+    // Lock order is canonical; display order is still the order found.
+    if (amended.status === "fulfilled") {
+      expect(amended.value!.characters.map(({ key }) => key)).toEqual([
+        key,
+        zulu,
+        alpha
+      ]);
+    }
+    if (created.status === "fulfilled") {
+      expect(created.value.characters.map(({ key }) => key)).toEqual([
+        alpha,
+        zulu
+      ]);
+    }
+  });
+
   it("ignores a character the snapshot already carries", async () => {
     const key = {
       region: "eu",
