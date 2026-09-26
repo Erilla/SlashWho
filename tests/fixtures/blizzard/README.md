@@ -10,7 +10,10 @@ a field; the variants only remove one, empty one, or change a value. Values
 (names, ids, timestamps) are illustrative.
 
 `packages/blizzard/src/fixtures.test.ts` fails if a fixture file has no row in
-the table below, or a row names a file that does not exist.
+the table below, or a row names a file that does not exist. Each is also
+registered in `scripts/recorded-payloads.test.mts` (see
+[`tests/fixtures/recorded/`](../recorded/README.md)), as synthetic until a
+Blizzard recording exists to check its shape against.
 
 ## Sources
 

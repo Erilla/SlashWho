@@ -380,6 +380,27 @@ type Registration =
 const notYetRecorded =
   "discord_profile: null is accepted by the parser but not yet recorded";
 
+// No Blizzard recording exists yet, so no Blizzard fixture can be checked as
+// upstream-shaped; each names where its shape comes from instead. The sources
+// are listed in tests/fixtures/blizzard/README.md.
+const blizzardShapedFrom = (source: string): Registration => ({
+  conformance: "synthetic",
+  reason: `no Blizzard recording yet; fields limited to those ${source} showed`
+});
+const blizzardStatusOnly = (status: string): Registration => ({
+  conformance: "synthetic",
+  reason: `a Blizzard ${status} has not been recorded; status only, no body`
+});
+const blizzardOffShape: Registration = {
+  conformance: "synthetic",
+  reason: "deliberately off-shape: schema drift"
+};
+const blizzardToken: Registration = {
+  conformance: "synthetic",
+  reason:
+    "the token endpoint is deliberately not recordable: its body is a credential"
+};
+
 const handBuiltFixtures: Readonly<Record<string, Registration>> = {
   "raiderio/character-declared-main-out-of-scope.json": {
     conformance: "upstream",
@@ -488,10 +509,48 @@ const handBuiltFixtures: Readonly<Record<string, Registration>> = {
   "raiderio/server-error.json": {
     conformance: "synthetic",
     reason: "a 5xx has not been recorded; body is a placeholder marker"
-  }
+  },
+  "blizzard/achievements-completed.json": blizzardShapedFrom(
+    "the 2026-09-12 research note"
+  ),
+  "blizzard/achievements-empty.json": blizzardShapedFrom("#23"),
+  "blizzard/achievements-forbidden.json": blizzardStatusOnly("403"),
+  "blizzard/achievements-malformed-timestamp.json": blizzardOffShape,
+  "blizzard/achievements-missing.json": blizzardStatusOnly("404"),
+  "blizzard/achievements-non-numeric-pairs.json": blizzardOffShape,
+  "blizzard/achievements-rate-limited.json": blizzardStatusOnly("429"),
+  "blizzard/achievements-rate-limited-no-retry-after.json":
+    blizzardStatusOnly("429"),
+  "blizzard/achievements-with-unfinished.json": blizzardShapedFrom(
+    "the 2026-09-12 research note"
+  ),
+  "blizzard/achievements-without-achievements.json": blizzardOffShape,
+  "blizzard/guild-roster.json": blizzardShapedFrom("#23 and #38"),
+  "blizzard/guild-roster-forbidden.json": blizzardStatusOnly("403"),
+  "blizzard/guild-roster-member-empty-name.json":
+    blizzardShapedFrom("#23 and #38"),
+  "blizzard/guild-roster-member-empty-realm-slug.json":
+    blizzardShapedFrom("#23 and #38"),
+  "blizzard/guild-roster-member-without-playable-class.json":
+    blizzardShapedFrom("#23 and #38"),
+  "blizzard/guild-roster-missing.json": blizzardStatusOnly("404"),
+  "blizzard/guild-roster-without-members.json": blizzardOffShape,
+  "blizzard/playable-class-index.json": blizzardShapedFrom("#38"),
+  "blizzard/playable-class-index-empty-name.json": blizzardShapedFrom("#38"),
+  "blizzard/playable-class-index-forbidden.json": blizzardStatusOnly("403"),
+  "blizzard/playable-class-index-renamed.json": blizzardShapedFrom("#38"),
+  "blizzard/profile-forbidden.json": blizzardStatusOnly("403"),
+  "blizzard/profile-guild.json": blizzardShapedFrom("#23"),
+  "blizzard/profile-guild-empty-name.json": blizzardOffShape,
+  "blizzard/profile-guild-empty-realm-slug.json": blizzardOffShape,
+  "blizzard/profile-guild-other-realm.json": blizzardShapedFrom("#23"),
+  "blizzard/profile-missing.json": blizzardStatusOnly("404"),
+  "blizzard/profile-without-guild.json": blizzardShapedFrom("#23"),
+  "blizzard/token-empty-access-token.json": blizzardToken,
+  "blizzard/token-forbidden.json": blizzardToken,
+  "blizzard/token-valid.json": blizzardToken
 };
 
-// Blizzard joins this list once its fixtures move to files (#597).
 const handBuiltDirectories = ["raiderio", "blizzard"];
 
 describe("hand-built fixtures", () => {
