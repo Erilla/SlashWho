@@ -204,6 +204,9 @@ describe("CollectionMonitorClient", () => {
     expect(rows[0]).toHaveTextContent("running");
     expect(rows[0]).toHaveTextContent("20 Sept 2026, 12:02:00");
     expect(rows[1]).toHaveTextContent("upstream_unavailable");
+    expect(
+      within(table).getByRole("link", { name: /newest — draenor/i })
+    ).toHaveAttribute("href", "/dossiers/eu/draenor/newest");
   });
 
   it("says when no discovery runs have been requested", () => {
@@ -214,6 +217,17 @@ describe("CollectionMonitorClient", () => {
         "No discovery runs have been requested."
       )
     ).toBeVisible();
+  });
+
+  it("links each run's character to its dossier", () => {
+    render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
+
+    expect(
+      screen.getByRole("link", { name: /ryii — silvermoon/i })
+    ).toHaveAttribute("href", "/dossiers/eu/silvermoon/ryii");
+    expect(
+      screen.getByRole("link", { name: /unrelated — area-52/i })
+    ).toHaveAttribute("href", "/dossiers/us/area-52/unrelated");
   });
 
   it("moves the matching in-flight run into completed after a complete publication", async () => {
