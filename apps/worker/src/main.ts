@@ -7,6 +7,7 @@ import {
   type HealthServerOptions
 } from "./health-server";
 import { createWorkerLogger } from "./logger";
+import { errorName, installProcessErrorHandlers } from "./process-errors";
 import { createWorkerRuntime, type WorkerRuntime } from "./runtime";
 
 type WorkerLogger = { info(value: Record<string, unknown>): void };
@@ -32,10 +33,10 @@ const defaultDependencies: WorkerMainDependencies = {
 };
 
 export async function main(
-  dependencies: WorkerMainDependencies = defaultDependencies
+  dependencies: WorkerMainDependencies = defaultDependencies,
+  logger: WorkerLogger = dependencies.createLogger()
 ): Promise<void> {
   const config = dependencies.loadConfig();
-  const logger = dependencies.createLogger();
   const runtime = await dependencies.createRuntime(config, logger);
   const terminateAfterStopFailure = () => {
     logger.info({ event: "worker_stop_failed" });
@@ -78,8 +79,29 @@ export async function main(
   logger.info({ event: "worker_ready", port: healthServer.port });
 }
 
+type WorkerProcess = Parameters<typeof installProcessErrorHandlers>[0] & {
+  exitCode?: number | string | null | undefined;
+};
+
+/**
+ * The process entry point. The logger is created before the config is read,
+ * so a config, database, or health-bind failure still leaves a record naming
+ * the error class instead of a silent non-zero exit.
+ */
+export async function startWorker(
+  dependencies: WorkerMainDependencies = defaultDependencies,
+  target: WorkerProcess = process
+): Promise<void> {
+  const logger = dependencies.createLogger();
+  installProcessErrorHandlers(target, logger, dependencies.terminate);
+  try {
+    await main(dependencies, logger);
+  } catch (error) {
+    logger.info({ event: "worker_start_failed", errorName: errorName(error) });
+    target.exitCode = 1;
+  }
+}
+
 if (process.env.NODE_ENV !== "test") {
-  void main().catch(() => {
-    process.exitCode = 1;
-  });
+  void startWorker();
 }
