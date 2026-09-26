@@ -841,6 +841,8 @@ function raidEncountersInZone(
   return members.sort((a, b) => a - b);
 }
 
+const UNRANKED_METRIC_ERROR = "Invalid class or spec number specified.";
+
 function historicEncounterIds(
   value: unknown,
   characterId?: number
@@ -856,6 +858,11 @@ function historicEncounterIds(
     // A metric a character never ranked in may be null (for example hps on
     // a damage-only character). That is an empty result, not schema drift.
     if (entry?.[metric] === null) continue;
+    // Warcraft Logs can also answer a metric with an error object in place of
+    // its rankings, and no GraphQL `errors` entry. This one arrives for
+    // characters that do rank in the metric, so it says only that the metric
+    // has no rankings here. Any other error still reads as drift.
+    if (record(entry?.[metric])?.error === UNRANKED_METRIC_ERROR) continue;
     const rankings = record(entry?.[metric])?.rankings;
     if (!Array.isArray(rankings)) return null;
     for (const value of rankings) {
@@ -2247,18 +2254,41 @@ export function createWarcraftLogsClient(
       characterId?: number;
       cursor?: WarcraftLogsRankedBackfillCursor;
       onRequest?(event: WarcraftLogsRequestEvent): void;
+      onLimitation?(
+        query: WarcraftLogsQueryType,
+        code: WarcraftLogsLimitationCode
+      ): void;
       signal?: AbortSignal;
     }>
   ): Promise<WarcraftLogsRankedBackfillResult> {
     const key = validCharacterKey(requestedKey);
+    // Names the read a limitation stopped. A decoder check fails on a request
+    // that succeeded, so `onRequest` alone never attributes schema drift.
+    const noteLimitation = (
+      query: WarcraftLogsQueryType,
+      limitation: WarcraftLogsLimitation
+    ): WarcraftLogsLimitation => {
+      try {
+        options.onLimitation?.(query, limitation.code);
+      } catch {
+        /* Observation never changes evidence. */
+      }
+      return limitation;
+    };
     if (!Number.isSafeInteger(options.requestCap) || options.requestCap < 0) {
-      return { kind: "limitation", code: "request_cap" };
+      return noteLimitation("zone_rankings", {
+        kind: "limitation",
+        code: "request_cap"
+      });
     }
     if (
       options.cursor &&
       options.cursor.journalRaidId !== options.journalRaidId
     ) {
-      return { kind: "limitation", code: "schema_drift" };
+      return noteLimitation("zone_rankings", {
+        kind: "limitation",
+        code: "schema_drift"
+      });
     }
     const lookup = characterLookup(key, options.characterId);
     let spent = 0;
@@ -2293,12 +2323,13 @@ export function createWarcraftLogsClient(
     const acceptedFights = new Set(progress.acceptedFightKeys ?? []);
     const hydratedFights = new Set(acceptedFights);
     const limited = (
+      query: WarcraftLogsQueryType,
       limitation: WarcraftLogsLimitation
     ): WarcraftLogsRankedBackfillResult => ({
       kind: "evidence",
       kills: [...kills.values()],
       cursor: { ...progress, acceptedFightKeys: [...acceptedFights] },
-      limitation
+      limitation: noteLimitation(query, limitation)
     });
     const request = async (
       category: WarcraftLogsQueryType,
@@ -2329,10 +2360,18 @@ export function createWarcraftLogsClient(
         sharedZones && monotonic() - sharedZones.at < SHARED_ZONES_TTL_MS
           ? { kind: "success" as const, value: sharedZones.value }
           : await request("zone_rankings", historicRaidZonesQuery, {});
-      if (!zones) return limited({ kind: "limitation", code: "request_cap" });
-      if (zones.kind !== "success") return limited(zones);
+      if (!zones)
+        return limited("zone_rankings", {
+          kind: "limitation",
+          code: "request_cap"
+        });
+      if (zones.kind !== "success") return limited("zone_rankings", zones);
       const scopes = historicZoneIds(zones.value, options.journalRaidId);
-      if (!scopes) return limited({ kind: "limitation", code: "schema_drift" });
+      if (!scopes)
+        return limited("zone_rankings", {
+          kind: "limitation",
+          code: "schema_drift"
+        });
       // Kept only once it has decoded, so a drifted answer is asked again.
       if (sharedZones?.value !== zones.value) {
         sharedZones = { value: zones.value, at: monotonic() };
@@ -2343,7 +2382,10 @@ export function createWarcraftLogsClient(
       const zoneId = progress.zoneIds[progress.zoneIndex]!;
       const partition = progress.partitionIds?.[progress.zoneIndex];
       if (partition === undefined)
-        return limited({ kind: "limitation", code: "schema_drift" });
+        return limited("zone_rankings", {
+          kind: "limitation",
+          code: "schema_drift"
+        });
       if (!progress.encountersLoaded) {
         const ranking = await request(
           "zone_rankings",
@@ -2355,11 +2397,18 @@ export function createWarcraftLogsClient(
           }
         );
         if (!ranking)
-          return limited({ kind: "limitation", code: "request_cap" });
-        if (ranking.kind !== "success") return limited(ranking);
+          return limited("zone_rankings", {
+            kind: "limitation",
+            code: "request_cap"
+          });
+        if (ranking.kind !== "success")
+          return limited("zone_rankings", ranking);
         const found = historicEncounterIds(ranking.value, options.characterId);
         if (!found)
-          return limited({ kind: "limitation", code: "schema_drift" });
+          return limited("zone_rankings", {
+            kind: "limitation",
+            code: "schema_drift"
+          });
         const only = progress.zoneEncounterIds?.[progress.zoneIndex] ?? null;
         progress = {
           ...progress,
@@ -2392,11 +2441,18 @@ export function createWarcraftLogsClient(
             }
           );
           if (!ranking)
-            return limited({ kind: "limitation", code: "request_cap" });
-          if (ranking.kind !== "success") return limited(ranking);
+            return limited("zone_rankings", {
+              kind: "limitation",
+              code: "request_cap"
+            });
+          if (ranking.kind !== "success")
+            return limited("zone_rankings", ranking);
           const refs = historicReportRefs(ranking.value);
           if (!refs)
-            return limited({ kind: "limitation", code: "schema_drift" });
+            return limited("zone_rankings", {
+              kind: "limitation",
+              code: "schema_drift"
+            });
           for (
             ;
             progress.reportIndex < refs.length;
@@ -2414,13 +2470,16 @@ export function createWarcraftLogsClient(
               }
             );
             if (!detail)
-              return limited({ kind: "limitation", code: "request_cap" });
+              return limited("report_hydration", {
+                kind: "limitation",
+                code: "request_cap"
+              });
             if (detail.kind !== "success") {
               if (detail.code === "not_found" || detail.code === "private") {
                 hydratedFights.add(fightKey);
                 continue;
               }
-              return limited(detail);
+              return limited("report_hydration", detail);
             }
             const decoded = decodedRankedKill(detail.value, {
               ...ref,
@@ -2431,7 +2490,10 @@ export function createWarcraftLogsClient(
               region: key.region
             });
             if (!Array.isArray(decoded))
-              return limited(decoded as WarcraftLogsLimitation);
+              return limited(
+                "report_hydration",
+                decoded as WarcraftLogsLimitation
+              );
             const report = record(
               record(record(detail.value)?.data)?.reportData
             )?.report;
@@ -3128,7 +3190,7 @@ export function createWarcraftLogsClient(
       type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
       search: for (const [guildKey, guild] of guilds) {
         const pages = new Map<number, Page | null>();
-        const walkKey = `${guildKey} ${earliestStart} ${latestStart}`;
+        const walkKey = `${guildKey}\u0000${earliestStart}\u0000${latestStart}`;
         const kept = sharedAttendanceWalks.get(walkKey);
         const replay =
           kept && monotonic() - kept.at < SHARED_ATTENDANCE_WALK_TTL_MS
@@ -3296,6 +3358,9 @@ export function createWarcraftLogsClient(
           ...options.rankedBackfill,
           ...(options.characterId ? { characterId: options.characterId } : {}),
           ...(options.onRequest ? { onRequest: options.onRequest } : {}),
+          ...(options.onLimitation
+            ? { onLimitation: options.onLimitation }
+            : {}),
           ...(options.signal ? { signal: options.signal } : {})
         })
       : undefined;
@@ -3501,7 +3566,7 @@ export function createWarcraftLogsClient(
       { killedAt: string; fightUrl: string }
     >();
     for (const kill of kills.values()) {
-      const bossKey = `${kill.raidId} ${kill.bossId} ${kill.difficulty}`;
+      const bossKey = `${kill.raidId}\u0000${kill.bossId}\u0000${kill.difficulty}`;
       const seen = earliestByBoss.get(bossKey);
       if (!seen || kill.killedAt < seen.killedAt) {
         earliestByBoss.set(bossKey, {

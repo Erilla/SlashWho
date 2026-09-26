@@ -1003,6 +1003,7 @@ export async function createWorkerRuntime(
               logger?.info({
                 event: "applicant_sheet_poll",
                 baseline: poll.baseline,
+                rebaselined: poll.rebaselined,
                 created: poll.created,
                 backlog: poll.backlog,
                 invalid: poll.invalid,
