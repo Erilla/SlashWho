@@ -3891,6 +3891,43 @@ describe("Warcraft Logs gateway", () => {
         }
       });
 
+    it("asks each report only for its player actors", async () => {
+      // Break caught: history pages and hydrated reports listed every actor
+      // -- pets, NPCs, bosses -- although every decoder keeps only players,
+      // so each request paid query complexity for rows it threw away.
+      const actorSelections: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { code?: string };
+        };
+        actorSelections.push(...(body.query.match(/actors[^{]*\{/g) ?? []));
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("GuildAttendance")) {
+          return attendancePage(
+            [{ code: "killNight", startTime: night - hours(1) }],
+            false
+          );
+        }
+        if (body.query.includes("ReportByCode")) {
+          return hydratedKill(body.variables.code!);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        verifiedKills: verified
+      });
+
+      expect(actorSelections.length).toBeGreaterThanOrEqual(2);
+      for (const selection of actorSelections) {
+        expect(selection).toBe('actors(type: "Player") {');
+      }
+    });
+
     it("recovers nothing, and limits nothing, from a guild Warcraft Logs does not know", async () => {
       // Break caught: Raider.IO names the guild as it was on the night. One
       // renamed, moved or never logged is unknown to Warcraft Logs, and its

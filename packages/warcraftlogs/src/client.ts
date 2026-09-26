@@ -121,7 +121,7 @@ const recentReportsQuery = (lookup: CharacterLookup) => `
             owner { name }
             guild { name server { slug region { slug } } }
             zone { id name encounters { id journalID } }
-            masterData { actors { id name server type } }
+            masterData { actors(type: "Player") { id name server type } }
             fights {
               id
               encounterID
@@ -173,7 +173,7 @@ const reportByCodeQuery = `
         owner { name }
         guild { name server { slug region { slug } } }
         zone { id name encounters { id journalID } }
-        masterData { actors { id name server type } }
+        masterData { actors(type: "Player") { id name server type } }
         fights {
           id encounterID name startTime endTime kill difficulty friendlyPlayers
           gameZone { id name }
@@ -220,7 +220,7 @@ const historicRankedReportQuery = `
         guild { name server { slug region { slug } } }
         zone { id name encounters { id journalID } }
         rankedCharacters { id canonicalID name server { slug name } }
-        masterData { actors { id name server type } }
+        masterData { actors(type: "Player") { id name server type } }
         fights(fightIDs: [$fightId]) {
           id encounterID name startTime endTime kill difficulty friendlyPlayers friendlySpecs
           gameZone { id name }
@@ -240,7 +240,7 @@ const reportFightParsesQuery = `
     reportData {
       report(code: $code) {
         code
-        masterData { actors { id name server type } }
+        masterData { actors(type: "Player") { id name server type } }
         damage: rankings(
           compare: Rankings
           fightIDs: $fightIDs
