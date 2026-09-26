@@ -329,7 +329,14 @@ test("scrubs through dossier sections while dragging the desktop timeline", asyn
   const newPagePromise = page.context().waitForEvent("page", { timeout: 3000 });
   await first.click({ modifiers: ["Control"] });
   const newPage = await newPagePromise;
-  await expect(newPage).toHaveURL(/#dossier-characters-heading$/);
+  // Poll the tab's URL rather than use toHaveURL. When the section's document
+  // commits before Playwright attaches to the new tab, Playwright never sees
+  // that commit and every auto-waiting assertion on the tab waits forever for
+  // the navigation "to finish". The production build serves the page quickly
+  // enough to win that race most of the time.
+  await expect
+    .poll(() => newPage.url())
+    .toMatch(/\/demo#dossier-characters-heading$/);
   await newPage.close();
 
   await first.click();

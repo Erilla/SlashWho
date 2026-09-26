@@ -9,6 +9,7 @@ import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
 import { releasePortPair } from "./port-reservation";
+import { webBuildFreshness } from "./web-build";
 
 const webPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
 const workerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
@@ -133,6 +134,24 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const processes: ManagedProcess[] = [];
 
   try {
+    // The browser suite runs the production build rather than `next dev`,
+    // which compiles each route on its first request. CI builds immediately
+    // beforehand; locally, build only when the sources have moved on, so a
+    // bare `test:e2e` still works but never exercises a stale bundle. The
+    // build overlaps the container and fixture start-up below.
+    const freshness = webBuildFreshness(process.cwd());
+    const build =
+      freshness === "fresh"
+        ? undefined
+        : startPnpm(["--filter", "@slashwho/web", "build"], {
+            ...process.env,
+            NODE_ENV: "production"
+          });
+    if (build) {
+      console.log(`Building the web app for e2e (build ${freshness}).`);
+      processes.push(build);
+    }
+
     postgres = await new PostgreSqlContainer("postgres:16-alpine")
       .withDatabase("slashwho_e2e")
       .withUsername("slashwho")
@@ -187,6 +206,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       startPnpm(["tsx", "tests/e2e/support/migrate.ts"], environment)
     );
 
+    if (build) await waitForSuccessfulExit(build);
     await releasePortPair();
 
     const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
@@ -195,11 +215,17 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ACCOUNT_EMAIL_FROM: undefined,
       PORT: `${workerPort}`
     });
+    // NODE_ENV stays "development" because the web config accepts a
+    // plain-HTTP loopback operator origin only then; `next start` warns about
+    // the pairing and selects its development server runtime, but serves the
+    // prebuilt bundle without compiling on request.
     const web = startPnpm(
       [
         "--filter",
         "@slashwho/web",
-        "dev",
+        "exec",
+        "next",
+        "start",
         "--hostname",
         "127.0.0.1",
         "--port",
