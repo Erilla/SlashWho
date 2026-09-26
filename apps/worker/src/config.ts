@@ -410,14 +410,25 @@ export function loadWorkerConfig(
     // A shorter delay buys cadence only while the hourly points allowance has
     // room, because the reserve gate refuses any re-entry that arrives before
     // it does. Measured on `test` from 2026-09-19 to 2026-09-25, under a
-    // temporary 20-minute override (#345): on the two saturated days (about
-    // 260k points a day, against the 216k ceiling of 9,000 an hour) the gate
-    // refused 234 of 310 cap retries (75%). Once the backlog had drained, on
-    // 2026-09-24 and 25, all 16 went through. So 20 minutes saves ten minutes
-    // per capped step when load is light. Under load it mostly creates
-    // refusals, each costing a probe point, a queue attempt and another wait.
-    // It is not the default because light load is also when the extra
-    // cadence matters least.
+    // temporary 20-minute override (#345). On 2026-09-22 and 23 the gate
+    // refused 234 of 310 cap retries (75%). Those days spent 262k and 195k
+    // points, 61% and 45% of the worker's 432k daily allowance (18,000 an
+    // hour), so the saturation was hourly, not daily. In the hours with five
+    // or more refusals, the worker's own runs spent 12.5k-19.6k points against
+    // the 14,500 usable above the 3,500 reserve, and every refused run opened
+    // with less than the reserve left. Once the backlog had drained, on
+    // 2026-09-24 and 25, all 16 cap retries went through. So 20 minutes saves
+    // ten minutes per capped step when load is light. Under load it mostly
+    // creates refusals, each costing a probe point, a queue attempt and
+    // another wait. It is not the default because light load is also when the
+    // extra cadence matters least.
+    //
+    // The sample passed two of evidence-run-cost.md's checks and failed one.
+    // Passed: no row's hourly window moved, and the unmeasured rows are
+    // exactly the refused attempts, which spend nothing. Failed: twelve
+    // handovers on 22-23 carry unaccounted spend of up to 1,753 points. That
+    // spend is outside the totals above and only adds to the load, so it
+    // strengthens the hourly binding rather than explaining it.
     //
     // EVIDENCE_PARSE_CAP_RETRY_MS is the name this was deployed under while it
     // governed the parse cap alone. It is still read, because renaming a
@@ -579,10 +590,11 @@ export function loadWorkerConfig(
     // How long a run that stopped on a fault waits before a reader may reserve
     // another. `failed` is invisible to `reserve` -- neither active nor
     // completed -- so without this a stopped run is re-reserved by the next
-    // page read and a retry storm becomes a reservation storm. Half an hour
-    // matches EVIDENCE_CAP_RETRY_MS, and for the same reason: long
-    // enough that a persistently broken character is not re-collected on every
-    // read, short enough that it recovers without intervention.
+    // page read and a retry storm becomes a reservation storm. Half an hour is
+    // long enough that a persistently broken character is not re-collected on
+    // every read, and short enough that it recovers without intervention. It
+    // equals EVIDENCE_CAP_RETRY_MS's default only by coincidence. The two are
+    // independent, and changing one does not call for changing the other.
     evidenceFailureCooldownMs: positiveInteger(
       environment.EVIDENCE_FAILURE_COOLDOWN_MS,
       30 * 60_000,
