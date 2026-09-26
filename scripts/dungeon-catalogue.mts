@@ -1,3 +1,5 @@
+import { nonEmptyString, positiveInteger, record } from "./lib/json.mts";
+
 /**
  * The Journal's dungeon instances, by name.
  *
@@ -13,24 +15,6 @@
  * already names every dungeon -- one request per expansion rather than one per
  * instance.
  */
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function positiveInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-    ? value
-    : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : null;
-}
 
 export type GeneratedJournalDungeon = Readonly<{
   journalDungeonId: string;

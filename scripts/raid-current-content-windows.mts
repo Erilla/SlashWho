@@ -1,12 +1,4 @@
-export function isDirectExecution(
-  moduleUrl: string,
-  invokedPath: string
-): boolean {
-  return (
-    new URL(moduleUrl).pathname.replace(/^\//, "") ===
-    invokedPath.replace(/\\/g, "/")
-  );
-}
+import { record } from "./lib/json.mts";
 
 export type GeneratedRaidCurrentContentWindow = Readonly<{
   startsAt: string;
@@ -28,12 +20,6 @@ export const raiderIoExpansionIds = [6, 7, 8, 9, 10, 11] as const;
 // far-future placeholder. Recording it verbatim would expire the window on a
 // date nobody published, so treat it as open-ended.
 const openEndedAtOrAfter = Date.parse("2030-01-01T00:00:00.000Z");
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function nonEmptySlug(value: unknown): string | null {
   return typeof value === "string" && /^[a-z0-9-]+$/.test(value) ? value : null;
