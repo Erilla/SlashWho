@@ -119,11 +119,14 @@ it("shows a spinner only for characters whose evidence is still gathering", () =
   );
 
   expect(
-    screen.getByRole("status", { name: "Research gathering for Ryalts" })
+    screen.getByRole("img", { name: "Research gathering for Ryalts" })
   ).toBeVisible();
   expect(
-    screen.queryByRole("status", { name: "Research gathering for Ryii" })
+    screen.queryByRole("img", { name: "Research gathering for Ryii" })
   ).not.toBeInTheDocument();
+  // Each row's spinner is a picture, not a live region: a dossier gathering
+  // for a dozen characters would otherwise hold a dozen of them.
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
 
 it("exposes overflowing desktop rows as a labelled keyboard-scrollable region", async () => {
@@ -467,7 +470,7 @@ it("shows a collecting character's current step beneath its name instead of the 
     screen.queryByRole("img", { name: "Evidence currently being scanned" })
   ).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("status", { name: /research gathering/i })
+    screen.queryByRole("img", { name: /research gathering/i })
   ).not.toBeInTheDocument();
 });
 
