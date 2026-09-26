@@ -2560,6 +2560,32 @@ td > .collection-progress {
   border-radius: 0.55rem;
 }
 
+/* Completed runs accumulate forever; the table scrolls within a fixed height. */
+.collection-monitor-table-scroll--capped {
+  max-height: min(32rem, 70vh);
+  overflow-y: auto;
+}
+
+.collection-monitor-table-scroll--capped thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.collection-monitor-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.collection-monitor-load-more p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
 .collection-monitor-page table {
   width: 100%;
   border-collapse: collapse;
