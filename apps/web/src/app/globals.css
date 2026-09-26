@@ -2628,6 +2628,84 @@ td > .collection-progress {
   color: var(--text);
 }
 
+.state-badge[data-state="disabled"] {
+  color: var(--danger);
+}
+
+.admin-accounts-status {
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+/* Stay in the accessibility tree so the live region exists before it speaks. */
+.admin-accounts-status:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  padding: 0;
+}
+
+.admin-accounts-recovery {
+  justify-self: start;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.admin-accounts-recovery:hover {
+  text-decoration: underline;
+}
+
+.admin-accounts-role {
+  text-transform: capitalize;
+}
+
+.admin-accounts-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.admin-accounts-action {
+  min-height: 2.25rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.5rem;
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 0 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.admin-accounts-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.admin-accounts-action[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.admin-accounts-action[data-tone="danger"]:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.admin-accounts-action:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .operator-login-page {
   width: min(100% - 2.5rem, 32rem);
   display: grid;
