@@ -116,3 +116,11 @@ it.each(["Make user", "Disable"])(
     );
   }
 );
+
+it("titles the page Account Management", () => {
+  render(<AdminAccountClient initialAccounts={[account]} />);
+  expect(
+    screen.getByRole("heading", { level: 1, name: "Account Management" })
+  ).toBeInTheDocument();
+  expect(screen.getByRole("table", { name: "Accounts" })).toBeInTheDocument();
+});

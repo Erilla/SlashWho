@@ -161,6 +161,17 @@ describe("CollectionMonitorClient", () => {
     expect(withSteps?.querySelector('[role="status"]')).not.toBeInTheDocument();
   });
 
+  it("links each run's character to its dossier", () => {
+    render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
+
+    expect(
+      screen.getByRole("link", { name: /ryii — silvermoon/i })
+    ).toHaveAttribute("href", "/dossiers/eu/silvermoon/ryii");
+    expect(
+      screen.getByRole("link", { name: /unrelated — area-52/i })
+    ).toHaveAttribute("href", "/dossiers/us/area-52/unrelated");
+  });
+
   it("moves the matching in-flight run into completed after a complete publication", async () => {
     // Break caught: an authoritative publication could leave the visible monitor stale.
     const fetchMock = mockFetchMonitor(completeMonitor);

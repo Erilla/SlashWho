@@ -31,8 +31,11 @@ import type {
 } from "./types";
 
 const MYTHIC_DIFFICULTY = 5;
-// Nested actor/fight selections make a 100-report page exceed WCL's
-// 50,000-point query complexity ceiling. Ten reports fit that limit.
+// WCL's 50,000 query complexity ceiling is scored from the query's shape at
+// about 1,625 a report, so a page holds at most 30. Points are about 2.08 a
+// report, so a bigger page saves no points. It would move every stored history
+// cursor, which is a page number, and make a light refresh's one page dearer.
+// Measured in docs/operations/evidence-run-cost.md.
 const REPORTS_PER_PAGE = 10;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const MAX_RANKING_IDENTITIES = 50;

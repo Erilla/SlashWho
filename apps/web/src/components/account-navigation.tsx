@@ -104,7 +104,7 @@ export function AccountNavigation() {
           {account?.role === "admin" && !account.passwordChangeRequired && (
             <>
               <Link href="/admin/settings" onClick={() => setOpen(false)}>
-                Admin settings
+                Account Management
               </Link>
               <Link
                 href="/operations/collection-monitor"
