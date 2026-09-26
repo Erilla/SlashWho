@@ -668,7 +668,10 @@ function DossierPageState({
     </div>
   );
   return (
-    <DossierCharacterProvider characters={dossier?.characters ?? []}>
+    <DossierCharacterProvider
+      characters={dossier?.characters ?? []}
+      current={identity}
+    >
       <main className="page-shell dossier-page">
         <p
           className="visually-hidden"
