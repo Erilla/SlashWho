@@ -759,23 +759,31 @@ describe("Raider.IO gateway", () => {
     // Pinned by name, not count: a raid filed one tier off passes any
     // structural check, and would let a run skip the tier that holds it.
     // Recorded from live responses on 2026-09-26.
-    const raids = new Map(
-      raiderIoHistoricTiers.map((tier) => [tier.ordinal, tier.raidSlugs])
-    );
-    expect(raids.get(19)).toEqual([
-      "the-emerald-nightmare",
-      "the-nighthold",
-      "trial-of-valor"
+    expect(raiderIoHistoricTiers).toEqual([
+      {
+        ordinal: 19,
+        raidSlugs: ["the-emerald-nightmare", "the-nighthold", "trial-of-valor"]
+      },
+      { ordinal: 20, raidSlugs: ["tomb-of-sargeras"] },
+      { ordinal: 21, raidSlugs: ["antorus-the-burning-throne"] },
+      { ordinal: 22, raidSlugs: ["uldir"] },
+      {
+        ordinal: 23,
+        raidSlugs: ["battle-of-dazaralor", "crucible-of-storms"]
+      },
+      { ordinal: 24, raidSlugs: ["the-eternal-palace"] },
+      { ordinal: 25, raidSlugs: ["nyalotha-the-waking-city"] },
+      { ordinal: 26, raidSlugs: ["castle-nathria"] },
+      { ordinal: 27, raidSlugs: ["sanctum-of-domination"] },
+      { ordinal: 28, raidSlugs: ["sepulcher-of-the-first-ones"] },
+      { ordinal: 29, raidSlugs: ["vault-of-the-incarnates"] },
+      { ordinal: 30, raidSlugs: ["aberrus-the-shadowed-crucible"] },
+      { ordinal: 31, raidSlugs: ["amirdrassil-the-dreams-hope"] },
+      { ordinal: 32, raidSlugs: ["nerubar-palace"] },
+      { ordinal: 33, raidSlugs: ["liberation-of-undermine"] },
+      { ordinal: 34, raidSlugs: ["manaforge-omega"] },
+      { ordinal: 35, raidSlugs: ["tier-mn-1"] }
     ]);
-    expect(raids.get(23)).toEqual([
-      "battle-of-dazaralor",
-      "crucible-of-storms"
-    ]);
-    expect(raids.get(24)).toEqual(["the-eternal-palace"]);
-    expect(raids.get(25)).toEqual(["nyalotha-the-waking-city"]);
-    expect(raids.get(29)).toEqual(["vault-of-the-incarnates"]);
-    expect(raids.get(32)).toEqual(["nerubar-palace"]);
-    expect(raids.get(35)).toEqual(["tier-mn-1"]);
     expect(raiderIoHistoricTiers.map((tier) => tier.ordinal)).toEqual(
       raiderIoHistoricTierOrdinals
     );
