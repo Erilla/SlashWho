@@ -1210,6 +1210,12 @@ a {
   font-weight: 600;
 }
 
+/* Class-coloured names, lighter than in the evidence rows so a long roster
+   still reads as one line of detail. */
+.dossier-guild-timeline-tooltip .dossier-character-name {
+  font-weight: 600;
+}
+
 .dossier-layout > .dossier-limitations {
   grid-column: 1 / -1;
 }

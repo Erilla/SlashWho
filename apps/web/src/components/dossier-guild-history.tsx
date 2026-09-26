@@ -5,9 +5,10 @@ import {
   guildTimelineSpans,
   raidTiers
 } from "@slashwho/domain";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EvidenceFilter } from "../lib/character-visibility";
+import { DossierCharacterLabels } from "./dossier-character-name";
 import {
   layoutGuildTimeline,
   tierBands,
@@ -73,7 +74,25 @@ function describeBar(bar: GuildTimelineBar): string[] {
   ];
 }
 
-type Tooltip = Readonly<{ lines: readonly string[]; x: number; y: number }>;
+/** The bar's description as the tooltip shows it, names in class colours. */
+function barTooltipLines(bar: GuildTimelineBar): ReactNode[] {
+  const [guild, dates, , ...tiers] = describeBar(bar);
+  return [
+    guild,
+    dates,
+    <>
+      {plural(bar.nights, "raid night")}:{" "}
+      <DossierCharacterLabels characters={bar.characters} />
+    </>,
+    ...tiers
+  ];
+}
+
+type Tooltip = Readonly<{
+  lines: readonly ReactNode[];
+  x: number;
+  y: number;
+}>;
 
 export function DossierGuildHistory({
   guildHistory,
@@ -157,7 +176,7 @@ export function DossierGuildHistory({
     : [];
   // The tooltip sits outside the scroller so a short timeline cannot clip
   // it, which means placing it against what is scrolled into view.
-  const showTooltip = (lines: readonly string[], x: number, y: number) => {
+  const showTooltip = (lines: readonly ReactNode[], x: number, y: number) => {
     const scroll = scrollRef.current;
     const left = x - (scroll?.scrollLeft ?? 0);
     const visibleWidth = scroll?.clientWidth ?? width;
@@ -275,10 +294,10 @@ export function DossierGuildHistory({
                 })}
                 {layout.bars.map((bar) => {
                   const y = laneY(bar.lane) + (LANE_HEIGHT - BAR_HEIGHT) / 2;
-                  const lines = describeBar(bar);
+                  const lines = barTooltipLines(bar);
                   return (
                     <g
-                      aria-label={lines.join(". ")}
+                      aria-label={describeBar(bar).join(". ")}
                       className="dossier-guild-timeline-bar"
                       key={`${bar.guildId}-${bar.firstNight}`}
                       onBlur={() => setTooltip(null)}
@@ -361,9 +380,9 @@ export function DossierGuildHistory({
             >
               {tooltip.lines.map((line, index) =>
                 index === 0 ? (
-                  <strong key={line}>{line}</strong>
+                  <strong key={index}>{line}</strong>
                 ) : (
-                  <span key={line}>{line}</span>
+                  <span key={index}>{line}</span>
                 )
               )}
             </div>

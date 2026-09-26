@@ -212,6 +212,41 @@ export function DossierCharacterNameByName({
   );
 }
 
+/**
+ * Names in their class colours, without links or profile icons: for a
+ * surface such as a tooltip, which shows on hover and cannot be clicked.
+ */
+export function DossierCharacterLabels({
+  characters
+}: Readonly<{ characters: readonly CharacterKey[] }>) {
+  const dossierCharacters = useContext(DossierCharactersContext);
+
+  return (
+    <>
+      {characters.map((character, index) => {
+        const resolved = resolveCharacter(character, dossierCharacters);
+        const modifier = colourClass(resolved.className);
+        return (
+          <Fragment
+            key={`${character.region}/${character.realm}/${character.name}`}
+          >
+            {index > 0 ? ", " : null}
+            <span
+              className={
+                modifier
+                  ? `dossier-character-name dossier-character-name--${modifier}`
+                  : "dossier-character-name"
+              }
+            >
+              {formatCharacterDisplayName(resolved.displayName)}
+            </span>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 export function DossierCharacterNames({
   characters,
   empty = "—"
