@@ -1,4 +1,8 @@
-import { collectionMonitorResponseSchema } from "@slashwho/contracts";
+import {
+  collectionMonitorCompletedLimitMax,
+  collectionMonitorCompletedPageSize,
+  collectionMonitorResponseSchema
+} from "@slashwho/contracts";
 
 import { getContainer } from "../../../../server/container";
 import { apiError, withHttpRequest } from "../../../../server/http";
@@ -10,10 +14,24 @@ function unauthorized(): Response {
   return response;
 }
 
+/** The requested completed-run limit, held to what one read may return. */
+function completedLimit(request: Request): number {
+  const requested = Number(
+    new URL(request.url).searchParams.get("completedLimit")
+  );
+  if (!Number.isSafeInteger(requested)) {
+    return collectionMonitorCompletedPageSize;
+  }
+  return Math.min(
+    collectionMonitorCompletedLimitMax,
+    Math.max(collectionMonitorCompletedPageSize, requested)
+  );
+}
+
 export async function GET(request: Request): Promise<Response> {
-  return withHttpRequest("collection_monitor", async () => {
+  return withHttpRequest("collection_monitor", async (scope) => {
     const { collectionMonitor, accountAuth } = await getContainer();
-    const authentication = await accountAuth.authenticate(request);
+    const authentication = await accountAuth.authenticate(request, scope);
     if (
       authentication.principal?.kind === "account" &&
       !authorizes(authentication.principal, "admin")
@@ -38,7 +56,7 @@ export async function GET(request: Request): Promise<Response> {
       return response;
     }
     const monitor = collectionMonitorResponseSchema.parse(
-      await collectionMonitor.list()
+      await collectionMonitor.list({ completedLimit: completedLimit(request) })
     );
     return Response.json(monitor, {
       headers: {

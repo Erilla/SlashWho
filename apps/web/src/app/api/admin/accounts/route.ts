@@ -3,9 +3,9 @@ import { authorizes } from "../../../../server/operator-auth";
 import { withHttpRequest } from "../../../../server/http";
 
 export async function GET(request: Request): Promise<Response> {
-  return withHttpRequest("admin_accounts", async () => {
+  return withHttpRequest("admin_accounts", async (scope) => {
     const { accountAuth, accountAdmin } = await getContainer();
-    const authentication = await accountAuth.authenticate(request);
+    const authentication = await accountAuth.authenticate(request, scope);
     const headers = new Headers({ "cache-control": "no-store" });
     if (authentication.cookie)
       headers.set("set-cookie", authentication.cookie.header);

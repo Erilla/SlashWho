@@ -1,12 +1,15 @@
 import { collectionProgress } from "@slashwho/application";
 import {
+  collectionMonitorCompletedPageSize,
   collectionMonitorResponseSchema,
   type CollectionMonitorResponse
 } from "@slashwho/contracts";
 import type { EvidenceRepository } from "@slashwho/database";
 
 export type CollectionMonitorService = Readonly<{
-  list(): Promise<CollectionMonitorResponse>;
+  list(options?: {
+    completedLimit?: number;
+  }): Promise<CollectionMonitorResponse>;
 }>;
 
 export function createCollectionMonitorService(options: {
@@ -15,9 +18,12 @@ export function createCollectionMonitorService(options: {
 }): CollectionMonitorService {
   const clock = options.clock ?? (() => new Date());
   return {
-    async list() {
+    async list({ completedLimit = collectionMonitorCompletedPageSize } = {}) {
       const generatedAt = clock();
-      const rows = await options.evidence.listForMonitor();
+      // One row past the limit says whether older completed runs remain.
+      const rows = await options.evidence.listForMonitor({
+        completedLimit: completedLimit + 1
+      });
       const hasActiveRuns = rows.some(
         (row) =>
           row.status === "queued" ||
@@ -29,6 +35,7 @@ export function createCollectionMonitorService(options: {
         hasActiveRuns,
         inFlight: [],
         completed: [],
+        hasMoreCompleted: false,
         failed: []
       };
 
@@ -60,6 +67,10 @@ export function createCollectionMonitorService(options: {
         }
 
         if (row.status === "complete" || row.status === "partial") {
+          if (response.completed.length === completedLimit) {
+            response.hasMoreCompleted = true;
+            continue;
+          }
           response.completed.push({
             character: row.key,
             state: row.status,

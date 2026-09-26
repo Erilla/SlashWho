@@ -1080,8 +1080,14 @@ export interface EvidenceRepository {
     settled: Date;
     active: Date;
   }): Promise<number>;
-  /** Every persisted run, projected only to the fields the operator monitor displays. */
-  listForMonitor(): Promise<readonly EvidenceMonitorRun[]>;
+  /**
+   * Persisted runs, projected only to the fields the operator monitor displays:
+   * every unsettled and failed run, plus the `completedLimit` most recently
+   * completed ones. Completed runs accumulate forever, so they alone are paged.
+   */
+  listForMonitor(options: {
+    completedLimit: number;
+  }): Promise<readonly EvidenceMonitorRun[]>;
   /**
    * Every run `reserve` currently counts as active, oldest first, with the two
    * facts recovery judges them by: the job they were sent to, and when a
@@ -1591,6 +1597,15 @@ export interface Repositories {
     markRunning(id: string): Promise<void>;
     markRetrying(id: string, attempt: number, nextRetryAt: Date): Promise<void>;
     complete(id: string, snapshotId: string): Promise<void>;
+    /**
+     * Completes a run against the snapshot another run's live fingerprint
+     * sweep cursor is extending for the same root, instead of one it published
+     * itself. Refuses any other snapshot.
+     */
+    completeWithLiveSweepSnapshot(
+      id: string,
+      snapshotId: string
+    ): Promise<void>;
     fail(id: string, code: PublicErrorCode): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;

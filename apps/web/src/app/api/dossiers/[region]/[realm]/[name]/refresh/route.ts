@@ -30,7 +30,7 @@ export async function POST(
     if (!character.canonical) return apiError("invalid_character_url");
     const { dossiers, accountAuth, accountCredentials } = await getContainer();
     const { principal } = accountAuth
-      ? await accountAuth.authenticate(request)
+      ? await accountAuth.authenticate(request, scope)
       : { principal: null };
     const overrides =
       principal?.kind === "account"
@@ -38,7 +38,8 @@ export async function POST(
             request,
             principal,
             accountCredentials,
-            loadWebConfig()
+            loadWebConfig(),
+            scope
           )
         : undefined;
     const result = await dossiers.refreshCharacter(

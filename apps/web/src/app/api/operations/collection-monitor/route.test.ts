@@ -33,12 +33,13 @@ const monitor = {
     }
   ],
   completed: [],
+  hasMoreCompleted: false,
   failed: []
 };
 
-function request(headers: Record<string, string> = {}): Request {
+function request(headers: Record<string, string> = {}, search = ""): Request {
   return new Request(
-    "https://slashwho.example/api/operations/collection-monitor",
+    `https://slashwho.example/api/operations/collection-monitor${search}`,
     {
       headers: {
         ...headers,
@@ -90,6 +91,27 @@ describe("GET /api/operations/collection-monitor", () => {
     });
     expect(list).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["no limit", "", 50],
+    ["a further page", "?completedLimit=150", 150],
+    ["a limit below one page", "?completedLimit=3", 50],
+    ["a limit beyond the cap", "?completedLimit=999999", 1_000],
+    ["a non-numeric limit", "?completedLimit=all", 50],
+    ["a fractional limit", "?completedLimit=75.5", 50]
+  ])(
+    "holds %s to what one monitor read may return",
+    async (_, search, completedLimit) => {
+      // Break caught: an unbounded limit would put the whole completed history
+      // back into every poll, which is what paging it exists to prevent.
+      const response = await GET(
+        request({ authorization: `Bearer ${operatorKey}` }, search)
+      );
+
+      expect(response.status).toBe(200);
+      expect(list).toHaveBeenCalledWith({ completedLimit });
+    }
+  );
 
   it("accepts the admin browser session cookie", async () => {
     fixture.setAccount({ role: "admin" });

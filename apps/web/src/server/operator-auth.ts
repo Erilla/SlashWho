@@ -1,7 +1,9 @@
 import {
   AuthenticationError,
   classifyCaller,
-  type ApplicationConfig
+  measuredRepositories,
+  type ApplicationConfig,
+  type MeasurementScope
 } from "@slashwho/application";
 import type {
   Account,
@@ -474,11 +476,15 @@ export function createAccountAuth(options: {
       ),
       at
     );
-  async function useCookie(request: Request, at: Date) {
+  async function useCookie(
+    request: Request,
+    at: Date,
+    sessions: Pick<typeof repository, "useSession"> = repository
+  ) {
     const cookie = parseCookie(request);
     const used =
       cookie.sessionId && cookie.secret
-        ? await repository.useSession({
+        ? await sessions.useSession({
             sessionId: cookie.sessionId,
             secretDigest: digest(cookie.secret),
             at,
@@ -487,8 +493,14 @@ export function createAccountAuth(options: {
         : null;
     return { cookie, used };
   }
+  /**
+   * `scope` charges the session lookup to the request's `db*` totals. Routes
+   * authenticate before their scoped service call, so without it the lookup
+   * would land in `durationMs` and nowhere else.
+   */
   async function authenticate(
-    request: Request
+    request: Request,
+    scope?: MeasurementScope
   ): Promise<{ principal: AccountPrincipal | null; cookie?: CookieDirective }> {
     if (request.headers.has("authorization")) {
       try {
@@ -504,7 +516,13 @@ export function createAccountAuth(options: {
       }
     }
     const at = now();
-    const { cookie, used } = await useCookie(request, at);
+    const { cookie, used } = await useCookie(
+      request,
+      at,
+      scope
+        ? measuredRepositories({ accountAuth: repository }, scope).accountAuth
+        : repository
+    );
     if (!used) return cookie.present ? denied() : { principal: null };
     return {
       principal: project(used.account),
