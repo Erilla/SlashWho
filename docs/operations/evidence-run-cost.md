@@ -355,6 +355,16 @@ than the ordinary run's budget allowed. It gallops through a guild's attendance 
 the window, then walks it page by page, so an old tier behind years of newer
 reports costs a few requests a guild instead of one for every page in between.
 
+One press searches every dossier character (#494), one run after another, and
+alts share guilds. A guild's walk across a window that finished is kept by the
+worker for 30 minutes and replayed for the next character, which judges each
+report by its own name and still pays for its own hydrations. So within one
+press, the first character's row carries the attendance pages and later rows
+read lower: that is what they spent, not an undercount. A walk the budget cut
+short, or one with an unreadable page, is never kept. Runs on a visitor's own
+key use a client of their own and share nothing. The ranked walk's zone
+catalogue is kept the same way, for six hours.
+
 Its rows carry `mode = 'tier_search'`, and these columns, all null on a run that
 searched no tier:
 

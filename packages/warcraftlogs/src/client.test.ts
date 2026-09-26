@@ -115,7 +115,8 @@ function zoneRankingsResponse(
 }
 
 function clientFor(
-  responder: (url: URL, init?: RequestInit) => Response | Promise<Response>
+  responder: (url: URL, init?: RequestInit) => Response | Promise<Response>,
+  clock: Readonly<{ monotonic?: () => number }> = {}
 ) {
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(
@@ -181,7 +182,8 @@ function clientFor(
     client: createWarcraftLogsClient({
       fetch: fetch as unknown as typeof globalThis.fetch,
       clientId: "id",
-      clientSecret: "client-secret-marker"
+      clientSecret: "client-secret-marker",
+      ...clock
     })
   };
 }
@@ -6652,46 +6654,50 @@ describe("searching one tier's guild attendance", () => {
       listedGuilds?: unknown[];
       listed?: (index: number) => boolean;
       refuseGuild?: string;
+      monotonic?: () => number;
     }> = {}
   ) {
     const requests: Sent[] = [];
     const guildReports = options.guildReports ?? { Guild: 500 };
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as Body;
-      const query = body.query.match(/query (\w+)/)?.[1] ?? "";
-      requests.push({
-        query,
-        ...(body.variables.name ? { guild: body.variables.name } : {}),
-        ...(body.variables.page ? { page: body.variables.page } : {}),
-        ...(body.variables.code ? { code: body.variables.code } : {})
-      });
-      if (query === "RecentReports") return emptyHistory();
-      if (query === "CharacterGuilds") {
-        return characterGuilds(options.listedGuilds ?? []);
-      }
-      if (query === "GuildAttendance") {
-        const guild = body.variables.name!;
-        if (guild === "Ghost") {
-          return jsonResponse({ data: { guildData: { guild: null } } });
+    const { client } = clientFor(
+      (url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as Body;
+        const query = body.query.match(/query (\w+)/)?.[1] ?? "";
+        requests.push({
+          query,
+          ...(body.variables.name ? { guild: body.variables.name } : {}),
+          ...(body.variables.page ? { page: body.variables.page } : {}),
+          ...(body.variables.code ? { code: body.variables.code } : {})
+        });
+        if (query === "RecentReports") return emptyHistory();
+        if (query === "CharacterGuilds") {
+          return characterGuilds(options.listedGuilds ?? []);
         }
-        if (guild === options.refuseGuild) {
-          return new Response("upstream-body-marker", { status: 503 });
+        if (query === "GuildAttendance") {
+          const guild = body.variables.name!;
+          if (guild === "Ghost") {
+            return jsonResponse({ data: { guildData: { guild: null } } });
+          }
+          if (guild === options.refuseGuild) {
+            return new Response("upstream-body-marker", { status: 503 });
+          }
+          return attendance(
+            guild,
+            body.variables.page!,
+            guildReports[guild] ?? 0,
+            options.listed
+          );
         }
-        return attendance(
-          guild,
-          body.variables.page!,
-          guildReports[guild] ?? 0,
-          options.listed
-        );
-      }
-      if (query === "ReportByCode") {
-        const code = body.variables.code!;
-        const index = Number(code.replace(/^\D+/, ""));
-        return hydrated(code, startOf(index));
-      }
-      return emptyZoneRankingsResponse();
-    });
+        if (query === "ReportByCode") {
+          const code = body.variables.code!;
+          const index = Number(code.replace(/^\D+/, ""));
+          return hydrated(code, startOf(index));
+        }
+        return emptyZoneRankingsResponse();
+      },
+      options.monotonic ? { monotonic: options.monotonic } : {}
+    );
     return { client, requests };
   }
   const guild = { name: "Guild", realm: "silvermoon", region: "eu" as const };
@@ -6737,6 +6743,89 @@ describe("searching one tier's guild attendance", () => {
       }
     });
     expect(result).not.toHaveProperty("limitation");
+  });
+
+  describe("sharing a finished walk between the characters of one press", () => {
+    const searchAs = (
+      client: ReturnType<typeof tierClient>["client"],
+      name: string,
+      requestCap = 60
+    ) =>
+      client.getFirstKillReports(
+        { ...key, name },
+        {
+          requestCap: 0,
+          targetedOnly: true,
+          parseRequestCap: 1,
+          tierSearch: {
+            from: tierFrom,
+            to: tierTo,
+            guilds: [guild],
+            requestCap
+          }
+        }
+      );
+    const attendancePages = (requests: readonly Sent[]) =>
+      requests.filter((request) => request.query === "GuildAttendance").length;
+
+    it("replays a guild's finished walk for the next character", async () => {
+      // Break caught: one press searches up to 30 characters, alts share
+      // guilds, and every run walked the same guild's attendance again at
+      // about 28 points a page.
+      const { client, requests } = tierClient();
+
+      await searchAs(client, "sentinel");
+      const firstPages = attendancePages(requests);
+      requests.length = 0;
+      const second = await searchAs(client, "sentinel");
+
+      expect(firstPages).toBeGreaterThan(0);
+      expect(attendancePages(requests)).toBe(0);
+      // Each character still judges each report, and hydrates its own.
+      expect(second).toMatchObject({
+        tierSearch: { outcome: "complete", recoveredKills: 21 }
+      });
+    });
+
+    it("judges a replayed walk's reports by the searching character's name", async () => {
+      const { client, requests } = tierClient();
+
+      await searchAs(client, "sentinel");
+      requests.length = 0;
+      const alt = await searchAs(client, "otheralt");
+
+      expect(attendancePages(requests)).toBe(0);
+      expect(
+        requests.filter((request) => request.query === "ReportByCode")
+      ).toEqual([]);
+      expect(alt).toMatchObject({
+        tierSearch: { outcome: "complete", reportsHydrated: 0 }
+      });
+    });
+
+    it("keeps no walk the budget cut short", async () => {
+      // A kept page beside a fresh one could skip a report at the seam, so
+      // only a whole walk is ever replayed.
+      const { client, requests } = tierClient();
+
+      await searchAs(client, "sentinel", 4);
+      requests.length = 0;
+      await searchAs(client, "sentinel");
+
+      expect(attendancePages(requests)).toBeGreaterThan(0);
+    });
+
+    it("walks again once a kept walk has expired", async () => {
+      let now = 0;
+      const { client, requests } = tierClient({ monotonic: () => now });
+
+      await searchAs(client, "sentinel");
+      now += 31 * 60_000;
+      requests.length = 0;
+      await searchAs(client, "sentinel");
+
+      expect(attendancePages(requests)).toBeGreaterThan(0);
+    });
   });
 
   it("reads no history on a targeted search, and reports no shortfall for it", async () => {
