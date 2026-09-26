@@ -182,12 +182,13 @@ it("allows the slowest-call name, which is a static method identifier", () => {
   expect(serialized).not.toHaveProperty("characterName");
 });
 
-// Measurement prefixes timed only by the evidence job handler, which runs in
-// the worker and logs through the worker logger -- never a web request.
-const workerOnlyTimePrefixes = new Set([
-  "raiderIoHistoricKills",
-  "warcraftLogs",
-  "warcraftLogsHistoricAlias"
+// Job handlers run only in the worker and log through the worker logger, so
+// nothing they measure can reach an `http_request` record. Excluded by file,
+// not by field name, so a new worker counter never tempts anyone into
+// allowlisting a field the web path does not emit.
+const workerOnlySources = new Set([
+  "applicant-evidence-job-handler.ts",
+  "discovery-job-handler.ts"
 ]);
 
 function measurementSources(directory: string): string[] {
@@ -196,7 +197,9 @@ function measurementSources(directory: string): string[] {
     if (entry.isDirectory()) {
       return measurementSources(path);
     }
-    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)
+    return /\.tsx?$/.test(entry.name) &&
+      !/\.test\.tsx?$/.test(entry.name) &&
+      !workerOnlySources.has(entry.name)
       ? [path]
       : [];
   });
@@ -219,7 +222,7 @@ it("allowlists every measurement field a web request can emit", () => {
     for (const [, method, name] of readFileSync(file, "utf8").matchAll(call)) {
       if (method !== "time") {
         emitted.add(name!);
-      } else if (!workerOnlyTimePrefixes.has(name!)) {
+      } else {
         emitted.add(`${name}Ms`);
         emitted.add(`${name}Calls`);
         emitted.add(`${name}MaxCallMs`);
