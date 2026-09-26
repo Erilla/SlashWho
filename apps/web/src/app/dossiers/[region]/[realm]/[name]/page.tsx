@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { parseCharacterRoute } from "../../../../../server/http";
 import { notFound, permanentRedirect } from "next/navigation";
 
+import { parseCharacterRoute } from "../../../../../lib/character-route";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import { DossierPageClient } from "./dossier-page-client";
 

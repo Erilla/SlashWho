@@ -1,15 +1,16 @@
 "use client";
 
+import { dossierStartResponseSchema } from "@slashwho/contracts";
 import {
-  dossierStartResponseSchema,
-  safeApiErrorSchema
-} from "@slashwho/contracts";
-import {
+  canonicalCharacterId,
   parseApplicantCharacterUrl,
   type CharacterKey
 } from "@slashwho/domain";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { dossierApiPath } from "../lib/dossier-api";
+import { warcraftLogsCharacterUrl } from "../lib/dossier-path";
+import { refusalMessage } from "../lib/refusal-message";
 import { closeDialog, openDialog, supportsModalDialog } from "./modal-dialog";
 import {
   CharacterIdentityFields,
@@ -29,27 +30,13 @@ const unreachableMessage =
 type Status =
   Readonly<{ kind: "idle" }> | Readonly<{ kind: "error"; message: string }>;
 
-function refusalMessage(response: Response, body: unknown): string {
-  const parsed = safeApiErrorSchema.safeParse(body);
-  if (response.status === 429) {
-    const retryAfter = response.headers.get("retry-after");
-    return retryAfter && /^\d+$/.test(retryAfter)
-      ? `Too many requests. Try again in ${retryAfter} seconds.`
-      : "Too many requests. Please try again shortly.";
-  }
-  if (parsed.success) return parsed.data.error.message;
-  return "The character could not be added.";
-}
-
 /** Resolves what the viewer entered, falling back to the structured fields. */
 function resolveIdentity(identity: CharacterIdentity): CharacterKey | null {
   try {
     return parseApplicantCharacterUrl(identity.character.trim());
   } catch {
     try {
-      return parseApplicantCharacterUrl(
-        `https://www.warcraftlogs.com/character/${identity.region}/${encodeURIComponent(identity.realm)}/${encodeURIComponent(identity.name)}`
-      );
+      return parseApplicantCharacterUrl(warcraftLogsCharacterUrl(identity));
     } catch {
       return null;
     }
@@ -57,11 +44,7 @@ function resolveIdentity(identity: CharacterIdentity): CharacterKey | null {
 }
 
 function sameCharacter(left: CharacterKey, right: CharacterKey): boolean {
-  return (
-    left.region === right.region &&
-    left.realm === right.realm &&
-    left.name === right.name
-  );
+  return canonicalCharacterId(left) === canonicalCharacterId(right);
 }
 
 function displayName(key: CharacterKey): string {
@@ -155,18 +138,23 @@ export function AddConnectedCharacterDialog({
     setPending(true);
     try {
       const response = await fetch(
-        `/api/dossiers/${root.region}/${root.realm}/${root.name}/connected-characters`,
+        dossierApiPath(root, "connected-characters"),
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            characterUrl: `https://www.warcraftlogs.com/character/${key.region}/${key.realm}/${key.name}`
-          })
+          body: JSON.stringify({ characterUrl: warcraftLogsCharacterUrl(key) })
         }
       );
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        setStatus({ kind: "error", message: refusalMessage(response, body) });
+        setStatus({
+          kind: "error",
+          message: refusalMessage(
+            response,
+            body,
+            "The character could not be added."
+          )
+        });
         return;
       }
       const parsed = dossierStartResponseSchema.safeParse(body);

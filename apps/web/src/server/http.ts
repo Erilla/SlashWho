@@ -13,9 +13,10 @@ import {
   safeApiErrorSchema,
   type PublicErrorCode
 } from "@slashwho/contracts";
-import { parseRaiderIoCharacterUrl, type CharacterKey } from "@slashwho/domain";
+import type { CharacterKey } from "@slashwho/domain";
 import { randomUUID } from "node:crypto";
 
+import { parseCharacterRoute } from "../lib/character-route";
 import { errorName } from "./error-name";
 import { webLogger } from "./logger";
 
@@ -45,33 +46,6 @@ export function publicReadAuthorizationResponse(
     });
   }
   return apiError(result.code);
-}
-
-export function parseCharacterRoute(params: {
-  region: string;
-  realm: string;
-  name: string;
-}): { key: CharacterKey; canonical: boolean } {
-  let decoded: { region: string; realm: string; name: string };
-  try {
-    decoded = {
-      region: decodeURIComponent(params.region),
-      realm: decodeURIComponent(params.realm),
-      name: decodeURIComponent(params.name)
-    };
-  } catch {
-    throw new Error("invalid_character_url");
-  }
-  const key = parseRaiderIoCharacterUrl(
-    `https://raider.io/characters/${encodeURIComponent(decoded.region)}/${encodeURIComponent(decoded.realm)}/${encodeURIComponent(decoded.name)}`
-  );
-  return {
-    key,
-    canonical:
-      decoded.region === key.region &&
-      decoded.realm === key.realm &&
-      decoded.name === key.name
-  };
 }
 
 /**

@@ -1,7 +1,27 @@
 import { useEffect, useRef } from "react";
 
-const pollDelaysMs = [1_000, 2_000, 4_000, 8_000, 10_000] as const;
+/** How long each successive read waits, holding at the last delay. */
+export const pollDelaysMs: readonly number[] = [
+  1_000, 2_000, 4_000, 8_000, 10_000
+];
 const cappedDelayMs = pollDelaysMs[pollDelaysMs.length - 1];
+
+/**
+ * A backoff over `delays`: each `next()` returns the following delay, and the
+ * last one repeats once the schedule runs out.
+ */
+export function createBackoff(delays: readonly number[] = pollDelaysMs): {
+  next(): number;
+} {
+  let attempt = 0;
+  return {
+    next() {
+      const delay = delays[Math.min(attempt, delays.length - 1)];
+      attempt += 1;
+      return delay;
+    }
+  };
+}
 
 export type PollReadResult<T> =
   | { kind: "snapshot"; value: T }
@@ -41,7 +61,7 @@ export function useAuthoritativePoll<T>(
   useEffect(() => {
     let mounted = true;
     let terminal = false;
-    let attempt = 0;
+    const backoff = createBackoff();
 
     function clearScheduledRead() {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -70,12 +90,6 @@ export function useAuthoritativePoll<T>(
         timeoutRef.current = undefined;
         void readSnapshot();
       }, delay);
-    }
-
-    function nextPollDelay() {
-      const delay = pollDelaysMs[Math.min(attempt, pollDelaysMs.length - 1)];
-      attempt += 1;
-      return delay;
     }
 
     function retryDelay(retryAfterMs: number | undefined) {
@@ -113,7 +127,7 @@ export function useAuthoritativePoll<T>(
 
         if (result.kind === "snapshot") {
           optionsRef.current.onSnapshot(result.value);
-          scheduleRead(nextPollDelay());
+          scheduleRead(backoff.next());
           return;
         }
 
@@ -153,7 +167,7 @@ export function useAuthoritativePoll<T>(
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     if (options.active && document.visibilityState !== "hidden") {
-      scheduleRead(nextPollDelay());
+      scheduleRead(backoff.next());
     }
 
     return () => {

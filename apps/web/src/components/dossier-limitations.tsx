@@ -3,6 +3,7 @@ import type {
   DossierLimitationAffects
 } from "@slashwho/contracts";
 
+import { formatUtcMinute } from "../lib/date-format";
 import { DossierCharacterName } from "./dossier-character-name";
 import { CharacterProfileLinks } from "./profile-links";
 
@@ -184,13 +185,5 @@ function killCount(kills: number): string {
 }
 
 function formatTimestamp(value: string): string {
-  return `${new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZone: "UTC"
-  }).format(new Date(value))} UTC`;
+  return `${formatUtcMinute(value)} UTC`;
 }

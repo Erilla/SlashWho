@@ -16,6 +16,7 @@ import {
 } from "../../../lib/use-authoritative-poll";
 
 import { CollectionProgress } from "../../../components/collection-progress";
+import { formatUtcDateTime } from "../../../lib/date-format";
 import { dossierPath } from "../../../lib/dossier-path";
 
 function characterText(character: {
@@ -53,15 +54,7 @@ function characterKey(character: {
 
 function dateTime(value: string | null): React.ReactNode {
   if (value === null) return "—";
-  return (
-    <time dateTime={value}>
-      {new Intl.DateTimeFormat("en-GB", {
-        dateStyle: "medium",
-        timeStyle: "medium",
-        timeZone: "UTC"
-      }).format(new Date(value))}
-    </time>
-  );
+  return <time dateTime={value}>{formatUtcDateTime(value)}</time>;
 }
 
 function duration(seconds: number | null): string {

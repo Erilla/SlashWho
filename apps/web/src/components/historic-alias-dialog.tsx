@@ -3,6 +3,7 @@
 import { safeApiErrorSchema, type DossierCharacter } from "@slashwho/contracts";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { dossierApiPath } from "../lib/dossier-api";
 import { closeDialog, openDialog, supportsModalDialog } from "./modal-dialog";
 
 export function HistoricAliasDialog({
@@ -75,18 +76,15 @@ export function HistoricAliasDialog({
     }
     setPending(true);
     try {
-      const response = await fetch(
-        `/api/dossiers/${root.region}/${root.realm}/${root.name}/historic-aliases`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            character: character.key,
-            name: name.trim(),
-            realm: realm.trim()
-          })
-        }
-      );
+      const response = await fetch(dossierApiPath(root, "historic-aliases"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          character: character.key,
+          name: name.trim(),
+          realm: realm.trim()
+        })
+      });
       if (!response.ok) {
         const parsed = safeApiErrorSchema.safeParse(
           await response.json().catch(() => null)

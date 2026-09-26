@@ -4,6 +4,7 @@ import {
 } from "@slashwho/contracts";
 import { parseApplicantCharacterUrl } from "@slashwho/domain";
 
+import { warcraftLogsCharacterUrl } from "../../../../../../../lib/dossier-path";
 import { getContainer } from "../../../../../../../server/container";
 import {
   apiError,
@@ -47,7 +48,11 @@ async function change(
     let alias: ReturnType<typeof parseApplicantCharacterUrl>;
     try {
       alias = parseApplicantCharacterUrl(
-        `https://www.warcraftlogs.com/character/${body.character.region}/${encodeURIComponent(body.realm)}/${encodeURIComponent(body.name)}`
+        warcraftLogsCharacterUrl({
+          region: body.character.region,
+          realm: body.realm,
+          name: body.name
+        })
       );
     } catch {
       return apiError("invalid_character_url");
