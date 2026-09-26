@@ -1088,6 +1088,18 @@ export const characterEvidenceRunCosts = pgTable(
     attendanceRecoveredKills: integer("attendance_recovered_kills"),
     /** The run's mode, so a tier search's cost can be read apart (#435). */
     mode: text("mode").default("full").notNull(),
+    /**
+     * Physical requests to the other two upstreams: Raider.IO `raid-progress`
+     * (one per tier), Raider.IO boss rankings (two per guild query) and the
+     * Blizzard achievements profile. Counted so what retaining them would save
+     * can be measured before it is built (#298).
+     *
+     * Null on a row recorded before they were counted, which is not a zero:
+     * those runs did ask both providers, and nothing counted what it cost.
+     */
+    raiderIoHistoricRequests: integer("raiderio_historic_requests"),
+    raiderIoRankingsRequests: integer("raiderio_rankings_requests"),
+    blizzardAchievementsRequests: integer("blizzard_achievements_requests"),
     /** `CharacterGuilds`, which only a tier search reads. */
     characterGuildsRequests: integer("character_guilds_requests")
       .default(0)
