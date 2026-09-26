@@ -431,9 +431,10 @@ function responseLimitation(
   onThrottle?: (event: { retryAfterMs: number | undefined }) => void
 ): WarcraftLogsLimitation {
   if (response.status === 404) return { kind: "limitation", code: "not_found" };
-  if (response.status === 401 || response.status === 403) {
-    return { kind: "limitation", code: "private" };
-  }
+  // Only 403 speaks for the thing asked about. A 401 is our token being
+  // refused, which says nothing about the character, and falls through to
+  // `unavailable` below (#563).
+  if (response.status === 403) return { kind: "limitation", code: "private" };
   // Upstream asking us to back off is throttling whether or not it also sent
   // 429 — a 503 carrying Retry-After is the same signal. This affects only
   // when onThrottle fires, never the limitation this function returns.
@@ -449,6 +450,27 @@ function responseLimitation(
     };
   }
   return { kind: "limitation", code: "unavailable" };
+}
+
+/**
+ * Whether a GraphQL envelope refuses our token rather than the thing asked
+ * for. `UNAUTHORIZED` was read as a private character until #563, which made
+ * a revoked token look like every player it touched choosing privacy.
+ */
+function graphQlAuthRejected(value: unknown): boolean {
+  const envelope = record(value);
+  const errors = envelope && envelope.errors;
+  if (!Array.isArray(errors) || errors.length === 0) return false;
+  const error = record(errors[0]);
+  const message =
+    error && nonEmptyString(error.message)?.toLocaleLowerCase("en-US");
+  const extensions = error && record(error.extensions);
+  const code =
+    extensions && nonEmptyString(extensions.code)?.toLocaleUpperCase("en-US");
+  return (
+    (code === "UNAUTHORIZED" || code === "UNAUTHENTICATED") &&
+    !message?.includes("private")
+  );
 }
 
 function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
@@ -475,7 +497,6 @@ function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
   }
   if (
     code === "FORBIDDEN" ||
-    code === "UNAUTHORIZED" ||
     message?.includes("private") ||
     message?.includes("forbidden") ||
     message?.includes("not authorized")
@@ -2064,7 +2085,15 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
-    if (!response.ok) return responseLimitation(response, options.onThrottle);
+    if (!response.ok) {
+      // The token endpoint answers for our credentials, never for a
+      // character: a refusal here is ours, so it must not read as `private`
+      // or `not_found`, which are statements about the player (#563).
+      const limitation = responseLimitation(response, options.onThrottle);
+      return limitation.code === "rate_limited"
+        ? limitation
+        : { kind: "limitation", code: "unavailable" };
+    }
     try {
       const body = record(await response.json());
       signal?.throwIfAborted();
@@ -2084,14 +2113,41 @@ export function createWarcraftLogsClient(
     }
   }
 
+  /**
+   * A token refused before its cached expiry -- revoked or rotated upstream
+   * -- would otherwise fail every request until the expiry passed. So a
+   * refusal drops the cached token and asks once more with a fresh one. A
+   * refusal that survives that is ours to fix, not the character's: it reads
+   * as `unavailable`, which retries, never as `private`, which does not and
+   * which lets a stored kill go (#563).
+   */
   async function graphql(
     query: string,
     variables: Record<string, string | number | readonly number[]>,
     signal?: AbortSignal
   ): Promise<GraphqlResult> {
+    const first = await graphqlOnce(query, variables, signal);
+    if (first !== "auth_rejected") return first;
+    const second = await graphqlOnce(query, variables, signal);
+    return second === "auth_rejected"
+      ? { kind: "limitation", code: "unavailable" }
+      : second;
+  }
+
+  async function graphqlOnce(
+    query: string,
+    variables: Record<string, string | number | readonly number[]>,
+    signal?: AbortSignal
+  ): Promise<GraphqlResult | "auth_rejected"> {
     const token = await accessToken(signal);
     if (typeof token !== "string") return token;
     signal?.throwIfAborted();
+    const rejected = () => {
+      // Only the token this request carried. A concurrent request may
+      // already have replaced it with a fresh one.
+      if (cachedToken?.value === token) cachedToken = undefined;
+      return "auth_rejected" as const;
+    };
 
     let response: Response;
     try {
@@ -2111,10 +2167,12 @@ export function createWarcraftLogsClient(
     }
 
     signal?.throwIfAborted();
+    if (response.status === 401) return rejected();
     if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
       const body = await response.json();
       signal?.throwIfAborted();
+      if (graphQlAuthRejected(body)) return rejected();
       return graphQlErrorLimitation(body) ?? { kind: "success", value: body };
     } catch {
       if (signal?.aborted) throw signal.reason;

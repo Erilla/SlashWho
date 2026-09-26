@@ -11,6 +11,9 @@ type FixtureName =
   | "token-valid"
   | "character-report-valid"
   | "character-private"
+  | "graphql-unauthenticated"
+  | "graphql-unauthorized"
+  | "token-invalid-client"
   | "report-rankings-valid"
   | "schema-drift";
 
@@ -4035,6 +4038,31 @@ describe("Warcraft Logs gateway", () => {
       expect(code).toBe("unavailable");
     });
 
+    it("keeps a stored kill whose re-read was refused authentication (#563)", async () => {
+      // Break caught: a 401 read as a private report let the stored kill go
+      // under a complete publish -- verified evidence deleted because our own
+      // token was rejected.
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("ReportByCode")) {
+          return jsonResponse(fixture("graphql-unauthenticated"), 401);
+        }
+        return emptyZoneRankingsResponse();
+      });
+
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 10,
+        parseRequestCap: 1,
+        storedKillReportCodes: ["storedRecovery"]
+      });
+
+      const code =
+        result.kind === "limitation" ? result.code : result.limitation?.code;
+      expect(code).toBe("unavailable");
+    });
+
     it("lets a stored kill go when its report is gone, as a complete publish should", async () => {
       // A deleted or private report is a kill the run stopped finding. That
       // is not a failure to read, so it must not hold the run partial.
@@ -5453,6 +5481,103 @@ describe("Warcraft Logs gateway", () => {
     expect(result).toEqual({ kind: "limitation", code: "private" });
     expect(JSON.stringify(result)).not.toContain("private-envelope-marker");
     expect(JSON.stringify(result)).not.toContain("client-secret-marker");
+  });
+
+  describe("an authentication failure is ours, not the character's (#563)", () => {
+    function authClient(
+      graphqlResponses: readonly (() => Response)[],
+      tokenResponse: () => Response = token
+    ) {
+      let tokens = 0;
+      let requests = 0;
+      const { client } = clientFor((url) => {
+        if (url.pathname === "/oauth/token") {
+          tokens++;
+          return tokenResponse();
+        }
+        const next =
+          graphqlResponses[Math.min(requests, graphqlResponses.length - 1)]!;
+        requests++;
+        return next();
+      });
+      return { client, counts: () => ({ tokens, requests }) };
+    }
+    const unauthenticated = () =>
+      jsonResponse(fixture("graphql-unauthenticated"), 401);
+    const unauthorized = () => jsonResponse(fixture("graphql-unauthorized"));
+    const absent = () =>
+      jsonResponse({ data: { characterData: { character: null } } });
+
+    it("fetches a fresh token and retries once when a cached one is rejected", async () => {
+      // Break caught: a token revoked before its cached expiry recorded every
+      // character read until that expiry as private, and never retried them.
+      const { client, counts } = authClient([absent, unauthenticated, absent]);
+
+      await client.resolveCharacter(key);
+      expect(counts()).toEqual({ tokens: 1, requests: 1 });
+
+      await expect(client.resolveCharacter(key)).resolves.toEqual({
+        kind: "limitation",
+        code: "not_found"
+      });
+      expect(counts()).toEqual({ tokens: 2, requests: 3 });
+    });
+
+    it("reads a rejection that survives a fresh token as unavailable", async () => {
+      // Break caught: `private` is never retried, so a broken secret would
+      // strand every character it touched as the player's own choice.
+      for (const rejection of [unauthenticated, unauthorized]) {
+        const { client, counts } = authClient([rejection]);
+
+        const result = await client.resolveCharacter(key);
+
+        expect(result).toEqual({ kind: "limitation", code: "unavailable" });
+        expect(counts()).toEqual({ tokens: 2, requests: 2 });
+      }
+    });
+
+    it("reads a rejected client credential as unavailable, not private", async () => {
+      // Break caught: bad credentials made the token endpoint answer 401, and
+      // that was presented as the character being private.
+      for (const status of [400, 401, 403, 404]) {
+        const { client, counts } = authClient([absent], () =>
+          jsonResponse(fixture("token-invalid-client"), status)
+        );
+
+        const result = await client.resolveCharacter(key);
+
+        expect(result).toEqual({ kind: "limitation", code: "unavailable" });
+        expect(JSON.stringify(result)).not.toContain("client-secret-marker");
+        expect(counts().requests).toBe(0);
+      }
+    });
+
+    it("still reads a throttled token endpoint as rate limited", async () => {
+      const { client } = authClient(
+        [absent],
+        () =>
+          new Response("{}", { status: 429, headers: { "Retry-After": "30" } })
+      );
+
+      await expect(client.resolveCharacter(key)).resolves.toEqual({
+        kind: "limitation",
+        code: "rate_limited",
+        retryAfterMs: 30_000
+      });
+    });
+
+    it("keeps a 403 as private without spending a retry on it", async () => {
+      // Forbidden is about what was asked for; a fresh token cannot change it.
+      const { client, counts } = authClient([
+        () => new Response("{}", { status: 403 })
+      ]);
+
+      await expect(client.resolveCharacter(key)).resolves.toEqual({
+        kind: "limitation",
+        code: "private"
+      });
+      expect(counts()).toEqual({ tokens: 1, requests: 1 });
+    });
   });
 
   it("represents an absent public character as not found", async () => {
