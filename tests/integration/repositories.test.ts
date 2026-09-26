@@ -7458,6 +7458,55 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("keeps a history bookmark only when a later run carries it forward", async () => {
+    // Break caught: a light refresh left the bookmark out of its publish,
+    // expecting storage to keep it. The bookmark lives on each run's own row
+    // and is read from the newest published run, so the omission cleared it.
+    await seedCompleteSnapshot(repositories);
+    const publishRun = async (
+      minute: number,
+      bookmark: Readonly<{
+        historyScanResumePage?: number;
+        historyScanResumeBoundaryReportCode?: string | null;
+      }>
+    ) => {
+      const reservation = await repositories.evidence.reserve({
+        key: rootKey,
+        freshnessCutoff: new Date(`2026-09-20T12:${minute}:00.000Z`),
+        at: new Date(`2026-09-20T12:${minute + 1}:00.000Z`)
+      });
+      if (reservation.kind !== "reserved") throw new Error("run_not_reserved");
+      await repositories.evidence.publish(reservation.run.id, {
+        state: "partial",
+        limitationCode: "request_cap",
+        parseLimitationCode: null,
+        ...bookmark,
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        completedAt: new Date(`2026-09-20T12:${minute + 2}:00.000Z`)
+      });
+    };
+    const stored = async () =>
+      createPostgresRepositories(pool).evidence.storedEvidenceTiers(rootKey);
+
+    await publishRun(10, {
+      historyScanResumePage: 19,
+      historyScanResumeBoundaryReportCode: "newest-proved-report"
+    });
+    await publishRun(20, {
+      historyScanResumePage: 19,
+      historyScanResumeBoundaryReportCode: "newest-proved-report"
+    });
+    await expect(stored()).resolves.toMatchObject({
+      historyScanResumePage: 19,
+      historyScanResumeBoundaryReportCode: "newest-proved-report"
+    });
+
+    await publishRun(30, {});
+    expect((await stored()).historyScanResumePage).toBeUndefined();
+  });
+
   it("persists historic aliases and invalidates only kill completion and scan cursors", async () => {
     await seedCompleteSnapshot(repositories);
     const alias = { region: "eu", realm: "neptulon", name: "erilla" } as const;

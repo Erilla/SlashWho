@@ -3943,7 +3943,7 @@ describe("applicant evidence job handler", () => {
         signal: new AbortController().signal
       };
 
-      it("leaves a stored bookmark untouched when its one page is capped", async () => {
+      it("carries a stored bookmark forward when its one page is capped", async () => {
         // Break caught: a light refresh reads one page and was publishing the
         // client's "resume at page 2" over the stored bookmark. The next full
         // run resumed from page 2, read to the end, and -- a resumed scan never
@@ -3958,12 +3958,12 @@ describe("applicant evidence job handler", () => {
           state: "partial",
           limitationCode: "request_cap"
         });
-        expect(evidence.published[0]?.result).not.toHaveProperty(
-          "historyScanResumePage"
-        );
-        expect(evidence.published[0]?.result).not.toHaveProperty(
-          "historyScanResumeBoundaryReportCode"
-        );
+        // Carried, not omitted: the bookmark lives on each run's own row and
+        // is read from the newest, so leaving it out would clear it.
+        expect(evidence.published[0]?.result).toMatchObject({
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
       });
 
       it("creates no bookmark where none was stored", async () => {
@@ -3985,12 +3985,13 @@ describe("applicant evidence job handler", () => {
 
         await handler.execute(light, context);
 
-        expect(evidence.published[0]?.result).not.toHaveProperty(
-          "historyScanResumePage"
-        );
+        expect(evidence.published[0]?.result).toMatchObject({
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
       });
 
-      it("does not rewrite a stored bookmark when its one page fails", async () => {
+      it("carries a stored bookmark forward when its one page fails", async () => {
         const evidence = withBookmark(store());
         const handler = lightHandler(
           evidence,
@@ -4006,9 +4007,10 @@ describe("applicant evidence job handler", () => {
           state: "partial",
           limitationCode: "unavailable"
         });
-        expect(evidence.published[0]?.result).not.toHaveProperty(
-          "historyScanResumePage"
-        );
+        expect(evidence.published[0]?.result).toMatchObject({
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
       });
 
       it("reads the newest page rather than resuming from the bookmark", async () => {

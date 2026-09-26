@@ -228,7 +228,10 @@ sizing the cap from `request_cap` rows, tell the two apart:
 budget exhaustion.
 
 A light refresh neither resumes nor moves the history cursor: it reads the
-newest page and leaves the stored cursor as it was. Before, its one-page cap
+newest page and republishes the stored cursor unchanged on its own run. It has
+to republish it: the cursor lives on each run's row and is read from the
+newest published run, so a run that left it out would clear it. Before, its
+one-page cap
 saved "resume at page 2", which sent the next full run on a resumed scan and
 the run after that back to page one, so every light refresh on an active
 character paid for its history twice. A light run's `request_cap` is its

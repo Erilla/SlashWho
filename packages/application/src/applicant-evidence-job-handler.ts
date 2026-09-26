@@ -1473,6 +1473,18 @@ export function createApplicantEvidenceJobHandler(
         // page 2" sent the next full run on a resumed scan that may never
         // publish complete (#437), so it paid for the history twice.
         const movesHistoryBookmark = !targeted && job.mode !== "light";
+        // The bookmark lives on each run's own row, and the loader reads it
+        // from the newest published run. So a run that must not move it
+        // cannot simply leave it out -- its new row would hold none, and the
+        // bookmark would be lost -- it has to carry the stored one forward.
+        const carriedHistoryBookmark =
+          storedEvidence.historyScanResumePage !== undefined
+            ? {
+                historyScanResumePage: storedEvidence.historyScanResumePage,
+                historyScanResumeBoundaryReportCode:
+                  storedEvidence.historyScanResumeBoundaryReportCode ?? null
+              }
+            : {};
         const historyScanResumeOptions =
           movesHistoryBookmark &&
           storedEvidence.historyScanResumePage &&
@@ -1881,14 +1893,7 @@ export function createApplicantEvidenceJobHandler(
               ...(!targeted && historicAliases.length > 0
                 ? { historicAliasProgress }
                 : {}),
-              ...(movesHistoryBookmark &&
-              storedEvidence.historyScanResumePage !== undefined
-                ? {
-                    historyScanResumePage: storedEvidence.historyScanResumePage,
-                    historyScanResumeBoundaryReportCode:
-                      storedEvidence.historyScanResumeBoundaryReportCode ?? null
-                  }
-                : {}),
+              ...(targeted ? {} : carriedHistoryBookmark),
               limitationCode: response.code,
               parseLimitationCode: null,
               // The scan stopped before any parse work, so there is nothing
@@ -2131,31 +2136,34 @@ export function createApplicantEvidenceJobHandler(
             ...(response.rankedBackfillCursor !== undefined
               ? { rankedBackfillCursor: response.rankedBackfillCursor }
               : {}),
-            // Omitted, storage keeps the bookmark exactly as it was.
-            ...(!movesHistoryBookmark || response.scanSkipped
+            // A light run's own cursor is its one-page budget, not a place to
+            // resume: it carries the stored bookmark forward unchanged.
+            ...(targeted || response.scanSkipped
               ? {}
-              : response.historyScanResumePage !== undefined
-                ? {
-                    historyScanResumePage: response.historyScanResumePage,
-                    historyScanResumeBoundaryReportCode:
-                      response.historyScanResumeBoundaryReportCode ?? null
-                  }
-                : response.limitation === undefined
-                  ? storedEvidence.historyScanResumePage !== undefined
-                    ? {
-                        historyScanResumePage: null,
-                        historyScanResumeBoundaryReportCode: null
-                      }
-                    : {}
-                  : storedEvidence.historyScanResumePage !== undefined
-                    ? {
-                        historyScanResumePage:
-                          storedEvidence.historyScanResumePage,
-                        historyScanResumeBoundaryReportCode:
-                          storedEvidence.historyScanResumeBoundaryReportCode ??
-                          null
-                      }
-                    : {}),
+              : !movesHistoryBookmark
+                ? carriedHistoryBookmark
+                : response.historyScanResumePage !== undefined
+                  ? {
+                      historyScanResumePage: response.historyScanResumePage,
+                      historyScanResumeBoundaryReportCode:
+                        response.historyScanResumeBoundaryReportCode ?? null
+                    }
+                  : response.limitation === undefined
+                    ? storedEvidence.historyScanResumePage !== undefined
+                      ? {
+                          historyScanResumePage: null,
+                          historyScanResumeBoundaryReportCode: null
+                        }
+                      : {}
+                    : storedEvidence.historyScanResumePage !== undefined
+                      ? {
+                          historyScanResumePage:
+                            storedEvidence.historyScanResumePage,
+                          historyScanResumeBoundaryReportCode:
+                            storedEvidence.historyScanResumeBoundaryReportCode ??
+                            null
+                        }
+                      : {}),
             limitationCode: response.limitation?.code ?? null,
             parseLimitationCode: drivingParse?.code ?? null,
             parseLimitationCodesSeen: parseLimitationsSeen.map(
