@@ -379,3 +379,44 @@ test("keeps section navigation usable by keyboard on a narrow viewport", async (
   );
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test("returns to the top from above the desktop timeline", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/demo");
+
+  const navigation = page.getByRole("navigation", { name: "Dossier sections" });
+  await navigation.getByRole("link", { name: "Data limitations" }).click();
+  await expect(page).toHaveURL(/#limitations-heading$/);
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+
+  const button = navigation.getByRole("button", { name: "Back to top" });
+  const box = await button.boundingBox();
+  const first = await navigation
+    .getByRole("link", { name: "Connected characters" })
+    .boundingBox();
+  const headerBottom = await page
+    .locator(".site-header")
+    .evaluate((header) => header.getBoundingClientRect().bottom);
+  expect(box).not.toBeNull();
+  expect(first).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(headerBottom);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(first!.y);
+
+  await button.click();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page).not.toHaveURL(/#/);
+  await expect(
+    navigation.getByRole("link", { name: "Connected characters" })
+  ).toHaveAttribute("aria-current", "location");
+});
+
+test("hides back to top on a narrow viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/demo");
+
+  await expect(
+    page
+      .getByRole("navigation", { name: "Dossier sections" })
+      .getByRole("button", { name: "Back to top" })
+  ).toBeHidden();
+});

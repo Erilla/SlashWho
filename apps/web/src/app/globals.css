@@ -689,6 +689,12 @@ a {
   text-transform: uppercase;
 }
 
+/* Back to top belongs to the fixed rail; the inline strip already sits at
+   the top of the page. */
+.dossier-section-navigation-top {
+  display: none;
+}
+
 .dossier-section-navigation ol {
   display: flex;
   gap: 0.25rem;
@@ -772,6 +778,39 @@ a {
 
   .dossier-section-navigation-title {
     display: none;
+  }
+
+  .dossier-section-navigation-top {
+    position: absolute;
+    right: 0.3rem;
+    bottom: calc(100% + 0.25rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    padding: 0;
+    color: #6b6b75;
+    cursor: pointer;
+  }
+
+  .dossier-section-navigation-top:hover {
+    background: var(--surface-raised);
+    color: var(--text);
+  }
+
+  .dossier-section-navigation-top:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    color: var(--text);
+  }
+
+  .dossier-section-navigation-top svg {
+    width: 1.125rem;
+    height: 1.125rem;
   }
 
   .dossier-section-navigation ol {
