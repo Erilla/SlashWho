@@ -2230,6 +2230,86 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("round-trips awkward text, nulls and a zero percentile through the batched publish", async () => {
+    // publish sends each column as one array. Array literals have their own
+    // quoting, so text that needs escaping and a legitimate numeric zero are
+    // what a mistake there would corrupt.
+    const awkward = 'Boss "Quoted", {braced} \\ back\\slash';
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
+      at: new Date("2026-08-04T12:00:00.000Z")
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [
+        mythicKill({
+          bossName: awkward,
+          journalBossId: null,
+          guild: null,
+          performance: {
+            spec: null,
+            damage: { state: "available", percentile: 0 },
+            healing: { state: "not_applicable" },
+            bossDamage: { state: "available", percentile: 99.5 }
+          }
+        }),
+        mythicKill({
+          bossId: "1235",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=2"
+        })
+      ],
+      wipes: [mythicWipe({ bossName: awkward, journalBossId: null })],
+      tierBests: [
+        {
+          raidId: "42",
+          raidName: "NULL",
+          bossId: "1234",
+          bossName: awkward,
+          rankingsUrl: "https://www.warcraftlogs.com/character/eu/x#boss=1234",
+          performance: {
+            spec: { name: "Fire", iconUrl: "https://example.test/fire.jpg" },
+            damage: { state: "available", percentile: 0 },
+            healing: { state: "unavailable" },
+            bossDamage: { state: "unavailable" }
+          }
+        }
+      ],
+      completedAt: new Date("2026-08-04T12:05:00.000Z")
+    });
+
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    expect(completed?.kills).toHaveLength(2);
+    const kill = completed?.kills.find((stored) => stored.bossId === "1234");
+    expect(kill).toMatchObject({
+      bossName: awkward,
+      journalBossId: null,
+      guild: null,
+      performance: {
+        damage: { state: "available", percentile: 0 },
+        healing: { state: "not_applicable" },
+        bossDamage: { state: "available", percentile: 99.5 }
+      }
+    });
+    expect(completed?.wipes).toMatchObject([
+      { bossName: awkward, journalBossId: null }
+    ]);
+    expect(completed?.tierBests).toMatchObject([
+      {
+        raidName: "NULL",
+        bossName: awkward,
+        performance: {
+          spec: { name: "Fire" },
+          damage: { state: "available", percentile: 0 }
+        }
+      }
+    ]);
+  });
+
   it("persists a rankless successful lookup and carries it into later publications", async () => {
     const first = await repositories.evidence.reserve({
       key: rootKey,

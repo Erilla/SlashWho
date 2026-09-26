@@ -1618,6 +1618,79 @@ async function finishFingerprintSweep(
   }
 }
 
+type EvidenceRowColumn<Row> = readonly [
+  name: string,
+  type: string,
+  value: (row: Row) => unknown
+];
+
+// Inserts every row for one evidence run in a single statement. Each column
+// travels as one typed array and `unnest` zips the arrays back into rows, so
+// the statement and its parameter count stay the same size however long the
+// history is.
+async function insertEvidenceRows<Row>(
+  client: Queryable,
+  table: string,
+  runId: string,
+  columns: readonly EvidenceRowColumn<Row>[],
+  rows: readonly Row[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  const names = columns.map(([name]) => name).join(", ");
+  await client.query(
+    `INSERT INTO ${table} (evidence_run_id, ${names})
+     SELECT $1::uuid, item.*
+       FROM unnest(${columns
+         .map(([, type], index) => `$${index + 2}::${type}[]`)
+         .join(", ")}) AS item(${names})`,
+    [runId, ...columns.map(([, , value]) => rows.map(value))]
+  );
+}
+
+// The spec and three parse metrics shared by a kill and a tier best.
+function performanceColumns<
+  Row extends { performance: ReturnType<typeof parsePerformanceValues> }
+>(): EvidenceRowColumn<Row>[] {
+  return [
+    ["spec_name", "text", ({ performance }) => performance.spec?.name ?? null],
+    [
+      "spec_icon_url",
+      "text",
+      ({ performance }) => performance.spec?.iconUrl ?? null
+    ],
+    [
+      "damage_parse_state",
+      "character_mythic_kill_parse_state",
+      ({ performance }) => performance.damage.state
+    ],
+    [
+      "damage_percentile",
+      "double precision",
+      ({ performance }) => performance.damage.percentile
+    ],
+    [
+      "healing_parse_state",
+      "character_mythic_kill_parse_state",
+      ({ performance }) => performance.healing.state
+    ],
+    [
+      "healing_percentile",
+      "double precision",
+      ({ performance }) => performance.healing.percentile
+    ],
+    [
+      "boss_damage_parse_state",
+      "character_mythic_kill_parse_state",
+      ({ performance }) => performance.bossDamage.state
+    ],
+    [
+      "boss_damage_percentile",
+      "double precision",
+      ({ performance }) => performance.bossDamage.percentile
+    ]
+  ];
+}
+
 async function requireUpdated(
   client: Pool,
   text: string,
@@ -5055,132 +5128,124 @@ export function createPostgresRepositories(pool: Pool): Repositories {
               collectedAt: input.completedAt
             });
           }
-          for (const { kill, performance } of kills.values()) {
-            await client.query(
-              `INSERT INTO character_mythic_kills
-                (evidence_run_id, source_fight_key, raid_id, raid_name, boss_id,
-                 boss_name, journal_boss_id, boss_order, killed_at,
-                 report_url, fight_url, guild_name, guild_region, guild_realm, uploader,
-                 historic_world_rank, historic_rank_checked_at,
-                 spec_name, spec_icon_url, damage_parse_state, damage_percentile, healing_parse_state,
-                 healing_percentile, boss_damage_parse_state, boss_damage_percentile,
-                 collected_at, parses_read_at)
-               VALUES (${Array.from({ length: 27 }, (_, index) => `$${index + 1}`).join(", ")})`,
+          // One statement per table rather than one per row. Carry-forward
+          // makes every publish rewrite the character's whole history, and
+          // all of it happens while the run's row lock is held.
+          await insertEvidenceRows(
+            client,
+            "character_mythic_kills",
+            runId,
+            [
+              ["source_fight_key", "text", ({ kill }) => kill.fightUrl],
+              ["raid_id", "text", ({ kill }) => kill.raidId],
+              ["raid_name", "text", ({ kill }) => kill.raidName],
+              ["boss_id", "text", ({ kill }) => kill.bossId],
+              ["boss_name", "text", ({ kill }) => kill.bossName],
+              ["journal_boss_id", "text", ({ kill }) => kill.journalBossId],
+              ["boss_order", "integer", ({ kill }) => kill.bossOrder],
+              ["killed_at", "timestamptz", ({ kill }) => kill.killedAt],
+              ["report_url", "text", ({ kill }) => kill.reportUrl],
+              ["fight_url", "text", ({ kill }) => kill.fightUrl],
+              ["guild_name", "text", ({ kill }) => kill.guild?.name ?? null],
               [
-                runId,
-                kill.fightUrl,
-                kill.raidId,
-                kill.raidName,
-                kill.bossId,
-                kill.bossName,
-                kill.journalBossId,
-                kill.bossOrder,
-                kill.killedAt,
-                kill.reportUrl,
-                kill.fightUrl,
-                kill.guild?.name ?? null,
-                kill.guild?.region ?? null,
-                kill.guild?.realm ?? null,
-                kill.uploader ?? null,
-                kill.historicWorldRank ??
+                "guild_region",
+                "text",
+                ({ kill }) => kill.guild?.region ?? null
+              ],
+              ["guild_realm", "text", ({ kill }) => kill.guild?.realm ?? null],
+              ["uploader", "text", ({ kill }) => kill.uploader ?? null],
+              [
+                "historic_world_rank",
+                "integer",
+                ({ kill }) =>
+                  kill.historicWorldRank ??
                   storedHistoricRankLookups.get(kill.fightUrl)
                     ?.historic_world_rank ??
-                  null,
-                kill.historicRankCheckedAt ??
+                  null
+              ],
+              [
+                "historic_rank_checked_at",
+                "timestamptz",
+                ({ kill }) =>
+                  kill.historicRankCheckedAt ??
                   storedHistoricRankLookups.get(kill.fightUrl)
                     ?.historic_rank_checked_at ??
-                  null,
-                performance.spec?.name ?? null,
-                performance.spec?.iconUrl ?? null,
-                performance.damage.state,
-                performance.damage.percentile,
-                performance.healing.state,
-                performance.healing.percentile,
-                performance.bossDamage.state,
-                performance.bossDamage.percentile,
+                  null
+              ],
+              ...performanceColumns(),
+              [
+                "collected_at",
+                "timestamptz",
                 // This run observed the fight only if it came back with it. A
                 // fight carried forward keeps the time it was actually read,
                 // so a percentile's age stays honest.
-                incomingFightUrls.has(kill.fightUrl)
-                  ? input.completedAt
-                  : (storedCollectedAt.get(kill.fightUrl) ?? input.completedAt),
+                ({ kill }) =>
+                  incomingFightUrls.has(kill.fightUrl)
+                    ? input.completedAt
+                    : (storedCollectedAt.get(kill.fightUrl) ??
+                      input.completedAt)
+              ],
+              [
+                "parses_read_at",
+                "timestamptz",
                 // Only a fight this run actually asked about is restamped.
                 // Everything else keeps the answer time it already had, and a
                 // fight never asked about stays null.
-                parsedFightUrls.has(kill.fightUrl)
-                  ? input.completedAt
-                  : (storedParsesReadAt.get(kill.fightUrl) ?? null)
+                ({ kill }) =>
+                  parsedFightUrls.has(kill.fightUrl)
+                    ? input.completedAt
+                    : (storedParsesReadAt.get(kill.fightUrl) ?? null)
               ]
-            );
-          }
-          for (const {
-            tierBest,
-            performance,
-            collectedAt
-          } of tierBests.values()) {
-            await client.query(
-              `INSERT INTO character_tier_best_parses
-                (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
-                 rankings_url, spec_name, spec_icon_url,
-                 damage_parse_state, damage_percentile,
-                 healing_parse_state, healing_percentile,
-                 boss_damage_parse_state, boss_damage_percentile, collected_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-              [
-                runId,
-                tierBest.raidId,
-                tierBest.raidName,
-                tierBest.bossId,
-                tierBest.bossName,
-                tierBest.rankingsUrl,
-                performance.spec?.name ?? null,
-                performance.spec?.iconUrl ?? null,
-                performance.damage.state,
-                performance.damage.percentile,
-                performance.healing.state,
-                performance.healing.percentile,
-                performance.bossDamage.state,
-                performance.bossDamage.percentile,
-                collectedAt
-              ]
-            );
-          }
-          for (const wipe of wipes.values()) {
-            await client.query(
-              `INSERT INTO character_mythic_wipes
-                (evidence_run_id, raid_id, raid_name, boss_id, boss_name,
-                 journal_boss_id, boss_order, attempted_at, report_url, fight_url,
-                 guild_name, guild_realm, uploader)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-              [
-                runId,
-                wipe.raidId,
-                wipe.raidName,
-                wipe.bossId,
-                wipe.bossName,
-                wipe.journalBossId,
-                wipe.bossOrder,
-                wipe.attemptedAt,
-                wipe.reportUrl,
-                wipe.fightUrl,
-                wipe.guild?.name ?? null,
-                wipe.guild?.realm ?? null,
-                wipe.uploader ?? null
-              ]
-            );
-          }
+            ],
+            [...kills.values()]
+          );
+          await insertEvidenceRows(
+            client,
+            "character_tier_best_parses",
+            runId,
+            [
+              ["raid_id", "text", ({ tierBest }) => tierBest.raidId],
+              ["raid_name", "text", ({ tierBest }) => tierBest.raidName],
+              ["boss_id", "text", ({ tierBest }) => tierBest.bossId],
+              ["boss_name", "text", ({ tierBest }) => tierBest.bossName],
+              ["rankings_url", "text", ({ tierBest }) => tierBest.rankingsUrl],
+              ...performanceColumns(),
+              ["collected_at", "timestamptz", ({ collectedAt }) => collectedAt]
+            ],
+            [...tierBests.values()]
+          );
+          await insertEvidenceRows(
+            client,
+            "character_mythic_wipes",
+            runId,
+            [
+              ["raid_id", "text", (wipe) => wipe.raidId],
+              ["raid_name", "text", (wipe) => wipe.raidName],
+              ["boss_id", "text", (wipe) => wipe.bossId],
+              ["boss_name", "text", (wipe) => wipe.bossName],
+              ["journal_boss_id", "text", (wipe) => wipe.journalBossId],
+              ["boss_order", "integer", (wipe) => wipe.bossOrder],
+              ["attempted_at", "timestamptz", (wipe) => wipe.attemptedAt],
+              ["report_url", "text", (wipe) => wipe.reportUrl],
+              ["fight_url", "text", (wipe) => wipe.fightUrl],
+              ["guild_name", "text", (wipe) => wipe.guild?.name ?? null],
+              ["guild_realm", "text", (wipe) => wipe.guild?.realm ?? null],
+              ["uploader", "text", (wipe) => wipe.uploader ?? null]
+            ],
+            [...wipes.values()]
+          );
           // Cutting edges are read from the newest full publication, so a
           // targeted one has none of its own to write.
-          for (const cuttingEdge of targeted
-            ? []
-            : (input.cuttingEdges ?? [])) {
-            await client.query(
-              `INSERT INTO character_evidence_cutting_edges
-                (evidence_run_id, achievement_id, completed_at)
-               VALUES ($1, $2, $3)`,
-              [runId, cuttingEdge.achievementId, cuttingEdge.completedAt]
-            );
-          }
+          await insertEvidenceRows(
+            client,
+            "character_evidence_cutting_edges",
+            runId,
+            [
+              ["achievement_id", "text", (edge) => edge.achievementId],
+              ["completed_at", "timestamptz", (edge) => edge.completedAt]
+            ],
+            targeted ? [] : (input.cuttingEdges ?? [])
+          );
           // The terminal publication marker belongs to this transaction, not
           // to the worker's finally block: evidence a reader can see must not
           // ever say its final phase is still pending after a crash.
