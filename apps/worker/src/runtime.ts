@@ -46,6 +46,8 @@ import {
   wasSuppressedAt
 } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
+import { type Clock, elapsedMs, monotonicClock } from "./cycle-log";
+import { errorName } from "./process-errors";
 import {
   AccountMailStopTimeoutError,
   startAccountMailWorker
@@ -119,6 +121,8 @@ type RuntimePool = {
 
 export type WorkerRuntimeDependencies = {
   startAccountMailWorker?: typeof startAccountMailWorker;
+  /** Times each background cycle; monotonic by default. */
+  clock?: Clock;
   createPool: (connectionString: string) => RuntimePool;
   runMigrations: (pool: RuntimePool) => Promise<void>;
   createRepositories: (pool: RuntimePool) => Repositories;
@@ -626,6 +630,7 @@ export async function createWorkerRuntime(
   logger?: DiscoveryLogger
 ): Promise<WorkerRuntime> {
   const pool = dependencies.createPool(config.databaseUrl);
+  const clock = dependencies.clock ?? monotonicClock;
   let queue: DiscoveryQueue | undefined;
   let ready = false;
   let stopping: Promise<void> | undefined;
@@ -810,24 +815,44 @@ export async function createWorkerRuntime(
       }
     }
     await initializedQueue.workFingerprintAdmissions(async (runId) => {
-      const admission = await repositories.fingerprintSweeps.admitWaiting(
-        runId,
-        new Date()
-      );
-      if (admission.kind === "waiting") {
-        const blockedForMs = admission.blockedSince
-          ? Math.max(0, Date.now() - admission.blockedSince.getTime())
-          : 0;
-        if (blockedForMs >= 15 * 60_000) {
-          logger?.info({
-            event: "fingerprint_admission_blocked",
-            blockedForMs
-          });
+      // One record per admission attempt, whatever it decided. The run id
+      // stays out: the outcome and the time taken are what show a slow cycle.
+      const startedAt = clock();
+      let outcome: string | undefined;
+      let failure: string | undefined;
+      try {
+        const admission = await repositories.fingerprintSweeps.admitWaiting(
+          runId,
+          new Date()
+        );
+        outcome = admission.kind;
+        if (admission.kind === "waiting") {
+          const blockedForMs = admission.blockedSince
+            ? Math.max(0, Date.now() - admission.blockedSince.getTime())
+            : 0;
+          if (blockedForMs >= 15 * 60_000) {
+            logger?.info({
+              event: "fingerprint_admission_blocked",
+              blockedForMs
+            });
+          }
+          throw fingerprintAdmissionRetry(admission.retryAt);
         }
-        throw fingerprintAdmissionRetry(admission.retryAt);
+        if (admission.kind !== "admitted") return;
+        await dispatchAdmittedFingerprintRun(runId);
+      } catch (error) {
+        // A waiting run throws only to ask the queue for a later retry; that
+        // is the outcome working, not a failure.
+        if (outcome !== "waiting") failure = errorName(error);
+        throw error;
+      } finally {
+        logger?.info({
+          event: "fingerprint_admission",
+          ...(outcome === undefined ? {} : { outcome }),
+          durationMs: elapsedMs(clock, startedAt),
+          ...(failure === undefined ? {} : { errorName: failure })
+        });
       }
-      if (admission.kind !== "admitted") return;
-      await dispatchAdmittedFingerprintRun(runId);
     });
     // What actually drives a waiting run. `reserve` is otherwise reached only
     // from a dossier read or the refresh endpoint, so a run that deferred
@@ -838,6 +863,7 @@ export async function createWorkerRuntime(
     // at a time and the points gate still refuses a run it cannot afford, so
     // this cannot spend more per hour than a reader already could.
     await initializedQueue.scheduleEvidenceResume(async () => {
+      const sweepStartedAt = clock();
       // The backlog over time (#509). It rides this five-minute tick because
       // the cadence is modest and the tick already runs on every worker, and
       // it samples before the sweep enqueues anything of its own. Guarded like
@@ -887,17 +913,30 @@ export async function createWorkerRuntime(
           failure: error instanceof Error ? error.name : "unknown"
         });
       }
-      const resumed = await resumeWaitingEvidence(
-        repositories.evidence,
-        initializedQueue,
-        {
-          freshnessCutoff: new Date(
-            Date.now() - config.evidenceFreshnessHours * 60 * 60 * 1000
-          ),
-          limit: config.evidenceResumeSweepLimit,
-          ...(logger ? { logger } : {})
-        }
-      );
+      let resumed: number;
+      try {
+        resumed = await resumeWaitingEvidence(
+          repositories.evidence,
+          initializedQueue,
+          {
+            freshnessCutoff: new Date(
+              Date.now() - config.evidenceFreshnessHours * 60 * 60 * 1000
+            ),
+            limit: config.evidenceResumeSweepLimit,
+            ...(logger ? { logger } : {})
+          }
+        );
+      } catch (error) {
+        // Still rethrown for the queue's one retry, but no longer silent.
+        logger?.info({
+          event: "evidence_resume_sweep",
+          released,
+          republished,
+          durationMs: elapsedMs(clock, sweepStartedAt),
+          errorName: errorName(error)
+        });
+        throw error;
+      }
       // Counts only, never a character key -- recovery reads one now, to mark
       // the tiers a republished stage earned, and it must not leak here. This
       // says whether the sweep is doing anything, which is the thing that was
@@ -906,9 +945,13 @@ export async function createWorkerRuntime(
         event: "evidence_resume_sweep",
         resumed,
         released,
-        republished
+        republished,
+        durationMs: elapsedMs(clock, sweepStartedAt)
       });
       if (applicantSheet) {
+        // Outside the try, so a tick that fails anywhere -- the due check, the
+        // poll's alerts or the drain -- still reports how long it ran.
+        const tickStartedAt = clock();
         try {
           const due = await pool.query(
             "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
@@ -921,6 +964,7 @@ export async function createWorkerRuntime(
               Date.now() - new Date(last as string).getTime() >=
                 config.applicantWatcher.cadenceMs)
           ) {
+            const pollStartedAt = clock();
             try {
               let numericChecks = 0;
               let numericAllowance: boolean | undefined;
@@ -976,7 +1020,8 @@ export async function createWorkerRuntime(
                 created: poll.created,
                 backlog: poll.backlog,
                 invalid: poll.invalid,
-                truncated: poll.truncated
+                truncated: poll.truncated,
+                durationMs: elapsedMs(clock, pollStartedAt)
               });
               await announceNewApplicantIntents(
                 poll,
@@ -1008,7 +1053,7 @@ export async function createWorkerRuntime(
                   }
                 });
               }
-            } catch {
+            } catch (error) {
               applicantPollFailures++;
               applicantNextPollAttempt =
                 Date.now() +
@@ -1019,7 +1064,9 @@ export async function createWorkerRuntime(
                 );
               logger?.info({
                 event: "applicant_sheet_poll_failed",
-                failures: applicantPollFailures
+                failures: applicantPollFailures,
+                durationMs: elapsedMs(clock, pollStartedAt),
+                errorName: errorName(error)
               });
               if (
                 applicantPollFailures >= 3 &&
@@ -1033,6 +1080,7 @@ export async function createWorkerRuntime(
               }
             }
           }
+          const drainStartedAt = clock();
           const wcl = evidenceGateway;
           if (!wcl.resolveCharacterById)
             throw new Error("applicant_resolver_unavailable");
@@ -1047,42 +1095,65 @@ export async function createWorkerRuntime(
               resolveCharacterById: wcl.resolveCharacterById
             }
           });
-          logger?.info({ event: "applicant_sheet_drain", ...drained });
-        } catch {
-          logger?.info({ event: "applicant_sheet_tick_failed" });
+          logger?.info({
+            event: "applicant_sheet_drain",
+            ...drained,
+            durationMs: elapsedMs(clock, drainStartedAt)
+          });
+        } catch (error) {
+          logger?.info({
+            event: "applicant_sheet_tick_failed",
+            durationMs: elapsedMs(clock, tickStartedAt),
+            errorName: errorName(error)
+          });
         }
       }
     });
     await initializedQueue.scheduleMaintenanceCleanup(async () => {
-      await cleanupExpired(repositories);
-      const removedEvidenceRuns =
-        await repositories.evidence.clearStaleCredentials({
-          settled: new Date(
-            Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS
-          ),
-          active: new Date(
-            Date.now() - STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS
-          )
+      const startedAt = clock();
+      let removedEvidenceRuns: number | undefined;
+      let removedCollectionStages: number | undefined;
+      let removedRunCosts: number | undefined;
+      // On the injected logger rather than console.info: this record passes
+      // through the worker's redaction like every other one. It carries counts
+      // only — never a credential, a run id or a character key. It is written
+      // once the whole cycle has run, so its duration covers the search
+      // recovery too, and a failed cycle still reports what it had removed.
+      const record = (failure?: unknown) =>
+        logger?.info({
+          event: "evidence_cache_cleanup",
+          removedEvidenceRuns,
+          removedCollectionStages,
+          removedRunCosts,
+          durationMs: elapsedMs(clock, startedAt),
+          ...(failure === undefined ? {} : { errorName: errorName(failure) })
         });
-      // On the injected logger rather than console.info: this record now passes
-      // through the worker's redaction like every other one. It carries a count
-      // only — never a credential, a run id or a character key.
-      // A stage belongs to an attempt in flight. One whose run has settled is
-      // work nothing will ever republish, so it is dropped rather than left to
-      // hold a copy of the evidence indefinitely.
-      const removedCollectionStages =
-        await repositories.evidence.clearSettledCollectionStages();
-      // Counts only, like the two above it.
-      const removedRunCosts = await repositories.evidence.clearExpiredRunCosts(
-        new Date(Date.now() - EVIDENCE_RUN_COST_RETENTION_MS)
-      );
-      logger?.info({
-        event: "evidence_cache_cleanup",
-        removedEvidenceRuns,
-        removedCollectionStages,
-        removedRunCosts
-      });
-      await recoverPendingSearches(repositories, initializedQueue);
+      try {
+        await cleanupExpired(repositories);
+        removedEvidenceRuns = await repositories.evidence.clearStaleCredentials(
+          {
+            settled: new Date(
+              Date.now() - STALE_EVIDENCE_CREDENTIAL_RETENTION_MS
+            ),
+            active: new Date(
+              Date.now() - STALE_ACTIVE_EVIDENCE_CREDENTIAL_RETENTION_MS
+            )
+          }
+        );
+        // A stage belongs to an attempt in flight. One whose run has settled
+        // is work nothing will ever republish, so it is dropped rather than
+        // left to hold a copy of the evidence indefinitely.
+        removedCollectionStages =
+          await repositories.evidence.clearSettledCollectionStages();
+        removedRunCosts = await repositories.evidence.clearExpiredRunCosts(
+          new Date(Date.now() - EVIDENCE_RUN_COST_RETENTION_MS)
+        );
+        await recoverPendingSearches(repositories, initializedQueue);
+      } catch (error) {
+        record(error);
+        throw error;
+      }
+      record();
     });
     await initializedQueue.work(async (payload, context) => {
       await handler.execute(

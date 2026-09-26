@@ -108,7 +108,11 @@ describe("account mail", () => {
       return new Response("", { status: 200 });
     });
     const logger = { info: vi.fn() };
-    const worker = startAccountMailWorker(repository, config, logger);
+    // Each reading advances 40ms, so a tick's start and its record are 40 apart.
+    let now = 0;
+    const worker = startAccountMailWorker(repository, config, logger, {
+      clock: () => (now += 40)
+    });
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(sent).toBe(false);
@@ -118,9 +122,18 @@ describe("account mail", () => {
         message,
         message
       ]);
+      // The provider failure is named by class, never by its message.
       expect(logger.info.mock.calls).toEqual([
-        [{ event: "account_mail_delivery_failed" }]
+        [
+          {
+            event: "account_mail_delivery_failed",
+            durationMs: 40,
+            errorName: "AccountMailDeliveryError"
+          }
+        ],
+        [{ event: "account_mail_delivered", durationMs: 40 }]
       ]);
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain("secret");
       await worker.stop();
       await vi.advanceTimersByTimeAsync(60000);
       expect(requests).toHaveLength(2);
