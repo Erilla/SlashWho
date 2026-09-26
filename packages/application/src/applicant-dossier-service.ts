@@ -11,6 +11,7 @@ import type {
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
   StoredCharacterTierBestParse,
+  StoredSnapshot,
   StoredSnapshotCharacter
 } from "@slashwho/database";
 import {
@@ -1117,19 +1118,23 @@ async function assembleDossier(options: {
       collectedTimes.length === 0
         ? null
         : new Date(Math.min(...collectedTimes)).toISOString(),
-    research: evidence.some((item) => item.gathering)
-      ? options.rootOnlyStoredEvidence
-        ? {
-            state: "gathering" as const,
-            message:
-              "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
-          }
-        : {
-            state: "gathering" as const,
-            message:
-              "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
-          }
-      : options.research,
+    // A provisional list is the page's cue to research the character itself,
+    // so evidence still gathering beneath it must not replace that state.
+    research:
+      options.research.state !== "provisional" &&
+      evidence.some((item) => item.gathering)
+        ? options.rootOnlyStoredEvidence
+          ? {
+              state: "gathering" as const,
+              message:
+                "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
+            }
+          : {
+              state: "gathering" as const,
+              message:
+                "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+            }
+        : options.research,
     characters: [
       ...options.subjects.map((character, index) =>
         serializeDossierSubject(
@@ -1471,13 +1476,50 @@ export function createApplicantDossierService(options: {
    * tier both go through here, so they can never disagree about who is in
    * the dossier.
    */
+  /**
+   * Another root's snapshot, re-rooted at a character it lists as a
+   * Raider.IO-declared member, so a character with no discovery of its own
+   * shows the account it was claimed on while that discovery runs. An
+   * inferred membership is not enough to put another root's whole list under
+   * this character's name. Nothing is stored: the view lasts one read, and
+   * the character's own snapshot replaces it once published.
+   */
+  function borrowSnapshot(
+    key: CharacterKey,
+    containing: StoredSnapshot | null | undefined
+  ): StoredSnapshot | null {
+    if (!containing) return null;
+    const id = canonicalCharacterId(key);
+    const member = containing.characters.find(
+      (character) => canonicalCharacterId(character.key) === id
+    );
+    if (member?.source !== "claimed" && member?.source !== "declared_main")
+      return null;
+    const formerRootId = canonicalCharacterId(containing.rootKey);
+    return {
+      ...containing,
+      rootKey: key,
+      characters: containing.characters.map((character) => {
+        const characterId = canonicalCharacterId(character.key);
+        if (characterId === id) return { ...character, source: "input" };
+        if (characterId === formerRootId)
+          return { ...character, source: "claimed" };
+        return character;
+      })
+    };
+  }
+
   async function resolveSubjects(
     key: CharacterKey,
     repositories: ReturnType<typeof scopedRepositories>
   ) {
+    const own = await repositories.snapshots.getCurrent(key);
     const snapshot =
-      (await repositories.snapshots.getCurrent(key)) ??
-      (await repositories.snapshots.getCurrentContainingCharacter?.(key));
+      own ??
+      borrowSnapshot(
+        key,
+        await repositories.snapshots.getCurrentContainingCharacter?.(key)
+      );
     if (!snapshot) return null;
     const seen = new Set(
       snapshot.characters.map((character) =>
@@ -1615,7 +1657,13 @@ export function createApplicantDossierService(options: {
         left.key.realm.localeCompare(right.key.realm, "en") ||
         left.key.name.localeCompare(right.key.name, "en")
     );
-    return { snapshot, selected, skipped, excludedOrdered };
+    return {
+      snapshot,
+      selected,
+      skipped,
+      excludedOrdered,
+      provisional: own === null
+    };
   }
 
   async function readRootOnly(
@@ -1882,7 +1930,8 @@ export function createApplicantDossierService(options: {
         if (!completed) return { kind: "not_ready" };
         return readRootOnly(key, true, repositories, signal, overrides, scope);
       }
-      const { snapshot, selected, skipped, excludedOrdered } = resolved;
+      const { snapshot, selected, skipped, excludedOrdered, provisional } =
+        resolved;
 
       // The existing dossier stays readable while this cadence-gated background
       // sweep checks for members who joined current or historical guilds. Its
@@ -1901,8 +1950,13 @@ export function createApplicantDossierService(options: {
           subjects: selected,
           skippedSubjects: skipped,
           excludedSubjects: excludedOrdered,
-          research:
-            snapshot.state === "complete"
+          research: provisional
+            ? {
+                state: "provisional",
+                message:
+                  "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
+              }
+            : snapshot.state === "complete"
               ? {
                   state: "complete",
                   message: "Linked-character research is complete."
