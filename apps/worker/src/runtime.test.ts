@@ -20,6 +20,7 @@ import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
+import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import {
   createDiscoveryRunNotifier,
@@ -31,6 +32,19 @@ import {
   createAccountWarcraftLogsResolver,
   announceNewApplicantIntents
 } from "./runtime";
+
+// The applicant watcher builds its Sheet client itself rather than taking it
+// as a dependency, so the tests that switch the watcher on stub the client and
+// the poll and drain it feeds. Every other test leaves the watcher disabled,
+// where none of these is ever reached.
+vi.mock("./applicant-sheet", () => ({
+  createApplicantSheetClient: vi.fn(() => ({ readRows: vi.fn(async () => []) }))
+}));
+vi.mock("./applicant-watcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./applicant-watcher")>()),
+  pollApplicantSheet: vi.fn(),
+  drainApplicantIntents: vi.fn()
+}));
 
 it("announces newly recorded applicant intents without alerting on baseline or unchanged polls", async () => {
   const notify = vi.fn(async () => undefined);
@@ -1601,6 +1615,126 @@ describe("worker runtime", () => {
     // Neither the run id nor the error message reaches a record.
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain(brokenRunId);
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain(waitingRunId);
+    await runtime.stop();
+  });
+
+  const applicantConfig: WorkerConfig = {
+    ...config,
+    applicantWatcher: {
+      ...config.applicantWatcher,
+      enabled: true,
+      sheetId: "applicant-sheet",
+      apiKey: "applicant-sheet-key"
+    }
+  };
+  const applicantGateway = () =>
+    ({
+      getRateLimit: vi.fn(),
+      resolveCharacterById: vi.fn()
+    }) as unknown as Pick<
+      WarcraftLogsGateway,
+      "getFirstKillReports" | "getRateLimit" | "resolveCharacterById"
+    >;
+  const applicantRecords = (logger: { info: ReturnType<typeof vi.fn> }) =>
+    logger.info.mock.calls
+      .map(([record]) => record as Record<string, unknown>)
+      .filter((record) => String(record.event).startsWith("applicant_sheet"));
+
+  it("times the applicant sheet poll and drain", async () => {
+    // Break caught (#507): the poll and drain logged counts but no duration,
+    // so a slow Sheet read that held up the resume tick could not be seen.
+    // The stepping clock is read at the sweep, the tick, the poll and the
+    // drain, each start and record 25ms apart.
+    vi.mocked(pollApplicantSheet).mockResolvedValueOnce({
+      baseline: false,
+      created: 0,
+      backlog: 0,
+      invalid: 0,
+      truncated: 0,
+      newApplicants: []
+    });
+    vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
+      admitted: 1,
+      suppressed: 0,
+      deferred: 0
+    });
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      applicantConfig,
+      {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway,
+        clock: steppingClock()
+      },
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(applicantRecords(logger)).toEqual([
+      {
+        event: "applicant_sheet_poll",
+        baseline: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        durationMs: 25
+      },
+      {
+        event: "applicant_sheet_drain",
+        admitted: 1,
+        suppressed: 0,
+        deferred: 0,
+        durationMs: 25
+      }
+    ]);
+    await runtime.stop();
+  });
+
+  it("times and names a failed applicant poll and a failed tick", async () => {
+    // Break caught (#507): a failed poll said only how many times it had
+    // failed, and a failed tick said nothing but that it failed -- not what
+    // threw, nor how long it ran first.
+    vi.mocked(pollApplicantSheet).mockRejectedValueOnce(
+      new TypeError("private-value")
+    );
+    vi.mocked(drainApplicantIntents).mockRejectedValueOnce(
+      new RangeError("private-value")
+    );
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      applicantConfig,
+      {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway,
+        clock: steppingClock()
+      },
+      logger
+    );
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(applicantRecords(logger)).toEqual([
+      {
+        event: "applicant_sheet_poll_failed",
+        failures: 1,
+        durationMs: 25,
+        errorName: "TypeError"
+      },
+      // Timed from the start of the tick: the due check, the failed poll and
+      // the drain that threw.
+      {
+        event: "applicant_sheet_tick_failed",
+        durationMs: 100,
+        errorName: "RangeError"
+      }
+    ]);
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      "private-value"
+    );
     await runtime.stop();
   });
 

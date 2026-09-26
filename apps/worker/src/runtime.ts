@@ -888,6 +888,9 @@ export async function createWorkerRuntime(
         durationMs: elapsedMs(clock, sweepStartedAt)
       });
       if (applicantSheet) {
+        // Outside the try, so a tick that fails anywhere -- the due check, the
+        // poll's alerts or the drain -- still reports how long it ran.
+        const tickStartedAt = clock();
         try {
           const due = await pool.query(
             "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
@@ -1039,6 +1042,7 @@ export async function createWorkerRuntime(
         } catch (error) {
           logger?.info({
             event: "applicant_sheet_tick_failed",
+            durationMs: elapsedMs(clock, tickStartedAt),
             errorName: errorName(error)
           });
         }
