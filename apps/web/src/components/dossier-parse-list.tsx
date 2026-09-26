@@ -44,7 +44,7 @@ function ParseMetric({
           <span
             aria-label="Loading parse"
             className="dossier-parse-spinner"
-            role="status"
+            role="img"
           />
         ) : (
           <span className="dossier-parse-metric-value">-</span>

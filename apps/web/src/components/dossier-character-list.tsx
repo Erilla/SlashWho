@@ -142,7 +142,7 @@ export function DossierCharacterList({
                     <svg
                       aria-label={`Research gathering for ${character.displayName}`}
                       className="dossier-loading-spinner dossier-character-spinner"
-                      role="status"
+                      role="img"
                       viewBox="0 0 24 24"
                     >
                       <circle cx="12" cy="12" r="8" />

@@ -144,8 +144,8 @@ it("shows a spinner for unavailable metrics while research is gathering", () => 
     />
   );
 
-  expect(screen.getAllByRole("status", { name: "Loading parse" })).toHaveLength(
-    2
-  );
+  expect(screen.getAllByRole("img", { name: "Loading parse" })).toHaveLength(2);
+  // Each loading metric is a picture, not a live region of its own.
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
   expect(screen.getAllByText("-")).toHaveLength(1);
 });

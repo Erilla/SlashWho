@@ -998,13 +998,13 @@ describe("DossierPageClient staged research", () => {
     );
 
     expect(
-      screen.queryByRole("status", { name: "Current character" })
+      screen.queryByRole("group", { name: "Current character" })
     ).toBeNull();
     act(() =>
       observe?.([{ isIntersecting: false } as IntersectionObserverEntry])
     );
 
-    const badge = await screen.findByRole("status", {
+    const badge = await screen.findByRole("group", {
       name: "Current character"
     });
     expect(badge).toHaveTextContent("RyiiEU · silvermoon");
@@ -1076,7 +1076,7 @@ describe("DossierPageClient staged research", () => {
       observe?.([{ isIntersecting: false } as IntersectionObserverEntry])
     );
 
-    const badge = await screen.findByRole("status", {
+    const badge = await screen.findByRole("group", {
       name: "Current character"
     });
     expect(badge).toHaveTextContent("Ryii<Rancour>EU · silvermoon");
