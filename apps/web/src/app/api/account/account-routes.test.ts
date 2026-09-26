@@ -1,3 +1,5 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { operatorMutation } from "../../../server/operator-auth-test-fixture";
 
@@ -9,7 +11,8 @@ const state = vi.hoisted(() => ({
   requestReset: vi.fn(),
   confirmVerification: vi.fn(),
   signInVerifiedAccount: vi.fn(),
-  completeReset: vi.fn()
+  completeReset: vi.fn(),
+  changePassword: vi.fn()
 }));
 vi.mock("../../../server/container", () => ({
   getContainer: async () => ({
@@ -140,6 +143,41 @@ describe("account routes", () => {
         )
       ).status
     ).toBe(200);
+  });
+
+  it("changes a signed-in password from a body read once, surviving garbage collection", async () => {
+    // A discarded Request.clone() cancels the original's body when collected,
+    // so the route must hand the parsed body on rather than re-read a clone.
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const body = {
+      currentPassword: "current-long-password",
+      newPassword: "abcdef"
+    };
+    state.changePassword.mockImplementation(
+      async (_request: Request, parsed: unknown) => {
+        gc();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return parsed && (parsed as typeof body).newPassword === "abcdef"
+          ? {
+              accepted: true,
+              principal: null,
+              cookie: { header: "s=; Max-Age=0" }
+            }
+          : { accepted: false, principal: null };
+      }
+    );
+
+    const response = await password(operatorMutation(body));
+
+    expect(response.status).toBe(200);
+    expect(state.changePassword).toHaveBeenCalledWith(
+      expect.any(Request),
+      body
+    );
+    expect(await response.json()).toEqual({
+      message: "Password changed. Sign in again."
+    });
   });
 
   it("returns generic recovery and a safe own-session projection", async () => {

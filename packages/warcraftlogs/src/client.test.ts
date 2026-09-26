@@ -121,11 +121,22 @@ function clientFor(
     const url = new URL(
       typeof input === "string" || input instanceof URL ? input : input.url
     );
-    const response = await responder(url, init);
+    let response = await responder(url, init);
     if (url.pathname === "/api/v2/client") {
       const body = JSON.parse(String(init?.body)) as {
         query: string;
         variables: { code?: string };
+      };
+      // Peek at the payload by reading it once and rebuilding the response:
+      // a discarded clone() cancels the original's body when collected.
+      const readOnce = async () => {
+        const text = await response.text();
+        response = new Response(text, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers
+        });
+        return text;
       };
       // Zone rankings are their own request. A responder written for the
       // report path would answer it with a report payload, so tests that do
@@ -134,7 +145,7 @@ function clientFor(
         let character: unknown;
         try {
           character = (
-            (await response.clone().json()) as {
+            JSON.parse(await readOnce()) as {
               data?: { characterData?: { character?: unknown } };
             }
           ).data?.characterData?.character;
@@ -152,7 +163,7 @@ function clientFor(
       if (body.query.includes("ReportFightParses")) {
         let payload: { data?: { reportData?: unknown } };
         try {
-          payload = (await response.clone().json()) as {
+          payload = JSON.parse(await readOnce()) as {
             data?: { reportData?: unknown };
           };
         } catch {
@@ -3885,18 +3896,21 @@ describe("Warcraft Logs gateway", () => {
       // renamed, moved or never logged is unknown to Warcraft Logs, and its
       // refusal marked the scan limited -- so the run was partial, and was
       // retried, and was partial again, for as long as the kill stayed unheld.
+      // Factories, not held responses: cloning a held response per call
+      // breaks once a collected clone cancels the original's body.
       for (const refusal of [
-        jsonResponse({
-          errors: [{ message: "No guild exists for this name/server/region" }]
-        }),
-        jsonResponse({ data: { guildData: { guild: null } } }),
-        new Response("upstream-body-marker", { status: 503 })
+        () =>
+          jsonResponse({
+            errors: [{ message: "No guild exists for this name/server/region" }]
+          }),
+        () => jsonResponse({ data: { guildData: { guild: null } } }),
+        () => new Response("upstream-body-marker", { status: 503 })
       ]) {
         const { client } = clientFor((url, init) => {
           if (url.pathname === "/oauth/token") return token();
           const body = JSON.parse(String(init?.body)) as { query: string };
           if (body.query.includes("RecentReports")) return history();
-          if (body.query.includes("GuildAttendance")) return refusal.clone();
+          if (body.query.includes("GuildAttendance")) return refusal();
           return emptyZoneRankingsResponse();
         });
 

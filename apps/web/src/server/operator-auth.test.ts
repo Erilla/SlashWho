@@ -283,7 +283,7 @@ it("authenticates verified accounts and reads current role and required-change s
   expect(
     (
       await auth.changePassword(
-        mutation(
+        ...passwordChange(
           {
             currentPassword: credential,
             newPassword: "abcdef"
@@ -296,7 +296,7 @@ it("authenticates verified accounts and reads current role and required-change s
   expect(
     (
       await auth.changePassword(
-        mutation(
+        ...passwordChange(
           {
             currentPassword: "incorrect-but-long-password",
             newPassword: "another-long-secret-password"
@@ -309,7 +309,7 @@ it("authenticates verified accounts and reads current role and required-change s
   expect(
     (
       await auth.changePassword(
-        mutation(
+        ...passwordChange(
           {
             currentPassword: credential,
             newPassword: "abcdef"
@@ -326,6 +326,14 @@ it("authenticates verified accounts and reads current role and required-change s
       .principal
   ).toBeNull();
 });
+
+/** The route parses the body once and passes it on beside the request. */
+function passwordChange(
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {}
+): [Request, Record<string, unknown>] {
+  return [mutation(body, headers), body];
+}
 
 function mutation(
   body: unknown = { login: "RYAN", credential },

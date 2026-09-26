@@ -205,21 +205,24 @@ function principal(operator: Operator): OperatorPrincipal {
   };
 }
 
-async function mutationBody(
-  request: Request,
-  origin: string
-): Promise<Record<string, unknown> | null> {
-  if (
-    request.method !== "POST" ||
-    request.headers.get("origin") !== origin ||
-    request.headers.get("sec-fetch-site") !== "same-origin" ||
+function mutationHeadersAllowed(request: Request, origin: string): boolean {
+  return (
+    request.method === "POST" &&
+    request.headers.get("origin") === origin &&
+    request.headers.get("sec-fetch-site") === "same-origin" &&
     request.headers
       .get("content-type")
       ?.split(";", 1)[0]!
       .trim()
-      .toLowerCase() !== "application/json"
-  )
-    return null;
+      .toLowerCase() === "application/json"
+  );
+}
+
+async function mutationBody(
+  request: Request,
+  origin: string
+): Promise<Record<string, unknown> | null> {
+  if (!mutationHeadersAllowed(request, origin)) return null;
   // Bound the bytes consumed even when the sender omits Content-Length.
   const reader = request.body?.getReader();
   if (!reader) return null;
@@ -647,15 +650,22 @@ export function createAccountAuth(options: {
     }
     return { ...denied(), accepted: true };
   }
+  /**
+   * Takes the body already parsed by the route: the request's own body has
+   * been read, and re-reading a `clone()` is unsafe because collecting the
+   * discarded clone cancels the original's body.
+   */
   async function changePassword(
-    request: Request
+    request: Request,
+    body: Record<string, unknown>
   ): Promise<{ accepted: boolean; principal: null; cookie?: CookieDirective }> {
     const at = now();
-    if (request.headers.has("authorization"))
-      return { accepted: false, principal: null };
-    const body = await mutationBody(request, options.origin);
     if (
-      !body ||
+      request.headers.has("authorization") ||
+      !mutationHeadersAllowed(request, options.origin)
+    )
+      return { accepted: false, principal: null };
+    if (
       typeof body.currentPassword !== "string" ||
       typeof body.newPassword !== "string" ||
       body.currentPassword.length > 1024 ||
