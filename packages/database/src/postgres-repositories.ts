@@ -4887,6 +4887,36 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         }));
       },
 
+      async withCompletedEvidence(keys) {
+        if (keys.length === 0) return [];
+        const result = await pool.query<{
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+        }>(
+          `SELECT keys.region, keys.realm_slug, keys.normalized_name
+             FROM unnest($1::text[], $2::text[], $3::text[])
+                    WITH ORDINALITY AS keys(region, realm_slug, normalized_name, ordinal)
+            WHERE EXISTS (
+                    SELECT 1 FROM character_evidence_runs runs
+                     WHERE runs.region = keys.region
+                       AND runs.realm_slug = keys.realm_slug
+                       AND runs.normalized_name = keys.normalized_name
+                       AND runs.status IN ('complete', 'partial'))
+            ORDER BY keys.ordinal`,
+          [
+            keys.map((key) => key.region),
+            keys.map((key) => key.realm),
+            keys.map((key) => key.name)
+          ]
+        );
+        return result.rows.map((row) => ({
+          region: row.region,
+          realm: row.realm_slug,
+          name: row.normalized_name
+        }));
+      },
+
       async reserveTierSearch({
         key,
         raidId,

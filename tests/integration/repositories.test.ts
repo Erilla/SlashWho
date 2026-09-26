@@ -5670,6 +5670,31 @@ describe("PostgreSQL repositories", () => {
       ).resolves.toEqual([]);
     });
 
+    it("names which characters have evidence a tier search could add to", async () => {
+      // Break caught (#494 re-review): a character with nothing collected
+      // read as still to search, so the tier offered a search that the
+      // reservation always refuses.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const failed = await repositories.evidence.reserve({
+        key: altKey,
+        freshnessCutoff: searchedAt,
+        at: searchedAt
+      });
+      await repositories.evidence.claim(failed.run.id, 1);
+      await repositories.evidence.fail(failed.run.id, "unavailable");
+
+      await expect(
+        repositories.evidence.withCompletedEvidence!([
+          rootKey,
+          altKey,
+          { ...rootKey, name: "nobody" }
+        ])
+      ).resolves.toEqual([rootKey]);
+      await expect(
+        repositories.evidence.withCompletedEvidence!([])
+      ).resolves.toEqual([]);
+    });
+
     it("keeps each character's tier search a run of its own, costed apart", async () => {
       // One press queues one run per character (#449); each attempt's cost is
       // recorded against that character's run, never pooled.

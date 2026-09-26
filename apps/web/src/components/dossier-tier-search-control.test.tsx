@@ -146,6 +146,41 @@ describe("tierSearchView", () => {
     );
   });
 
+  it("does not offer a search for characters it cannot reach", () => {
+    // Break caught (#494 re-review): a character with nothing collected kept
+    // "Search remaining characters" enabled, though every press is refused.
+    const view = tierSearchView(
+      tier("searched", [
+        ["Ryii", "completed"],
+        ["Empty", "no_evidence"]
+      ]),
+      null
+    );
+
+    expect(view.label).toBe("Searched");
+    expect(view.disabled).toBe(true);
+    expect(view.summary).toMatch(
+      /^1 of 2 characters searched\. 1 with nothing collected yet\. It can be searched again after .+\.$/
+    );
+    expect(view.characters).toEqual([
+      { name: "Ryii", status: "searched" },
+      { name: "Empty", status: "not searchable: nothing collected for it yet" }
+    ]);
+    // The same holds when only a press has said so.
+    expect(
+      tierSearchView(
+        tier("partly_searched", [
+          ["Ryii", "completed"],
+          ["Empty", "not_searched"]
+        ]),
+        answer("searched", [
+          ["Ryii", "searched"],
+          ["Empty", "no_evidence"]
+        ])
+      )
+    ).toMatchObject({ label: "Searched", disabled: true });
+  });
+
   it("gives each character the press skipped the reason it was skipped", () => {
     const view = tierSearchView(
       tier("queued", [
@@ -172,7 +207,10 @@ describe("tierSearchView", () => {
         name: "Busy",
         status: "skipped: another collection is running for it"
       },
-      { name: "Empty", status: "skipped: nothing collected for it yet" },
+      {
+        name: "Empty",
+        status: "not searchable: nothing collected for it yet"
+      },
       {
         name: "Late",
         status: "not queued: beyond the most one search may queue"
@@ -181,7 +219,7 @@ describe("tierSearchView", () => {
       { name: "Cooling", status: "searched" }
     ]);
     expect(view.summary).toBe(
-      "1 of 6 characters searched. 1 queued, 1 failed, 3 skipped."
+      "1 of 6 characters searched. 1 queued, 1 failed, 2 skipped, 1 with nothing collected yet."
     );
   });
 

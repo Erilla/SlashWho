@@ -3186,6 +3186,59 @@ describe("applicant dossier tier search across characters", () => {
     });
   });
 
+  it("marks a character with nothing collected as a search that cannot run", async () => {
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const plain = await fixture().dossiers.read(root);
+    if (plain.kind !== "ready") throw new Error("dossier_not_ready");
+    const raidId = plain.dossier.raids[0]!.raidId;
+    const { dossiers, repositories } = fixture({
+      characterCap: 1,
+      tierSearches: [{ key: root, raidId, status: "complete", createdAt }]
+    });
+    const withCompletedEvidence = vi.fn(async () => [root]);
+    Object.assign(repositories.evidence, { withCompletedEvidence });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(withCompletedEvidence).toHaveBeenCalledWith([root, alt]);
+    expect(
+      result.dossier.raids.find((raid) => raid.raidId === raidId)?.tierSearch
+    ).toMatchObject({
+      state: "searched",
+      characters: [
+        { key: root, state: "completed" },
+        { key: alt, state: "no_evidence" }
+      ]
+    });
+  });
+
+  it("treats every character as searchable when their evidence cannot be read", async () => {
+    // A failed read costs the button its precision, never the dossier.
+    const createdAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const plain = await fixture().dossiers.read(root);
+    if (plain.kind !== "ready") throw new Error("dossier_not_ready");
+    const raidId = plain.dossier.raids[0]!.raidId;
+    const { dossiers, repositories } = fixture({
+      tierSearches: [{ key: root, raidId, status: "complete", createdAt }]
+    });
+    Object.assign(repositories.evidence, {
+      withCompletedEvidence: vi.fn(async () => {
+        throw new Error("database_down");
+      })
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(
+      result.dossier.raids.find((raid) => raid.raidId === raidId)?.tierSearch
+    ).toMatchObject({
+      state: "partly_searched",
+      characters: [{ state: "completed" }, { state: "not_searched" }]
+    });
+  });
+
   it("keeps every character's verified evidence when one character's search failed", async () => {
     // A failed search publishes nothing (#492), so the section still shows
     // what every character had before it.

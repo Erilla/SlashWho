@@ -124,13 +124,17 @@ function characterState(
  * The dossier's view of each tier's searches across its included characters
  * (#449). A character's newest search, under any of its merged names, is in
  * flight or ended within the rate limit's window; otherwise the character is
- * still to search. A tier no character has such a search for is absent,
- * meaning it may be searched.
+ * still to search, unless `withEvidence` says it has nothing collected for a
+ * search to add to (#494 review): a reservation always refuses it, so it is
+ * never counted as remaining. `withEvidence` holds canonical character ids;
+ * without it every character is taken to be searchable. A tier no character
+ * has such a search for is absent, meaning it may be searched.
  */
 export function tierSearchStates(
   subjects: readonly TierSearchSubject[],
   latest: readonly LatestTierSearch[],
-  now: Date
+  now: Date,
+  withEvidence?: ReadonlySet<string>
 ): ReadonlyMap<string, DossierTierSearch> {
   const subjectOf = new Map<string, number>();
   subjects.forEach((subject, index) => {
@@ -158,13 +162,17 @@ export function tierSearchStates(
       (subject, index) => {
         const search = bySubject.get(index);
         const base = { key: subject.key, displayName: subject.displayName };
-        if (!search) return { ...base, state: "not_searched" };
+        const idle =
+          withEvidence && !withEvidence.has(canonicalCharacterId(subject.key))
+            ? "no_evidence"
+            : "not_searched";
+        if (!search) return { ...base, state: idle };
         const searchableAgainAt = new Date(
           search.createdAt.getTime() + TIER_SEARCH_SPACING_MS
         );
         const state = characterState(search.status, searchableAgainAt, now);
         return state === "not_searched"
-          ? { ...base, state }
+          ? { ...base, state: idle }
           : {
               ...base,
               state,
@@ -174,16 +182,17 @@ export function tierSearchStates(
       }
     );
     const searched = characters.filter(
-      (character) => character.state !== "not_searched"
+      (character) =>
+        character.state !== "not_searched" && character.state !== "no_evidence"
     );
     if (searched.length === 0) continue;
     const state = characters.some((character) => character.state === "running")
       ? "running"
       : characters.some((character) => character.state === "queued")
         ? "queued"
-        : searched.length === characters.length
-          ? "searched"
-          : "partly_searched";
+        : characters.some((character) => character.state === "not_searched")
+          ? "partly_searched"
+          : "searched";
     states.set(raidId, {
       state,
       searchedAt: searched

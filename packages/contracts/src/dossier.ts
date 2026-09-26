@@ -207,7 +207,9 @@ export const dossierBossSchema = z.discriminatedUnion("state", [
  * Where one dossier character's search of a tier stands. `completed`,
  * `partial` and `failed` are how a search in the rate limit's window ended;
  * `partial` stopped at its request cap. `not_searched` means no search of the
- * tier is in flight or in that window for the character.
+ * tier is in flight or in that window for the character. `no_evidence` means
+ * the character has nothing collected for a search to add to, so no search
+ * can run for it until an ordinary collection has.
  */
 export const dossierTierSearchCharacterSchema = z
   .object({
@@ -219,7 +221,8 @@ export const dossierTierSearchCharacterSchema = z
       "completed",
       "partial",
       "failed",
-      "not_searched"
+      "not_searched",
+      "no_evidence"
     ]),
     searchedAt: z.iso.datetime().optional(),
     searchableAgainAt: z.iso.datetime().optional()
@@ -229,8 +232,8 @@ export const dossierTierSearchCharacterSchema = z
 /**
  * Where the dossier's explicit search of this tier stands, across every
  * included character (#435, #449). `queued` and `running` mean some
- * character's search is in flight. `searched` means every character has a
- * search in the rate limit's window, so nothing can be searched until
+ * character's search is in flight. `searched` means every character that can
+ * be searched has a search in the rate limit's window, so nothing can be searched until
  * `searchableAgainAt`, the earliest any of them may run again.
  * `partly_searched` means some characters have been searched and others have
  * not, so the tier may be searched again for those. `searchedAt` is the

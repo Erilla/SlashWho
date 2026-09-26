@@ -806,6 +806,13 @@ export interface EvidenceRepository {
     keys: readonly CharacterKey[],
     since: Date
   ): Promise<readonly LatestTierSearch[]>;
+  /**
+   * The keys among these with a complete or partial collection: the ones a
+   * tier search can add to, by the same test `reserveTierSearch` applies.
+   */
+  withCompletedEvidence?(
+    keys: readonly CharacterKey[]
+  ): Promise<readonly CharacterKey[]>;
   reserveTierSearch(input: {
     key: CharacterKey;
     raidId: string;

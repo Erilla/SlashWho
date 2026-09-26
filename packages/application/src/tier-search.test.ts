@@ -1,4 +1,4 @@
-import { supportedRaidCatalogue } from "@slashwho/domain";
+import { canonicalCharacterId, supportedRaidCatalogue } from "@slashwho/domain";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -323,6 +323,39 @@ describe("tier search policy", () => {
           searchedAt: hoursAgo(3).toISOString()
         })
       ]);
+    });
+
+    it("marks a character with nothing collected as unsearchable, not remaining", () => {
+      // Break caught (#494 re-review): such a character kept the tier
+      // "partly searched" for ever, though every press is refused for it.
+      const states = tierSearchStates(
+        subjects,
+        [
+          {
+            key: ryii,
+            raidId: "1180",
+            status: "complete",
+            createdAt: hoursAgo(2)
+          },
+          {
+            key: other,
+            raidId: "1180",
+            status: "failed",
+            createdAt: hoursAgo(2)
+          }
+        ],
+        now,
+        new Set([ryii, other].map(canonicalCharacterId))
+      );
+
+      expect(states.get("1180")).toMatchObject({
+        state: "searched",
+        characters: [
+          { key: ryii, state: "completed" },
+          { key: alt, state: "no_evidence" },
+          { key: other, state: "failed" }
+        ]
+      });
     });
 
     it("ignores searches for characters the dossier does not include", () => {

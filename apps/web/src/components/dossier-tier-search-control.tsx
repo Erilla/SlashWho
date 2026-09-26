@@ -18,7 +18,14 @@ function formatTime(value: string): string {
 
 /** Where one character stands, whichever of the dossier or a press said so. */
 type Standing =
-  "running" | "queued" | "searched" | "failed" | "skipped" | "not_searched";
+  | "running"
+  | "queued"
+  | "searched"
+  | "failed"
+  | "skipped"
+  | "not_searched"
+  /** Nothing collected for a search to add to, so no press can reach it. */
+  | "unreachable";
 
 type CharacterView = Readonly<{ name: string; status: string }>;
 
@@ -50,6 +57,11 @@ function fromDossier(
       return { standing: "failed", status: "search failed" };
     case "not_searched":
       return { standing: "not_searched", status: "not searched" };
+    case "no_evidence":
+      return {
+        standing: "unreachable",
+        status: "not searchable: nothing collected for it yet"
+      };
   }
 }
 
@@ -76,8 +88,8 @@ function fromAnswer(
       };
     case "no_evidence":
       return {
-        standing: "skipped",
-        status: "skipped: nothing collected for it yet"
+        standing: "unreachable",
+        status: "not searchable: nothing collected for it yet"
       };
     case "over_limit":
       return {
@@ -130,7 +142,11 @@ export function tierSearchView(
     rows.filter((row) => row.standing === standing).length;
   const total = rows.length;
   const searched = count("searched");
-  const settled = total > 0 && searched + count("failed") === total;
+  // A character no press can reach is not remaining (#494 review): the tier
+  // settles once every character that can be searched has been.
+  const settled =
+    searched + count("failed") > 0 &&
+    searched + count("failed") + count("unreachable") === total;
   const label =
     count("running") > 0
       ? "Searching…"
@@ -150,6 +166,7 @@ export function tierSearchView(
         ["queued", "queued"],
         ["failed", "failed"],
         ["skipped", "skipped"],
+        ["unreachable", "with nothing collected yet"],
         ["not_searched", "not searched"]
       ] as const
     ).flatMap(([standing, word]) =>

@@ -1078,6 +1078,19 @@ async function assembleDossier(options: {
     ...options.subjects,
     ...options.skippedSubjects
   ]);
+  // A character with nothing collected cannot be searched, so it is never
+  // offered as remaining. Searches reserve under the name shown, so that is
+  // the name checked; a failed read leaves every character searchable.
+  const withEvidence = await Promise.resolve()
+    .then(() =>
+      options.repositories.evidence.withCompletedEvidence?.(
+        searchSubjects.map((subject) => subject.key)
+      )
+    )
+    .then((keys) =>
+      keys ? new Set(keys.map(canonicalCharacterId)) : undefined
+    )
+    .catch(() => undefined);
   const tierSearches = tierSearchStates(
     searchSubjects,
     await Promise.resolve()
@@ -1091,7 +1104,8 @@ async function assembleDossier(options: {
         )
       )
       .catch(() => []),
-    searchedAt
+    searchedAt,
+    withEvidence
   );
   return applicantDossierSchema.parse({
     ...dossier,
