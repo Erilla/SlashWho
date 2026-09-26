@@ -148,6 +148,9 @@ export function DossierCharacterName({
             aria-describedby={historicAliases.length ? tooltipId : undefined}
             className={className}
             href={href}
+            // A dossier can name dozens of characters, and each would otherwise
+            // prefetch its own dossier route as it scrolls into view.
+            prefetch={false}
           >
             {formatCharacterDisplayName(resolved.displayName)}
           </Link>
