@@ -1,6 +1,12 @@
 import {
-  parseEncryptionKey,
-  parseNegativeCacheTtlMs
+  integerInRange,
+  loadSharedConfig,
+  optionalHttpUrl,
+  optionalSecret,
+  positiveInteger,
+  requiredPositiveInteger,
+  requiredSecret,
+  type Environment
 } from "@slashwho/application";
 import type { AccountMailConfig } from "./account-mail";
 
@@ -60,35 +66,7 @@ export type WorkerConfig = {
   evidenceJobCredentialEncryptionKey: Buffer;
 };
 
-function positiveInteger(
-  value: string | undefined,
-  fallback: number,
-  code: string
-): number {
-  const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(code);
-  return parsed;
-}
-
-function integerInRange(
-  value: string | undefined,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-  code: string
-): number {
-  const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(code);
-  }
-  return parsed;
-}
-
-function optionalSecret(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
-}
-
-function applicantSheetId(environment: NodeJS.ProcessEnv): string | undefined {
+function applicantSheetId(environment: Environment): string | undefined {
   const id = optionalSecret(environment.APPLICANT_SHEET_ID);
   const value = optionalSecret(environment.APPLICANT_SHEET_URL);
   if (!value) return id;
@@ -117,27 +95,6 @@ function applicantSheetColumn(value: string | undefined): string {
   return column;
 }
 
-function requiredString(value: string | undefined, code: string): string {
-  if (!value?.trim()) throw new Error(code);
-  return value;
-}
-
-function optionalHttpUrl(
-  value: string | undefined,
-  code: string
-): string | undefined {
-  if (value === undefined) return undefined;
-  try {
-    const normalized = value.trim();
-    const url = new URL(normalized);
-    if (url.protocol !== "http:" && url.protocol !== "https:")
-      throw new Error();
-    return normalized;
-  } catch {
-    throw new Error(code);
-  }
-}
-
 function applicantDossierOrigin(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   try {
@@ -158,13 +115,12 @@ function applicantDossierOrigin(value: string | undefined): string | undefined {
 }
 
 export function loadWorkerConfig(
-  environment: NodeJS.ProcessEnv = process.env
+  environment: Environment = process.env
 ): WorkerConfig {
+  const shared = loadSharedConfig(environment);
   const resendApiKey = optionalSecret(environment.RESEND_API_KEY);
   const accountEmailFrom = optionalSecret(environment.ACCOUNT_EMAIL_FROM);
-  const accountKey = optionalSecret(
-    environment.ACCOUNT_CREDENTIAL_ENCRYPTION_KEY
-  );
+  const accountKey = shared.accountCredentialEncryptionKey;
   // Saved account keys may be enabled without delivery on this process.
   let accountMail: AccountMailConfig | undefined;
   if (resendApiKey || accountEmailFrom) {
@@ -174,10 +130,9 @@ export function loadWorkerConfig(
     accountMail = {
       resendApiKey,
       accountEmailFrom,
-      accountCredentialEncryptionKey: parseEncryptionKey(accountKey)
+      accountCredentialEncryptionKey: accountKey
     };
   }
-  if (!environment.DATABASE_URL) throw new Error("database_url_required");
   const applicantEnabled = environment.APPLICANT_WATCHER_ENABLED === "true";
   if (
     environment.APPLICANT_WATCHER_ENABLED &&
@@ -265,25 +220,19 @@ export function loadWorkerConfig(
   if (healthHost !== "127.0.0.1" && healthHost !== "0.0.0.0") {
     throw new Error("invalid_worker_health_host");
   }
-  const blizzardClientId = requiredString(
-    environment.BLIZZARD_CLIENT_ID,
-    "blizzard_client_id_required"
-  );
-  const blizzardClientSecret = requiredString(
-    environment.BLIZZARD_CLIENT_SECRET,
-    "blizzard_client_secret_required"
-  );
-  const warcraftLogsClientId = requiredString(
+  const warcraftLogsClientId = requiredSecret(
     environment.WARCRAFT_LOGS_CLIENT_ID,
     "warcraft_logs_client_id_required"
   );
-  const warcraftLogsClientSecret = requiredString(
+  const warcraftLogsClientSecret = requiredSecret(
     environment.WARCRAFT_LOGS_CLIENT_SECRET,
     "warcraft_logs_client_secret_required"
   );
-  const blizzardSweepRequestCap = positiveInteger(
+  // No default: every deployment sets the per-cycle cap explicitly, and a
+  // missing one says so rather than reporting an invalid value (#569).
+  const blizzardSweepRequestCap = requiredPositiveInteger(
     environment.BLIZZARD_SWEEP_REQUEST_CAP,
-    0,
+    "blizzard_sweep_request_cap_required",
     "invalid_blizzard_sweep_request_cap"
   );
   const blizzardHourlyRequestBudget = positiveInteger(
@@ -294,21 +243,12 @@ export function loadWorkerConfig(
   if (blizzardSweepRequestCap > blizzardHourlyRequestBudget) {
     throw new Error("invalid_blizzard_sweep_request_cap");
   }
-  const evidenceJobCredentialEncryptionKey = (() => {
-    const secret = environment.EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY?.trim();
-    if (!secret) {
-      throw new Error("evidence_job_credential_encryption_key_required");
-    }
-    return parseEncryptionKey(secret);
-  })();
 
   return {
     applicantWatcher,
     ...(accountMail ? { accountMail } : {}),
-    ...(accountKey
-      ? { accountCredentialEncryptionKey: parseEncryptionKey(accountKey) }
-      : {}),
-    databaseUrl: environment.DATABASE_URL,
+    ...(accountKey ? { accountCredentialEncryptionKey: accountKey } : {}),
+    databaseUrl: shared.databaseUrl,
     healthHost,
     port: positiveInteger(environment.PORT, 3001, "invalid_port"),
     workerDrainTimeoutMs: positiveInteger(
@@ -347,20 +287,13 @@ export function loadWorkerConfig(
       "invalid_discovery_request_cap"
     ),
     // Shared with the dossier read path — see parseNegativeCacheTtlMs.
-    negativeCacheTtlMs: parseNegativeCacheTtlMs(
-      environment.NEGATIVE_CACHE_TTL_MS
-    ),
-    raiderIoBaseUrl:
-      environment.RAIDER_IO_BASE_URL?.trim() || "https://raider.io",
-    raiderIoTimeoutMs: positiveInteger(
-      environment.RAIDER_IO_TIMEOUT_MS,
-      10_000,
-      "invalid_raiderio_timeout"
-    ),
-    raiderIoAccessKey: optionalSecret(environment.RAIDER_IO_ACCESS_KEY),
+    negativeCacheTtlMs: shared.negativeCacheTtlMs,
+    raiderIoBaseUrl: shared.raiderIoBaseUrl,
+    raiderIoTimeoutMs: shared.raiderIoTimeoutMs,
+    raiderIoAccessKey: shared.raiderIoAccessKey,
     discoveryWebhookUrl: optionalSecret(environment.DISCOVERY_WEBHOOK_URL),
-    blizzardClientId,
-    blizzardClientSecret,
+    blizzardClientId: shared.blizzardClientId,
+    blizzardClientSecret: shared.blizzardClientSecret,
     warcraftLogsClientId,
     warcraftLogsClientSecret,
     // Pages of report history one run may scan. A ceiling, not the value a
@@ -469,17 +402,13 @@ export function loadWorkerConfig(
       25,
       "invalid_evidence_resume_sweep_limit"
     ),
-    // The same FRESHNESS_HOURS the web service reads, and the same default, so
-    // a resume sweep asks `reserve` exactly the question a dossier read would.
+    // The same FRESHNESS_HOURS the web service reads, through the same parser
+    // (parseFreshnessHours) and so the same default, so a resume sweep asks `reserve` exactly the question a dossier read would.
     // A character the sweep picked up is past its retry deadline and so never
     // fresh whatever this is, but passing a value the read path does not share
     // would make the two able to disagree about a character neither of them
     // has a reason to disagree about.
-    evidenceFreshnessHours: positiveInteger(
-      environment.FRESHNESS_HOURS,
-      24,
-      "invalid_freshness_hours"
-    ),
+    evidenceFreshnessHours: shared.freshnessHours,
     // How much of the Warcraft Logs hourly allowance must remain before a run
     // is allowed to start.
     //
@@ -618,15 +547,12 @@ export function loadWorkerConfig(
       100,
       "invalid_fingerprint_minimum_identical_percent"
     ),
-    fingerprintSweepCadenceHours: positiveInteger(
-      environment.FINGERPRINT_SWEEP_CADENCE_HOURS,
-      168,
-      "invalid_fingerprint_sweep_cadence_hours"
-    ),
+    fingerprintSweepCadenceHours: shared.fingerprintSweepCadenceHours,
     maintainerAlertWebhookUrl: optionalHttpUrl(
       environment.MAINTAINER_ALERT_WEBHOOK_URL,
       "invalid_maintainer_alert_webhook_url"
     ),
-    evidenceJobCredentialEncryptionKey
+    evidenceJobCredentialEncryptionKey:
+      shared.evidenceJobCredentialEncryptionKey
   };
 }

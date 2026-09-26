@@ -12,6 +12,7 @@ export default defineConfig({
             "apps/**/src/**/*.test.{ts,tsx}",
             "packages/**/src/**/*.test.ts",
             "scripts/**/*.test.mts",
+            "tests/unit/**/*.test.ts",
             "tests/e2e/support/**/*.test.ts"
           ],
           name: "unit"

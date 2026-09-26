@@ -6,7 +6,8 @@ import type {
 } from "@slashwho/database";
 import type {
   BlizzardGateway,
-  BlizzardProfileRequestObserver
+  BlizzardProfileRequestObserver,
+  BlizzardSlotWait
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
@@ -55,7 +56,8 @@ function scopedRaiderIoGateway(
 
 function scopedBlizzardGateway(
   gateway: BlizzardGateway,
-  scope: MeasurementScope
+  scope: MeasurementScope,
+  monotonic: () => number
 ): BlizzardGateway {
   // The fingerprint budget is recorded through a callback the client invokes
   // mid-request, so that one database write is the only nesting that cannot be
@@ -71,6 +73,20 @@ function scopedBlizzardGateway(
           excluded(async () => {
             await onProfileRequest();
           });
+  // Time spent queued in the client's request limiter is not Blizzard's: it
+  // is kept out of `blizzardMs`, so the per-call mean stays a latency, and
+  // reported on its own as `blizzardLimiterWaitMs`.
+  const excludeSlotWait =
+    (excluded: ExcludeFromBucket): BlizzardSlotWait =>
+    (wait) =>
+      excluded(async () => {
+        const queuedAt = monotonic();
+        try {
+          return await wait();
+        } finally {
+          scope.observe("blizzardLimiterWaitMs", monotonic() - queuedAt);
+        }
+      });
 
   return {
     getGuildRoster: (root, signal, onProfileRequest) =>
@@ -78,7 +94,8 @@ function scopedBlizzardGateway(
         gateway.getGuildRoster(
           root,
           signal,
-          excludeObserver(excluded, onProfileRequest)
+          excludeObserver(excluded, onProfileRequest),
+          excludeSlotWait(excluded)
         )
       ),
     getGuildRosterByIdentity: (guild, signal, onProfileRequest) =>
@@ -86,7 +103,8 @@ function scopedBlizzardGateway(
         gateway.getGuildRosterByIdentity(
           guild,
           signal,
-          excludeObserver(excluded, onProfileRequest)
+          excludeObserver(excluded, onProfileRequest),
+          excludeSlotWait(excluded)
         )
       ),
     getAchievementFingerprint: (key, signal, onProfileRequest) =>
@@ -94,7 +112,8 @@ function scopedBlizzardGateway(
         gateway.getAchievementFingerprint(
           key,
           signal,
-          excludeObserver(excluded, onProfileRequest)
+          excludeObserver(excluded, onProfileRequest),
+          excludeSlotWait(excluded)
         )
       ),
     getCompletedAchievements: (key, signal, onProfileRequest) =>
@@ -102,7 +121,8 @@ function scopedBlizzardGateway(
         gateway.getCompletedAchievements(
           key,
           signal,
-          excludeObserver(excluded, onProfileRequest)
+          excludeObserver(excluded, onProfileRequest),
+          excludeSlotWait(excluded)
         )
       )
   };
@@ -171,6 +191,11 @@ export type DiscoveryJobHandlerOptions = {
     cadenceMs: number;
     minimumCommon: number;
     minimumIdenticalPercent: number;
+    /**
+     * Candidate reads a sweep keeps outstanding at once. The Blizzard client
+     * enforces the process-wide limits; this only lets a sweep use them.
+     */
+    readConcurrency?: number;
   };
   enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
   /** Queues full WCL collection before a newly admitted fingerprint match is published. */
@@ -349,9 +374,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       // Created before the first query so the run lookup and claim reach
       // `dbCalls` too; nothing else about the run depends on its lifetime.
       // `observedAt` moves up with it so `durationMs` still spans every
-      // measured call and the buckets stay within it.
+      // measured call and the buckets stay within it. The sweep's candidate
+      // reads, and the budget writes inside them, overlap, so overlapping calls
+      // share their wall time rather than each counting all of it; summed, the
+      // buckets would run past `durationMs` on any sweep of real size.
       const observedAt = monotonic();
-      const scope = createMeasurementScope(monotonic);
+      const scope = createMeasurementScope(monotonic, {
+        overlapping: "shared"
+      });
       bindThrottleScope(scope);
       const repositories = measuredRepositories(options.repositories, scope);
 
@@ -617,7 +647,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               };
               try {
                 const adaptedGateway = createBlizzardFingerprintAdapter(
-                  scopedBlizzardGateway(blizzardGateway, scope),
+                  scopedBlizzardGateway(blizzardGateway, scope, monotonic),
                   {
                     requestCap: admission.requestCap,
                     recordRequest: async () => {
@@ -660,6 +690,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       repositories.suppressions.isActive(key),
                     signal: context.signal,
                     historicalGuilds,
+                    ...(fingerprint.readConcurrency === undefined
+                      ? {}
+                      : { readConcurrency: fingerprint.readConcurrency }),
                     ...(resume ? { resumeAfter: resume.resumeAfter } : {})
                   }
                 );

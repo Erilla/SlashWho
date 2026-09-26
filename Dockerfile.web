@@ -4,7 +4,7 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 WORKDIR /workspace
 
-RUN corepack enable && corepack prepare pnpm@11.20.0 --activate
+RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/web/package.json apps/web/package.json
@@ -15,6 +15,8 @@ COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/raiderio/package.json packages/raiderio/package.json
 COPY packages/warcraftlogs/package.json packages/warcraftlogs/package.json
+# Corepack reads the pnpm version from packageManager in package.json.
+RUN corepack install
 RUN pnpm install --frozen-lockfile
 
 COPY . .

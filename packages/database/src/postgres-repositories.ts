@@ -35,6 +35,7 @@ import type {
   OperatorCredential,
   OperatorSession,
   Repositories,
+  SnapshotCharacterInput,
   SnapshotHistoryItem,
   SnapshotHistoryPage,
   StagedEvidenceCollection,
@@ -1308,27 +1309,26 @@ async function loadSnapshot(
   };
 }
 
-async function createSnapshot(
-  client: PoolClient,
-  input: CreateSnapshotInput,
-  options?: { signal?: AbortSignal }
-): Promise<StoredSnapshot> {
-  const runResult = await client.query(
-    `SELECT 1 FROM discovery_runs
-     WHERE id = $1
-       AND root_region = $2
-       AND root_realm_slug = $3
-       AND root_normalized_name = $4
-       AND status IN ${activeRunSql}
-     FOR UPDATE`,
-    [input.runId, input.rootKey.region, input.rootKey.realm, input.rootKey.name]
-  );
-  if (runResult.rowCount !== 1) {
-    throw new Error("discovery_run_root_mismatch");
-  }
+function characterIdentity(key: CharacterKey): string {
+  return `${key.region}/${key.realm}/${key.name}`;
+}
 
+/**
+ * Upserts `characters` and returns their ids by `characterIdentity`.
+ *
+ * Rows are written in canonical key order, whatever order the caller holds
+ * them in, so every transaction takes `characters` row locks in the same
+ * order. Two transactions under different root locks can share characters --
+ * a create for one root and an amend for another -- and locking them in
+ * opposite orders deadlocks (#567). Display order is the caller's business
+ * and is assigned separately by `insertMembership`.
+ */
+async function upsertCharacters(
+  client: PoolClient,
+  characters: readonly SnapshotCharacterInput[]
+): Promise<Map<string, string>> {
   const characterIds = new Map<string, string>();
-  const charactersByCanonicalKey = [...input.characters].sort((left, right) => {
+  const charactersByCanonicalKey = [...characters].sort((left, right) => {
     const leftKey = `${left.key.region}\0${left.key.realm}\0${left.key.name}`;
     const rightKey = `${right.key.region}\0${right.key.realm}\0${right.key.name}`;
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
@@ -1357,15 +1357,68 @@ async function createSnapshot(
         character.raiderIoUrl
       ]
     );
-    characterIds.set(
-      `${character.key.region}/${character.key.realm}/${character.key.name}`,
-      result.rows[0]!.id
+    characterIds.set(characterIdentity(character.key), result.rows[0]!.id);
+  }
+  return characterIds;
+}
+
+/**
+ * Adds `characters` to a snapshot in the order given, numbering them from
+ * `firstDisplayOrder`. Every character must already be in `characterIds`.
+ */
+async function insertMembership(
+  client: PoolClient,
+  snapshotId: string,
+  firstDisplayOrder: number,
+  characters: readonly SnapshotCharacterInput[],
+  characterIds: ReadonlyMap<string, string>
+): Promise<void> {
+  for (const [index, character] of characters.entries()) {
+    await client.query(
+      `INSERT INTO snapshot_characters
+        (snapshot_id, character_id, display_order, discovery_source,
+         display_name, class_name, level, raider_io_url,
+         guild_name, guild_region, guild_realm_slug)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        snapshotId,
+        characterIds.get(characterIdentity(character.key))!,
+        firstDisplayOrder + index,
+        character.source,
+        character.displayName,
+        character.className,
+        character.level,
+        character.raiderIoUrl,
+        character.guild?.name ?? null,
+        character.guild?.region ?? null,
+        character.guild?.realm ?? null
+      ]
     );
   }
+}
 
-  const rootId = characterIds.get(
-    `${input.rootKey.region}/${input.rootKey.realm}/${input.rootKey.name}`
+async function createSnapshot(
+  client: PoolClient,
+  input: CreateSnapshotInput,
+  options?: { signal?: AbortSignal }
+): Promise<StoredSnapshot> {
+  const runResult = await client.query(
+    `SELECT 1 FROM discovery_runs
+     WHERE id = $1
+       AND root_region = $2
+       AND root_realm_slug = $3
+       AND root_normalized_name = $4
+       AND status IN ${activeRunSql}
+     FOR UPDATE`,
+    [input.runId, input.rootKey.region, input.rootKey.realm, input.rootKey.name]
   );
+  if (runResult.rowCount !== 1) {
+    throw new Error("discovery_run_root_mismatch");
+  }
+
+  const characterIds = await upsertCharacters(client, input.characters);
+
+  const rootId = characterIds.get(characterIdentity(input.rootKey));
   if (!rootId) throw new Error("snapshot_root_missing");
 
   const snapshotResult = await client.query<{ id: string }>(
@@ -1390,31 +1443,7 @@ async function createSnapshot(
     [input.runId, rootId]
   );
 
-  for (const [displayOrder, character] of input.characters.entries()) {
-    const characterId = characterIds.get(
-      `${character.key.region}/${character.key.realm}/${character.key.name}`
-    )!;
-    await client.query(
-      `INSERT INTO snapshot_characters
-        (snapshot_id, character_id, display_order, discovery_source,
-         display_name, class_name, level, raider_io_url,
-         guild_name, guild_region, guild_realm_slug)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [
-        snapshotId,
-        characterId,
-        displayOrder,
-        character.source,
-        character.displayName,
-        character.className,
-        character.level,
-        character.raiderIoUrl,
-        character.guild?.name ?? null,
-        character.guild?.region ?? null,
-        character.guild?.realm ?? null
-      ]
-    );
-  }
+  await insertMembership(client, snapshotId, 0, input.characters, characterIds);
 
   const publication = await client.query(
     `UPDATE discovery_runs
@@ -3306,131 +3335,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
           options?.signal?.throwIfAborted();
           await client.query("BEGIN");
           await lockRoot(client, input.rootKey);
-          const runResult = await client.query(
-            `SELECT 1 FROM discovery_runs
-             WHERE id = $1
-               AND root_region = $2
-               AND root_realm_slug = $3
-               AND root_normalized_name = $4
-               AND status IN ${activeRunSql}
-             FOR UPDATE`,
-            [
-              input.runId,
-              input.rootKey.region,
-              input.rootKey.realm,
-              input.rootKey.name
-            ]
-          );
-          if (runResult.rowCount !== 1) {
-            throw new Error("discovery_run_root_mismatch");
-          }
-
-          const characterIds = new Map<string, string>();
-          const charactersByCanonicalKey = [...input.characters].sort(
-            (left, right) => {
-              const leftKey = `${left.key.region}\0${left.key.realm}\0${left.key.name}`;
-              const rightKey = `${right.key.region}\0${right.key.realm}\0${right.key.name}`;
-              return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-            }
-          );
-          for (const character of charactersByCanonicalKey) {
-            const result = await client.query<{ id: string }>(
-              `INSERT INTO characters
-                (region, realm_slug, normalized_name, display_name, class_name,
-                 level, raider_io_url)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
-               ON CONFLICT (region, realm_slug, normalized_name)
-               DO UPDATE SET
-                 display_name = EXCLUDED.display_name,
-                 class_name = EXCLUDED.class_name,
-                 level = EXCLUDED.level,
-                 raider_io_url = EXCLUDED.raider_io_url,
-                 updated_at = now()
-               RETURNING id`,
-              [
-                character.key.region,
-                character.key.realm,
-                character.key.name,
-                character.displayName,
-                character.className,
-                character.level,
-                character.raiderIoUrl
-              ]
-            );
-            characterIds.set(
-              `${character.key.region}/${character.key.realm}/${character.key.name}`,
-              result.rows[0]!.id
-            );
-          }
-
-          const rootId = characterIds.get(
-            `${input.rootKey.region}/${input.rootKey.realm}/${input.rootKey.name}`
-          );
-          if (!rootId) throw new Error("snapshot_root_missing");
-
-          const snapshotResult = await client.query<{ id: string }>(
-            `INSERT INTO snapshots
-              (root_character_id, discovery_run_id, state, limitation_code,
-               refreshed_at, character_count)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id`,
-            [
-              rootId,
-              input.runId,
-              input.state,
-              input.limitationCode,
-              input.refreshedAt,
-              input.characters.length
-            ]
-          );
-          const snapshotId = snapshotResult.rows[0]!.id;
-
-          await client.query(
-            `UPDATE discovery_runs SET root_character_id = $2 WHERE id = $1`,
-            [input.runId, rootId]
-          );
-
-          for (const [displayOrder, character] of input.characters.entries()) {
-            const characterId = characterIds.get(
-              `${character.key.region}/${character.key.realm}/${character.key.name}`
-            )!;
-            await client.query(
-              `INSERT INTO snapshot_characters
-                (snapshot_id, character_id, display_order, discovery_source,
-                 display_name, class_name, level, raider_io_url,
-                 guild_name, guild_region, guild_realm_slug)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-              [
-                snapshotId,
-                characterId,
-                displayOrder,
-                character.source,
-                character.displayName,
-                character.className,
-                character.level,
-                character.raiderIoUrl,
-                character.guild?.name ?? null,
-                character.guild?.region ?? null,
-                character.guild?.realm ?? null
-              ]
-            );
-          }
-
-          const publication = await client.query(
-            `UPDATE discovery_runs
-             SET status = 'complete', snapshot_id = $2,
-                 completed_at = COALESCE(completed_at, now()),
-                 next_retry_at = NULL, error_code = NULL
-             WHERE id = $1 AND status IN ${activeRunSql}`,
-            [input.runId, snapshotId]
-          );
-          if (publication.rowCount !== 1) {
-            throw new Error("discovery_run_not_active");
-          }
-
-          const snapshot = await loadSnapshot(client, snapshotId);
-          if (!snapshot) throw new Error("snapshot_not_found");
-          options?.signal?.throwIfAborted();
+          const snapshot = await createSnapshot(client, input, options);
           await client.query("COMMIT");
           return snapshot;
         } catch (error) {
@@ -3575,59 +3480,21 @@ export function createPostgresRepositories(pool: Pool): Repositories {
             )
           );
 
-          let displayOrder = Number(orderResult.rows[0]!.next_order);
-          let appended = 0;
-          for (const character of characters) {
-            const id = `${character.key.region}/${character.key.realm}/${character.key.name}`;
-            if (present.has(id)) continue;
+          const additions = characters.filter((character) => {
+            const id = characterIdentity(character.key);
+            if (present.has(id)) return false;
             present.add(id);
-
-            const upserted = await client.query<{ id: string }>(
-              `INSERT INTO characters
-                (region, realm_slug, normalized_name, display_name, class_name,
-                 level, raider_io_url)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
-               ON CONFLICT (region, realm_slug, normalized_name)
-               DO UPDATE SET
-                 display_name = EXCLUDED.display_name,
-                 class_name = EXCLUDED.class_name,
-                 level = EXCLUDED.level,
-                 raider_io_url = EXCLUDED.raider_io_url,
-                 updated_at = now()
-               RETURNING id`,
-              [
-                character.key.region,
-                character.key.realm,
-                character.key.name,
-                character.displayName,
-                character.className,
-                character.level,
-                character.raiderIoUrl
-              ]
-            );
-            await client.query(
-              `INSERT INTO snapshot_characters
-                (snapshot_id, character_id, display_order, discovery_source,
-                 display_name, class_name, level, raider_io_url,
-                 guild_name, guild_region, guild_realm_slug)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-              [
-                snapshotId,
-                upserted.rows[0]!.id,
-                displayOrder,
-                character.source,
-                character.displayName,
-                character.className,
-                character.level,
-                character.raiderIoUrl,
-                character.guild?.name ?? null,
-                character.guild?.region ?? null,
-                character.guild?.realm ?? null
-              ]
-            );
-            displayOrder += 1;
-            appended += 1;
-          }
+            return true;
+          });
+          const characterIds = await upsertCharacters(client, additions);
+          await insertMembership(
+            client,
+            snapshotId,
+            Number(orderResult.rows[0]!.next_order),
+            additions,
+            characterIds
+          );
+          const appended = additions.length;
 
           await client.query(
             `UPDATE snapshots

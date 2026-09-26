@@ -2,10 +2,12 @@ import {
   attributeThrottlesTo,
   bindThrottleScope,
   createMeasurementScope,
+  type CreateSearchResult,
   type MeasurementScope,
   type PublicReadAuthorizationResult
 } from "@slashwho/application";
 import {
+  dossierStartResponseSchema,
   publicErrorHttpStatus,
   publicErrorMessages,
   safeApiErrorSchema,
@@ -70,6 +72,64 @@ export function parseCharacterRoute(params: {
       decoded.realm === key.realm &&
       decoded.name === key.name
   };
+}
+
+/**
+ * The character a route names, or the refusal that stops the request. A
+ * route that redirects a non-canonical spelling passes `requireCanonical:
+ * false` and checks `canonical` itself.
+ */
+export async function resolveCharacterRoute(
+  context: { params: Promise<{ region: string; realm: string; name: string }> },
+  options: { requireCanonical: boolean }
+): Promise<{ key: CharacterKey; canonical: boolean } | { refusal: Response }> {
+  let parsed: ReturnType<typeof parseCharacterRoute>;
+  try {
+    parsed = parseCharacterRoute(await context.params);
+  } catch {
+    return { refusal: apiError("invalid_character_url") };
+  }
+  if (options.requireCanonical && !parsed.canonical) {
+    return { refusal: apiError("invalid_character_url") };
+  }
+  return parsed;
+}
+
+/** A response body validated against its public contract, never cached. */
+export function jsonNoStore<T>(
+  schema: { parse(value: unknown): T },
+  value: unknown,
+  init: ResponseInit = {}
+): Response {
+  const headers = new Headers(init.headers);
+  headers.set("cache-control", "no-store");
+  return Response.json(schema.parse(value), { ...init, headers });
+}
+
+/**
+ * The response to a search that did not settle on a character straight away:
+ * a pollable job, a throttle, or a refusal. Each route decides for itself what
+ * a settled character means.
+ */
+export function startResultResponse(
+  result: Exclude<CreateSearchResult, { kind: "character" }>
+): Response {
+  if (result.kind === "job") {
+    return jsonNoStore(
+      dossierStartResponseSchema,
+      { kind: "job", jobId: result.jobId, status: result.status },
+      {
+        status: 202,
+        headers: { location: `/api/dossiers/jobs/${result.jobId}` }
+      }
+    );
+  }
+  if (result.kind === "rate_limited") {
+    return apiError("rate_limited", {
+      retryAfterSeconds: result.retryAfterSeconds
+    });
+  }
+  return apiError(result.code);
 }
 
 type HttpLogger = {
@@ -142,6 +202,11 @@ export async function withHttpRequest(
   } catch (error) {
     failure = errorName(error);
     response = apiError("search_failed");
+  }
+  // Every response this wraps is private to its caller, so one that names no
+  // caching policy gets the safe one rather than whatever a proxy assumes.
+  if (!response.headers.has("cache-control")) {
+    response.headers.set("cache-control", "no-store");
   }
   response.headers.set("x-request-id", correlationId);
   let count: number | undefined;

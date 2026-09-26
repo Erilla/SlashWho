@@ -3,7 +3,124 @@ import { runInNewContext } from "node:vm";
 import { upstreamThrottleRecord } from "@slashwho/application";
 import { describe, expect, it } from "vitest";
 
-import { parseCharacterRoute, withHttpRequest } from "./http";
+import { dossierStartResponseSchema } from "@slashwho/contracts";
+
+import {
+  jsonNoStore,
+  parseCharacterRoute,
+  resolveCharacterRoute,
+  startResultResponse,
+  withHttpRequest
+} from "./http";
+
+const silentLogger = { info: () => {} };
+
+async function errorCode(response: Response): Promise<string> {
+  return ((await response.json()) as { error: { code: string } }).error.code;
+}
+
+describe("resolveCharacterRoute", () => {
+  const context = (params: {
+    region: string;
+    realm: string;
+    name: string;
+  }) => ({
+    params: Promise.resolve(params)
+  });
+
+  it("refuses a non-canonical spelling when the route requires one", async () => {
+    const result = await resolveCharacterRoute(
+      context({ region: "EU", realm: "Silvermoon", name: "Ryii" }),
+      { requireCanonical: true }
+    );
+    expect("refusal" in result).toBe(true);
+    if (!("refusal" in result)) return;
+    expect(result.refusal.status).toBe(400);
+    expect(await errorCode(result.refusal)).toBe("invalid_character_url");
+  });
+
+  it("hands a non-canonical spelling back to a route that redirects it", async () => {
+    const result = await resolveCharacterRoute(
+      context({ region: "EU", realm: "Silvermoon", name: "Ryii" }),
+      { requireCanonical: false }
+    );
+    expect(result).toEqual({
+      key: { region: "eu", realm: "silvermoon", name: "ryii" },
+      canonical: false
+    });
+  });
+
+  it("refuses a name that cannot be decoded", async () => {
+    const result = await resolveCharacterRoute(
+      context({ region: "eu", realm: "silvermoon", name: "%E0%A4%A" }),
+      { requireCanonical: false }
+    );
+    expect("refusal" in result).toBe(true);
+  });
+});
+
+describe("jsonNoStore", () => {
+  it("validates the body and marks it no-store alongside the caller's headers", async () => {
+    const response = jsonNoStore(
+      dossierStartResponseSchema,
+      { kind: "ready" },
+      { status: 201, headers: { location: "/elsewhere" } }
+    );
+    expect(response.status).toBe(201);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("location")).toBe("/elsewhere");
+    expect(await response.json()).toEqual({ kind: "ready" });
+  });
+
+  it("refuses a body its contract does not allow", () => {
+    expect(() =>
+      jsonNoStore(dossierStartResponseSchema, { kind: "ready", extra: 1 })
+    ).toThrow();
+  });
+});
+
+describe("startResultResponse", () => {
+  const jobId = "54f14e37-7df7-43db-91d5-21e797d1d145";
+
+  it("points a queued job at its status endpoint", async () => {
+    const response = startResultResponse({
+      kind: "job",
+      jobId,
+      status: "queued",
+      statusUrl: `/api/dossiers/jobs/${jobId}`,
+      characterUrl: "/characters/eu/silvermoon/ryii",
+      staleCharacter: null,
+      joinedExistingRun: false
+    });
+    expect(response.status).toBe(202);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("location")).toBe(
+      `/api/dossiers/jobs/${jobId}`
+    );
+    expect(await response.json()).toEqual({
+      kind: "job",
+      jobId,
+      status: "queued"
+    });
+  });
+
+  it("carries a throttle's retry delay", async () => {
+    const response = startResultResponse({
+      kind: "rate_limited",
+      retryAfterSeconds: 7
+    });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("7");
+  });
+
+  it("maps a refusal to its public error", async () => {
+    const response = startResultResponse({
+      kind: "not_found",
+      code: "suppressed_character"
+    });
+    expect(await errorCode(response)).toBe("suppressed_character");
+  });
+});
 
 describe("character route parsing", () => {
   it("accepts a percent-encoded Unicode name from the page route", () => {
@@ -21,6 +138,40 @@ describe("character route parsing", () => {
 });
 
 describe("withHttpRequest", () => {
+  it("marks a response that names no caching policy no-store", async () => {
+    // Break caught: a handler that forgets the header would let a proxy or
+    // browser cache a dossier (CLAUDE.md: assembled dossiers are no-store).
+    const json = await withHttpRequest(
+      "dossier",
+      async () => Response.json({ ok: true }),
+      silentLogger
+    );
+    const redirect = await withHttpRequest(
+      "dossier",
+      async () =>
+        new Response(null, {
+          status: 308,
+          headers: { location: "/elsewhere" }
+        }),
+      silentLogger
+    );
+    expect(json.headers.get("cache-control")).toBe("no-store");
+    expect(redirect.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("keeps a caching policy the handler chose", async () => {
+    const response = await withHttpRequest(
+      "dossier",
+      async () =>
+        Response.json(
+          { ok: true },
+          { headers: { "cache-control": "private, max-age=5" } }
+        ),
+      silentLogger
+    );
+    expect(response.headers.get("cache-control")).toBe("private, max-age=5");
+  });
+
   it("folds the scope's totals into the emitted record", async () => {
     const records: Record<string, unknown>[] = [];
     const logger = {

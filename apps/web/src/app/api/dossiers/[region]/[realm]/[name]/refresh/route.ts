@@ -4,12 +4,10 @@ import { getContainer } from "../../../../../../../server/container";
 import { loadWebConfig } from "../../../../../../../server/config";
 import { resolveCredentialOverrides } from "../../../../../../../server/credential-headers";
 import {
-  apiError,
-  parseCharacterRoute,
+  jsonNoStore,
+  resolveCharacterRoute,
   withHttpRequest
 } from "../../../../../../../server/http";
-
-type CharacterParams = { region: string; realm: string; name: string };
 
 /**
  * Re-collects one character on demand. A press inside the character's cooldown
@@ -18,16 +16,13 @@ type CharacterParams = { region: string; realm: string; name: string };
  */
 export async function POST(
   request: Request,
-  context: { params: Promise<CharacterParams> }
+  context: RouteContext<"/api/dossiers/[region]/[realm]/[name]/refresh">
 ): Promise<Response> {
   return withHttpRequest("dossier_refresh", async (scope) => {
-    let character: ReturnType<typeof parseCharacterRoute>;
-    try {
-      character = parseCharacterRoute(await context.params);
-    } catch {
-      return apiError("invalid_character_url");
-    }
-    if (!character.canonical) return apiError("invalid_character_url");
+    const character = await resolveCharacterRoute(context, {
+      requireCanonical: true
+    });
+    if ("refusal" in character) return character.refusal;
     const { dossiers, accountAuth, accountCredentials } = await getContainer();
     const { principal } = accountAuth
       ? await accountAuth.authenticate(request, scope)
@@ -47,12 +42,9 @@ export async function POST(
       scope,
       overrides
     );
-    return Response.json(
-      dossierRefreshResponseSchema.parse({
-        mode: result.mode,
-        lastCollectedAt: result.lastCollectedAt?.toISOString() ?? null
-      }),
-      { headers: { "cache-control": "no-store" } }
-    );
+    return jsonNoStore(dossierRefreshResponseSchema, {
+      mode: result.mode,
+      lastCollectedAt: result.lastCollectedAt?.toISOString() ?? null
+    });
   });
 }

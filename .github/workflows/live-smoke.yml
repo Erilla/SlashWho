@@ -17,16 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.20.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.15.0
-          cache: pnpm
-      - run: corepack pnpm install --frozen-lockfile
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-workspace
       - run: corepack pnpm tsx scripts/live-smoke.mts
         env:
           SLASHWHO_BASE_URL: ${{ vars.SLASHWHO_PRODUCTION_URL }}
