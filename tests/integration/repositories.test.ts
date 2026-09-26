@@ -3553,7 +3553,9 @@ describe("PostgreSQL repositories", () => {
         WHERE normalized_name IN ('running', 'complete')`
     );
 
-    const rows = await repositories.evidence.listForMonitor();
+    const rows = await repositories.evidence.listForMonitor({
+      completedLimit: 10
+    });
 
     expect(rows.find((row) => row.status === "running")?.phases).toEqual([
       {
@@ -3590,6 +3592,42 @@ describe("PostgreSQL repositories", () => {
     expect(rows.every((row) => !("id" in row) && !("queueJobId" in row))).toBe(
       true
     );
+  });
+
+  it("limits only completed runs in the monitor projection, newest first", async () => {
+    // Break caught: completed runs accumulate forever, so the monitor must page
+    // them; limiting the whole read instead would hide in-flight or failed runs.
+    await pool.query(
+      `INSERT INTO character_evidence_runs
+         (region, realm_slug, normalized_name, status, evidence_version,
+          attempt, created_at, started_at, completed_at, error_code)
+       VALUES
+         ('eu', 'silvermoon', 'queued', 'queued', 13, 0,
+          '2026-09-20T09:00:00Z', NULL, NULL, NULL),
+         ('eu', 'silvermoon', 'oldest', 'complete', 13, 1,
+          '2026-09-20T06:00:00Z', '2026-09-20T06:05:00Z',
+          '2026-09-20T07:00:00Z', NULL),
+         ('eu', 'silvermoon', 'newest', 'complete', 13, 1,
+          '2026-09-20T08:00:00Z', '2026-09-20T08:05:00Z',
+          '2026-09-20T09:00:00Z', NULL),
+         ('eu', 'silvermoon', 'middle', 'complete', 13, 1,
+          '2026-09-20T07:00:00Z', '2026-09-20T07:05:00Z',
+          '2026-09-20T08:00:00Z', NULL),
+         ('eu', 'silvermoon', 'failed', 'failed', 13, 3,
+          '2026-09-20T05:00:00Z', '2026-09-20T05:05:00Z',
+          '2026-09-20T05:30:00Z', 'warcraft_logs_unavailable')`
+    );
+
+    const rows = await repositories.evidence.listForMonitor({
+      completedLimit: 2
+    });
+
+    expect(rows.map((row) => row.key.name)).toEqual([
+      "queued",
+      "newest",
+      "middle",
+      "failed"
+    ]);
   });
 
   it("carries terminal-tier kills and wipes through a complete publish", async () => {
