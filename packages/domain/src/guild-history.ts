@@ -24,23 +24,30 @@ type GuildKill = Readonly<{
   guild: CharacterGuild | null;
 }>;
 
-function comparable(value: string): string {
+function comparable(value: string, ignored: RegExp): string {
   return value
     .normalize("NFKD")
-    .replace(/[\s'-]+/gu, "")
+    .replace(ignored, "")
     .toLocaleLowerCase("en-US");
 }
 
+// A realm arrives as a slug or a display name, "kiljaeden" or "Kil'jaeden",
+// so its apostrophes and hyphens are ignored. A guild name is never slugged,
+// so only its spacing is.
+const REALM_IGNORED = /[\s'-]+/gu;
+const NAME_IGNORED = /\s+/gu;
+
 /**
  * Which guild a name refers to. Names differing only in case or spacing are
- * one guild -- "Seriously Casual" was renamed "SeriouslyCasual" -- while the
- * same name on another realm or region is another guild.
+ * one guild -- "Seriously Casual" was renamed "SeriouslyCasual" -- while
+ * names differing by an apostrophe or hyphen, or the same name on another
+ * realm or region, are another guild.
  */
 export function guildIdentity(guild: CharacterGuild): string {
   return JSON.stringify([
     guild.region,
-    comparable(guild.realm),
-    comparable(guild.name)
+    comparable(guild.realm, REALM_IGNORED),
+    comparable(guild.name, NAME_IGNORED)
   ]);
 }
 

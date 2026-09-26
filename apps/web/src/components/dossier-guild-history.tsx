@@ -91,8 +91,13 @@ function barTooltipLines(bar: GuildTimelineBar): ReactNode[] {
 
 type Tooltip = Readonly<{
   lines: readonly ReactNode[];
+  /** Where it points, in pixels from the timeline's left edge. */
+  anchor: number;
+  /** Where it is drawn, against what is scrolled into view. */
   x: number;
   y: number;
+  /** Shown by keyboard focus, so it follows its bar through a scroll. */
+  focused: boolean;
 }>;
 
 export function DossierGuildHistory({
@@ -169,11 +174,35 @@ export function DossierGuildHistory({
     if (scroll) scroll.scrollLeft = scroll.scrollWidth;
   }, [width, fitWidth]);
 
-  const height = layout ? TOP + layout.lanes * LANE_HEIGHT + AXIS_HEIGHT : 0;
+  // Bars are laid out oldest first, so the last seen in a row ends it.
+  const lastBar = new Map<string, GuildTimelineBar>();
+  const endsRow = new Map<number, string>();
+  for (const bar of layout?.bars ?? []) {
+    lastBar.set(bar.guildId, bar);
+    endsRow.set(bar.lane, bar.guildId);
+  }
+  // A current guild's ring sits at the end of the row its history ends in.
+  // If a later guild has since taken that row, a ring there would read as
+  // the later guild's, so it gets a row of its own, named.
+  let extraLanes = 0;
+  const rings = [...current].flatMap(([guildId, count]) => {
+    const bar = lastBar.get(guildId);
+    if (!bar || !layout) return [];
+    const ownsRow = endsRow.get(bar.lane) === guildId;
+    return [
+      {
+        guildId,
+        guild: bar.guild,
+        count,
+        lane: ownsRow ? bar.lane : layout.lanes + extraLanes++,
+        labelled: !ownsRow
+      }
+    ];
+  });
+  const height = layout
+    ? TOP + (layout.lanes + extraLanes) * LANE_HEIGHT + AXIS_HEIGHT
+    : 0;
   const laneY = (lane: number) => TOP + lane * LANE_HEIGHT;
-  const lastLane = new Map<string, number>();
-  for (const bar of layout?.bars ?? []) lastLane.set(bar.guildId, bar.lane);
-  const ringsInLane = new Map<number, number>();
   // Every year that opens on the axis, the current one included.
   const years = layout
     ? Array.from(
@@ -194,16 +223,26 @@ export function DossierGuildHistory({
     : [];
   // The tooltip sits outside the scroller so a short timeline cannot clip
   // it, which means placing it against what is scrolled into view.
-  const showTooltip = (lines: readonly ReactNode[], x: number, y: number) => {
+  const place = (anchor: number) => {
     const scroll = scrollRef.current;
-    const left = x - (scroll?.scrollLeft ?? 0);
+    const left = anchor - (scroll?.scrollLeft ?? 0);
     const visibleWidth = scroll?.clientWidth ?? width;
-    setTooltip({
-      lines,
-      x: Math.max(0, Math.min(left, visibleWidth - TOOLTIP_WIDTH)),
-      y
-    });
+    return Math.max(0, Math.min(left, visibleWidth - TOOLTIP_WIDTH));
   };
+  const showTooltip = (
+    lines: readonly ReactNode[],
+    anchor: number,
+    y: number,
+    focused = false
+  ) => setTooltip({ lines, anchor, x: place(anchor), y, focused });
+  // Focusing an off-screen bar makes the browser scroll it into view, and
+  // that scroll arrives after `focus`: a focused tooltip is moved with its
+  // bar rather than hidden. A hovered one would be left pointing at
+  // whatever scrolled under the pointer, so it goes.
+  const onScroll = () =>
+    setTooltip((shown) =>
+      shown?.focused ? { ...shown, x: place(shown.anchor) } : null
+    );
 
   return (
     <section
@@ -226,7 +265,7 @@ export function DossierGuildHistory({
           <div
             aria-label="Guild history timeline, scrolls horizontally"
             className="dossier-guild-timeline-scroll"
-            onScroll={() => setTooltip(null)}
+            onScroll={onScroll}
             ref={scrollRef}
             role="region"
             tabIndex={0}
@@ -320,7 +359,7 @@ export function DossierGuildHistory({
                       key={`${bar.guildId}-${bar.firstNight}`}
                       onBlur={() => setTooltip(null)}
                       onFocus={() =>
-                        showTooltip(lines, bar.x, y + BAR_HEIGHT + 4)
+                        showTooltip(lines, bar.x, y + BAR_HEIGHT + 4, true)
                       }
                       onMouseEnter={() =>
                         showTooltip(lines, bar.x, y + BAR_HEIGHT + 4)
@@ -351,29 +390,20 @@ export function DossierGuildHistory({
                     </g>
                   );
                 })}
-                {[...current].flatMap(([guildId, count]) => {
-                  const lane = lastLane.get(guildId);
-                  if (lane === undefined) return [];
-                  // Two current guilds whose histories end in the same row
-                  // sit side by side rather than on top of each other.
-                  const inLane = ringsInLane.get(lane) ?? 0;
-                  ringsInLane.set(lane, inLane + 1);
-                  const x = layout.x(today) + 10 + inLane * 14;
+                {rings.map(({ guildId, guild, count, lane, labelled }) => {
+                  const x = layout.x(today) + 10;
                   const cy = laneY(lane) + LANE_HEIGHT / 2;
-                  const guild = layout.bars.find(
-                    (bar) => bar.guildId === guildId
-                  )!.guild;
                   const lines = [
                     `${guild.name} today`,
                     `${plural(count, "character")} in the latest snapshot`
                   ];
-                  return [
+                  return (
                     <g
                       aria-label={lines.join(". ")}
                       className="dossier-guild-timeline-current"
                       key={guildId}
                       onBlur={() => setTooltip(null)}
-                      onFocus={() => showTooltip(lines, x - 120, cy + 12)}
+                      onFocus={() => showTooltip(lines, x - 120, cy + 12, true)}
                       onMouseEnter={() => showTooltip(lines, x - 120, cy + 12)}
                       role="img"
                       tabIndex={0}
@@ -384,8 +414,19 @@ export function DossierGuildHistory({
                         r={5}
                         stroke={colours.get(guildId)}
                       />
+                      {labelled ? (
+                        <text
+                          aria-hidden="true"
+                          className="dossier-guild-timeline-label dossier-guild-timeline-label--outside"
+                          textAnchor="end"
+                          x={x - 10}
+                          y={cy + 4}
+                        >
+                          {guild.name}
+                        </text>
+                      ) : null}
                     </g>
-                  ];
+                  );
                 })}
               </svg>
             </div>

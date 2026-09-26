@@ -123,6 +123,88 @@ it("shows the details in a tooltip on hover and on focus", () => {
   ).toContain("3 raid nights: Ryun");
 });
 
+/** Gives the scroller a view width and a scroll offset jsdom does not have. */
+function withScroller(clientWidth: number, run: () => void) {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get() {
+      return clientWidth;
+    }
+  });
+  try {
+    run();
+  } finally {
+    if (original) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", original);
+    }
+  }
+}
+
+function scrollTo(region: HTMLElement, offset: number) {
+  Object.defineProperty(region, "scrollLeft", {
+    configurable: true,
+    get: () => offset,
+    set: () => {}
+  });
+  fireEvent.scroll(region);
+}
+
+it("keeps a focused bar's tooltip when focus scrolls the bar into view", () => {
+  withScroller(375, () => {
+    render(
+      <DossierGuildHistory
+        characters={characters}
+        guildHistory={guildHistory}
+        today="2026-09-26"
+      />
+    );
+    const region = screen.getByRole("region", {
+      name: "Guild history timeline, scrolls horizontally"
+    });
+    // Opened at the present, so the oldest bar is out of view to the left.
+    Object.defineProperty(region, "scrollLeft", {
+      configurable: true,
+      get: () => 500,
+      set: () => {}
+    });
+    const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+    const barX = Number(casualBar!.querySelector("rect")!.getAttribute("x"));
+    act(() => casualBar!.focus());
+    // Focusing it makes the browser scroll it into view, after `focus`.
+    scrollTo(region, barX - 20);
+    const tooltip = document.querySelector<HTMLElement>(
+      ".dossier-guild-timeline-tooltip"
+    );
+    expect(tooltip?.textContent).toContain("3 raid nights: Ryun");
+    expect(tooltip?.style.left).toBe("20px");
+  });
+});
+
+it("hides a hovered bar's tooltip when the timeline scrolls", () => {
+  withScroller(375, () => {
+    render(
+      <DossierGuildHistory
+        characters={characters}
+        guildHistory={guildHistory}
+        today="2026-09-26"
+      />
+    );
+    const region = screen.getByRole("region", {
+      name: "Guild history timeline, scrolls horizontally"
+    });
+    const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+    fireEvent.mouseEnter(casualBar!);
+    scrollTo(region, 10);
+    expect(
+      document.querySelector(".dossier-guild-timeline-tooltip")
+    ).not.toBeInTheDocument();
+  });
+});
+
 it("colours the tooltip's character names by class", () => {
   render(
     <DossierCharacterProvider characters={characters}>
@@ -222,7 +304,26 @@ it("scrolls horizontally in a keyboard-reachable region", () => {
   ).toHaveAttribute("tabindex", "0");
 });
 
-it("marks the guilds the latest snapshot holds", () => {
+function currentMarkers() {
+  const ring = (guild: string) =>
+    screen.getByRole("img", {
+      name: `${guild} today. 1 character in the latest snapshot`
+    });
+  const [casualBar, rancourBar] = screen.getAllByRole("img", {
+    name: /raid night/
+  });
+  const barY = (bar: HTMLElement) =>
+    Number(bar.querySelector("rect")?.getAttribute("y"));
+  const ringY = (marker: HTMLElement) =>
+    Number(marker.querySelector("circle")?.getAttribute("cy"));
+  return {
+    rancour: { bar: barY(rancourBar!), ring: ringY(ring("Rancour")) },
+    casual: { bar: barY(casualBar!), ring: ringY(ring("SeriouslyCasual")) },
+    label: (guild: string) => ring(guild).querySelector("text")?.textContent
+  };
+}
+
+it("marks the guilds the latest snapshot holds, each at the end of its row", () => {
   render(
     <DossierGuildHistory
       characters={characters}
@@ -230,16 +331,33 @@ it("marks the guilds the latest snapshot holds", () => {
       today="2026-09-26"
     />
   );
-  const rancourToday = screen.getByRole("img", {
-    name: "Rancour today. 1 character in the latest snapshot"
+  const markers = currentMarkers();
+  // Narrow, SeriouslyCasual's outside label pushes Rancour to the next row.
+  expect(markers.casual.bar).not.toBe(markers.rancour.bar);
+  expect(markers.casual.ring).toBe(markers.casual.bar + 10);
+  expect(markers.rancour.ring).toBe(markers.rancour.bar + 10);
+  expect(markers.label("Rancour")).toBeUndefined();
+  expect(markers.label("SeriouslyCasual")).toBeUndefined();
+});
+
+it("gives a current guild's marker its own named row when a later guild ends its row", () => {
+  withScroller(1300, () => {
+    render(
+      <DossierGuildHistory
+        characters={characters}
+        guildHistory={guildHistory}
+        today="2026-09-26"
+      />
+    );
+    const markers = currentMarkers();
+    // Wide, Rancour follows SeriouslyCasual in the top row.
+    expect(markers.casual.bar).toBe(markers.rancour.bar);
+    expect(markers.rancour.ring).toBe(markers.rancour.bar + 10);
+    expect(markers.label("Rancour")).toBeUndefined();
+    // A ring at that row's end would read as Rancour's.
+    expect(markers.casual.ring).toBeGreaterThan(markers.rancour.ring);
+    expect(markers.label("SeriouslyCasual")).toBe("SeriouslyCasual");
   });
-  const casualToday = screen.getByRole("img", {
-    name: "SeriouslyCasual today. 1 character in the latest snapshot"
-  });
-  // Both histories end in the top row; the markers must not coincide.
-  expect(casualToday.querySelector("circle")?.getAttribute("cx")).not.toBe(
-    rancourToday.querySelector("circle")?.getAttribute("cx")
-  );
 });
 
 it("keeps a guild's colour when a character is hidden", () => {
