@@ -3222,6 +3222,35 @@ export function createPostgresRepositories(pool: Pool): Repositories {
         );
       },
 
+      async completeWithLiveSweepSnapshot(id, snapshotId) {
+        // The snapshot must be the one this root's sweep cursor is still
+        // extending, mirroring what `getResumeState` treats as a live chain.
+        await requireUpdated(
+          pool,
+          `UPDATE discovery_runs
+           SET status = 'complete', snapshot_id = $2,
+               completed_at = COALESCE(completed_at, now()),
+               next_retry_at = NULL, error_code = NULL
+           WHERE id = $1
+             AND (
+               (status = 'complete' AND snapshot_id = $2)
+               OR (
+                 status IN ${activeRunSql}
+                 AND EXISTS (
+                   SELECT 1 FROM fingerprint_sweep_states state
+                   WHERE state.region = discovery_runs.root_region
+                     AND state.realm_slug = discovery_runs.root_realm_slug
+                     AND state.normalized_name =
+                       discovery_runs.root_normalized_name
+                     AND state.resume_after IS NOT NULL
+                     AND state.resume_snapshot_id = $2
+                 )
+               )
+             )`,
+          [id, snapshotId]
+        );
+      },
+
       async fail(id, code) {
         await requireUpdated(
           pool,

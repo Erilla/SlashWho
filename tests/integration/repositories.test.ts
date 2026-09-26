@@ -8275,6 +8275,76 @@ describe("PostgreSQL repositories", () => {
     });
   });
 
+  it("completes a cadence-gated fresh run against the live sweep snapshot", async () => {
+    // Break caught: `complete` accepts only a snapshot the run itself
+    // published, so a fresh run deferring to another run's live cursor threw
+    // `discovery_run_not_found` on every attempt and failed as `search_failed`.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const key = {
+      region: "eu",
+      realm: "draenor",
+      name: "livecursor"
+    } as const;
+    const at = new Date("2026-09-26T10:00:00.000Z");
+    const owner = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(owner.id);
+    const admission = await repositories.fingerprintSweeps.requestAdmission({
+      runId: owner.id,
+      key,
+      requestCap: 10,
+      hourlyBudget: 100,
+      cadenceCutoff: new Date(at.getTime() - 60_000),
+      at
+    });
+    if (admission.kind !== "admitted") throw new Error("sweep_not_admitted");
+    const live = await repositories.snapshots.createAndFinishFingerprintSweep(
+      {
+        runId: owner.id,
+        rootKey: key,
+        state: "partial",
+        limitationCode: "fingerprint_sweep_capped",
+        refreshedAt: at,
+        characters: [observation(key, "Livecursor")]
+      },
+      {
+        reservationId: admission.reservationId,
+        finishedAt: at,
+        limitationCode: "fingerprint_sweep_capped"
+      },
+      {
+        resumeAfter: "eu/draenor/tail",
+        limitationCode: null,
+        advanced: true
+      }
+    );
+    const unrelated = await seedCompleteSnapshot(repositories);
+
+    const fresh = await repositories.runs.createOrReuse(key, "anonymous");
+    await repositories.runs.markRunning(fresh.id);
+
+    await expect(
+      repositories.runs.completeWithLiveSweepSnapshot(fresh.id, unrelated.id)
+    ).rejects.toThrow("discovery_run_not_found");
+    await repositories.runs.completeWithLiveSweepSnapshot(fresh.id, live.id);
+    // A redelivery after the write landed must settle, not throw.
+    await repositories.runs.completeWithLiveSweepSnapshot(fresh.id, live.id);
+
+    await expect(repositories.runs.find(fresh.id)).resolves.toMatchObject({
+      status: "complete",
+      snapshotId: live.id
+    });
+    await expect(repositories.snapshots.getCurrent(key)).resolves.toMatchObject(
+      { id: live.id }
+    );
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(key)
+    ).resolves.toMatchObject({ runId: owner.id, snapshotId: live.id });
+  });
+
   it("returns no resume state when the cursor was never set", async () => {
     const key = {
       region: "eu",

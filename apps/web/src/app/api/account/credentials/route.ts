@@ -1,3 +1,5 @@
+import type { MeasurementScope } from "@slashwho/application";
+
 import { getContainer } from "../../../../server/container";
 import {
   accountFailure,
@@ -10,9 +12,12 @@ import {
 import { authorizes } from "../../../../server/operator-auth";
 import { withHttpRequest } from "../../../../server/http";
 
-async function principalFor(request: Request) {
+async function principalFor(request: Request, scope: MeasurementScope) {
   const container = await getContainer();
-  const authentication = await container.accountAuth.authenticate(request);
+  const authentication = await container.accountAuth.authenticate(
+    request,
+    scope
+  );
   const principal = authentication.principal;
   return {
     container,
@@ -26,8 +31,8 @@ async function principalFor(request: Request) {
 }
 
 export async function GET(request: Request): Promise<Response> {
-  return withHttpRequest("account_credentials_get", async () => {
-    const { container, accountId, cookie } = await principalFor(request);
+  return withHttpRequest("account_credentials_get", async (scope) => {
+    const { container, accountId, cookie } = await principalFor(request, scope);
     if (!accountId) return accountFailure("Sign in required.", 401);
     if (!container.accountCredentials)
       return accountFailure("Account credentials are unavailable.", 503);
@@ -41,8 +46,11 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 export async function PUT(request: Request): Promise<Response> {
-  return withHttpRequest("account_credentials_put", async () => {
-    const { container, accountId, accountEmail } = await principalFor(request);
+  return withHttpRequest("account_credentials_put", async (scope) => {
+    const { container, accountId, accountEmail } = await principalFor(
+      request,
+      scope
+    );
     if (!accountId) return accountFailure("Sign in required.", 401);
     const body = await accountMutation(request, container.accountOrigin, "PUT");
     if (
@@ -81,8 +89,11 @@ export async function PUT(request: Request): Promise<Response> {
 }
 
 export async function DELETE(request: Request): Promise<Response> {
-  return withHttpRequest("account_credentials_delete", async () => {
-    const { container, accountId, accountEmail } = await principalFor(request);
+  return withHttpRequest("account_credentials_delete", async (scope) => {
+    const { container, accountId, accountEmail } = await principalFor(
+      request,
+      scope
+    );
     if (!accountId) return accountFailure("Sign in required.", 401);
     const body = await accountMutation(
       request,

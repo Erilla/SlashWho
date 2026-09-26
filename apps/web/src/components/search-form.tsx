@@ -123,7 +123,22 @@ export function SearchForm() {
           title="Research applicant"
           disabled={pending}
         >
-          {pending ? "…" : "→"}
+          {pending ? (
+            "…"
+          ) : (
+            <svg
+              className="search-button-icon"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+            >
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="m15.5 15.5 5 5" />
+            </svg>
+          )}
         </button>
       </CharacterIdentityFields>
       <p

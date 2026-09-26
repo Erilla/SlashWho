@@ -13,7 +13,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<JobParams> }
 ): Promise<Response> {
-  return withHttpRequest("dossier_research_status", async () => {
+  return withHttpRequest("dossier_research_status", async (scope) => {
     const { jobId } = await context.params;
     if (
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -24,7 +24,7 @@ export async function GET(
     }
     const { searches } = await getContainer();
     const denied = publicReadAuthorizationResponse(
-      await searches.authorizePublicRead(request.headers)
+      await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
     const run = await searches.getRun(jobId);

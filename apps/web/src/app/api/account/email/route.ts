@@ -7,7 +7,7 @@ import {
 import { withHttpRequest } from "../../../../server/http";
 
 export async function POST(request: Request): Promise<Response> {
-  return withHttpRequest("account_email", async () => {
+  return withHttpRequest("account_email", async (scope) => {
     const { accountOrigin, accountTokens, accountAuth } = await getContainer();
     const body = await accountMutation(request, accountOrigin);
     if (!body) return accountFailure("Invalid request.");
@@ -26,7 +26,7 @@ export async function POST(request: Request): Promise<Response> {
               : "Approval saved. The other address must also confirm."
           );
     }
-    const { principal } = await accountAuth.authenticate(request);
+    const { principal } = await accountAuth.authenticate(request, scope);
     if (principal?.kind !== "account" || principal.passwordChangeRequired)
       return accountFailure("Sign in to change your email.", 401);
     if (typeof body.password !== "string" || typeof body.newEmail !== "string")
