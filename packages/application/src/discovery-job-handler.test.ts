@@ -354,7 +354,22 @@ function createMemoryRepositories(): Repositories {
       },
       async complete(id, snapshotId) {
         const run = runs.get(id);
-        if (!run) throw new Error("discovery_run_not_found");
+        // Mirrors the PostgreSQL guard: a run completes only against a
+        // snapshot it published itself.
+        if (!run || snapshots.get(snapshotId)?.runId !== id) {
+          throw new Error("discovery_run_not_found");
+        }
+        run.status = "complete";
+        run.snapshotId = snapshotId;
+      },
+      async completeWithLiveSweepSnapshot(id, snapshotId) {
+        const run = runs.get(id);
+        if (
+          !run ||
+          sweepCursors.get(keyId(run.rootKey))?.snapshotId !== snapshotId
+        ) {
+          throw new Error("discovery_run_not_found");
+        }
         run.status = "complete";
         run.snapshotId = snapshotId;
       },

@@ -1,3 +1,4 @@
+import { createMeasurementScope } from "@slashwho/application";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -72,6 +73,23 @@ describe("resolveCredentialOverrides", () => {
       accountId: "alice",
       credentialVersion: 3
     });
+  });
+  it("forwards the request's scope to every credential lookup", async () => {
+    // Break caught: dropping the scope here puts the lookups back in
+    // durationMs only, however the service below measures them.
+    const credentials = { resolve: vi.fn().mockResolvedValue(null) };
+    const scope = createMeasurementScope();
+    await resolveCredentialOverrides(
+      new Request("https://example.test/api/dossiers"),
+      { kind: "account", accountId: "alice" },
+      credentials,
+      config,
+      scope
+    );
+    expect(credentials.resolve).toHaveBeenCalledTimes(3);
+    for (const call of credentials.resolve.mock.calls) {
+      expect(call[2]).toBe(scope);
+    }
   });
 });
 
