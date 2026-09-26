@@ -4156,6 +4156,53 @@ describe("Warcraft Logs gateway", () => {
         expect(result).not.toHaveProperty("attendanceSearchedEmpty");
       });
 
+      it("gallops to an old night instead of reading every newer page", async () => {
+        // Break caught: recovery walked the attendance one page at a time
+        // from page one, about 28 points a page, so a kill years back cost
+        // every page in between -- or, past the cap, was never reached.
+        const pagesRead: number[] = [];
+        const result = await searchWith(
+          (page) => {
+            pagesRead.push(page);
+            if (page < 41) {
+              return attendancePage(
+                [
+                  {
+                    code: `newer${page}`,
+                    startTime: night + hours(24 * (100 - page))
+                  }
+                ],
+                true
+              );
+            }
+            return page === 41 ? onTheNight() : pastTheNight();
+          },
+          { hydration: (code) => hydratedKill(code) }
+        );
+
+        expect(result).toMatchObject({ attendanceRecoveredKills: 1 });
+        expect(new Set(pagesRead).size).toBe(pagesRead.length);
+        expect(pagesRead.length).toBeLessThanOrEqual(13);
+      });
+
+      it("still reports a night passed by a galloping walk", async () => {
+        const result = await searchWith((page) =>
+          page < 30
+            ? attendancePage(
+                [
+                  {
+                    code: `newer${page}`,
+                    startTime: night + hours(24 * (100 - page))
+                  }
+                ],
+                true
+              )
+            : pastTheNight()
+        );
+
+        expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
+      });
+
       it("proves nothing from a walk that did not finish", async () => {
         // A transient refusal, a report that could not be read, or a budget
         // spent before the night was reached leaves the kill unproven: it is
