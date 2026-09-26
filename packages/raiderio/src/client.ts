@@ -519,9 +519,9 @@ export function createRaiderIoClient(
     // Tiers are asked a few at a time rather than one after another: a full
     // run with no settled history asks for all of them, so a serial walk made
     // each run wait on seventeen round trips. The result is still what a
-    // serial walk would give. Tiers start in order and none starts after a failure, so every
-    // tier below the earliest failure has been answered, and that failure is
-    // the limitation reported. Kills merge in tier order, so an overlapping
+    // serial walk would give. Tiers start in order and none starts after a
+    // failure, so every tier below the earliest failure has been answered,
+    // and that failure is the limitation reported. Kills merge in tier order, so an overlapping
     // duplicate resolves exactly as before.
     const outcomes: Array<
       | { kind: "kills"; kills: readonly HistoricMythicKill[] }
