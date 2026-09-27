@@ -30,6 +30,8 @@ import type { EvidenceVolume } from "../e2e/support/synthetic-evidence";
  * PROFILE_LOADS sets how many loads each warm scenario takes (default 20).
  * PROFILE_PROVIDER_LATENCY_MS sets how long the fake Raider.IO and Blizzard
  * take to answer in the provider scenarios (default 150).
+ * PROFILE_DB_RTT_MS adds that round trip to every database call the web server
+ * makes, through a proxy the global setup starts (#685); unset, there is none.
  */
 const loads = Math.max(1, Number(process.env.PROFILE_LOADS ?? 20) || 20);
 const providerLatencyMs = Math.max(
@@ -37,6 +39,14 @@ const providerLatencyMs = Math.max(
   Number(process.env.PROFILE_PROVIDER_LATENCY_MS ?? 150) || 0
 );
 const settleTimeoutMs = 45_000;
+// Set by the global setup only when it started the latency proxy, so the
+// summaries print what was injected rather than what was asked for.
+const summaryOptions = {
+  databaseRttMs:
+    process.env.E2E_DB_RTT_MS === undefined
+      ? undefined
+      : Number(process.env.E2E_DB_RTT_MS)
+};
 
 /** Sets the fakes' answer delay; the e2e suite always runs them at 0. */
 async function setProviderLatency(ms: number): Promise<void> {
@@ -358,7 +368,7 @@ async function profile(
     samples.push(await loadOnce(browser, path, options));
   }
   console.log(
-    `${formatLoadSummary(scenario, summariseLoads(samples))}\n${formatPrelude()}\n  (warm-up load: rendered ${Math.round(warmUp.renderedMs)} ms, settled ${Math.round(warmUp.settledMs ?? 0)} ms)\n`
+    `${formatLoadSummary(scenario, summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n  (warm-up load: rendered ${Math.round(warmUp.renderedMs)} ms, settled ${Math.round(warmUp.settledMs ?? 0)} ms)\n`
   );
 }
 
@@ -459,7 +469,7 @@ test("read that gathers Warcraft Logs evidence", async ({ browser }) => {
     if (index > 0) samples.push(sample);
   }
   console.log(
-    `${formatLoadSummary("gathering", summariseLoads(samples))}\n${formatPrelude()}\n`
+    `${formatLoadSummary("gathering", summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n`
   );
 });
 
@@ -493,7 +503,7 @@ test("read that needs Blizzard and Raider.IO rankings", async ({ browser }) => {
     await setProviderLatency(0);
   }
   console.log(
-    `${formatLoadSummary(`providers at ${providerLatencyMs} ms`, summariseLoads(samples))}\n${formatPrelude()}\n`
+    `${formatLoadSummary(`providers at ${providerLatencyMs} ms`, summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n`
   );
 });
 
@@ -512,7 +522,7 @@ test("cold read through discovery", async ({ browser }) => {
     if (index > 0) samples.push(sample);
   }
   console.log(
-    `${formatLoadSummary("cold", summariseLoads(samples))}\n${formatPrelude()}\n`
+    `${formatLoadSummary("cold", summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n`
   );
 });
 

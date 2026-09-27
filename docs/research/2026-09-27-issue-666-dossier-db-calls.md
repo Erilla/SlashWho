@@ -240,7 +240,8 @@ reads it again at every poll.
 
 Server `total` p50 in milliseconds. Each row is one run. The 5 ms rows used
 a temporary TCP proxy between the web server and PostgreSQL, built as
-described above and not committed; #685 will make it a profiler setting.
+described above and not committed. #685 has since made it a profiler setting,
+`PROFILE_DB_RTT_MS`.
 
 | Database RTT | Loads | Warm, 12 | Production median | Production largest |
 | -----------: | ----: | -------: | ----------------: | -----------------: |

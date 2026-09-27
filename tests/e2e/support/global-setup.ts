@@ -8,6 +8,12 @@ import process from "node:process";
 import { startFakeBlizzard } from "./fake-blizzard";
 import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
+import {
+  parseRoundTripMs,
+  startLatencyProxy,
+  throughProxy,
+  type LatencyProxy
+} from "./latency-proxy";
 import { releasePortPair } from "./port-reservation";
 import { webBuildFreshness } from "./web-build";
 import { postgresImage, tuneForTests } from "../../support/postgres-image";
@@ -132,6 +138,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   let blizzard: Awaited<ReturnType<typeof startFakeBlizzard>> | undefined;
   let warcraftLogs:
     Awaited<ReturnType<typeof startFakeWarcraftLogs>> | undefined;
+  let databaseProxy: LatencyProxy | undefined;
   const processes: ManagedProcess[] = [];
 
   try {
@@ -166,6 +173,20 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     process.env.E2E_DATABASE_URL = databaseUrl;
     process.env.E2E_RAIDER_IO_BASE_URL = fixture.baseUrl;
     process.env.E2E_BLIZZARD_BASE_URL = blizzard.baseUrl;
+
+    // The load profiler's latency mode (#685). Only the web server goes
+    // through the proxy; the worker, migrations and seeds stay direct. The
+    // e2e suite and CI never set PROFILE_DB_RTT_MS, so they never start it.
+    const databaseRttMs = parseRoundTripMs(process.env.PROFILE_DB_RTT_MS);
+    let webDatabaseUrl = databaseUrl;
+    if (databaseRttMs !== undefined) {
+      databaseProxy = await startLatencyProxy({
+        target: { host: postgres.getHost(), port: postgres.getPort() },
+        roundTripMs: databaseRttMs
+      });
+      webDatabaseUrl = throughProxy(databaseUrl, databaseProxy);
+      process.env.E2E_DB_RTT_MS = `${databaseRttMs}`;
+    }
 
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -236,7 +257,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         "--port",
         `${webPort}`
       ],
-      environment
+      { ...environment, DATABASE_URL: webDatabaseUrl }
     );
     processes.push(worker, web);
 
@@ -251,6 +272,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         fixture!.close(),
         blizzard!.close(),
         warcraftLogs!.close(),
+        ...(databaseProxy ? [databaseProxy.close()] : []),
         postgres!.stop()
       ]);
     };
@@ -263,6 +285,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ...(fixture ? [fixture.close()] : []),
       ...(blizzard ? [blizzard.close()] : []),
       ...(warcraftLogs ? [warcraftLogs.close()] : []),
+      ...(databaseProxy ? [databaseProxy.close()] : []),
       ...(postgres ? [postgres.stop()] : [])
     ]);
     throw error;

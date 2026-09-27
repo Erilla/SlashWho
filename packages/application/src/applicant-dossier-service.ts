@@ -79,7 +79,7 @@ const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
 import type { createConcurrencyLimiter } from "./concurrency";
 import { measuredRepositories } from "./measured-repositories";
 import { staleReadNeedsOnlyNewestPage } from "./settled-collection";
-import type { MeasurementScope } from "./measurement";
+import type { ExcludeFromBucket, MeasurementScope } from "./measurement";
 import type {
   CreateSearchCommand,
   CreateSearchResult,
@@ -213,6 +213,11 @@ type EvidenceResult = Readonly<{
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
   evidenceState: DossierEvidenceState;
+  /**
+   * When a read may next collect over fresh evidence: the last run's retry
+   * time, past which its evidence stops counting as fresh.
+   */
+  resumesAt: Date | null;
   /** When this character's evidence last finished collecting. */
   collectedAt: Date | null;
 }>;
@@ -479,6 +484,15 @@ async function gatherCharacterEvidence(
           (await options.repositories.evidence.listPhases?.(activeRun.id)) ?? []
         )
       : [],
+    // Either of two things adds to fresh evidence without a refresh: the last
+    // run's own retry, and a capped tier search continuing its walk.
+    resumesAt:
+      reservation.kind === "fresh"
+        ? earliest(
+            completed?.run.retryAfterAt ?? null,
+            reservation.tierSearchResumesAt ?? null
+          )
+        : null,
     evidenceState:
       reservation.kind === "fresh"
         ? completed?.run.status === "partial"
@@ -488,6 +502,14 @@ async function gatherCharacterEvidence(
           ? "scanning"
           : "waiting"
   };
+}
+
+function earliest(...times: readonly (Date | null)[]): Date | null {
+  return times.reduce<Date | null>(
+    (soonest, time) =>
+      time !== null && (soonest === null || time < soonest) ? time : soonest,
+    null
+  );
 }
 
 const EVIDENCE_STATE_SEVERITY: Readonly<Record<DossierEvidenceState, number>> =
@@ -549,6 +571,8 @@ function mergeIdentityEvidence(
     ),
     collectedAt:
       collected.length === 0 ? null : new Date(Math.min(...collected)),
+    // The soonest any name resumes: that read is the one that changes the row.
+    resumesAt: earliest(...results.map((item) => item.resumesAt)),
     gathering: results.some((item) => item.gathering),
     // One row shows one collection's steps: the subject's own while it runs,
     // otherwise whichever other name is still collecting.
@@ -680,6 +704,7 @@ function serializeDossierSubject(
   character: DossierSubject,
   evidence?: {
     evidenceState: DossierEvidenceState;
+    resumesAt?: Date | null;
     gathering: boolean;
     collectionProgress?: readonly CollectionPhase[];
   },
@@ -708,6 +733,9 @@ function serializeDossierSubject(
     ...(evidence
       ? {
           evidenceState: evidence.evidenceState,
+          ...(evidence.resumesAt
+            ? { evidenceResumesAt: evidence.resumesAt.toISOString() }
+            : {}),
           // Keyed on the run, not on `evidenceState`. A refresh over evidence
           // that is still fresh leaves the stored state `complete`, so
           // deriving the spinner from it left the row static through exactly
@@ -774,6 +802,8 @@ async function assembleDossier(options: {
   wclCredentialRef?:
     { accountId: string; credentialVersion: number } | undefined;
   encryptionKey: Buffer;
+  /** The read's scope, which times the assembly as `assemble` (#687). */
+  scope?: MeasurementScope | undefined;
 }): Promise<ContractApplicantDossier> {
   const evidence = await Promise.all(
     options.subjects.map(async (character) =>
@@ -822,132 +852,149 @@ async function assembleDossier(options: {
       signal: options.signal
     })
   ]);
-  const limitations = [
-    ...evidence.flatMap((item) => item.limitations),
-    ...cuttingEdgeEvidence.limitations,
-    ...ranked.limitations,
-    // Past the display cap nothing was requested, and nothing will be until
-    // the roster changes: no retry brings these in.
-    ...options.skippedSubjects.map((character) => ({
-      ...limitation("warcraft_logs", character.key, "request_cap", new Date()),
-      recovery: "none" as const
-    }))
-  ];
-  const dossier = buildApplicantDossier({
-    root: options.root,
-    characters: options.subjects.map(
-      ({ key, displayName, className, guild, raiderIoUrl }) => ({
-        key,
-        displayName,
-        className,
-        guild,
-        raiderIoUrl
-      })
-    ),
-    kills: ranked.kills,
-    wipes: evidence.flatMap((item) => item.wipes),
-    tierBests: evidence.flatMap((item) => item.tierBests),
-    completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
-      item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
-    ),
-    cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
-    limitations
-  });
-  // The oldest of the characters' collections, so the value reads as
-  // "everything is at least this fresh" rather than tracking whichever
-  // character happened to collect most recently.
-  const collectedTimes = evidence.flatMap((item) =>
-    item.collectedAt ? [item.collectedAt.getTime()] : []
-  );
-  // A tier is searched for every included character (#449), including any
-  // the display cap skipped, so each one's search is shown. A failure to read
-  // them costs the button its state, never the dossier.
-  const searchedAt = new Date();
-  const searchSubjects = tierSearchSubjects([
-    ...options.subjects,
-    ...options.skippedSubjects
-  ]);
-  // A character with nothing collected cannot be searched, so it is never
-  // offered as remaining. Searches reserve under the name shown, so that is
-  // the name checked; a failed read leaves every character searchable.
-  const withEvidence = await Promise.resolve()
-    .then(() =>
-      options.repositories.evidence.withCompletedEvidence?.(
-        searchSubjects.map((subject) => subject.key)
-      )
-    )
-    .then((keys) =>
-      keys ? new Set(keys.map(canonicalCharacterId)) : undefined
-    )
-    .catch(() => undefined);
-  const tierSearches = tierSearchStates(
-    searchSubjects,
-    await Promise.resolve()
-      .then(() =>
-        options.repositories.evidence.latestTierSearches(
-          searchSubjects.flatMap((subject) => [
-            subject.key,
-            ...(subject.aliases ?? [])
-          ]),
-          new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
-        )
-      )
-      .catch(() => []),
-    searchedAt,
-    withEvidence
-  );
-  return applicantDossierSchema.parse({
-    ...dossier,
-    raids: dossier.raids.map((raid) => {
-      const tierSearch = tierSearches.get(raid.raidId);
-      return tierSearch ? { ...raid, tierSearch } : raid;
-    }),
-    // Every stored kill, not only the first kills the raids lead with: a
-    // guild's history is the nights it raided, which the raids do not keep.
-    guildHistory: collectGuildRaidNights(ranked.kills),
-    lastCollectedAt:
-      collectedTimes.length === 0
-        ? null
-        : new Date(Math.min(...collectedTimes)).toISOString(),
-    // A provisional list is the page's cue to research the character itself,
-    // so evidence still gathering beneath it must not replace that state.
-    research:
-      options.research.state !== "provisional" &&
-      evidence.some((item) => item.gathering)
-        ? options.rootOnlyStoredEvidence
-          ? {
-              state: "gathering" as const,
-              message:
-                "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
-            }
-          : {
-              state: "gathering" as const,
-              message:
-                "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
-            }
-        : options.research,
-    characters: [
-      ...options.subjects.map((character, index) =>
-        serializeDossierSubject(
-          character,
-          evidence[index],
-          false,
-          aliases[index]
-        )
+  // Everything from here on works on evidence already in hand, so it is timed
+  // as the read's own `assemble` bucket (#687). The two database reads inside
+  // are left out of it, because `db` already times them.
+  const assemble = async (excluded: ExcludeFromBucket) => {
+    const limitations = [
+      ...evidence.flatMap((item) => item.limitations),
+      ...cuttingEdgeEvidence.limitations,
+      ...ranked.limitations,
+      // Past the display cap nothing was requested, and nothing will be until
+      // the roster changes: no retry brings these in.
+      ...options.skippedSubjects.map((character) => ({
+        ...limitation(
+          "warcraft_logs",
+          character.key,
+          "request_cap",
+          new Date()
+        ),
+        recovery: "none" as const
+      }))
+    ];
+    const dossier = buildApplicantDossier({
+      root: options.root,
+      characters: options.subjects.map(
+        ({ key, displayName, className, guild, raiderIoUrl }) => ({
+          key,
+          displayName,
+          className,
+          guild,
+          raiderIoUrl
+        })
       ),
-      // Excluded rows sit after the researched ones rather than holding their
-      // ranked position, so the list reads top-down as evidence then exclusions.
-      ...options.excludedSubjects.map((character, index) =>
-        serializeDossierSubject(
-          character,
-          undefined,
-          true,
-          aliases[options.subjects.length + index]
+      kills: ranked.kills,
+      wipes: evidence.flatMap((item) => item.wipes),
+      tierBests: evidence.flatMap((item) => item.tierBests),
+      completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
+        item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
+      ),
+      cuttingEdges: cuttingEdgeEvidence.cuttingEdges,
+      limitations
+    });
+    // The oldest of the characters' collections, so the value reads as
+    // "everything is at least this fresh" rather than tracking whichever
+    // character happened to collect most recently.
+    const collectedTimes = evidence.flatMap((item) =>
+      item.collectedAt ? [item.collectedAt.getTime()] : []
+    );
+    // A tier is searched for every included character (#449), including any
+    // the display cap skipped, so each one's search is shown. A failure to read
+    // them costs the button its state, never the dossier.
+    const searchedAt = new Date();
+    const searchSubjects = tierSearchSubjects([
+      ...options.subjects,
+      ...options.skippedSubjects
+    ]);
+    // A character with nothing collected cannot be searched, so it is never
+    // offered as remaining. Searches reserve under the name shown, so that is
+    // the name checked; a failed read leaves every character searchable.
+    const withEvidence = await excluded(() =>
+      Promise.resolve()
+        .then(() =>
+          options.repositories.evidence.withCompletedEvidence?.(
+            searchSubjects.map((subject) => subject.key)
+          )
         )
-      )
-    ],
-    limitations: dossier.limitations.map(contractLimitation)
-  });
+        .then((keys) =>
+          keys ? new Set(keys.map(canonicalCharacterId)) : undefined
+        )
+        .catch(() => undefined)
+    );
+    const tierSearches = tierSearchStates(
+      searchSubjects,
+      await excluded(() =>
+        Promise.resolve()
+          .then(() =>
+            options.repositories.evidence.latestTierSearches(
+              searchSubjects.flatMap((subject) => [
+                subject.key,
+                ...(subject.aliases ?? [])
+              ]),
+              new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
+            )
+          )
+          .catch(() => [])
+      ),
+      searchedAt,
+      withEvidence
+    );
+    return applicantDossierSchema.parse({
+      ...dossier,
+      raids: dossier.raids.map((raid) => {
+        const tierSearch = tierSearches.get(raid.raidId);
+        return tierSearch ? { ...raid, tierSearch } : raid;
+      }),
+      // Every stored kill, not only the first kills the raids lead with: a
+      // guild's history is the nights it raided, which the raids do not keep.
+      guildHistory: collectGuildRaidNights(ranked.kills),
+      lastCollectedAt:
+        collectedTimes.length === 0
+          ? null
+          : new Date(Math.min(...collectedTimes)).toISOString(),
+      // A provisional list is the page's cue to research the character itself,
+      // so evidence still gathering beneath it must not replace that state.
+      research:
+        options.research.state !== "provisional" &&
+        evidence.some((item) => item.gathering)
+          ? options.rootOnlyStoredEvidence
+            ? {
+                state: "gathering" as const,
+                message:
+                  "Linked-character research is pending, and historic mythic evidence is still gathering. Cached results for only the submitted character are shown."
+              }
+            : {
+                state: "gathering" as const,
+                message:
+                  "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes."
+              }
+          : options.research,
+      characters: [
+        ...options.subjects.map((character, index) =>
+          serializeDossierSubject(
+            character,
+            evidence[index],
+            false,
+            aliases[index]
+          )
+        ),
+        // Excluded rows sit after the researched ones rather than holding their
+        // ranked position, so the list reads top-down as evidence then exclusions.
+        ...options.excludedSubjects.map((character, index) =>
+          serializeDossierSubject(
+            character,
+            undefined,
+            true,
+            aliases[options.subjects.length + index]
+          )
+        )
+      ],
+      limitations: dossier.limitations.map(contractLimitation)
+    });
+  };
+  return options.scope
+    ? options.scope.time("assemble", assemble)
+    : assemble((inner) => inner());
 }
 
 /** Highest level first, then by region, realm and name. */
@@ -1313,7 +1360,8 @@ export function createApplicantDossierService(options: {
       signal: signal ?? new AbortController().signal,
       wclCredentials: overrides?.wclCredentials,
       wclCredentialRef: overrides?.wclCredentialRef,
-      encryptionKey: options.evidenceJobCredentialEncryptionKey
+      encryptionKey: options.evidenceJobCredentialEncryptionKey,
+      scope
     };
   }
 

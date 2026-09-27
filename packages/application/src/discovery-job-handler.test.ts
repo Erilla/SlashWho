@@ -356,6 +356,9 @@ function createMemoryRepositories(): Repositories {
         run.status = "complete";
         run.snapshotId = snapshotId;
       },
+      async recordGuildReadsDropped(id) {
+        if (!runs.has(id)) throw new Error("discovery_run_not_found");
+      },
       async fail(id, code) {
         const run = runs.get(id);
         if (!run) throw new Error("discovery_run_not_found");
@@ -627,6 +630,12 @@ function createMemoryRepositories(): Repositories {
         continuationFailures.set(keyId(key), failures);
         return failures;
       },
+      async requeueContinuation() {
+        return false;
+      },
+      async requeueStrandedContinuations() {
+        return [];
+      },
       async listWaiting() {
         return [];
       },
@@ -806,6 +815,14 @@ function handlerHarness(
     };
   };
 
+  // The runs whose next cycle a non-publishing continuation queued. The
+  // admission job admits only a queued row, so a bare re-enqueue is a dead end.
+  const requeuedContinuations: string[] = [];
+  repositories.fingerprintSweeps.requeueContinuation = async (runId) => {
+    requeuedContinuations.push(runId);
+    return true;
+  };
+
   const enqueuedFingerprintAdmissions: string[] = [];
   const created: CreateSnapshotInput[] = [];
   const amended: {
@@ -886,6 +903,7 @@ function handlerHarness(
         ?.outcome;
     },
     enqueuedFingerprintAdmissions,
+    requeuedContinuations,
     snapshots: { created, amended },
     handler: {
       async execute(...arguments_: Parameters<typeof handler.execute>) {
@@ -1648,6 +1666,7 @@ describe("discovery job handler", () => {
         state: "complete",
         limitationCode: null,
         characterCount: 3,
+        guildReadsDropped: 0,
         durationMs: 0,
         correlationId: null,
         queueWaitMs: null,
@@ -1657,7 +1676,8 @@ describe("discovery job handler", () => {
         fingerprintDurationMs: 0,
         dbMs: 0,
         dbCallMs: 0,
-        dbCalls: 9,
+        // A redelivery resets the guild-read count an earlier attempt stored.
+        dbCalls: 10,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
         // timed is the one that set the maximum.
@@ -1671,6 +1691,72 @@ describe("discovery job handler", () => {
         // The first Raider.IO call reaches the 0ms maximum, as for db above.
         raiderIoMaxCallName: "getCharacter"
       }
+    ]);
+  });
+
+  it("stores and logs the guild reads a discovery lost upstream", async () => {
+    // Break caught: a guild read that still failed after its retry left the
+    // immutable snapshot without a guild and no trace anywhere (run ed908d81).
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const recordGuildReadsDropped = vi.spyOn(
+      repositories.runs,
+      "recordGuildReadsDropped"
+    );
+    const gateway = new MutableGateway();
+    const read = gateway.getCharacter.bind(gateway);
+    gateway.getCharacter = async (key, signal) =>
+      key?.name === secondKey.name
+        ? Promise.reject(
+            Object.assign(new Error("raiderio_forbidden"), {
+              kind: "forbidden"
+            })
+          )
+        : read(key, signal);
+    const events: Record<string, unknown>[] = [];
+
+    await handlerFor(repositories, gateway, {
+      logger: {
+        info(event) {
+          events.push(event);
+        }
+      }
+    }).execute(run.id, delivery());
+
+    expect(recordGuildReadsDropped).toHaveBeenCalledExactlyOnceWith(run.id, 1);
+    expect(events).toEqual([
+      expect.objectContaining({
+        event: "discovery_run",
+        outcome: "snapshot",
+        state: "complete",
+        characterCount: 3,
+        guildReadsDropped: 1
+      })
+    ]);
+  });
+
+  it("skips the guild-read write when a first delivery lost nothing", async () => {
+    // The column defaults to 0, so writing 0 on a first attempt is a wasted
+    // database call on every run.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const recordGuildReadsDropped = vi.spyOn(
+      repositories.runs,
+      "recordGuildReadsDropped"
+    );
+    const events: Record<string, unknown>[] = [];
+
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: {
+        info(event) {
+          events.push(event);
+        }
+      }
+    }).execute(run.id, delivery());
+
+    expect(recordGuildReadsDropped).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({ outcome: "snapshot", guildReadsDropped: 0 })
     ]);
   });
 
@@ -1705,12 +1791,16 @@ describe("discovery job handler", () => {
       const isRoot = (key: CharacterKey) => key.name === rootKey.name;
       const rootOwner =
         slowOperation === "resolveProfileGuess" ? null : ownerMarker;
+      // The root names its guild so discovery reads only the alt's: guild
+      // reads run concurrently, and two overlapping slow reads would each time
+      // the other's delay as well.
       const gateway: RaiderIoGateway = {
         getCharacter: (key) =>
           slowWhen("getCharacter", {
             ...character(key),
             ownerId: isRoot(key) ? rootOwner : null,
-            profileGuess: isRoot(key) ? guessMarker : null
+            profileGuess: isRoot(key) ? guessMarker : null,
+            guild: isRoot(key) ? rosterGuild : null
           }),
         getClaimedCharacters: () =>
           slowWhen("getClaimedCharacters", {
@@ -1939,6 +2029,7 @@ describe("discovery job handler", () => {
         state: null,
         limitationCode: null,
         characterCount: 0,
+        guildReadsDropped: 0,
         durationMs: 0,
         correlationId: null,
         queueWaitMs: null,
@@ -2803,6 +2894,7 @@ describe("discovery job handler", () => {
     ).resolves.toBeUndefined();
 
     expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    expect(harness.requeuedContinuations).toEqual([harness.runId]);
     expect(harness.snapshots.amended).toHaveLength(0);
     await expect(
       harness.repositories.snapshots.getCurrent(rootKey)
@@ -2960,6 +3052,7 @@ describe("discovery job handler", () => {
     ).resolves.toBeUndefined();
 
     expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    expect(harness.requeuedContinuations).toEqual([harness.runId]);
     await expect(
       harness.repositories.runs.find(harness.runId)
     ).resolves.toMatchObject({ status: "complete" });

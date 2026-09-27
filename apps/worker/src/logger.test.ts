@@ -370,6 +370,7 @@ describe("worker logger", () => {
         state: "complete",
         limitationCode: null,
         characterCount: 3,
+        guildReadsDropped: 1,
         durationMs: 1,
         correlationId: null,
         queueWaitMs: null,
