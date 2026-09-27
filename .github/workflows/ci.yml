@@ -19,7 +19,7 @@ on:
 #   scope ──┬── checks (×3)   format, lint, typecheck, one script each
 #           ├── unit (×2)     unit tests, apps/web and the rest
 #           ├── integration
-#           ├── e2e (×2)      Playwright, one shard of the spec files each
+#           ├── e2e (×4)      Playwright, one shard of the spec files each
 #           └── docker (×2)   one image each
 #   all of them ───> ci       the required check
 #
@@ -191,6 +191,17 @@ jobs:
   # playwright.config.ts), so it is split into shards instead. Each shard is a
   # separate runner with its own global setup, database and servers; every spec
   # seeds what it needs, so no file depends on another having run first.
+  #
+  # Every spec file runs. There is deliberately no list of files here: a list
+  # only grows when someone remembers to extend it. responsive.spec.ts never
+  # ran in CI from the first commit, and two later files joined it (#653).
+  #
+  # With fullyParallel off, Playwright shards whole files, so the shard count is
+  # set by the largest files rather than by the total. Four shards put
+  # responsive, dossier-navigation and search on a runner each and the three
+  # account and connected-character files on the fourth, which keeps the
+  # slowest shard as short as it was when only three files ran. Three shards
+  # pair responsive with dossier-navigation, the slowest of the lot.
   e2e:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
@@ -199,7 +210,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-workspace
@@ -213,10 +224,7 @@ jobs:
           path: apps/web/.next/cache
           key: next-build-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: next-build-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
-      - run: >-
-          corepack pnpm playwright test --shard=${{ matrix.shard }}/2
-          tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts
-          tests/e2e/dossier-navigation.spec.ts
+      - run: corepack pnpm playwright test --shard=${{ matrix.shard }}/4
 
   # The images are built only to prove they still build; nothing is pushed or
   # loaded. Each image builds on its own runner. The layer cache lives in the
