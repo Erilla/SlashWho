@@ -84,6 +84,7 @@ export type WebContainerDependencies = Readonly<{
     fetch: typeof globalThis.fetch;
     clientId: string;
     clientSecret: string;
+    baseUrl?: string | undefined;
     onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): BlizzardGateway;
   /** Defaults to the real client; only character-ID resolution uses it. */
@@ -179,6 +180,7 @@ export async function createWebContainer(
         fetch: globalThis.fetch,
         clientId: config.dossier.blizzardClientId,
         clientSecret: config.dossier.blizzardClientSecret,
+        baseUrl: config.dossier.blizzardBaseUrl,
         onThrottle: throttleReporter(webLogger, "blizzard")
       }),
       raiderio,

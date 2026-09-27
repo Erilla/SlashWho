@@ -1,6 +1,7 @@
 import {
   applicationConfigSchema,
   loadSharedConfig,
+  optionalHttpUrl,
   optionalSecret,
   type ApplicationConfig,
   type Environment
@@ -23,6 +24,8 @@ export type WebConfig = Readonly<{
     raiderIoAccessKey?: string | undefined;
     blizzardClientId: string;
     blizzardClientSecret: string;
+    /** Overrides Blizzard's own hosts; e2e points it at a local fake. */
+    blizzardBaseUrl?: string | undefined;
     evidenceJobCredentialEncryptionKey: Buffer;
     /**
      * Resolves pasted Warcraft Logs character-ID URLs. Optional: without it
@@ -112,6 +115,10 @@ export function loadWebConfig(
       raiderIoAccessKey: shared.raiderIoAccessKey,
       blizzardClientId: shared.blizzardClientId,
       blizzardClientSecret: shared.blizzardClientSecret,
+      blizzardBaseUrl: optionalHttpUrl(
+        environment.BLIZZARD_BASE_URL,
+        "invalid_blizzard_base_url"
+      ),
       evidenceJobCredentialEncryptionKey:
         shared.evidenceJobCredentialEncryptionKey,
       warcraftLogs: optionalWarcraftLogsCredentials(environment)

@@ -368,6 +368,40 @@ test("shows a grey no-log row when an entire supported tier has no evidence", as
   await expect(tier.getByRole("article")).toHaveCount(0);
 });
 
+test("reads Cutting Edge achievements from the fake Blizzard, never the live one", async ({
+  page
+}) => {
+  // Break caught (#654): the web ignored BLIZZARD_BASE_URL, so every dossier
+  // read here sent the inert e2e credentials to live Blizzard instead.
+  const blizzardBaseUrl = process.env.E2E_BLIZZARD_BASE_URL;
+  if (!blizzardBaseUrl) throw new Error("e2e_blizzard_base_url_unavailable");
+  const achievementRequests = async () =>
+    (
+      (await fetch(new URL("/__control/stats", blizzardBaseUrl)).then(
+        (response) => response.json()
+      )) as { achievementRequests: number }
+    ).achievementRequests;
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "fakeblizzard"
+  } as const;
+  await seedSnapshot({
+    key,
+    displayName: "Fakeblizzard",
+    refreshedAt: new Date()
+  });
+  await seedCharacterEvidence(key, { withSampleKills: false });
+  const before = await achievementRequests();
+
+  await page.goto("/dossiers/eu/silvermoon/fakeblizzard");
+  await expect(
+    page.getByRole("heading", { name: "Connected characters" })
+  ).toBeVisible();
+
+  expect(await achievementRequests()).toBeGreaterThan(before);
+});
+
 test("presents parse evidence with exact fight sources at desktop and mobile widths", async ({
   page
 }) => {

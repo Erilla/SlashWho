@@ -39,6 +39,7 @@ export function readCredentialOverrides(
       fetch: globalThis.fetch,
       clientId: blizzardClientId,
       clientSecret: blizzardClientSecret,
+      baseUrl: config.dossier.blizzardBaseUrl,
       onThrottle: throttleReporter("blizzard")
     });
   }
