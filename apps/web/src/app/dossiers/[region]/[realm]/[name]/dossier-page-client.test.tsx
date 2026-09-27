@@ -214,6 +214,17 @@ function withEvidenceState(
   };
 }
 
+/** Partial evidence whose retry time has passed, so the next read collects. */
+function resuming(source: ApplicantDossier, at = "2026-01-01T00:00:00.000Z") {
+  return {
+    ...source,
+    characters: source.characters.map((character) => ({
+      ...character,
+      evidenceResumesAt: at
+    }))
+  };
+}
+
 function withCharacterEvidenceStates(
   source: ApplicantDossier,
   states: Record<string, "waiting" | "scanning" | "partial" | "complete">
@@ -327,7 +338,7 @@ describe("DossierPageClient live evidence", () => {
           : Response.json(
               withEvidenceState(
                 reads === 2 ? partiallyExpanded : expanded,
-                reads === 2 ? "partial" : "complete"
+                reads === 2 ? "scanning" : "complete"
               )
             )
       );
@@ -336,7 +347,7 @@ describe("DossierPageClient live evidence", () => {
     render(
       <DossierPageClient
         identity={identity}
-        initialDossier={withEvidenceState(initial, "partial")}
+        initialDossier={withEvidenceState(initial, "scanning")}
         jobId={null}
       />
     );
@@ -368,7 +379,7 @@ describe("DossierPageClient live evidence", () => {
       render(
         <DossierPageClient
           identity={identity}
-          initialDossier={withEvidenceState(initial, "partial")}
+          initialDossier={withEvidenceState(initial, "scanning")}
           jobId={null}
         />
       );
@@ -516,7 +527,7 @@ describe("DossierPageClient live evidence", () => {
     render(
       <DossierPageClient
         identity={identity}
-        initialDossier={withEvidenceState(initial, "partial")}
+        initialDossier={withEvidenceState(initial, "scanning")}
         jobId={null}
       />
     );
@@ -554,7 +565,7 @@ describe("DossierPageClient live evidence", () => {
       render(
         <DossierPageClient
           identity={identity}
-          initialDossier={withEvidenceState(initial, "partial")}
+          initialDossier={withEvidenceState(initial, "scanning")}
           jobId={null}
         />
       );
@@ -581,7 +592,7 @@ describe("DossierPageClient live evidence", () => {
       render(
         <DossierPageClient
           identity={identity}
-          initialDossier={withEvidenceState(initial, "partial")}
+          initialDossier={withEvidenceState(initial, "scanning")}
           jobId={null}
         />
       );
@@ -622,9 +633,25 @@ describe("DossierPageClient live evidence", () => {
     expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
   });
 
-  it.each(["waiting", "scanning", "partial"] as const)(
+  it.each([
+    ["waiting", withEvidenceState(initial, "waiting")],
+    ["scanning", withEvidenceState(initial, "scanning")],
+    [
+      "partial past its retry time",
+      resuming(withEvidenceState(initial, "partial"))
+    ],
+    [
+      "refreshing",
+      {
+        ...initial,
+        characters: withEvidenceState(initial, "complete").characters.map(
+          (character) => ({ ...character, researchState: "gathering" as const })
+        )
+      }
+    ]
+  ] as const)(
     "updates %s evidence without using research.state",
-    async (state) => {
+    async (_state, initialDossier) => {
       vi.useFakeTimers();
       const fetchMock = vi
         .fn()
@@ -635,7 +662,7 @@ describe("DossierPageClient live evidence", () => {
       render(
         <DossierPageClient
           identity={identity}
-          initialDossier={withEvidenceState(initial, state)}
+          initialDossier={initialDossier}
           jobId={null}
         />
       );
@@ -650,6 +677,100 @@ describe("DossierPageClient live evidence", () => {
       expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
     }
   );
+
+  it("stops polling partial evidence that is final (#663)", async () => {
+    // Break caught: a finished partial run was polled as if more were coming,
+    // so an open tab re-read the whole dossier every 10 s until it closed.
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(withEvidenceState(partiallyExpanded, "partial"))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    await startFirstLiveEvidenceRead();
+    expect(screen.getByText("Partial evidence")).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+  });
+
+  it("reads partial evidence again at its retry time, then follows the run it queues (#663)", async () => {
+    vi.useFakeTimers();
+    const resumesAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(withEvidenceState(partiallyExpanded, "waiting"))
+      )
+      .mockResolvedValue(
+        Response.json(withEvidenceState(expanded, "complete"))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={resuming(
+          withEvidenceState(initial, "partial"),
+          resumesAt
+        )}
+        jobId={null}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Partial evidence")).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads at once a retry time that passed before its snapshot arrived (#663)", async () => {
+    // Break caught: the wake-up timer was armed only for times still ahead,
+    // and the clock the poll is judged by moved only when it fired, so a
+    // retry time already behind the wall clock was neither due nor timed.
+    vi.useFakeTimers();
+    const passed = new Date(Date.now() + 500).toISOString();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          resuming(withEvidenceState(partiallyExpanded, "partial"), passed)
+        )
+      )
+      .mockResolvedValue(
+        Response.json(withEvidenceState(expanded, "complete"))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    await startFirstLiveEvidenceRead();
+    expect(screen.getByText("Partial evidence")).toBeVisible();
+    // Due already, so the wake-up fires without waiting; each act renders
+    // once, at its end, so the wake-up and the read it starts get one each.
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
   it.each([401, 403, 404, 200])(
     "retains a newer terminal discovery response %s when an older live snapshot arrives",
@@ -715,7 +836,7 @@ describe("DossierPageClient live evidence", () => {
           Response.json(
             withEvidenceState(
               dossierCalls === 1 ? initial : expanded,
-              dossierCalls === 1 ? "partial" : "complete"
+              dossierCalls === 1 ? "scanning" : "complete"
             )
           )
         );
@@ -815,7 +936,7 @@ describe("DossierPageClient live evidence", () => {
 
   it("announces partial and complete evidence changes once", async () => {
     vi.useFakeTimers();
-    const partial = withEvidenceState(partiallyExpanded, "partial");
+    const partial = resuming(withEvidenceState(partiallyExpanded, "partial"));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json(partial))
