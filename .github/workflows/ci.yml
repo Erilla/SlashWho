@@ -17,7 +17,7 @@ on:
 # no single job holds much more than a minute and a half of work:
 #
 #   scope ──┬── checks        format, lint, typecheck
-#           ├── unit          unit tests
+#           ├── unit (×2)     unit tests, apps/web and the rest
 #           ├── integration
 #           ├── e2e (×2)      Playwright, one shard of the spec files each
 #           └── docker (×2)   one image each
@@ -115,28 +115,37 @@ jobs:
       - run: corepack pnpm lint
       - run: corepack pnpm typecheck
 
+  # The unit suite was first given a 6 GB heap and then, when that was still
+  # not enough, split into one vitest process per workspace (d4739580,
+  # 209f11c9). apps/web is the heavy half — three quarters of the time, and all
+  # the React and jsdom files — so it has a leg to itself. The other workspaces
+  # are small, and each paid a second or two of vitest start-up for about a
+  # second of tests, so they share one. Each leg is its own runner, so the
+  # job's wall clock is the web leg's rather than the sum of both.
+  #
+  # If a leg runs out of heap, split it again rather than raising the limit:
+  # each of vitest's workers inherits this setting, and separate runners make
+  # a further split cheap. If the web leg is still the slowest job in the
+  # workflow, shard it across two legs with `--shard` next; jsdom environment
+  # set-up is about half of its time.
   unit:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
+    name: unit (${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: web
+            paths: apps/web
+          - leg: rest
+            paths: apps/worker packages scripts tests/e2e/support
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-workspace
-      # The unit suite was first given a 6 GB heap and then, when that was
-      # still not enough, split into one vitest process per workspace
-      # (d4739580, 209f11c9). apps/web is the heavy half — two thirds of the
-      # time, and all the React and jsdom files — so it keeps a process to
-      # itself. The other workspaces are small, and each paid a second or two
-      # of vitest start-up for about a second of tests, so they share one
-      # process. If that process runs out of heap, split it again rather than
-      # raising the limit: each of the two workers inherits this setting.
-      - run: corepack pnpm exec vitest run --project unit apps/web
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: >-
-          corepack pnpm exec vitest run --project unit
-          apps/worker packages scripts tests/e2e/support
+      - run: corepack pnpm exec vitest run --project unit ${{ matrix.paths }}
         env:
           NODE_OPTIONS: --max-old-space-size=6144
 
