@@ -271,9 +271,9 @@ export async function readQueueDepths(
  * evidence runs share, so they bound the process rather than one caller.
  * Blizzard allows the credentials 100 requests a second and the web service
  * spends the same allowance, so the worker takes two fifths of it; the web's
- * pessimistic share at the most concurrency its config accepts takes another
- * two, leaving a fifth spare. The rate limit, not the concurrency, is what
- * bounds that share: 10 in flight at a pessimistic 100 ms would be 100 a
+ * own limiter (BLIZZARD_WEB_REQUEST_LIMITS) takes another fifth, and the
+ * runtime test holds the sum to 80. The rate limit, not the concurrency, is
+ * what bounds that share: 10 in flight at a pessimistic 100 ms would be 100 a
  * second. The concurrency is sized to reach the limit instead: at 40 a second
  * and 6 in flight, a measured full run managed only 24 a second, because 6
  * reads at the 219 ms mean it saw cannot go faster (#655). 10 in flight reaches

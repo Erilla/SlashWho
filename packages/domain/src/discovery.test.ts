@@ -743,4 +743,187 @@ describe("discoverCharacter", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(claimedCalls).toBe(0);
   });
+
+  describe("guild reads", () => {
+    // Seven claimed characters the profile list returns without a guild, so
+    // each needs its own read after deduplication.
+    const guildless = ["a", "b", "c", "d", "e", "f", "g"].map(
+      (letter): CharacterKey => ({
+        region: "eu",
+        realm: "draenor",
+        name: `alt-${letter}`
+      })
+    );
+    const guild = { name: "Rancour", region: "eu" as const, realm: "draenor" };
+
+    function deferredGuildGateway() {
+      const started: CharacterKey[] = [];
+      const waiting: Array<{ key: CharacterKey; release: () => void }> = [];
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const gateway: RaiderIoGateway = {
+        async getCharacter(key) {
+          if (key.name === "alt")
+            return character(altKey, { ownerId: "owner" });
+          started.push(key);
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise<void>((resolve) =>
+            waiting.push({ key, release: resolve })
+          );
+          inFlight -= 1;
+          return character(key, { guild: { ...guild, name: `g-${key.name}` } });
+        },
+        async getClaimedCharacters() {
+          return {
+            characters: [
+              character(altKey),
+              ...guildless.map((key) => character(key))
+            ]
+          };
+        },
+        async resolveProfileGuess() {
+          return null;
+        }
+      };
+      return {
+        gateway,
+        started,
+        waiting,
+        maxInFlight: () => maxInFlight
+      };
+    }
+
+    async function settle(): Promise<void> {
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    }
+
+    it("reads at most four guilds at a time, keeping the deduplicated order", async () => {
+      // Break caught: serial reads made cycle 1 wait on the sum of heavy-tailed
+      // latencies; unbounded reads would overrun Raider.IO. Out-of-order
+      // completion must not reorder the snapshot.
+      const fake = deferredGuildGateway();
+      const run = discoverCharacter(altKey, fake.gateway, options);
+
+      await settle();
+      expect(fake.started).toHaveLength(4);
+      // Release newest first, so completion order is the reverse of start order.
+      while (fake.waiting.length > 0) {
+        fake.waiting.pop()!.release();
+        await settle();
+      }
+      const outcome = await run;
+
+      expect(fake.maxInFlight()).toBe(4);
+      expect(fake.started.map((key) => key.name)).toEqual(
+        guildless.map((key) => key.name)
+      );
+      expect(outcome.kind).toBe("snapshot");
+      if (outcome.kind !== "snapshot") return;
+      expect(outcome.state).toBe("complete");
+      expect(
+        outcome.characters.map((item) => [item.key.name, item.guild?.name])
+      ).toEqual([
+        ["alt", undefined],
+        ...guildless.map((key) => [key.name, `g-${key.name}`])
+      ]);
+    });
+
+    it("never spends more than the request cap on concurrent guild reads", async () => {
+      // Break caught: a reservation made after an await would let four
+      // workers each see the last unit of budget and overspend the cap.
+      let requests = 0;
+      const gateway = scriptedGateway({
+        characters: [
+          [altKey, character(altKey, { ownerId: "owner", guild })],
+          ...guildless.map((key) => [key, character(key, { guild })] as const)
+        ],
+        claimed: {
+          owner: [character(altKey), ...guildless.map((key) => character(key))]
+        }
+      });
+      const counted: RaiderIoGateway = {
+        getCharacter: (...args) => {
+          requests += 1;
+          return gateway.getCharacter(...args);
+        },
+        getClaimedCharacters: (...args) => {
+          requests += 1;
+          return gateway.getClaimedCharacters(...args);
+        },
+        resolveProfileGuess: (...args) => {
+          requests += 1;
+          return gateway.resolveProfileGuess(...args);
+        }
+      };
+
+      const outcome = await discoverCharacter(altKey, counted, {
+        ...options,
+        requestCap: 5
+      });
+
+      expect(requests).toBe(5);
+      expect(outcome.kind).toBe("snapshot");
+      if (outcome.kind !== "snapshot") return;
+      expect(outcome.state).toBe("complete");
+      expect(
+        outcome.characters
+          .filter((item) => item.guild !== null)
+          .map((item) => item.key.name)
+      ).toEqual(["alt", "alt-a", "alt-b", "alt-c"]);
+      expect(outcome.characters.map((item) => item.key.name)).toEqual([
+        "alt",
+        ...guildless.map((key) => key.name)
+      ]);
+    });
+
+    it("costs only that character's guild when one concurrent read fails", async () => {
+      // Break caught: one rejected read in a pool could fail the whole batch.
+      const gateway = scriptedGateway({
+        characters: [
+          [altKey, character(altKey, { ownerId: "owner" })],
+          ...guildless
+            .filter((key) => key.name !== "alt-b")
+            .map((key) => [key, character(key, { guild })] as const)
+        ],
+        claimed: {
+          owner: [character(altKey), ...guildless.map((key) => character(key))]
+        }
+      });
+
+      const outcome = await discoverCharacter(altKey, gateway, options);
+
+      expect(outcome.kind).toBe("snapshot");
+      if (outcome.kind !== "snapshot") return;
+      expect(
+        outcome.characters.map((item) => [item.key.name, item.guild !== null])
+      ).toEqual([
+        ["alt", false],
+        ...guildless.map((key) => [key.name, key.name !== "alt-b"])
+      ]);
+    });
+
+    it("rejects on abort and starts no guild read after it", async () => {
+      // Break caught: idle workers could keep pulling reads from the queue
+      // after cancellation, spending requests on a run nobody will publish.
+      const controller = new AbortController();
+      const fake = deferredGuildGateway();
+      const run = discoverCharacter(altKey, fake.gateway, {
+        ...options,
+        signal: controller.signal
+      });
+      const settled = run.catch((error: unknown) => error);
+
+      await settle();
+      expect(fake.started).toHaveLength(4);
+      controller.abort(new DOMException("drain timeout", "AbortError"));
+      while (fake.waiting.length > 0) {
+        fake.waiting.shift()!.release();
+        await settle();
+      }
+
+      await expect(settled).resolves.toMatchObject({ name: "AbortError" });
+      expect(fake.started).toHaveLength(4);
+    });
+  });
 });
