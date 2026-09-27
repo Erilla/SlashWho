@@ -43,6 +43,14 @@ const allowlist = new Set([
   // query argument -- so no character name, realm, or URL can arrive here.
   "dbMaxCallName",
   "limiterWaitMs",
+  // The request's own CPU work (#687): dossier assembly once the evidence is
+  // in hand, and compaction, validation, serialisation and counting.
+  "assembleMs",
+  "assembleCalls",
+  "assembleMaxCallMs",
+  "respondMs",
+  "respondCalls",
+  "respondMaxCallMs",
   "runJoined",
   // upstream_throttle: a fixed literal from a closed provider set, and the
   // upstream's own Retry-After -- never user data.

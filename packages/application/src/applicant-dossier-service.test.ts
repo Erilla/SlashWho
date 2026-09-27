@@ -1620,6 +1620,48 @@ describe("applicant dossier service", () => {
     expect(scope.totals().dbCalls).toBeGreaterThan(0);
   });
 
+  it("times assembly once the evidence is in, less its database reads", async () => {
+    // Issue #687: about 370 ms of a production dossier read sat in no bucket.
+    // `assemble` is the read's own work on evidence already in hand, so time
+    // spent gathering that evidence, and the two reads made while assembling,
+    // must stay in `db` rather than being charged to it.
+    const { dossiers, repositories } = fixture();
+    let now = 0;
+    const scope = createMeasurementScope(() => now);
+    repositories.evidence.historicAliases.mockImplementation(async () => {
+      now += 1000;
+      return [];
+    });
+    repositories.evidence.latestTierSearches.mockImplementation(async () => {
+      now += 30;
+      return [];
+    });
+    Object.assign(repositories.evidence, {
+      withCompletedEvidence: vi.fn(async () => {
+        now += 50;
+        return [root];
+      })
+    });
+
+    const result = await dossiers.read(root, undefined, undefined, scope);
+
+    expect(result.kind).toBe("ready");
+    const totals = scope.totals();
+    expect(totals.assembleCalls).toBe(1);
+    expect(totals.assembleMs).toBe(0);
+    expect(totals.dbMs).toBeGreaterThanOrEqual(1080);
+  });
+
+  it("times the readInitial path's assembly as well", async () => {
+    const { dossiers } = fixture();
+    const scope = createMeasurementScope();
+
+    await dossiers.readInitial(root, undefined, undefined, scope);
+
+    expect(scope.totals().assembleCalls).toBe(1);
+    expect(scope.totals().assembleMs).toEqual(expect.any(Number));
+  });
+
   it("threads the request scope through addConnectedCharacter's call to search.create", async () => {
     const { dossiers, search } = fixture();
     const scope = createMeasurementScope();
