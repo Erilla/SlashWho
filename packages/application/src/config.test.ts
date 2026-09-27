@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applicationConfigSchema } from "./config";
+import { BLIZZARD_WEB_REQUEST_LIMITS } from "./dossier-gateways";
 
 const required = {
   BOT_API_KEY: "b".repeat(32),
@@ -48,9 +49,26 @@ describe("dossier application configuration", () => {
     ).toThrow("invalid_negative_cache_ttl");
   });
 
+  it("lets the web's Blizzard client admit every read the dossier limiter does", () => {
+    // Break caught: the web's shared Blizzard client could hold fewer reads in
+    // flight than DOSSIER_PROVIDER_CONCURRENCY admits, so dossier slots would
+    // sit waiting on a second, hidden concurrency bound while Raider.IO reads
+    // queued behind them. Only the client's rate limit should bind.
+    const maximum =
+      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.unwrap()
+        .maxValue ?? Number.POSITIVE_INFINITY;
+
+    expect(maximum).toBe(12);
+    expect(BLIZZARD_WEB_REQUEST_LIMITS.maxConcurrent).toBeGreaterThanOrEqual(
+      maximum
+    );
+  });
+
   it.each([
     ["DOSSIER_CHARACTER_CEILING", 0],
-    ["DOSSIER_CHARACTER_CEILING", 51]
+    ["DOSSIER_CHARACTER_CEILING", 51],
+    ["DOSSIER_PROVIDER_CONCURRENCY", 0],
+    ["DOSSIER_PROVIDER_CONCURRENCY", 13]
   ])("rejects invalid %s values", (name, value) => {
     // Break caught: a malformed cap could cause a request to exceed its intended upstream bound.
     expect(() =>

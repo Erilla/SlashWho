@@ -1,4 +1,5 @@
 import {
+  BLIZZARD_WEB_REQUEST_LIMITS,
   createApplicantDossierService,
   createSearchService,
   throttleReporter,
@@ -14,7 +15,11 @@ import {
   type Repositories
 } from "@slashwho/database";
 import { createRaiderIoClient, type RaiderIoGateway } from "@slashwho/raiderio";
-import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
+import {
+  createBlizzardClient,
+  type BlizzardGateway,
+  type RequestLimits
+} from "@slashwho/blizzard";
 import {
   createWarcraftLogsClient,
   type WarcraftLogsGateway
@@ -86,6 +91,7 @@ export type WebContainerDependencies = Readonly<{
     clientSecret: string;
     baseUrl?: string | undefined;
     onThrottle?(event: { retryAfterMs: number | undefined }): void;
+    requestLimits?: RequestLimits;
   }): BlizzardGateway;
   /** Defaults to the real client; only character-ID resolution uses it. */
   createWarcraftLogsGateway?(options: {
@@ -181,7 +187,8 @@ export async function createWebContainer(
         clientId: config.dossier.blizzardClientId,
         clientSecret: config.dossier.blizzardClientSecret,
         baseUrl: config.dossier.blizzardBaseUrl,
-        onThrottle: throttleReporter(webLogger, "blizzard")
+        onThrottle: throttleReporter(webLogger, "blizzard"),
+        requestLimits: BLIZZARD_WEB_REQUEST_LIMITS
       }),
       raiderio,
       config: config.application,
