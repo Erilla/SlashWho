@@ -5,11 +5,13 @@ Issue #549. Investigated 2026-09-26 against `origin/main` at `2922426c`.
 > **Superseded in part on 2026-09-27 (#655).** The worker's rate limit is now
 > 40 requests a second, not the 20 recommended below, with 10 reads in flight,
 > not 6. The planning ceiling for shared traffic is 80% of Blizzard's 100 a
-> second, not about 60%. The web
-> service's `DOSSIER_PROVIDER_CONCURRENCY` is now capped at 4, not 12. See
-> [Addendum: the 40 a second limit](#addendum-the-40-a-second-limit) for the
-> figures and the reasons. The rest of this note is the 2026-09-26 analysis as
-> written.
+> second, not about 60%. The web's shared Blizzard client now has its own rate
+> limit of 20 a second (#673), so worker plus web is at most 60 a second,
+> enforced. See
+> [Addendum: the 40 a second limit](#addendum-the-40-a-second-limit) and
+> [Addendum: the web's own rate limit](#addendum-the-webs-own-rate-limit) for
+> the figures and the reasons. The rest of this note is the 2026-09-26 analysis
+> as written.
 
 ## Question
 
@@ -315,6 +317,71 @@ connection busy on average and about 20 briefly queued at worst. That fits
 within the pool's 10 s connection timeout, but if `dbMaxCallMs` grows in
 `discovery_run` records, look at the pool before anything else.
 
+## Addendum: the web's own rate limit
+
+Added 2026-09-27 (#673). The addendum above sized the web's share as an
+estimate: 4 reads in flight at an assumed 100 ms response, 40 a second. Nothing
+enforced it. Faster answers raised it (57 a second at 70 ms), and Blizzard's
+fixed one-second window let a burst of fast answers bunch into one second.
+
+The web's shared Blizzard client, the one built from the server's own
+credentials in `apps/web/src/server/container.ts`, now has its own request
+limiter, the same `createRequestLimiter` the worker's client uses. Its limits
+are `BLIZZARD_WEB_REQUEST_LIMITS` in
+`packages/application/src/dossier-gateways.ts`.
+
+| Setting                                       | After the 40 a second addendum | Now | Where                                          |
+| --------------------------------------------- | ------------------------------ | --- | ---------------------------------------------- |
+| Worker `maxPerSecond`                         | 40                             | 40  | `apps/worker/src/runtime.ts`                   |
+| Web `maxPerSecond`                            | none (about 40, estimated)     | 20  | `packages/application/src/dossier-gateways.ts` |
+| Web `maxConcurrent`                           | none                           | 12  | `packages/application/src/dossier-gateways.ts` |
+| `DOSSIER_PROVIDER_CONCURRENCY` schema maximum | 4                              | 12  | `packages/application/src/config.ts`           |
+| Worst case, worker plus web                   | 80, estimated                  | 60  | `apps/worker/src/runtime.test.ts` (ceiling 80) |
+
+The split is now 40 for the worker and 20 for the web, **60 a second**: the
+Answer's original target, enforced rather than estimated. The worker runtime
+test adds the two `maxPerSecond` values and fails the build above the 80%
+ceiling. It no longer derives the web's share from concurrency and a latency
+assumption, so the 100 ms figure no longer matters to the composition.
+
+Why 20 rather than 40:
+
+- The web does not need more. At the default of 4 in flight and the 219 ms mean
+  measured above, the web reaches about 18 a second, so the limit barely binds
+  in normal running.
+- A cold dossier makes at most 25 Cutting Edge reads
+  (`ACHIEVEMENT_KEYS_PER_DOSSIER`). At 20 a second the limiter costs it about a
+  second at worst.
+- It restores the margin the 80% ceiling gave away, which covers the fixed
+  window and a second replica better than 80 did.
+
+What else changed with it:
+
+- **`DOSSIER_PROVIDER_CONCURRENCY` goes back to a maximum of 12.** It was
+  lowered to 4 only because it was the web's one Blizzard bound. It also bounds
+  the web's Raider.IO ranking reads, so a deployment can raise it again for
+  their sake. The default stays 4. The web client's `maxConcurrent` is kept at
+  or above that maximum by `packages/application/src/config.test.ts`, so only
+  the rate binds and dossier slots never wait on a second, hidden concurrency
+  cap.
+- **Waiting on the limiter counts against the provider timeout.** Each dossier
+  Blizzard read is given `AbortSignal.timeout(PROVIDER_TIMEOUT_MS)` (15 s), and
+  the limiter admits a read under that signal, so time spent queued is part of
+  the 15 s and an expired read leaves the queue. At 20 a second a queue would
+  have to hold about 300 reads before any timed out.
+- **Limiter wait is not Blizzard latency.** Time a dossier read spends queued
+  in the limiter is kept out of `blizzardMs`, `blizzardMaxCallMs` and the
+  `blizzard` Server-Timing entry, and reported as `blizzardLimiterWaitMs`, the
+  same field the worker's discovery runs use.
+- **Visitor-supplied Blizzard credentials are not limited.** They build their
+  own client per read (`apps/web/src/server/credential-headers.ts`) on a
+  different client id, which is not part of this allowance.
+
+The replica assumption above still stands: both limits are per process, so the
+60 a second holds only while the web and the worker each run one replica. With
+two web replicas it is 80, which is still within the ceiling; the test cannot
+see replica counts.
+
 ## Open questions and things not verified
 
 - **Same credentials in both services: settled.** The service owner confirmed
@@ -340,7 +407,8 @@ within the pool's 10 s connection timeout, but if `dbMaxCallMs` grows in
   mean and maximum. No run on Railway has been read against them yet, so the
   100 ms figure is still an assumption.
 - **Web replica count and `DOSSIER_PROVIDER_CONCURRENCY` in production.** Not
-  in the repository. Both scale the web term above linearly.
+  in the repository. Since #673 only the replica count scales the web's
+  Blizzard share; `DOSSIER_PROVIDER_CONCURRENCY` no longer does.
 - **Uncharged hourly volume.** Web Cutting Edge misses per hour and evidence
   runs per hour are not measured against the Blizzard budget
   (`docs/operations/evidence-run-cost.md:514-520` describes how to count the

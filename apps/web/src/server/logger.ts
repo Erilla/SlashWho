@@ -31,6 +31,7 @@ const allowlist = new Set([
   "blizzardMs",
   "blizzardCalls",
   "blizzardMaxCallMs",
+  "blizzardLimiterWaitMs",
   "warcraftLogsMs",
   "warcraftLogsCalls",
   "warcraftLogsMaxCallMs",
