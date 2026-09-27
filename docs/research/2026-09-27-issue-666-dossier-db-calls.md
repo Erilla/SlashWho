@@ -20,6 +20,9 @@ only part of the gap.**
   90 ms of it, roughly a quarter (#686, "Evidence volume" below). Between
   220 and 280 ms of a production read is still unexplained; the range is how
   much slower the local baseline ran in #686's runs than in this note's.
+  anything the local fixtures exercise. **#687 has since measured it: it is
+  dossier assembly.** On `test`, `assemble` has a median of 371 ms on a
+  provider-free ten-character read (see [The ~370 ms, measured](#the-370-ms-measured)).
 
 ## Production records
 
@@ -137,6 +140,57 @@ first attempts wrong by an order of magnitude:
   round trip: 0.5 ms and 10 ms gave the same 740–850 ms reads. Release queued
   chunks from a `setImmediate` loop that checks `performance.now()`.
 
+## The ~370 ms, measured
+
+#687 added two buckets to the dossier read's `http_request` record and to
+`Server-Timing`:
+
+- `assemble` covers what the dossier service does once the evidence has
+  arrived: limitations, `buildApplicantDossier`, tier-search states, guild
+  history, character serialisation and the `applicantDossierSchema.parse`
+  of the result. The two database reads made during assembly are excluded,
+  because `db` already times them. Every other await in the frame is
+  excluded along with them, so `assemble` is this request's own synchronous
+  work.
+- `respond` covers the route's `compactDossierWipes`, `jsonNoStore`'s
+  validation and serialisation, and `withHttpRequest` reading the body back
+  to count it. `respondCalls` is 2, and `respondMaxCallMs` is the route's
+  share.
+
+The sample was 2026-09-27, web deployment `38c56d64` (#701 and later), on
+serial reads with nothing else running. `railway logs` returned it with no
+errors. That gave 13 ten-character reads of `eu/silvermoon/ryii`, 12 of them
+with no provider time, plus 10 fourteen-character reads of `rinn` and `ryun`,
+all provider-free:
+
+| Field                             | 10 chars p50 | range     | 14 chars p50 | range     |
+| --------------------------------- | -----------: | --------- | -----------: | --------- |
+| `durationMs`                      |          541 | 506–704   |          544 | 523–612   |
+| `assembleMs`                      |          371 | 352–416   |          384 | 372–431   |
+| `respondMs`                       |           45 | 42–51     |           45 | 41–49     |
+| `respondMaxCallMs` (route)        |           38 | 35–44     |           38 | 34–40     |
+| `durationMs` − assemble − respond |          117 | 102–237   |          119 | 102–159   |
+| `dbMs` (summed)                   |          659 | 562–1,409 |        1,041 | 880–1,152 |
+| `dbCalls`                         |           27 | 27        |           35 | 35        |
+
+Assembly is about 70% of a warm read. The route's compaction, validation and
+serialisation take about 38 ms, and counting takes about 7 ms. What remains,
+about 117 ms, is gathering the evidence: `resolveSubjects` and the concurrent
+`evidence.reserve` transactions. That is less than the 5 ms model above
+predicts, which is about 216 ms: that model's 266 ms read less about 50 ms of
+local work. So 5 ms is an upper bound on production's round trip, not a fit.
+
+This sample's ten-character reads made 27 database calls, where #666's made
+32, and took 541 ms at the median against 635. Ryii's dossier has changed
+since then. The split does not depend on that difference.
+
+Assembly takes about the same time at 10 and 14 characters, so it does not
+scale with the number of characters. It more likely scales with the evidence
+those characters carry. Locally, a seeded 12-character read takes about
+50 ms in total, assembly included. That points at the size of real evidence rather than
+at Railway's CPU. #686, which profiles a dossier with production-sized
+evidence, is the way to find which stage inside `assemble` dominates.
+
 ## What is still unexplained
 
 About 5 ms per round trip is high for `postgres.railway.internal`, which is
@@ -145,6 +199,9 @@ cannot separate network time from time spent executing statements over real
 evidence. Nor does it say what the ~370 ms outside the database does.
 Evidence volume, measured below, accounts for about 90 ms of it. One more
 difference from the local fixtures is not modelled:
+evidence. #687 has since shown that the ~370 ms outside the database is
+dossier assembly, above. Two
+things differ from the local fixtures and are not modelled:
 
 - **Pool contention.** The web's `pg` pool uses the default of 10 clients.
   A read with more subjects than that queues its later `evidence.reserve`
@@ -311,6 +368,10 @@ Three things could close the rest of the gap. None of them is measured:
 - **Time the read path's own work.** A bucket for dossier assembly and
   response validation would split the unexplained 370 ms in production
   without any new call names in the logs.
+  outside the database shows up locally.
+- **Time the read path's own work.** Done in #687, which added `assemble`
+  and `respond` buckets. The split is in
+  [The ~370 ms, measured](#the-370-ms-measured).
 - **Correct the baseline's note on log retention.**
   `2026-09-27-dossier-load-baseline.md` says Railway keeps only the current
   deployment's logs, but removed deployments can still be read by id.

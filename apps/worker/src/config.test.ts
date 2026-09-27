@@ -285,6 +285,21 @@ it("accepts a local Blizzard endpoint only when explicitly configured", () => {
   ).toBe("http://127.0.0.1:43101");
 });
 
+it("accepts a local Warcraft Logs endpoint only when explicitly configured", () => {
+  // Break caught: the worker never read WARCRAFT_LOGS_BASE_URL, so e2e
+  // evidence runs sent their inert credentials to live Warcraft Logs.
+  expect(
+    loadWorkerConfig({
+      ...environment,
+      WARCRAFT_LOGS_BASE_URL: "http://127.0.0.1:43102"
+    }).warcraftLogsBaseUrl
+  ).toBe("http://127.0.0.1:43102");
+  expect(loadWorkerConfig(environment).warcraftLogsBaseUrl).toBeUndefined();
+  expect(() =>
+    loadWorkerConfig({ ...environment, WARCRAFT_LOGS_BASE_URL: "ftp://x" })
+  ).toThrow("invalid_warcraft_logs_base_url");
+});
+
 it("preserves a discovery webhook path and query string", () => {
   // Break caught: a Discord webhook's path is the whole credential, so any
   // normalisation that kept only the origin would post to discord.com itself.

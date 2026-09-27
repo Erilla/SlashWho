@@ -173,6 +173,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     process.env.E2E_DATABASE_URL = databaseUrl;
     process.env.E2E_RAIDER_IO_BASE_URL = fixture.baseUrl;
     process.env.E2E_BLIZZARD_BASE_URL = blizzard.baseUrl;
+    process.env.E2E_WARCRAFT_LOGS_BASE_URL = warcraftLogs.baseUrl;
 
     // The load profiler's latency mode (#685). Only the web server goes
     // through the proxy; the worker, migrations and seeds stay direct. The

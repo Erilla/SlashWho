@@ -24,7 +24,7 @@ export type CreateWarcraftLogsClientOptions = Readonly<{
   clientId: string;
   clientSecret: string;
   /** Overrides the Warcraft Logs origin for deterministic local integration tests. */
-  baseUrl?: string;
+  baseUrl?: string | undefined;
   onThrottle?: ThrottleObserver;
   /** Times each request for `onRequest`. Injected so tests control it. */
   monotonic?: () => number;
