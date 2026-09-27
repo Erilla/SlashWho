@@ -2,9 +2,11 @@ import { expect, it } from "vitest";
 
 import {
   lookupJournalEncounter,
+  lookupRaidBossByLegacyName,
   lookupRaidBossByName,
   lookupRaiderIoBoss,
   lookupRaidByName,
+  lookupUniqueRaidBossByName,
   lookupRaidCurrentContentWindow,
   mythicDifficultyExistedDuring,
   raidContentWindowOpenedBetween,
@@ -132,6 +134,232 @@ it.each([
   ["March on Quel'Danas", "Midnight Falls", "tier-mn-1", "midnight-falls"]
 ])(
   "uses published identifiers for %s / %s",
+  (raid, boss, raidSlug, bossSlug) => {
+    expect(lookupRaiderIoBoss(raid, boss)).toEqual({ raidSlug, bossSlug });
+  }
+);
+
+// Every spelling below is what Warcraft Logs reports, read from its zone
+// encounter lists on 2026-09-27; none of those encounters carries a usable
+// journalID, so the name is all the catalogue has to go on. Pinned by name and
+// id, because a count passes just as happily over a transposed mapping.
+it.each([
+  [
+    "Liberation of Undermine",
+    "One-Armed Bandit",
+    "2644",
+    "The One-Armed Bandit"
+  ],
+  [
+    "Liberation of Undermine",
+    "The One-Armed Bandit",
+    "2644",
+    "The One-Armed Bandit"
+  ],
+  ["Battle of Dazar'alor", "Mekkatorque", "2334", "High Tinker Mekkatorque"],
+  [
+    "Antorus, The Burning Throne",
+    "The Defense of Eonar",
+    "2025",
+    "Eonar the Life-Binder"
+  ],
+  ["Ny'alotha, the Waking City", "Prophet Skitra", "2369", "The Prophet Skitra"]
+])(
+  "resolves Warcraft Logs' %s / %s to Journal boss %s",
+  (raidName, bossName, bossId, journalName) => {
+    expect(lookupRaidBossByName(raidName, bossName)).toMatchObject({
+      bossId,
+      bossName: journalName
+    });
+  }
+);
+
+// Warcraft Logs' `Ny'alotha` zone names no Journal raid, and it carries Eternal
+// Palace and Battle of Dazar'alor kills as well as Ny'alotha's own, so only the
+// boss can place them. Giving the zone an alias would pin all of them to
+// Ny'alotha, and withhold the rest.
+it.each([
+  ["Prophet Skitra", "2369"],
+  ["Wrathion", "2368"],
+  ["The Defense of Eonar", "2025"],
+  ["Mekkatorque", "2334"],
+  ["One-Armed Bandit", "2644"],
+  ["Abyssal Commander Sivara", "2352"]
+])("places a %s kill in a zone no raid is named for", (bossName, bossId) => {
+  expect(lookupRaidByName("Ny'alotha")).toBeNull();
+  expect(lookupUniqueRaidBossByName(bossName)).toMatchObject({ bossId });
+});
+
+it("keeps the legacy prefix rule inside a named raid only", () => {
+  const raid = lookupRaidByName("Ny'alotha, the Waking City")!;
+  expect(lookupRaidBossByLegacyName(raid.raidId, "Wrathion")).toMatchObject({
+    bossId: "2368"
+  });
+  expect(lookupUniqueRaidBossByName("Grong")).toBeNull();
+});
+
+it("does not let a Warcraft Logs alias claim a boss in another raid", () => {
+  expect(
+    lookupRaidBossByName("Manaforge Omega", "One-Armed Bandit")
+  ).toBeNull();
+  expect(lookupRaidBossByName("Nerub-ar Palace", "Mekkatorque")).toBeNull();
+});
+
+// Break caught: the Journal lists a Horde and an Alliance copy of these fights
+// under one name, while Warcraft Logs reports each as a single encounter. The
+// name matched both copies, so it matched neither, and every kill was withheld
+// as an unmatched encounter while two empty cards stood in for the boss.
+it.each([
+  ["Battle of Dazar'alor", "Champion of the Light", "2333", "2344"],
+  ["Battle of Dazar'alor", "Jadefire Masters", "2323", "2341"],
+  ["Siege of Orgrimmar", "Galakras", "868", "881"]
+])(
+  "treats the two faction copies of %s / %s as one boss",
+  (raidName, bossName, bossId, twinId) => {
+    expect(lookupRaidBossByName(raidName, bossName)).toMatchObject({ bossId });
+    expect(lookupJournalEncounter(twinId)).toMatchObject({ bossId, bossName });
+    const roster = supportedRaidCatalogue().find(
+      (raid) => raid.raidName === raidName
+    )?.encounters;
+    expect(roster?.filter((boss) => boss.bossName === bossName)).toHaveLength(
+      1
+    );
+    expect(roster?.some((boss) => boss.bossId === twinId)).toBe(false);
+  }
+);
+
+it("keeps both Grongs, whose Journal and Warcraft Logs names tell them apart", () => {
+  const raid = lookupRaidByName("Battle of Dazar'alor")!;
+  expect(
+    lookupRaidBossByName("Battle of Dazar'alor", "Grong the Revenant")
+  ).toMatchObject({ bossId: "2340" });
+  expect(
+    lookupRaidBossByName("Battle of Dazar'alor", "Grong, the Jungle Lord")
+  ).toMatchObject({ bossId: "2325" });
+  expect(lookupRaidBossByLegacyName(raid.raidId, "Grong")).toBeNull();
+  expect(
+    supportedRaidCatalogue()
+      .find((entry) => entry.raidId === raid.raidId)
+      ?.encounters.map((boss) => boss.bossName)
+  ).toEqual([
+    "Champion of the Light",
+    "Grong, the Jungle Lord",
+    "Grong, the Revenant",
+    "Jadefire Masters",
+    "Opulence",
+    "Conclave of the Chosen",
+    "King Rastakhan",
+    "High Tinker Mekkatorque",
+    "Stormwall Blockade",
+    "Lady Jaina Proudmoore"
+  ]);
+});
+
+// Raider.IO's boss slugs, read from its raiding static data on 2026-09-27.
+// Mostly the Journal name slugged, but not always, so each case here is one
+// where the Journal name would give the wrong answer or Warcraft Logs spells
+// the boss differently.
+it.each([
+  [
+    "Liberation of Undermine",
+    "One-Armed Bandit",
+    "liberation-of-undermine",
+    "onearmed-bandit"
+  ],
+  [
+    "Battle of Dazar'alor",
+    "Mekkatorque",
+    "battle-of-dazaralor",
+    "high-tinker-mekkatorque"
+  ],
+  [
+    "Battle of Dazar'alor",
+    "Jadefire Masters",
+    "battle-of-dazaralor",
+    "jadefire-masters"
+  ],
+  [
+    "Battle of Dazar'alor",
+    "Champion of the Light",
+    "battle-of-dazaralor",
+    "champion-of-the-light"
+  ],
+  [
+    "Battle of Dazar'alor",
+    "Grong the Revenant",
+    "battle-of-dazaralor",
+    "grong"
+  ],
+  [
+    "Battle of Dazar'alor",
+    "Grong, the Jungle Lord",
+    "battle-of-dazaralor",
+    "grong"
+  ],
+  [
+    "Antorus, The Burning Throne",
+    "The Defense of Eonar",
+    "antorus-the-burning-throne",
+    "eonar-the-life-binder"
+  ],
+  [
+    "Ny'alotha, the Waking City",
+    "Prophet Skitra",
+    "nyalotha-the-waking-city",
+    "the-prophet-skitra"
+  ],
+  [
+    "Ny'alotha, the Waking City",
+    "Wrathion",
+    "nyalotha-the-waking-city",
+    "wrathion-the-black-emperor"
+  ],
+  ["Uldir", "Zek'voz", "uldir", "zekvoz-herald-of-nzoth"],
+  ["The Eternal Palace", "Za'qul", "the-eternal-palace", "zaqul"],
+  [
+    "Sepulcher of the First Ones",
+    "Skolex, the Insatiable Ravener",
+    "sepulcher-of-the-first-ones",
+    "skolex"
+  ],
+  [
+    "Sepulcher of the First Ones",
+    "Dausegne",
+    "sepulcher-of-the-first-ones",
+    "dausegne"
+  ],
+  [
+    "Sepulcher of the First Ones",
+    "Lihuvim, Principal Architect",
+    "sepulcher-of-the-first-ones",
+    "lihuvim"
+  ],
+  [
+    "Sepulcher of the First Ones",
+    "Halondrus the Reclaimer",
+    "sepulcher-of-the-first-ones",
+    "halondrus"
+  ],
+  [
+    "Sanctum of Domination",
+    "Fatescribe Roh-Kalo",
+    "sanctum-of-domination",
+    "fatescribe-rohkalo"
+  ],
+  [
+    "Vault of the Incarnates",
+    "Raszageth the Storm-Eater",
+    "vault-of-the-incarnates",
+    "raszageth-the-stormeater"
+  ],
+  [
+    "The Emerald Nightmare",
+    "Il'gynoth, Heart of Corruption",
+    "the-emerald-nightmare",
+    "ilgynoth-the-heart-of-corruption"
+  ]
+])(
+  "asks Raider.IO about %s / %s by its published slug",
   (raid, boss, raidSlug, bossSlug) => {
     expect(lookupRaiderIoBoss(raid, boss)).toEqual({ raidSlug, bossSlug });
   }

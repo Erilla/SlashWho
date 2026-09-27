@@ -351,37 +351,48 @@ const canonicalTierOrdinals = new Map<string, number>([
 ]);
 
 // Raider.IO boss slugs are identifiers, not mechanically derived display
-// labels. Keep verified exceptions keyed by the immutable Journal encounter.
+// labels. Most are the Journal name slugged; these are the verified
+// exceptions, keyed by the immutable Journal encounter and checked against
+// Raider.IO's raiding static data on 2026-09-27.
 const raiderIoBossSlugOverrides = new Map<string, string>([
+  ["1738", "ilgynoth-the-heart-of-corruption"],
+  // Raider.IO ranks the two faction versions of Grong as one boss.
+  ["2325", "grong"],
+  ["2340", "grong"],
   ["2332", "uunat-harbinger-of-the-void"],
+  ["2349", "zaqul"],
+  ["2447", "fatescribe-rohkalo"],
+  ["2459", "dausegne"],
+  ["2461", "lihuvim"],
+  ["2463", "halondrus"],
+  ["2465", "skolex"],
+  ["2499", "raszageth-the-stormeater"],
   ["2599", "sikran"],
+  ["2644", "onearmed-bandit"],
   ["2691", "dimensius"],
   ["2736", "fallenking-salhadaar"]
 ]);
 
-const encounters = new Map<string, RaidCatalogueEncounter>(
-  catalogue.raids.flatMap((raid) =>
-    raid.encounters.map(
-      (encounter) =>
-        [
-          encounter.journalBossId,
-          {
-            raidId: raid.journalRaidId,
-            raidName: raid.raidName,
-            bossId: encounter.journalBossId,
-            bossName: encounter.bossName,
-            bossOrder: encounter.bossOrder,
-            isFinalBoss:
-              encounter.bossOrder ===
-              Math.max(...raid.encounters.map((item) => item.bossOrder)),
-            raiderIoBossSlug:
-              raiderIoBossSlugOverrides.get(encounter.journalBossId) ?? null,
-            imageUrl: encounter.imageUrl
-          }
-        ] as const
-    )
-  )
-);
+/**
+ * Names Warcraft Logs gives an encounter that the Journal does not, read from
+ * its zone encounter lists on 2026-09-27. None of these encounters carries a
+ * usable `journalID` -- Warcraft Logs serves 0 -- so without an alias the kill
+ * matches nothing and is withheld as an unmatched encounter.
+ *
+ * Within a named raid an alias is scoped to its encounter's own raid, so it can
+ * never claim a boss elsewhere. It also joins the catalogue-wide unique-name
+ * lookup, on the same terms as a Journal name: Warcraft Logs files Ny'alotha
+ * kills under the zone name `Ny'alotha`, which names no Journal raid, so only
+ * the boss can place them. `Wrathion` is here for that lookup alone -- inside
+ * the raid, the legacy-prefix rule already reaches it.
+ */
+const warcraftLogsBossAliases = new Map<string, readonly string[]>([
+  ["2025", ["The Defense of Eonar"]],
+  ["2334", ["Mekkatorque"]],
+  ["2368", ["Wrathion"]],
+  ["2369", ["Prophet Skitra"]],
+  ["2644", ["One-Armed Bandit"]]
+]);
 
 function normalizedName(value: string): string {
   return value
@@ -389,6 +400,62 @@ function normalizedName(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "")
     .toLocaleLowerCase("en-US");
 }
+
+/**
+ * Journal encounters that are a faction's copy of an earlier one, keyed to the
+ * encounter that stands for both.
+ *
+ * The Journal lists Battle of Dazar'alor's Champion of the Light and Jadefire
+ * Masters, and Siege of Orgrimmar's Galakras, once for the Horde and once for
+ * the Alliance under the same name. Warcraft Logs reports each as a single
+ * encounter under that name, so no evidence can say which copy it is: the name
+ * matched both, therefore neither, and every kill was withheld while two empty
+ * cards stood in for the boss. A raid's same-named encounters are one boss,
+ * listed where the Journal first lists it. The Grongs are not merged -- their
+ * names differ in the Journal and in Warcraft Logs, so each resolves alone.
+ */
+const factionCopies = new Map<string, string>(
+  catalogue.raids.flatMap((raid) => {
+    const first = new Map<string, string>();
+    return [...raid.encounters]
+      .sort((a, b) => a.bossOrder - b.bossOrder)
+      .flatMap((encounter) => {
+        const key = normalizedName(encounter.bossName);
+        const original = first.get(key);
+        if (original === undefined) {
+          first.set(key, encounter.journalBossId);
+          return [];
+        }
+        return [[encounter.journalBossId, original] as const];
+      });
+  })
+);
+
+const encounters = new Map<string, RaidCatalogueEncounter>(
+  catalogue.raids.flatMap((raid) =>
+    raid.encounters
+      .filter((encounter) => !factionCopies.has(encounter.journalBossId))
+      .map(
+        (encounter) =>
+          [
+            encounter.journalBossId,
+            {
+              raidId: raid.journalRaidId,
+              raidName: raid.raidName,
+              bossId: encounter.journalBossId,
+              bossName: encounter.bossName,
+              bossOrder: encounter.bossOrder,
+              isFinalBoss:
+                encounter.bossOrder ===
+                Math.max(...raid.encounters.map((item) => item.bossOrder)),
+              raiderIoBossSlug:
+                raiderIoBossSlugOverrides.get(encounter.journalBossId) ?? null,
+              imageUrl: encounter.imageUrl
+            }
+          ] as const
+      )
+  )
+);
 
 /**
  * The comparison key for an instance name, shared with the dungeon catalogue
@@ -410,19 +477,26 @@ export function isCataloguedRaidName(raidName: string): boolean {
   return raidsByName.has(normalizedName(raidName));
 }
 
+// An ambiguous key is stored as `null`, so a colliding alias matches nothing
+// rather than whichever encounter happened to be indexed last.
 const encountersByName = new Map<string, RaidCatalogueEncounter | null>();
 const encountersByBossName = new Map<string, RaidCatalogueEncounter | null>();
 for (const encounter of encounters.values()) {
-  const key = `${normalizedName(encounter.raidName)}\0${normalizedName(encounter.bossName)}`;
-  const existing = encountersByName.get(key);
-  encountersByName.set(key, existing === undefined ? encounter : null);
+  for (const bossName of [
+    encounter.bossName,
+    ...(warcraftLogsBossAliases.get(encounter.bossId) ?? [])
+  ]) {
+    const key = `${normalizedName(encounter.raidName)}\0${normalizedName(bossName)}`;
+    const existing = encountersByName.get(key);
+    encountersByName.set(key, existing === undefined ? encounter : null);
 
-  const bossKey = normalizedName(encounter.bossName);
-  const existingBoss = encountersByBossName.get(bossKey);
-  encountersByBossName.set(
-    bossKey,
-    existingBoss === undefined ? encounter : null
-  );
+    const bossKey = normalizedName(bossName);
+    const existingBoss = encountersByBossName.get(bossKey);
+    encountersByBossName.set(
+      bossKey,
+      existingBoss === undefined ? encounter : null
+    );
+  }
 }
 
 export type RaidCatalogueRaid = Readonly<{
@@ -462,12 +536,10 @@ export function supportedRaidCatalogue(): readonly SupportedRaidCatalogueEntry[]
             canonicalTierOrdinals.get(raid.journalRaidId) ?? tierOrdinal,
           encounters: Object.freeze(
             raid.encounters
-              .map((encounter) =>
-                lookupJournalEncounter(encounter.journalBossId)
-              )
+              .map((encounter) => encounters.get(encounter.journalBossId))
               .filter(
                 (encounter): encounter is RaidCatalogueEncounter =>
-                  encounter !== null
+                  encounter !== undefined
               )
               .sort((a, b) => a.bossOrder - b.bossOrder)
               .map((encounter) => Object.freeze({ ...encounter }))
@@ -478,12 +550,19 @@ export function supportedRaidCatalogue(): readonly SupportedRaidCatalogueEntry[]
   );
 }
 
+/** A faction copy resolves to the one boss that stands for both. */
 export function lookupJournalEncounter(
   journalBossId: string
 ): RaidCatalogueEncounter | null {
-  return encounters.get(journalBossId) ?? null;
+  return (
+    encounters.get(factionCopies.get(journalBossId) ?? journalBossId) ?? null
+  );
 }
 
+/**
+ * The encounter a raid and boss name identify, by the Journal's own names or a
+ * reviewed Warcraft Logs alias for either.
+ */
 export function lookupRaidBossByName(
   raidName: string,
   bossName: string
@@ -767,8 +846,16 @@ export function lookupRaiderIoBoss(
   }
   const raid = lookupRaidByName(raidName);
   if (!raid?.raiderIoRaidSlug) return null;
-  const encounter = lookupRaidBossByName(raidName, bossName);
-  const bossSlug = encounter?.raiderIoBossSlug ?? raiderIoBossSlug(bossName);
+  // Resolved as the dossier resolves the kill, so the rank is asked about the
+  // boss the kill is shown under. Raider.IO slugs the Journal name, not Warcraft
+  // Logs' spelling of it; only a boss the catalogue cannot place falls back to
+  // the name as given.
+  const encounter =
+    lookupRaidBossByName(raidName, bossName) ??
+    lookupRaidBossByLegacyName(raid.raidId, bossName);
+  const bossSlug =
+    encounter?.raiderIoBossSlug ??
+    raiderIoBossSlug(encounter?.bossName ?? bossName);
   return bossSlug ? { raidSlug: raid.raiderIoRaidSlug, bossSlug } : null;
 }
 

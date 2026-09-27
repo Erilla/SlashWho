@@ -236,6 +236,152 @@ describe("applicant dossier", () => {
     });
   });
 
+  it("files One-Armed Bandit evidence under Journal boss 2644 whichever way it is spelled", () => {
+    // Break caught: Warcraft Logs drops the Journal's leading "The" and serves
+    // journalID 0, so all 3,741 stored kills and every wipe on test were
+    // withheld as unmatched, and the boss read as incomplete (#634).
+    const undermine = (bossName: string, fight: number) =>
+      kill(root, {
+        raidId: "42",
+        raidName: "Liberation of Undermine",
+        bossId: "3014",
+        bossName,
+        journalBossId: null,
+        killedAt: `2025-04-0${fight}T20:00:00.000Z`,
+        reportUrl: `https://www.warcraftlogs.com/reports/bandit${fight}#fight=${fight}`
+      });
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        undermine("One-Armed Bandit", 1),
+        undermine("The One-Armed Bandit", 2)
+      ],
+      wipes: [
+        wipe(root, {
+          raidId: "42",
+          raidName: "Liberation of Undermine",
+          bossId: "3014",
+          bossName: "One-Armed Bandit",
+          journalBossId: null,
+          attemptedAt: "2025-03-30T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/banditwipe#fight=4"
+        })
+      ],
+      tierBests: [
+        tierBest(root, {
+          raidName: "Liberation of Undermine",
+          bossName: "One-Armed Bandit"
+        })
+      ],
+      completeWarcraftLogsCharacters: [root],
+      limitations: []
+    });
+
+    const bandit = verifiedKill(
+      dossier.raids
+        .find((raid) => raid.raidId === "1296")!
+        .bosses.find((boss) => boss.bossId === "2644")!
+    );
+    expect(bandit.bossName).toBe("The One-Armed Bandit");
+    expect(bandit.firstKills.map((entry) => entry.reportUrl)).toEqual(
+      expect.arrayContaining([
+        "https://www.warcraftlogs.com/reports/bandit1#fight=1",
+        "https://www.warcraftlogs.com/reports/bandit2#fight=2"
+      ])
+    );
+    expect((bandit.wipes ?? []).map((entry) => entry.reportUrl)).toEqual([
+      "https://www.warcraftlogs.com/reports/banditwipe#fight=4"
+    ]);
+    expect(bandit.bestParses).not.toEqual([]);
+    expect(dossier.limitations).not.toContainEqual(
+      expect.objectContaining({ code: "unmatched_encounter" })
+    );
+  });
+
+  it("shows a Jadefire Masters kill on the one Jadefire Masters card", () => {
+    // Break caught: the Journal's Horde and Alliance copies share the name, so
+    // the kill matched neither; the dossier showed two empty cards and listed
+    // the kill as an unmatched encounter.
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "21",
+          raidName: "Battle of Dazar'alor",
+          bossId: "2266",
+          bossName: "Jadefire Masters",
+          journalBossId: null,
+          killedAt: "2019-02-20T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/jadefire#fight=3"
+        })
+      ],
+      wipes: [],
+      completeWarcraftLogsCharacters: [root],
+      limitations: []
+    });
+
+    const jadefire = dossier.raids
+      .find((raid) => raid.raidId === "1176")!
+      .bosses.filter((boss) => boss.bossName === "Jadefire Masters");
+    expect(jadefire).toHaveLength(1);
+    expect(jadefire[0]).toMatchObject({
+      state: "kill",
+      bossId: "2323",
+      firstKill: {
+        reportUrl: "https://www.warcraftlogs.com/reports/jadefire#fight=3"
+      }
+    });
+    expect(dossier.limitations).not.toContainEqual(
+      expect.objectContaining({ code: "unmatched_encounter" })
+    );
+  });
+
+  it("places kills from Warcraft Logs' Ny'alotha zone by boss, whichever raid they belong to", () => {
+    // Warcraft Logs' `Ny'alotha` names no Journal raid and carries other
+    // raids' kills too. Wrathion and Prophet Skitra, 3,373 kills on test, were
+    // withheld because neither WCL name is the Journal's; Sivara must stay in
+    // The Eternal Palace.
+    const nyalotha = (bossName: string, fight: number) =>
+      kill(root, {
+        raidId: "24",
+        raidName: "Ny'alotha",
+        bossId: `wcl-${fight}`,
+        bossName,
+        journalBossId: null,
+        killedAt: `2020-02-0${fight}T20:00:00.000Z`,
+        reportUrl: `https://www.warcraftlogs.com/reports/nyalotha${fight}#fight=${fight}`
+      });
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        nyalotha("Wrathion", 1),
+        nyalotha("Prophet Skitra", 2),
+        {
+          ...nyalotha("Abyssal Commander Sivara", 3),
+          killedAt: "2019-08-01T20:00:00.000Z"
+        }
+      ],
+      limitations: []
+    });
+
+    const placed = dossier.raids.flatMap((raid) =>
+      raid.bosses.map((boss) => [raid.raidId, boss.bossId, boss.state])
+    );
+    expect(placed).toEqual(
+      expect.arrayContaining([
+        ["1180", "2368", "kill"],
+        ["1180", "2369", "kill"],
+        ["1179", "2352", "kill"]
+      ])
+    );
+    expect(dossier.limitations).not.toContainEqual(
+      expect.objectContaining({ code: "unmatched_encounter" })
+    );
+  });
+
   it("stays silent about a Mythic dungeon it already knows is not a raid", () => {
     // Break caught: `unmatched_encounter` was live on all eight collected
     // characters, and it was Mythic dungeons raising it -- a dungeon boss
