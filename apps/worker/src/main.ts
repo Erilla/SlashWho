@@ -20,7 +20,7 @@ export type WorkerMainDependencies = {
     logger: WorkerLogger
   ): Promise<WorkerRuntime>;
   startHealthServer(options: HealthServerOptions): Promise<HealthServer>;
-  terminate(exitCode: number): void;
+  terminate: (exitCode: number) => void;
 };
 
 const defaultDependencies: WorkerMainDependencies = {

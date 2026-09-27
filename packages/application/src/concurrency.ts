@@ -1,7 +1,7 @@
 export type ConcurrencyLimiterOptions = {
   /** Called once per `run`, with the milliseconds spent awaiting admission. */
-  onWait?(waitedMs: number): void;
-  monotonic?(): number;
+  onWait?: (waitedMs: number) => void;
+  monotonic?: () => number;
 };
 
 export function createConcurrencyLimiter(

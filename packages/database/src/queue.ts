@@ -255,8 +255,8 @@ export function createDiscoveryQueue(
        ORDER BY created_on DESC LIMIT 1`,
       [queueName, singletonKey]
     );
-    const id = result.rows[0]?.id;
-    return typeof id === "string" ? id : null;
+    const row = result.rows[0] as { id?: unknown } | undefined;
+    return typeof row?.id === "string" ? row.id : null;
   }
 
   return {
@@ -617,14 +617,14 @@ export function createDiscoveryQueue(
       const graceMs = graceful
         ? Math.min(Math.max(abortGraceMs ?? 0, 0), Math.floor(timeoutMs / 2))
         : 0;
-      let stopError: unknown;
+      let stopFailure: { error: unknown } | undefined;
       try {
         // pg-boss stops polling immediately and then waits for active jobs, so
         // this is the grace: nothing new is fetched during it, and a job that
         // is nearly done still gets to finish.
         await boss.stop({ graceful, timeout: graceful ? graceMs : timeoutMs });
       } catch (error) {
-        stopError = error;
+        stopFailure = { error };
       }
       // Whatever is still running now cannot finish inside this shutdown.
       // Aborting is what gives the handler its one database write -- releasing
@@ -636,7 +636,7 @@ export function createDiscoveryQueue(
       // stop timeout at one second, and a grace shorter than that must not be
       // allowed to eat the window the release needs.
       await settleInFlight(timeoutMs - graceMs);
-      if (stopError) throw stopError;
+      if (stopFailure) throw stopFailure.error;
     },
 
     isReady() {

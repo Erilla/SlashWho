@@ -21,8 +21,9 @@ export function withAccountMailClient<T>(
       combined.removeEventListener("abort", abort);
       // Destroying the connection cancels the server statement. Never return
       // an aborted client's connection to the pool while its query is running.
-      client?.release(Boolean(error));
-      if (error) reject(error);
+      const failed = Boolean(error);
+      client?.release(failed);
+      if (failed) reject(error);
       else resolve(value as T);
     };
     const abort = () => finish(new Error("account_mail_database_cancelled"));
