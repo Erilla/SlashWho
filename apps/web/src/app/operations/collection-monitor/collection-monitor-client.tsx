@@ -219,7 +219,12 @@ export function CollectionMonitorView({
 
       <section className="collection-monitor-section">
         <h2 id="collection-monitor-in-flight">In flight and pending</h2>
-        <div className="collection-monitor-table-scroll">
+        <div
+          aria-labelledby="collection-monitor-in-flight"
+          className="collection-monitor-table-scroll collection-monitor-table-scroll--capped"
+          role="region"
+          tabIndex={0}
+        >
           <table aria-labelledby="collection-monitor-in-flight">
             <thead>
               <tr>
@@ -346,7 +351,12 @@ export function CollectionMonitorView({
 
       <section className="collection-monitor-section">
         <h2 id="collection-monitor-failed">Failed</h2>
-        <div className="collection-monitor-table-scroll">
+        <div
+          aria-labelledby="collection-monitor-failed"
+          className="collection-monitor-table-scroll collection-monitor-table-scroll--capped"
+          role="region"
+          tabIndex={0}
+        >
           <table aria-labelledby="collection-monitor-failed">
             <thead>
               <tr>
@@ -380,7 +390,12 @@ export function CollectionMonitorView({
 
       <section className="collection-monitor-section">
         <h2 id="collection-monitor-discovery-runs">Discovery runs</h2>
-        <div className="collection-monitor-table-scroll">
+        <div
+          aria-labelledby="collection-monitor-discovery-runs"
+          className="collection-monitor-table-scroll collection-monitor-table-scroll--capped"
+          role="region"
+          tabIndex={0}
+        >
           <table aria-labelledby="collection-monitor-discovery-runs">
             <thead>
               <tr>

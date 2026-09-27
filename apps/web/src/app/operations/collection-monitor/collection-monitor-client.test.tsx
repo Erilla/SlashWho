@@ -453,14 +453,19 @@ describe("CollectionMonitorClient", () => {
       return { observers, intersect };
     }
 
-    it("scrolls within a capped region rather than growing the page", () => {
-      render(<CollectionMonitorClient initialMonitor={firstPage} />);
+    it.each(["In flight and pending", "Completed", "Failed", "Discovery runs"])(
+      "scrolls %s within a capped region rather than growing the page",
+      (name) => {
+        // Break caught: an uncapped table grows with its rows, so a burst of
+        // failures pushed every table below it off the page.
+        render(<CollectionMonitorClient initialMonitor={firstPage} />);
 
-      const region = screen.getByRole("region", { name: "Completed" });
-      expect(region).toHaveClass("collection-monitor-table-scroll--capped");
-      // Scrollable regions must be reachable without a pointer.
-      expect(region).toHaveAttribute("tabindex", "0");
-    });
+        const region = screen.getByRole("region", { name });
+        expect(region).toHaveClass("collection-monitor-table-scroll--capped");
+        // Scrollable regions must be reachable without a pointer.
+        expect(region).toHaveAttribute("tabindex", "0");
+      }
+    );
 
     it("loads the next page of older runs when asked", async () => {
       // Break caught: without paging, older completed runs past the first page
