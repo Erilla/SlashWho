@@ -16,7 +16,7 @@ on:
 # rather than by the sum of all of them. The heavier suites are split so that
 # no single job holds much more than a minute and a half of work:
 #
-#   scope ──┬── checks        format, lint, typecheck
+#   scope ──┬── checks (×3)   format, lint, typecheck, one script each
 #           ├── unit          unit tests
 #           ├── integration
 #           ├── e2e (×2)      Playwright, one shard of the spec files each
@@ -103,17 +103,23 @@ jobs:
   # it is the only place the workspace is typechecked: e2e and docker build the
   # web app, but neither needs the other packages' `build` scripts, which are
   # `tsc --noEmit` and nothing more.
+  #
+  # Each script runs on its own runner. Every leg pays the workspace setup
+  # again, but the three no longer queue behind one another, so the job takes
+  # as long as typecheck rather than as long as all three together.
   checks:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [format:check, lint, typecheck]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-workspace
-      - run: corepack pnpm format:check
-      - run: corepack pnpm lint
-      - run: corepack pnpm typecheck
+      - run: corepack pnpm ${{ matrix.script }}
 
   unit:
     needs: scope
