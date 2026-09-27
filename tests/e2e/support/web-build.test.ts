@@ -59,6 +59,15 @@ describe("webBuildFreshness", () => {
     expect(webBuildFreshness(root)).toBe("missing");
   });
 
+  it("reports a missing build when only the build cache was restored", () => {
+    // Break caught: CI restores apps/web/.next/cache, which creates
+    // apps/web/.next; a check on the directory would skip the build and run
+    // the suite against no bundle at all.
+    touch("apps/web/.next/cache/turbopack/index.sst", built);
+    ageDirectories("apps/web/.next/cache/turbopack", "apps/web/.next/cache");
+    expect(webBuildFreshness(root)).toBe("missing");
+  });
+
   it("accepts a build newer than every input", () => {
     touch("apps/web/.next/BUILD_ID", built);
     ageDirectories();

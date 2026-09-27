@@ -136,8 +136,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   try {
     // The browser suite runs the production build rather than `next dev`,
-    // which compiles each route on its first request. CI builds immediately
-    // beforehand; locally, build only when the sources have moved on, so a
+    // which compiles each route on its first request. Build when there is no
+    // build, as on every CI runner, or when the sources have moved on, so a
     // bare `test:e2e` still works but never exercises a stale bundle. The
     // build overlaps the container and fixture start-up below.
     const freshness = webBuildFreshness(process.cwd());
