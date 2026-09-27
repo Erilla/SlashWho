@@ -174,10 +174,16 @@ database latency. All values are p50 in milliseconds.
 | server `db` (summed) |      22 |      225 |               308 |              1,550 |
 | response bytes       |  45,892 |   62,086 |           923,395 |          4,027,441 |
 
-Runs vary by up to 50% on this machine. A second run put the median-sized
-dossier's server `total` at 238 ms and the largest at 1,119 ms. At a 5 ms
-database round trip, the median-sized dossier took 394–615 ms over four runs.
-In the same runs, the 12 small characters took 308–389 ms.
+Those runs varied by up to 50%. A second run put the median-sized dossier's
+server `total` at 238 ms and the largest at 1,119 ms.
+
+Later runs, on `main` after #701 (the `assemble` and `respond` buckets) and
+#685 (`PROFILE_DB_RTT_MS`), were steady. They put server `total` at about
+100 ms (median-sized) and 470 ms (largest) with no latency. At a 5 ms round
+trip they were about 230 ms and 540–580 ms, against about 245 ms for the 12
+seeded characters, which make two more characters' worth of round trips.
+`assemble` was about 50 ms and 300 ms, against 2 ms for the seeded ones. The
+#666 note ("Evidence volume") compares that with production's 371 ms.
 
 Rendering grows with the dossier too: 64 ms after the response for the
 median-sized dossier, and 214 ms for the largest, against 29–36 ms for the

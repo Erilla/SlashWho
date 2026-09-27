@@ -120,10 +120,22 @@ export function syntheticEvidence(
     name: `Profile${label}${Math.floor(encounter.raidIndex / 2) % 2 === 0 ? "Main" : "Old"}`,
     realm: "silvermoon"
   });
-  const at = (encounter: Encounter, offsetMs: number) =>
-    new Date(
-      Math.min(encounter.baseMs + offsetMs, encounter.latestMs)
-    ).toISOString();
+  // The `slot`th of `slots` rows on a boss, `unitMs` apart, squeezed closer
+  // when the window is too short to hold them all. Squeezing rather than
+  // clamping keeps every kill on its own date, which is what the route's wipe
+  // compaction groups by.
+  const at = (
+    encounter: Encounter,
+    slot: number,
+    slots: number,
+    unitMs: number
+  ) => {
+    const stepMs = Math.min(
+      unitMs,
+      (encounter.latestMs - encounter.baseMs) / slots
+    );
+    return new Date(encounter.baseMs + slot * stepMs).toISOString();
+  };
   const report = (index: number) =>
     `https://www.warcraftlogs.com/reports/profile${label}${index}`;
 
@@ -145,7 +157,7 @@ export function syntheticEvidence(
       bossName: encounter.bossName,
       journalBossId: encounter.bossId,
       bossOrder: encounter.bossOrder,
-      killedAt: at(encounter, (index % killsPerBoss) * weekMs),
+      killedAt: at(encounter, index % killsPerBoss, killsPerBoss, weekMs),
       reportUrl,
       fightUrl: `${reportUrl}#fight=${index + 1}`,
       guild: { ...guildFor(encounter), region: "eu" as const },
@@ -176,7 +188,7 @@ export function syntheticEvidence(
       bossName: encounter.bossName,
       journalBossId: encounter.bossId,
       bossOrder: encounter.bossOrder,
-      attemptedAt: at(encounter, (index % wipesPerBoss) * hourMs),
+      attemptedAt: at(encounter, index % wipesPerBoss, wipesPerBoss, hourMs),
       reportUrl,
       fightUrl: `${reportUrl}#fight=${index + 1}`,
       guild: guildFor(encounter),

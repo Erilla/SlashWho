@@ -16,13 +16,12 @@ only part of the gap.**
   per-call cost (`dbMs / dbCalls`) and slowest call (`dbMaxCallMs`). It
   reproduces less than half of production's request time.
 - The rest of a production read, about 370 ms at the median, is spent outside
-  anything the local fixtures exercise. Evidence volume accounts for about
-  90 ms of it, roughly a quarter (#686, "Evidence volume" below). Between
-  220 and 280 ms of a production read is still unexplained; the range is how
-  much slower the local baseline ran in #686's runs than in this note's.
   anything the local fixtures exercise. **#687 has since measured it: it is
   dossier assembly.** On `test`, `assemble` has a median of 371 ms on a
   provider-free ten-character read (see [The ~370 ms, measured](#the-370-ms-measured)).
+  #686 reproduced the cause locally: assembly grows with evidence volume, from
+  2 ms for the seeded characters to about 50 ms at a median ten-character
+  dossier's volume and about 300 ms at the largest (see "Evidence volume").
 
 ## Production records
 
@@ -190,18 +189,17 @@ those characters carry. Locally, a seeded 12-character read takes about
 50 ms in total, assembly included. That points at the size of real evidence rather than
 at Railway's CPU. #686, which profiles a dossier with production-sized
 evidence, is the way to find which stage inside `assemble` dominates.
+"Evidence volume" below confirms that assembly scales with evidence. The
+bucket does not split its stages, so which one dominates is still open.
 
 ## What is still unexplained
 
 About 5 ms per round trip is high for `postgres.railway.internal`, which is
 Railway's private network in the same region as the web service. The log
 cannot separate network time from time spent executing statements over real
-evidence. Nor does it say what the ~370 ms outside the database does.
-Evidence volume, measured below, accounts for about 90 ms of it. One more
-difference from the local fixtures is not modelled:
 evidence. #687 has since shown that the ~370 ms outside the database is
-dossier assembly, above. Two
-things differ from the local fixtures and are not modelled:
+dossier assembly, above, and #686 that assembly scales with evidence volume,
+below. One difference from the local fixtures is still not modelled:
 
 - **Pool contention.** The web's `pg` pool uses the default of 10 clients.
   A read with more subjects than that queues its later `evidence.reserve`
@@ -288,7 +286,7 @@ read made apart from the timed loads:
 | Warm, 1                  |         45,892 |
 | Warm, 12                 |         62,086 |
 | Warm, production median  |        923,395 |
-| Warm, production largest |      4,027,441 |
+| Warm, production largest |      4,025,409 |
 
 Production's response sizes were not taken. A median ten-character dossier
 on `test` should be close to the synthetic median's 0.9 MB, and the page
@@ -296,64 +294,59 @@ reads it again at every poll.
 
 ### Timings
 
-Server `total` p50 in milliseconds. Each row is one run. The 5 ms rows used
-a temporary TCP proxy between the web server and PostgreSQL, built as
-described above and not committed. #685 has since made it a profiler setting,
-`PROFILE_DB_RTT_MS`.
+Server-Timing p50 in milliseconds, 20 loads per scenario, from `main` after
+#701, which added the `assemble` and `respond` buckets, and #685, which added
+`PROFILE_DB_RTT_MS`. Two runs at each setting; each cell gives both.
 
-| Database RTT | Loads | Warm, 12 | Production median | Production largest |
-| -----------: | ----: | -------: | ----------------: | -----------------: |
-|         none |    20 |       45 |               155 |                789 |
-|         none |    10 |       51 |               238 |              1,119 |
-|         5 ms |    10 |      335 |               394 |              1,365 |
-|         5 ms |    20 |      389 |               615 |              1,448 |
-|         5 ms |    20 |      308 |               404 |              1,305 |
-|         5 ms |    20 |      348 |               429 |                852 |
+| Bucket   | RTT  | Warm, 12 | Production median | Production largest |
+| -------- | ---- | -------: | ----------------: | -----------------: |
+| total    | none |   37, 41 |           99, 105 |           469, 473 |
+| assemble | none |     2, 2 |            51, 56 |           311, 308 |
+| respond  | none |     1, 1 |            11, 12 |             54, 57 |
+| total    | 5 ms | 248, 243 |          230, 230 |           581, 542 |
+| assemble | 5 ms |     2, 2 |            48, 47 |           296, 273 |
+| respond  | 5 ms |     1, 1 |            10, 10 |             54, 49 |
 
-Runs on this machine vary by up to 50%, so compare scenarios within a row.
-The 12-character scenario took 308–389 ms here at 5 ms, against 266 ms in
-"Modelling Railway's latency". The proxy and the machine's load both differ
-between the two measurements.
+The two production-sized scenarios have ten characters and the seeded one
+twelve, so `total` does not compare like with like: at 5 ms the two extra
+characters' round trips cost about as much as the median volume's
+assembly. `assemble` and `respond` do compare, because neither waits on the
+database.
 
-### How much volume accounts for
+### How volume accounts for the 370 ms
 
-**About 90 ms of the 370 ms.** Within each 5 ms run, the median-sized
-dossier took 59, 226, 96 and 81 ms longer than twelve small characters. The
-median of those is 89 ms.
+**Assembly scales with evidence volume, and production's assembly is
+consistent with it.** Locally, `assemble` is 2 ms for twelve seeded
+characters, about 50 ms at a median ten-character dossier's volume and about
+300 ms at the largest's. `respond` follows the same curve, from 1 ms to
+about 55 ms, against production's 45 ms.
 
-That leaves 220–280 ms unexplained, and the two ends come from two
-baselines:
+#705's sample was one ten-character dossier. By kills and by wipes, it ranks
+second of the five ten-character dossiers on `test` when the rank was
+taken, later on 2026-09-27; there were six when the volumes above were
+taken. Its volume therefore lies between the two scenarios. The rank was taken the same
+way as the volumes above, and nothing else about the dossier was read.
 
-- **280 ms** is 370 less 90. The 370 ms is production's 635 ms less the
-  266 ms the 12-character scenario took at 5 ms in "Modelling Railway's
-  latency".
-- **220 ms** is production's 635 ms less the 415 ms the median-sized read
-  took in these runs.
+Production assembled it in 371 ms. This desktop takes about 300 ms for the
+largest dossier's volume, which is more than the sampled one holds. On the
+same evidence, then, Railway's CPU assembles more slowly than this machine,
+by a factor of at least about 1.2 and at most about 7. The rank cannot
+narrow it further, and the dossier's own totals were not recorded.
 
-They differ because the 12-character scenario itself ran at 308–389 ms in
-these runs (median about 340), roughly 60–75 ms slower than the 266 ms
-above. The same-run difference, 90 ms, is the figure for volume. Which end
-of the remainder is right depends on which absolute baseline matches
-production, and neither can be checked against it.
+So the ~370 ms is assembly, and assembly is evidence volume run on
+Railway's CPU. Two things are still open:
 
-Without latency, volume costs more: 110–190 ms. At 5 ms, each subject's
-reservation spends most of its time waiting on round trips, and building
-the other subjects' evidence overlaps those waits.
+- **Which stage of assembly dominates.** `assemble` covers limitations,
+  `buildApplicantDossier`, serialisation and `applicantDossierSchema.parse`
+  together. A CPU profile of the production-largest scenario would split
+  them.
+- **How much slower Railway's CPU is.** Running a production-sized scenario
+  on a Railway instance would measure the factor directly.
 
-The largest dossier took 850–1,450 ms at 5 ms and 0.8–1.1 s with no latency.
-Evidence volume alone can make a dossier read take over a second.
-
-Three things could close the rest of the gap. None of them is measured:
-
-- **Railway's CPU.** Most of the volume cost is CPU work: building,
-  validating and serialising a 0.9 MB response. A shared Railway vCPU slower
-  than this desktop multiplies it. The assembly timing bucket in
-  "Follow-ups" would show this directly.
-- **Skew.** Real dossiers hold most of their evidence on one or two
-  characters. One large reservation then runs on its own after the small
-  ones finish, where the synthetic dossier runs ten medium ones in parallel.
-- **Aliases.** Each alias is its own `evidence.reserve`, and the synthetic
-  dossiers have none.
+An earlier version of this section put volume at "about 90 ms of the
+370 ms". That compared `total` for twelve seeded characters with ten large
+ones, from runs that varied by up to 50%. #701's buckets superseded it by
+measuring assembly directly, and the later runs above were steady.
 
 ## Follow-ups
 
@@ -362,16 +355,14 @@ Three things could close the rest of the gap. None of them is measured:
 - **Seed production-sized evidence** in a profiler scenario, so the time
   outside the database shows up locally. Done in #686; see "Evidence
   volume".
-- **Consider the dossier's size.** A median ten-character dossier serialises
-  to about 0.9 MB and the largest to about 4 MB, and the page reads it again
-  at every poll.
-- **Time the read path's own work.** A bucket for dossier assembly and
-  response validation would split the unexplained 370 ms in production
-  without any new call names in the logs.
-  outside the database shows up locally.
 - **Time the read path's own work.** Done in #687, which added `assemble`
   and `respond` buckets. The split is in
   [The ~370 ms, measured](#the-370-ms-measured).
+- **Consider the dossier's size.** A median ten-character dossier serialises
+  to about 0.9 MB and the largest to about 4 MB, and the page reads it again
+  at every poll.
+- **Profile assembly's stages** on the production-largest scenario, to find
+  which part of `assemble` dominates.
 - **Correct the baseline's note on log retention.**
   `2026-09-27-dossier-load-baseline.md` says Railway keeps only the current
   deployment's logs, but removed deployments can still be read by id.

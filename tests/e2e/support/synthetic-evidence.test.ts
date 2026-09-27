@@ -96,6 +96,19 @@ describe("syntheticEvidence", () => {
     expect(latest).toBeLessThanOrEqual(Date.parse(syntheticEvidenceCutoff));
   });
 
+  it("keeps each boss's kills on distinct dates, even in a raid still open", () => {
+    const { kills } = syntheticEvidence("alpha", volume);
+
+    const byBoss = new Map<string, string[]>();
+    for (const kill of kills) {
+      const key = `${kill.raidId}:${kill.bossId}`;
+      byBoss.set(key, [...(byBoss.get(key) ?? []), kill.killedAt]);
+    }
+    for (const dates of byBoss.values()) {
+      expect(new Set(dates).size).toBe(dates.length);
+    }
+  });
+
   it("marks every kill's rank as looked up, so a warm read makes no lookup", () => {
     const { kills } = syntheticEvidence("alpha", volume);
 
