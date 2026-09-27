@@ -1,5 +1,5 @@
 import {
-  applicationConfigSchema,
+  BLIZZARD_WEB_REQUEST_LIMITS,
   encryptAccountMail,
   encryptCredential,
   upstreamThrottleRecord
@@ -555,25 +555,19 @@ describe("worker runtime", () => {
     });
   });
 
-  it("leaves the web service headroom inside Blizzard's per-second allowance", () => {
-    // Break caught: the worker's rate limit and the web service's provider
-    // concurrency are set in different packages and carve the same 100 a
-    // second, so raising either could overrun the shared credentials with
-    // nothing to say so. The web reads are bounded only by concurrency, so its
-    // share is taken at the pessimistic 100 ms response the limit was sized on,
-    // and at the most concurrency the config accepts rather than its default:
-    // a deployment override must fail at config load, not at Blizzard.
+  it("leaves headroom inside Blizzard's per-second allowance for both services' limits", () => {
+    // Break caught: the worker's and the web's Blizzard rate limits are set in
+    // different packages and carve the same 100 a second, so raising either
+    // could overrun the shared credentials with nothing to say so. Both are
+    // enforced by their clients' request limiters, whatever Blizzard's
+    // response time, so their sum is the most the two can start in a second.
     const blizzardPerSecond = 100;
-    const pessimisticResponseSeconds = 0.1;
-    // A schema with no maximum leaves the web unbounded, which must fail.
-    const webConcurrency =
-      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.unwrap()
-        .maxValue ?? Number.POSITIVE_INFINITY;
-    const webPerSecond = webConcurrency / pessimisticResponseSeconds;
 
     expect(BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond).toBe(40);
+    expect(BLIZZARD_WEB_REQUEST_LIMITS.maxPerSecond).toBe(20);
     expect(
-      BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond + webPerSecond
+      BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond +
+        BLIZZARD_WEB_REQUEST_LIMITS.maxPerSecond
     ).toBeLessThanOrEqual(blizzardPerSecond * 0.8);
   });
 

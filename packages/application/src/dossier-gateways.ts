@@ -1,5 +1,5 @@
 import { lookupCuttingEdgeAchievement } from "@slashwho/domain";
-import type { BlizzardGateway } from "@slashwho/blizzard";
+import type { BlizzardGateway, RequestLimits } from "@slashwho/blizzard";
 import type {
   RaiderIoGateway,
   MythicBossRankingsOptions,
@@ -13,8 +13,30 @@ import type { ApplicationConfig } from "./config";
 import { rankingRequestKey } from "./historic-world-rank";
 import type { MeasurementScope } from "./measurement";
 
-/** How long one provider call the dossier read makes may take. */
+/**
+ * How long one provider call the dossier read makes may take. A Blizzard read
+ * that waits on BLIZZARD_WEB_REQUEST_LIMITS spends this timeout while it
+ * waits, and leaves the limiter's queue when it expires.
+ */
 export const PROVIDER_TIMEOUT_MS = 15_000;
+
+/**
+ * Limits on the web's shared Blizzard client, the one built from the server's
+ * own credentials. Blizzard allows those credentials 100 requests a second and
+ * the worker spends 40 of them, so the web takes a fifth, leaving two fifths
+ * spare; the worker runtime test holds the sum to 80. A cold dossier makes up
+ * to 25 reads, so the limit costs it about a second at worst. The concurrency
+ * is not meant to bind: it admits every read DOSSIER_PROVIDER_CONCURRENCY can,
+ * so the rate is the only bound on Blizzard. Visitor-supplied credentials are
+ * a different client id with an allowance of their own, and are not limited
+ * by this. Both are per process, so the split holds only while the web runs
+ * one replica. See
+ * docs/research/2026-09-26-issue-549-blizzard-sweep-concurrency.md.
+ */
+export const BLIZZARD_WEB_REQUEST_LIMITS = {
+  maxConcurrent: 12,
+  maxPerSecond: 20
+} as const satisfies RequestLimits;
 
 /**
  * Visitor-supplied credentials for a single dossier read. Gateways built from
