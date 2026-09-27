@@ -7,8 +7,11 @@ import {
   type DossierSchema
 } from "./dossier-api";
 
-/** Where the shell's script leaves the read it started, for the client. */
-const earlyReadSlot = "__slashwhoEarlyDossierRead";
+/**
+ * Where the shell's script leaves the read it started, for the client. The
+ * load profiler watches it to report whether the early read fired.
+ */
+export const earlyReadSlot = "__slashwhoEarlyDossierRead";
 
 type EarlyRead = Readonly<{ path: string; response: Promise<Response> }>;
 

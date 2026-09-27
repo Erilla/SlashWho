@@ -1687,9 +1687,17 @@ describe("discovery job handler", () => {
       const repositories = createMemoryRepositories();
       const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
       const records: Array<Record<string, unknown>> = [];
+      // Only the first call of the slow operation is slow. The clock is shared,
+      // so advancing it on every such call would charge a guild read's latency
+      // to every other guild read in flight with it; for getCharacter the
+      // first call is the root read, which runs before any guild read starts.
       let tick = 0;
+      let slowCallMade = false;
       const slowWhen = async <T>(operation: string, result: T): Promise<T> => {
-        if (operation === slowOperation) tick += 1_000;
+        if (operation === slowOperation && !slowCallMade) {
+          slowCallMade = true;
+          tick += 1_000;
+        }
         return result;
       };
       // Discovery resolves a profile guess only for a character with no
