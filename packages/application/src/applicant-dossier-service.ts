@@ -816,7 +816,8 @@ async function assembleDossier(options: {
     restoreMissingHistoricRanks({
       kills: evidence.flatMap((item) => item.kills),
       raiderio: options.raiderio,
-      recordLookup: options.repositories.evidence.recordHistoricRankLookup,
+      recordLookup: (...args) =>
+        options.repositories.evidence.recordHistoricRankLookup(...args),
       concurrency: options.concurrency,
       signal: options.signal
     })

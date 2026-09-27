@@ -240,7 +240,10 @@ export function firstKillReports(
       }
       if (
         difficulty !== MYTHIC_DIFFICULTY ||
-        !friendlyPlayers.some((player) => participantIds.has(player))
+        !friendlyPlayers.some(
+          (player: unknown) =>
+            typeof player === "number" && participantIds.has(player)
+        )
       ) {
         continue;
       }

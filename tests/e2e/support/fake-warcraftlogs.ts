@@ -29,7 +29,8 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
     }
     if (request.method === "POST" && url.pathname === "/api/v2/client") {
       const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      for await (const chunk of request as AsyncIterable<Buffer>)
+        chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
         query?: string;
         variables?: { name?: string; realm?: string; id?: number };

@@ -34,6 +34,7 @@ export function decodeApplicantIdentity(value: string): ApplicantIdentity {
     if (
       !Array.isArray(parsed) ||
       parsed.length !== 3 ||
+      typeof parsed[0] !== "string" ||
       !["us", "eu", "kr", "tw"].includes(parsed[0]) ||
       typeof parsed[1] !== "string" ||
       !/^[a-z0-9-]+$/.test(parsed[1]) ||

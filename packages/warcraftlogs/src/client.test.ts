@@ -183,7 +183,7 @@ function clientFor(
   return {
     fetch,
     client: createWarcraftLogsClient({
-      fetch: fetch as unknown as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "client-secret-marker",
       ...clock
@@ -1968,7 +1968,7 @@ describe("Warcraft Logs gateway", () => {
     // whose parse budget runs out every run never settled anything and
     // re-scanned their whole history forever (#304).
     const client = createWarcraftLogsClient({
-      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(
           typeof input === "string" || input instanceof URL ? input : input.url
         );
@@ -1981,7 +1981,7 @@ describe("Warcraft Logs gateway", () => {
           return new Response("", { status: 503 });
         }
         return jsonResponse(performanceReport([26]));
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "client-secret-marker"
     });
@@ -3254,7 +3254,7 @@ describe("Warcraft Logs gateway", () => {
       if (body.query.includes("CharacterZoneParses")) {
         return emptyZoneRankingsResponse();
       }
-      return jsonResponse(pages[page++]!);
+      return jsonResponse(pages[page++]);
     });
 
     await expect(
@@ -3309,7 +3309,7 @@ describe("Warcraft Logs gateway", () => {
         region: "eu",
         page: page + 1
       });
-      return jsonResponse(pages[page++]!);
+      return jsonResponse(pages[page++]);
     });
 
     await expect(
@@ -5678,14 +5678,14 @@ describe("Warcraft Logs gateway", () => {
   it("reports a throttled response through onThrottle", async () => {
     const throttles: Array<{ retryAfterMs: number | undefined }> = [];
     const client = createWarcraftLogsClient({
-      fetch: (async (input: RequestInfo | URL) => {
+      fetch: async (input: RequestInfo | URL) => {
         const url = new URL(
           typeof input === "string" || input instanceof URL ? input : input.url
         );
         return url.pathname === "/oauth/token"
           ? token()
           : new Response("", { status: 429, headers: { "Retry-After": "60" } });
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "client-secret-marker",
       onThrottle: (event) => throttles.push(event)
@@ -5704,14 +5704,14 @@ describe("Warcraft Logs gateway", () => {
     // throttle into an unexpected_error job retry instead of the rate_limited
     // limitation the caller handles.
     const client = createWarcraftLogsClient({
-      fetch: (async (input: RequestInfo | URL) => {
+      fetch: async (input: RequestInfo | URL) => {
         const url = new URL(
           typeof input === "string" || input instanceof URL ? input : input.url
         );
         return url.pathname === "/oauth/token"
           ? token()
           : new Response("", { status: 429, headers: { "Retry-After": "60" } });
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "secret",
       onThrottle: () => {
@@ -5748,14 +5748,14 @@ describe("Warcraft Logs gateway", () => {
     // the configured default however long upstream had asked for (#577).
     const throttles: Array<{ retryAfterMs: number | undefined }> = [];
     const client = createWarcraftLogsClient({
-      fetch: (async (input: RequestInfo | URL) => {
+      fetch: async (input: RequestInfo | URL) => {
         const url = new URL(
           typeof input === "string" || input instanceof URL ? input : input.url
         );
         return url.pathname === "/oauth/token"
           ? token()
           : new Response("", { status: 503, headers: { "Retry-After": "30" } });
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "client-secret-marker",
       onThrottle: (event) => throttles.push(event)
@@ -5777,14 +5777,14 @@ describe("Warcraft Logs gateway", () => {
   it("does not report a response without Retry-After as throttling", async () => {
     const throttles: unknown[] = [];
     const client = createWarcraftLogsClient({
-      fetch: (async (input: RequestInfo | URL) => {
+      fetch: async (input: RequestInfo | URL) => {
         const url = new URL(
           typeof input === "string" || input instanceof URL ? input : input.url
         );
         return url.pathname === "/oauth/token"
           ? token()
           : new Response("", { status: 503 });
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "client-secret-marker",
       onThrottle: () => throttles.push(true)
@@ -6604,7 +6604,7 @@ describe("Warcraft Logs gateway", () => {
       performanceRankings({ damage: 91, healing: 12, bossDamage: 44 })
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as unknown as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "client-secret-marker",
       // Each reading advances further than the last, so a duration taken
@@ -6639,7 +6639,7 @@ describe("Warcraft Logs gateway", () => {
     // Built directly rather than through `clientFor`: that harness reshapes any
     // zone response it cannot parse, which would swallow the 503 under test.
     const client = createWarcraftLogsClient({
-      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(
           typeof input === "string" || input instanceof URL ? input : input.url
         );
@@ -6648,7 +6648,7 @@ describe("Warcraft Logs gateway", () => {
         return body.query.includes("CharacterZoneParses")
           ? new Response("", { status: 503 })
           : jsonResponse(performanceReport([26]));
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "client-secret-marker"
     });
