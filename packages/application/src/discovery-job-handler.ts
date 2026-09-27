@@ -6,8 +6,7 @@ import type {
 } from "@slashwho/database";
 import type {
   BlizzardGateway,
-  BlizzardProfileRequestObserver,
-  BlizzardSlotWait
+  BlizzardProfileRequestObserver
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
@@ -21,6 +20,7 @@ import {
 } from "@slashwho/domain";
 
 import { bestEffort } from "./best-effort";
+import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
 import {
@@ -82,20 +82,8 @@ function scopedBlizzardGateway(
           excluded(async () => {
             await onProfileRequest();
           });
-  // Time spent queued in the client's request limiter is not Blizzard's: it
-  // is kept out of `blizzardMs`, so the per-call mean stays a latency, and
-  // reported on its own as `blizzardLimiterWaitMs`.
-  const excludeSlotWait =
-    (excluded: ExcludeFromBucket): BlizzardSlotWait =>
-    (wait) =>
-      excluded(async () => {
-        const queuedAt = monotonic();
-        try {
-          return await wait();
-        } finally {
-          scope.observe("blizzardLimiterWaitMs", monotonic() - queuedAt);
-        }
-      });
+  const excludeSlotWait = (excluded: ExcludeFromBucket) =>
+    excludeBlizzardSlotWait(scope, monotonic, excluded);
 
   return {
     getGuildRoster: (root, signal, onProfileRequest) =>
