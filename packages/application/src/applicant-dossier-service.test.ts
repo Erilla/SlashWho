@@ -2710,7 +2710,7 @@ describe("applicant dossier service", () => {
     // An ordinary read that found no snapshot is still an ordinary read, not
     // the initial one (#708).
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: root, origin: "dossier_read" })
+      expect.objectContaining({ key: root, origin: "dossier_read", root })
     );
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
   });
@@ -2887,7 +2887,7 @@ describe("applicant dossier service", () => {
 
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: root, origin: "dossier_initial" })
+      expect.objectContaining({ key: root, origin: "dossier_initial", root })
     );
     expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
@@ -3799,7 +3799,8 @@ describe("manually connected characters", () => {
       alias
     );
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: alt, origin: "historic_alias" })
+      // The dossier the edit was made in, not the character re-collected.
+      expect.objectContaining({ key: alt, origin: "historic_alias", root })
     );
   });
 
@@ -3816,11 +3817,25 @@ describe("manually connected characters", () => {
     await dossiers.rebuildCharacter(third);
 
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: alt, origin: "refresh" })
+      expect.objectContaining({ key: alt, origin: "refresh", root: null })
     );
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: third, origin: "rebuild" })
+      expect.objectContaining({ key: third, origin: "rebuild", root: null })
     );
+  });
+
+  it("records the dossier root on every character's run, not the character's own key", async () => {
+    // Break caught: the monitor could not say which search queued an alt's
+    // collection, because the run named only the alt.
+    const { dossiers, repositories } = fixture({ storedEvidence: false });
+
+    await dossiers.read(root);
+
+    const reserved = vi
+      .mocked(repositories.evidence.reserve)
+      .mock.calls.map(([input]) => input);
+    expect(reserved.map((input) => input.key)).toContainEqual(alt);
+    for (const input of reserved) expect(input.root).toEqual(root);
   });
 
   it("rejects self-links and unconnected targets before persisting aliases", async () => {

@@ -193,6 +193,7 @@ export function createEvidenceRepositories(
         freshnessCutoff,
         at,
         origin,
+        root,
         credentials,
         phasePlan,
         lightRefresh
@@ -333,10 +334,11 @@ export function createEvidenceRepositories(
             `INSERT INTO character_evidence_runs
               (region, realm_slug, normalized_name, mode, tier_search_raid_id,
                wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-               light_refresh, origin)
+               light_refresh, origin,
+               root_region, root_realm_slug, root_normalized_name)
              VALUES ($1, $2, $3,
                      CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
-                     $4, $5, $6, $7, $8, $9, $10)
+                     $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
              RETURNING ${evidenceRunColumns()}`,
             [
               key.region,
@@ -359,7 +361,10 @@ export function createEvidenceRepositories(
               continuationRaidId === null && lightRefresh === true,
               // A continuation is still whatever asked for this run: the
               // caller, not the tier search that capped, queued it.
-              origin
+              origin,
+              root?.region ?? null,
+              root?.realm ?? null,
+              root?.name ?? null
             ]
           );
           const reservedRun = mapEvidenceRun(one(inserted));
@@ -465,6 +470,7 @@ export function createEvidenceRepositories(
 
       async reserveTierSearch({
         key,
+        root,
         raidId,
         at,
         searchedSince,
@@ -528,8 +534,9 @@ export function createEvidenceRepositories(
           }
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at, account_credential_owner_id, account_credential_version, origin)
-             VALUES ($1, $2, $3, 'tier_search', $4, $5, $6, $7, 'tier_search')
+               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at, account_credential_owner_id, account_credential_version, origin,
+                root_region, root_realm_slug, root_normalized_name)
+             VALUES ($1, $2, $3, 'tier_search', $4, $5, $6, $7, 'tier_search', $8, $9, $10)
              RETURNING ${columns}`,
             [
               key.region,
@@ -538,7 +545,10 @@ export function createEvidenceRepositories(
               raidId,
               at,
               credentials?.accountId ?? null,
-              credentials?.credentialVersion ?? null
+              credentials?.credentialVersion ?? null,
+              root?.region ?? null,
+              root?.realm ?? null,
+              root?.name ?? null
             ]
           );
           const run = mapEvidenceRun(one(inserted));
@@ -1730,6 +1740,9 @@ export function createEvidenceRepositories(
           normalized_name: string;
           status: CharacterEvidenceRun["status"];
           origin: CharacterEvidenceRun["origin"];
+          root_region: CharacterKey["region"] | null;
+          root_realm_slug: string | null;
+          root_normalized_name: string | null;
           evidence_version: number;
           attempt: number;
           limitation_code: string | null;
@@ -1746,6 +1759,7 @@ export function createEvidenceRepositories(
           // they are limited, newest first to match the outer ordering.
           `WITH runs AS (
              (SELECT id, region, realm_slug, normalized_name, status, origin,
+                     root_region, root_realm_slug, root_normalized_name,
                      evidence_version, attempt, limitation_code,
                      parse_limitation_code, retry_after_at, error_code,
                      created_at, started_at, completed_at
@@ -1753,6 +1767,7 @@ export function createEvidenceRepositories(
                WHERE status NOT IN ('complete', 'partial'))
              UNION ALL
              (SELECT id, region, realm_slug, normalized_name, status, origin,
+                     root_region, root_realm_slug, root_normalized_name,
                      evidence_version, attempt, limitation_code,
                      parse_limitation_code, retry_after_at, error_code,
                      created_at, started_at, completed_at
@@ -1762,7 +1777,9 @@ export function createEvidenceRepositories(
                LIMIT $1)
            )
            SELECT runs.region, runs.realm_slug, runs.normalized_name,
-                  runs.status, runs.origin, runs.evidence_version, runs.attempt,
+                  runs.status, runs.origin, runs.root_region,
+                  runs.root_realm_slug, runs.root_normalized_name,
+                  runs.evidence_version, runs.attempt,
                   runs.limitation_code, runs.parse_limitation_code,
                   runs.retry_after_at, runs.error_code, runs.started_at,
                   runs.completed_at, steps.phases
@@ -1802,6 +1819,17 @@ export function createEvidenceRepositories(
           },
           status: row.status,
           origin: row.origin,
+          // The check constraint keeps the three columns all set or all null.
+          root:
+            row.root_region === null ||
+            row.root_realm_slug === null ||
+            row.root_normalized_name === null
+              ? null
+              : {
+                  region: row.root_region,
+                  realm: row.root_realm_slug,
+                  name: row.root_normalized_name
+                },
           evidenceVersion: row.evidence_version,
           attempt: row.attempt,
           limitationCode: row.limitation_code,

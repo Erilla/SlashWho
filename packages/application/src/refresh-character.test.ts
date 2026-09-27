@@ -62,6 +62,7 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
       refreshCharacter({
         key,
         origin: rebuild ? "rebuild" : "refresh",
+        root: null,
         at,
         cooldownMs,
         ...(rebuild ? { rebuild: true } : {}),
@@ -95,6 +96,7 @@ describe("refreshCharacter", () => {
       expect.objectContaining({
         key,
         origin: "refresh",
+        root: null,
         freshnessCutoff: at,
         lightRefresh: false
       })
@@ -171,6 +173,7 @@ describe("refreshCharacter", () => {
     await refreshCharacter({
       key,
       origin: "refresh",
+      root: null,
       at,
       cooldownMs,
       repositories: { evidence: h } as never,
@@ -369,6 +372,7 @@ describe("refreshCharacter", () => {
     await refreshCharacter({
       key,
       origin: "refresh",
+      root: null,
       at,
       cooldownMs,
       scope,

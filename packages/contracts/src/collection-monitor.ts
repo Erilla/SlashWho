@@ -38,6 +38,8 @@ export const collectionMonitorInFlightRunSchema = z
     character: characterKeySchema,
     status: z.enum(["queued", "running", "retrying"]),
     origin: evidenceRunOriginSchema,
+    /** The dossier root the run was reserved for; null when none was. */
+    root: characterKeySchema.nullable(),
     attempt: z.number().int().nonnegative(),
     startedAt: timestampSchema.nullable(),
     elapsedSeconds: z.number().int().nonnegative().nullable(),
@@ -52,6 +54,8 @@ export const collectionMonitorCompletedRunSchema = z
     character: characterKeySchema,
     state: z.enum(["complete", "partial"]),
     origin: evidenceRunOriginSchema,
+    /** The dossier root the run was reserved for; null when none was. */
+    root: characterKeySchema.nullable(),
     limitationCode: z.string().min(1).nullable(),
     parseLimitationCode: z.string().min(1).nullable(),
     completedAt: timestampSchema.nullable(),
@@ -63,6 +67,8 @@ export const collectionMonitorFailedRunSchema = z
   .object({
     character: characterKeySchema,
     origin: evidenceRunOriginSchema,
+    /** The dossier root the run was reserved for; null when none was. */
+    root: characterKeySchema.nullable(),
     errorCode: z.string().min(1).nullable(),
     stoppedAt: timestampSchema.nullable()
   })

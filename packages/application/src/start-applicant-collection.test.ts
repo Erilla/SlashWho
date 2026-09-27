@@ -34,7 +34,8 @@ describe("startApplicantCollection", () => {
     });
 
     expect(reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key, origin: "applicant_sheet" })
+      // The applicant is the root of its own discovery.
+      expect.objectContaining({ key, origin: "applicant_sheet", root: key })
     );
   });
 });

@@ -1791,8 +1791,36 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the eight queries the document describes", () => {
-        expect(queries).toHaveLength(8);
+      it("finds exactly the nine queries the document describes", () => {
+        expect(queries).toHaveLength(9);
+      });
+
+      it("says which searches the queue is working for", async () => {
+        const at = new Date();
+        for (const [key, root] of [
+          [rootKey, rootKey],
+          [altKey, rootKey]
+        ] as const) {
+          await repositories.evidence.reserve({
+            origin: "dossier_read",
+            key,
+            root,
+            freshnessCutoff: at,
+            at
+          });
+        }
+
+        const result = await pool.query(queries[8] as string);
+
+        // The alt's run is counted under the search that queued it.
+        expect(result.rows).toEqual([
+          {
+            root_region: rootKey.region,
+            root_realm_slug: rootKey.realm,
+            root_normalized_name: rootKey.name,
+            runs: "2"
+          }
+        ]);
       });
 
       it("says why the queue is long from the runs alone", async () => {
