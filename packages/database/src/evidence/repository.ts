@@ -9,7 +9,6 @@ import {
 } from "../mappers";
 import type {
   CharacterEvidenceRun,
-  CharacterMythicKillInput,
   EvidenceCollectionDomain,
   EvidenceMonitorPhase,
   EvidenceReservationResult,
@@ -35,7 +34,7 @@ import {
   loadStoredPerformanceByFightUrl,
   loadStoredTierBestParses
 } from "./load";
-import { mergePerformanceValues } from "./merge";
+import { mergePublishedEvidence } from "./merge";
 import { insertEvidenceRows, performanceColumns } from "./rows";
 
 /**
@@ -681,21 +680,17 @@ export function createEvidenceRepositories(
         ) {
           throw new RangeError("character_evidence_publication_invalid");
         }
-        const incomingKills: Array<{
-          kill: CharacterMythicKillInput;
-          performance: ReturnType<typeof parsePerformanceValues>;
-        }> = input.kills.map((kill) => {
+        for (const kill of input.kills) {
           if (
             kill.guild !== null &&
             (kill.guild.name.length === 0 || kill.guild.realm.length === 0)
           ) {
             throw new RangeError("character_evidence_guild_invalid");
           }
-          return {
-            kill,
-            performance: parsePerformanceValues(kill.performance)
-          };
-        });
+          // Rejects a malformed parse before the transaction opens; the
+          // merge parses it again for the rows it writes.
+          parsePerformanceValues(kill.performance);
+        }
         return withTransaction(pool, async (client) => {
           const active = await client.query<{
             id: string;
@@ -755,34 +750,6 @@ export function createEvidenceRepositories(
             input.state === "complete" && !targeted
               ? await loadLatestTierSearchKills(client, activeKey)
               : [];
-          // A partial publish carries everything forward, as it always has. A
-          // complete ordinary one carries forward terminal raids and kills
-          // confirmed by the latest explicit search of each tier. An ordinary
-          // history scan cannot re-find those old exact reports through
-          // recentReports. Every other raid keeps the contract where a kill a
-          // complete run stopped finding stops being claimed. A targeted
-          // search is only ever additive, whatever its state.
-          const previous =
-            input.state === "partial" || targeted
-              ? stored
-              : {
-                  kills: [
-                    ...new Map(
-                      [
-                        ...tierSearchKills,
-                        ...stored.kills.filter((kill) =>
-                          terminalKillRaidIds.has(kill.raidId)
-                        )
-                      ].map((kill) => [kill.fightUrl, kill] as const)
-                    ).values()
-                  ],
-                  wipes: stored.wipes.filter((wipe) =>
-                    terminalKillRaidIds.has(wipe.raidId)
-                  )
-                };
-          // A complete publish must not resurrect kills the run no longer
-          // found, but it must still carry forward parses for kills it did,
-          // because collection skips fights it has already hydrated.
           const storedPerformance = await loadStoredPerformanceByFightUrl(
             client,
             activeKey
@@ -822,10 +789,16 @@ export function createEvidenceRepositories(
                   ORDER BY k.fight_url, r.completed_at DESC NULLS LAST, r.id DESC`,
                 [activeKey.region, activeKey.realm, activeKey.name]
               )
-            ).rows.map((row) => [row.fight_url, row] as const)
-          );
-          const incomingFightUrls = new Set(
-            input.kills.map((kill) => kill.fightUrl)
+            ).rows.map(
+              (row) =>
+                [
+                  row.fight_url,
+                  {
+                    historicWorldRank: row.historic_world_rank,
+                    historicRankCheckedAt: row.historic_rank_checked_at
+                  }
+                ] as const
+            )
           );
           // When each fight's rankings were last asked about and answered.
           // Carried forward exactly like `collected_at`, and for the same
@@ -847,73 +820,25 @@ export function createEvidenceRepositories(
               )
             ).rows.map((row) => [row.fight_url, row.parses_read_at] as const)
           );
-          // Fights this run got a ranking answer about, whatever the answer
-          // was. A fight answered with nothing is what makes the difference:
-          // recorded, it stops being re-requested every run (#297).
-          // A targeted search vouches only for the fights it publishes. One it
-          // parsed but left out -- another raid's, on the same night -- keeps
-          // the answer time it had, so a stored unparsed kill is not marked
-          // read without its parses (#492 review).
-          const parsedFightUrls = new Set(
-            (input.parsedFightUrls ?? []).filter(
-              (url) => !targeted || incomingFightUrls.has(url)
-            )
-          );
-          const kills = new Map<string, (typeof incomingKills)[number]>(
-            previous.kills.map((kill) => [
-              kill.fightUrl,
-              { kill, performance: parsePerformanceValues(kill.performance) }
-            ])
-          );
-          for (const kill of incomingKills) {
-            const stored =
-              kills.get(kill.kill.fightUrl) ??
-              (storedPerformance.has(kill.kill.fightUrl)
-                ? {
-                    kill: kill.kill,
-                    performance: storedPerformance.get(kill.kill.fightUrl)!
-                  }
-                : undefined);
-            kills.set(
-              kill.kill.fightUrl,
-              stored === undefined
-                ? kill
-                : {
-                    kill: kill.kill,
-                    performance: mergePerformanceValues(
-                      stored.performance,
-                      kill.performance
-                    )
-                  }
-            );
-          }
-          const wipes = new Map<string, (typeof input.wipes)[number]>();
-          for (const wipe of [...previous.wipes, ...input.wipes]) {
-            wipes.set(wipe.fightUrl, wipe);
-          }
-          const tierBests = await loadStoredTierBestParses(client, {
+          const storedTierBests = await loadStoredTierBestParses(client, {
             region: activeRun.region,
             realm: activeRun.realm_slug,
             name: activeRun.normalized_name
           });
-          for (const tierBest of input.tierBests) {
-            const key = `${tierBest.raidId}\0${tierBest.bossId}`;
-            const stored = tierBests.get(key);
-            const performance = parsePerformanceValues(tierBest.performance);
-            tierBests.set(key, {
-              tierBest,
-              performance:
-                stored === undefined
-                  ? performance
-                  : mergePerformanceValues(stored.performance, performance),
-              // This run read the zone, so it is collected now. Rows this run
-              // did not supply keep the time they were read: stamping the
-              // run's own completion on a carried row would make a zone the
-              // budget never reached look current, and it would never be read
-              // again.
-              collectedAt: input.completedAt
-            });
-          }
+          const merged = mergePublishedEvidence(
+            {
+              positive: stored,
+              tierSearchKills,
+              terminalKillRaidIds,
+              performanceByFightUrl: storedPerformance,
+              collectedAtByFightUrl: storedCollectedAt,
+              parsesReadAtByFightUrl: storedParsesReadAt,
+              historicRankByFightUrl: storedHistoricRankLookups,
+              tierBests: storedTierBests
+            },
+            input,
+            targeted
+          );
           // One statement per table rather than one per row. Carry-forward
           // makes every publish rewrite the character's whole history, and
           // all of it happens while the run's row lock is held.
@@ -943,47 +868,22 @@ export function createEvidenceRepositories(
               [
                 "historic_world_rank",
                 "integer",
-                ({ kill }) =>
-                  kill.historicWorldRank ??
-                  storedHistoricRankLookups.get(kill.fightUrl)
-                    ?.historic_world_rank ??
-                  null
+                ({ historicWorldRank }) => historicWorldRank
               ],
               [
                 "historic_rank_checked_at",
                 "timestamptz",
-                ({ kill }) =>
-                  kill.historicRankCheckedAt ??
-                  storedHistoricRankLookups.get(kill.fightUrl)
-                    ?.historic_rank_checked_at ??
-                  null
+                ({ historicRankCheckedAt }) => historicRankCheckedAt
               ],
               ...performanceColumns(),
-              [
-                "collected_at",
-                "timestamptz",
-                // This run observed the fight only if it came back with it. A
-                // fight carried forward keeps the time it was actually read,
-                // so a percentile's age stays honest.
-                ({ kill }) =>
-                  incomingFightUrls.has(kill.fightUrl)
-                    ? input.completedAt
-                    : (storedCollectedAt.get(kill.fightUrl) ??
-                      input.completedAt)
-              ],
+              ["collected_at", "timestamptz", ({ collectedAt }) => collectedAt],
               [
                 "parses_read_at",
                 "timestamptz",
-                // Only a fight this run actually asked about is restamped.
-                // Everything else keeps the answer time it already had, and a
-                // fight never asked about stays null.
-                ({ kill }) =>
-                  parsedFightUrls.has(kill.fightUrl)
-                    ? input.completedAt
-                    : (storedParsesReadAt.get(kill.fightUrl) ?? null)
+                ({ parsesReadAt }) => parsesReadAt
               ]
             ],
-            [...kills.values()]
+            merged.kills
           );
           await insertEvidenceRows(
             client,
@@ -998,7 +898,7 @@ export function createEvidenceRepositories(
               ...performanceColumns(),
               ["collected_at", "timestamptz", ({ collectedAt }) => collectedAt]
             ],
-            [...tierBests.values()]
+            merged.tierBests
           );
           await insertEvidenceRows(
             client,
@@ -1018,7 +918,7 @@ export function createEvidenceRepositories(
               ["guild_realm", "text", (wipe) => wipe.guild?.realm ?? null],
               ["uploader", "text", (wipe) => wipe.uploader ?? null]
             ],
-            [...wipes.values()]
+            merged.wipes
           );
           // Cutting edges are read from the newest full publication, so a
           // targeted one has none of its own to write.
