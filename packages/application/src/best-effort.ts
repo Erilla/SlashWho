@@ -6,7 +6,7 @@
  * through `errorFields`.
  */
 export async function bestEffort(
-  work: () => Promise<unknown> | unknown,
+  work: () => unknown,
   onFailure?: () => void
 ): Promise<void> {
   try {

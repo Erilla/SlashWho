@@ -5,7 +5,8 @@
     "build": "next build",
     "dev": "next dev",
     "test": "vitest run --root ../.. --project unit apps/web/src",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "pnpm typegen && tsc --noEmit",
+    "typegen": "next typegen"
   },
   "dependencies": {
     "@slashwho/application": "workspace:*",

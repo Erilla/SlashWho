@@ -677,7 +677,7 @@ describe("DossierPageClient live evidence", () => {
       await act(async () => {
         resolveOlder(Response.json(withEvidenceState(expanded, "complete")));
       });
-      expect(screen.getByRole("alert")).toHaveTextContent(terminalMessage!);
+      expect(screen.getByRole("alert")).toHaveTextContent(terminalMessage);
       expect(screen.getByText("Initial evidence")).toBeVisible();
       expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
     }

@@ -138,7 +138,7 @@ export function summarize(
     let perOutcome: Map<string, number[]> | undefined;
     if (outcome !== undefined) {
       outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
-      perOutcome = outcomeSamples.get(outcome) ?? new Map();
+      perOutcome = outcomeSamples.get(outcome) ?? new Map<string, number[]>();
       outcomeSamples.set(outcome, perOutcome);
     }
 
@@ -146,14 +146,14 @@ export function summarize(
     if (typeof record.endpoint === "string") {
       const endpoint = join(endpointGroups, record.endpoint, () => ({
         count: 0,
-        samples: new Map(),
-        byStatus: new Map()
+        samples: new Map<string, number[]>(),
+        byStatus: new Map<string, Group>()
       }));
       grouped.push(endpoint.samples);
       if (typeof record.status === "number") {
         const status = join(endpoint.byStatus, String(record.status), () => ({
           count: 0,
-          samples: new Map()
+          samples: new Map<string, number[]>()
         }));
         grouped.push(status.samples);
       }
@@ -234,7 +234,8 @@ async function main(): Promise<void> {
   }
 
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  for await (const chunk of process.stdin as AsyncIterable<Buffer>)
+    chunks.push(chunk);
   const summary = summarize(
     Buffer.concat(chunks).toString("utf8").split("\n"),
     event

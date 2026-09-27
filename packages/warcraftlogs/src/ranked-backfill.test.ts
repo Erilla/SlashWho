@@ -87,7 +87,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -188,7 +188,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -264,7 +264,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -341,7 +341,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -449,7 +449,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -551,7 +551,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -647,7 +647,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -684,7 +684,7 @@ describe("ranked Mythic backfill", () => {
   describe("a metric Warcraft Logs answers with an error object", () => {
     const zoneRankingsClient = (healing: unknown) =>
       createWarcraftLogsClient({
-        fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = new URL(
             typeof input === "string" || input instanceof URL
               ? input
@@ -746,7 +746,7 @@ describe("ranked Mythic backfill", () => {
           return Response.json(
             report(String(variables.code), Number(variables.fightId))
           );
-        }) as typeof globalThis.fetch,
+        },
         clientId: "id",
         clientSecret: "secret"
       });
@@ -848,7 +848,7 @@ describe("ranked Mythic backfill", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "id",
       clientSecret: "secret"
     });
@@ -969,7 +969,7 @@ describe("ranked Mythic backfill", () => {
         }
       );
       const client = createWarcraftLogsClient({
-        fetch: fetch as typeof globalThis.fetch,
+        fetch: fetch,
         clientId: "id",
         clientSecret: "secret"
       });
@@ -1058,7 +1058,7 @@ describe("ranked Mythic backfill", () => {
       report?: unknown;
     }) =>
       createWarcraftLogsClient({
-        fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = new URL(
             typeof input === "string" || input instanceof URL
               ? input
@@ -1076,7 +1076,7 @@ describe("ranked Mythic backfill", () => {
           if (query.includes("HistoricEncounterRankings"))
             return Response.json(encounterRankings);
           return Response.json(answers.report ?? report("ranked", 10));
-        }) as typeof globalThis.fetch,
+        },
         clientId: "id",
         clientSecret: "secret"
       });
