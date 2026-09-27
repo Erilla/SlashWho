@@ -62,3 +62,5 @@ export function one<Row extends QueryResultRow>(
   if (row === undefined) throw new Error(name);
   return row;
 }
+
+export type Queryable = Pick<Pool | PoolClient, "query">;
