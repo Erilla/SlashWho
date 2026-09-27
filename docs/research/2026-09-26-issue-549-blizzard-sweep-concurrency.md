@@ -3,8 +3,9 @@
 Issue #549. Investigated 2026-09-26 against `origin/main` at `2922426c`.
 
 > **Superseded in part on 2026-09-27 (#655).** The worker's rate limit is now
-> 40 requests a second, not the 20 recommended below, and the planning ceiling
-> for shared traffic is 80% of Blizzard's 100 a second, not about 60%. The web
+> 40 requests a second, not the 20 recommended below, with 10 reads in flight,
+> not 6. The planning ceiling for shared traffic is 80% of Blizzard's 100 a
+> second, not about 60%. The web
 > service's `DOSSIER_PROVIDER_CONCURRENCY` is now capped at 4, not 12. See
 > [Addendum: the 40 a second limit](#addendum-the-40-a-second-limit) for the
 > figures and the reasons. The rest of this note is the 2026-09-26 analysis as
@@ -249,12 +250,18 @@ The same run's mean Blizzard response was 236 ms. At 6 in flight that gives
 therefore leaves concurrency, not the limiter, as the bound in normal running.
 Reaching 40 a second would need about 10 in flight.
 
+A second run of the same root at 40 a second and 6 in flight (run `39295b4f`,
+after #661) confirmed it. The run took 2 min 56 s, the sweep 151 s. It averaged
+24.0 requests a second, and its summed limiter wait fell from 218 s to 14 s. The
+mean response was 219 ms. So `maxConcurrent` was raised to 10, which at that
+mean offers about 45 a second and leaves the 40 a second limit as the bound.
+
 ### What the code now holds
 
 | Setting                                       | Before #655 | Now | Where                                |
 | --------------------------------------------- | ----------- | --- | ------------------------------------ |
 | Worker `maxPerSecond`                         | 20          | 40  | `apps/worker/src/runtime.ts`         |
-| Worker `maxConcurrent`                        | 6           | 6   | `apps/worker/src/runtime.ts`         |
+| Worker `maxConcurrent`                        | 6           | 10  | `apps/worker/src/runtime.ts`         |
 | `DOSSIER_PROVIDER_CONCURRENCY` schema maximum | 12          | 4   | `packages/application/src/config.ts` |
 | Planning ceiling for shared traffic           | about 60%   | 80% | `apps/worker/src/runtime.test.ts`    |
 
@@ -274,14 +281,15 @@ rate limiter, can bunch up. Neither reason has gone away. The service owner
 chose on 2026-09-27 to keep 40 a second and accept the 80% ceiling, knowing
 the following:
 
-- At the measured 236 ms mean, the sweep reaches only about 25 a second, so
-  the worst case of 80 applies only when Blizzard answers faster than about
-  150 ms. That is also when the web's unlimited slots run fastest.
+- With 10 in flight, the sweep reaches the 40 a second limit at any response
+  time up to about 250 ms, so the worker holds its full 40 for the whole of a
+  sweep. At 6 in flight it did so only when Blizzard answered faster than
+  about 150 ms. The worst case of 80 is therefore reached whenever the web is
+  busy at the same moment, not only when Blizzard is fast.
 - The 100 ms figure is still an assumption, not a measured minimum. At 70 ms,
   the web's 4 slots alone reach 57 a second, and 40 + 57 = 97.
-- A limit of 30 would give the same expected sweep time (the sweep is bound
-  at about 25 a second either way) with a worst case of 70 a second. It
-  remains the fallback if throttling appears.
+- A limit of 30 is still the fallback if throttling appears. It now costs
+  sweep time: about 115 s for a ryun-sized sweep, against about 86 s at 40.
 
 What would restore the margin, or justify the 80% ceiling on evidence rather
 than a decision: a measured latency floor (a minimum or p5 per
@@ -297,6 +305,15 @@ full share. The hourly split is unchanged: sweeps are admitted against
 evidence reads is still neither charged nor checked. At 40 a second the sweep
 can spend its hourly budget in 12 minutes rather than 24, but the hourly total
 does not change.
+
+Each read in flight also makes its own database calls: its budget write, which
+waits on the `fingerprint-sweeps` advisory lock while holding a connection, and
+its look-ahead suppression check. The sweep shares the worker's `pg` pool,
+which uses the default of 10 connections, with evidence runs and the applicant
+watcher. At 40 a second that is about 80 short queries a second, roughly one
+connection busy on average and about 20 briefly queued at worst. That fits
+within the pool's 10 s connection timeout, but if `dbMaxCallMs` grows in
+`discovery_run` records, look at the pool before anything else.
 
 ## Open questions and things not verified
 
