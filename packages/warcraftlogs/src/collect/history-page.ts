@@ -1,11 +1,12 @@
-import { MYTHIC_DIFFICULTY, reportActorsQuery } from "../queries";
-import {
-  characterVariables,
-  recentReportsQuery,
-  type CharacterLookup
-} from "../queries";
 import { nonEmptyString, positiveInteger, record } from "../decode/primitives";
 import { recentReportsData } from "../decode/reports";
+import {
+  characterVariables,
+  MYTHIC_DIFFICULTY,
+  recentReportsQuery,
+  reportActorsQuery,
+  type CharacterLookup
+} from "../queries";
 import type { GraphqlResult } from "../transport";
 import { unavailableOnTimeout, type CollectionRun } from "./context";
 
