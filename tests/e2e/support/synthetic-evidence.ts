@@ -59,13 +59,15 @@ type Encounter = Readonly<{
   bossId: string;
   bossName: string;
   bossOrder: number;
+  /** The raid's position in the catalogue, newest first. */
+  raidIndex: number;
   /** A time inside the raid's current-content window, or a fixed fallback. */
   baseMs: number;
 }>;
 
 /** Every catalogued boss, newest raid first, in boss order. */
 function encounters(): readonly Encounter[] {
-  return supportedRaidCatalogue().flatMap((raid) => {
+  return supportedRaidCatalogue().flatMap((raid, raidIndex) => {
     const window = lookupRaidCurrentContentWindow(raid.raidId);
     const baseMs = Date.parse(window?.startsAt ?? "2020-01-07T19:00:00.000Z");
     return raid.encounters.map((encounter) => ({
@@ -74,6 +76,7 @@ function encounters(): readonly Encounter[] {
       bossId: encounter.bossId,
       bossName: encounter.bossName,
       bossOrder: encounter.bossOrder,
+      raidIndex,
       baseMs
     }));
   });
@@ -96,17 +99,12 @@ export function syntheticEvidence(
   const bosses = encounters();
   const hourMs = 3_600_000;
   const weekMs = 7 * 24 * hourMs;
-  // The raid's guild changes every other raid, so a character carries about
+  // The guild changes every two raids, so a character carries about
   // as many guilds as a real one does (1.7 on average).
-  const guildFor = (encounter: Encounter) => {
-    const raidIndex = bosses.findIndex(
-      (candidate) => candidate.raidId === encounter.raidId
-    );
-    return {
-      name: `Profile${label}${Math.floor(raidIndex / 2) % 2 === 0 ? "Main" : "Old"}`,
-      realm: "silvermoon"
-    };
-  };
+  const guildFor = (encounter: Encounter) => ({
+    name: `Profile${label}${Math.floor(encounter.raidIndex / 2) % 2 === 0 ? "Main" : "Old"}`,
+    realm: "silvermoon"
+  });
   const report = (index: number) =>
     `https://www.warcraftlogs.com/reports/profile${label}${index}`;
 
