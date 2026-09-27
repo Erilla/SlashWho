@@ -166,6 +166,101 @@ describe("createMeasurementScope", () => {
     expect(createMeasurementScope(fakeClock([0])).totals()).toEqual({});
   });
 
+  describe("with the fast end measured", () => {
+    it("records the shortest call and how many fell under the threshold", async () => {
+      // Break caught: the budget resting on a 100 ms response time that no
+      // record could confirm, because only the mean and maximum were kept.
+      const scope = createMeasurementScope(
+        fakeClock([0, 120, 120, 190, 190, 290, 290, 330]),
+        { fastCallThresholdMs: { blizzard: 100 } }
+      );
+
+      for (let call = 0; call < 4; call += 1) {
+        await scope.time("blizzard", async () => undefined);
+      }
+
+      expect(scope.totals()).toMatchObject({
+        blizzardCalls: 4,
+        blizzardMinCallMs: 40,
+        blizzardMaxCallMs: 120,
+        // 70 and 40; the 100 ms call is not under 100 ms.
+        blizzardFastCalls: 2,
+        blizzardFastCallThresholdMs: 100
+      });
+    });
+
+    it("reports a count of zero when no call was fast", async () => {
+      // Break caught: a missing count reading as "not measured" rather than
+      // as "every call was slower than the threshold".
+      const scope = createMeasurementScope(fakeClock([0, 150]), {
+        fastCallThresholdMs: { blizzard: 100 }
+      });
+
+      await scope.time("blizzard", async () => undefined);
+
+      expect(scope.totals()).toMatchObject({
+        blizzardMinCallMs: 150,
+        blizzardFastCalls: 0,
+        blizzardFastCallThresholdMs: 100
+      });
+    });
+
+    it("measures the call's own time, not its share, when calls overlap", async () => {
+      // Break caught: the fast end read from the shared split, which halves
+      // every call that overlapped another and invents fast responses.
+      let now = 0;
+      const scope = createMeasurementScope(() => now, {
+        overlapping: "shared",
+        fastCallThresholdMs: { blizzard: 100 }
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((done) => (release = done));
+
+      const calls = [
+        scope.time("blizzard", () => gate),
+        scope.time("blizzard", () => gate)
+      ];
+      now = 120;
+      release();
+      await Promise.all(calls);
+
+      expect(scope.totals()).toMatchObject({
+        blizzardMs: 120,
+        blizzardMinCallMs: 120,
+        blizzardFastCalls: 0
+      });
+    });
+
+    it("leaves other prefixes, and scopes that did not ask, unchanged", async () => {
+      // Break caught: every record in the service gaining fields that only
+      // the discovery run's Blizzard calls were meant to carry.
+      const measured = createMeasurementScope(fakeClock([0, 10, 10, 20]), {
+        fastCallThresholdMs: { blizzard: 100 }
+      });
+      const plain = createMeasurementScope(fakeClock([0, 10]));
+
+      await measured.time("db", async () => undefined);
+      await measured.time("blizzard", async () => undefined);
+      await plain.time("blizzard", async () => undefined);
+
+      expect(Object.keys(measured.totals())).not.toContain("dbMinCallMs");
+      expect(Object.keys(measured.totals())).not.toContain("dbFastCalls");
+      expect(plain.totals()).toEqual({
+        blizzardMs: 10,
+        blizzardCalls: 1,
+        blizzardMaxCallMs: 10
+      });
+    });
+
+    it("emits nothing for a measured prefix that was never timed", () => {
+      const scope = createMeasurementScope(fakeClock([0]), {
+        fastCallThresholdMs: { blizzard: 100 }
+      });
+
+      expect(scope.totals()).toEqual({});
+    });
+  });
+
   it("rounds to whole milliseconds and never reports a negative duration", async () => {
     const scope = createMeasurementScope(fakeClock([10.6, 10.2]));
     await scope.time("db", async () => undefined);

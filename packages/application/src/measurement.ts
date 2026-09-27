@@ -66,6 +66,17 @@ export type MeasurementScopeOptions = {
    * same either way.
    */
   overlapping?: "summed" | "shared";
+  /**
+   * Prefixes whose fast end is measured, each with its threshold. For such a
+   * prefix the scope also reports the shortest call as `${prefix}MinCallMs`,
+   * how many calls took less than the threshold as `${prefix}FastCalls`, and
+   * the threshold itself as `${prefix}FastCallThresholdMs`, so a record read
+   * on its own says what "fast" meant. A minimum alone can be set by a single
+   * cached response; the count shows how often the fast end occurred. Both
+   * use each call's own elapsed time, as the maximum does, never its shared
+   * split.
+   */
+  fastCallThresholdMs?: Readonly<Record<string, number>>;
 };
 
 type Frame = { charged: number };
@@ -78,6 +89,7 @@ export function createMeasurementScope(
   const names = new Map<string, string>();
   const flags = new Set<string>();
   const shared = options.overlapping === "shared";
+  const fastCallThresholdMs = options.fastCallThresholdMs ?? {};
   // Shared mode only: the frames charging at this instant, and when the
   // elapsed time was last handed out between them.
   const charging = new Set<Frame>();
@@ -156,6 +168,16 @@ export function createMeasurementScope(
         }
         add(`${prefix}Calls`, 1);
         slowest(`${prefix}MaxCall`, elapsed, label);
+        const threshold = fastCallThresholdMs[prefix];
+        if (threshold !== undefined) {
+          const minField = `${prefix}MinCallMs`;
+          values.set(
+            minField,
+            Math.min(values.get(minField) ?? elapsed, elapsed)
+          );
+          add(`${prefix}FastCalls`, elapsed < threshold ? 1 : 0);
+          values.set(`${prefix}FastCallThresholdMs`, threshold);
+        }
       }
     },
 
