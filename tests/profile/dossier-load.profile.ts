@@ -16,9 +16,27 @@ import { seedCharacterEvidence, seedSnapshot } from "../e2e/support/seed";
  * `test:e2e` or CI; it measures, and asserts nothing about the numbers.
  *
  * PROFILE_LOADS sets how many loads each warm scenario takes (default 20).
+ * PROFILE_PROVIDER_LATENCY_MS sets how long the fake Raider.IO and Blizzard
+ * take to answer in the provider scenario (default 150).
  */
 const loads = Math.max(1, Number(process.env.PROFILE_LOADS ?? 20) || 20);
+const providerLatencyMs = Math.max(
+  0,
+  Number(process.env.PROFILE_PROVIDER_LATENCY_MS ?? 150) || 0
+);
 const settleTimeoutMs = 45_000;
+
+/** Sets the fakes' answer delay; the e2e suite always runs them at 0. */
+async function setProviderLatency(ms: number): Promise<void> {
+  for (const variable of ["E2E_RAIDER_IO_BASE_URL", "E2E_BLIZZARD_BASE_URL"]) {
+    const baseUrl = process.env[variable];
+    if (!baseUrl) throw new Error(`profile_${variable.toLowerCase()}_missing`);
+    const response = await fetch(
+      new URL(`/__control/latency?ms=${ms}`, baseUrl)
+    );
+    if (!response.ok) throw new Error("profile_latency_control_failed");
+  }
+}
 
 type PageMarks = {
   requestedMs?: number;
@@ -291,5 +309,58 @@ test("read that gathers Warcraft Logs evidence", async ({ browser }) => {
   }
   console.log(
     `${formatLoadSummary("gathering", summariseLoads(samples))}\n${formatPrelude()}\n`
+  );
+});
+
+test("read that needs Blizzard and Raider.IO rankings", async ({ browser }) => {
+  // Completed evidence whose kills carry no world rank and no stored Cutting
+  // Edge, so the read looks up both from the fakes, each answering after
+  // PROFILE_PROVIDER_LATENCY_MS. Every load gets its own character and guild,
+  // because a lookup is cached per character (Blizzard) and per guild
+  // (rankings), and a ranking lookup is recorded once made.
+  const count = Math.max(1, Math.ceil(loads / 2));
+  const samples: LoadSample[] = [];
+  await setProviderLatency(providerLatencyMs);
+  try {
+    for (let index = 0; index <= count; index += 1) {
+      const root = key(`profileranked${suffix(index)}`);
+      await seedSnapshot({
+        key: root,
+        displayName: title(root.name),
+        refreshedAt: new Date()
+      });
+      await seedCharacterEvidence(root, {
+        guildName: `Profile${title(suffix(index))}`
+      });
+      const sample = await loadOnce(
+        browser,
+        `/dossiers/eu/silvermoon/${root.name}`
+      );
+      if (index > 0) samples.push(sample);
+    }
+  } finally {
+    await setProviderLatency(0);
+  }
+  console.log(
+    `${formatLoadSummary(`providers at ${providerLatencyMs} ms`, summariseLoads(samples))}\n${formatPrelude()}\n`
+  );
+});
+
+test("cold read through discovery", async ({ browser }) => {
+  // No snapshot at all: the read answers discovery_not_ready, the page starts
+  // research, polls the job, then reads the dossier and waits for its
+  // evidence. The fake Raider.IO declares nothing for these characters, so
+  // discovery ends on the root. Each load needs a character never seen.
+  const count = Math.max(1, Math.ceil(loads / 4));
+  const samples: LoadSample[] = [];
+  for (let index = 0; index <= count; index += 1) {
+    const sample = await loadOnce(
+      browser,
+      `/dossiers/eu/silvermoon/profilecold${suffix(index)}`
+    );
+    if (index > 0) samples.push(sample);
+  }
+  console.log(
+    `${formatLoadSummary("cold", summariseLoads(samples))}\n${formatPrelude()}\n`
   );
 });

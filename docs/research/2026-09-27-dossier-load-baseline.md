@@ -9,9 +9,28 @@ measure it again.
 corepack pnpm profile:dossier
 ```
 
-`PROFILE_LOADS` sets the loads per warm scenario (default 20). The gathering
-scenario takes a quarter as many, because each of its loads needs a new
-character.
+`PROFILE_LOADS` sets the loads per warm scenario (default 20). Scenarios that
+need a new character for every load take fewer: half as many for the provider
+scenario, and a quarter as many for the gathering and cold scenarios.
+`PROFILE_PROVIDER_LATENCY_MS` (default 150) sets how long the fake Raider.IO
+and the fake Blizzard achievement read take to answer in the provider
+scenario. Every other scenario, and the whole e2e suite, runs the fakes with
+no delay.
+
+The five scenarios are:
+
+| Scenario  | What the read has to do                                                                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Warm, 1   | A fresh snapshot and completed evidence for one character                                                                                                                 |
+| Warm, 12  | The same for 12 connected characters, the default `DOSSIER_CHARACTER_CEILING`                                                                                             |
+| Gathering | A fresh snapshot but no evidence, so the read queues a Warcraft Logs run and the page polls until it is published                                                         |
+| Providers | Completed evidence with no world ranks and no stored Cutting Edge, so the read looks up Raider.IO rankings and Blizzard achievements, each delayed by the latency setting |
+| Cold      | No snapshot at all, so the page starts research, polls the discovery job, then reads the dossier and waits for its evidence                                               |
+
+The provider scenario gives every load a new character and a new guild. The
+rankings cache is keyed by raid and guild, the achievement cache by character,
+and a ranking lookup is recorded against the kill once it has been made, so
+reusing either would turn later loads into cache hits.
 
 The profiler is a Playwright config (`playwright.profile.config.ts`) over the
 e2e global setup. It runs against a PostgreSQL container, the fake Raider.IO,
@@ -40,30 +59,46 @@ read.
 polling. The page keeps polling while any character is `partial`, and a
 partial result can be final, in which case the poll never ends (#663).
 
-`Server-Timing` is set by `withHttpRequest` on every wrapped API response. It
-carries durations only: no call names, counts, flags or request data.
+`Server-Timing` is sent only by the dossier read route
+(`/api/dossiers/{region}/{realm}/{name}`, through `withTimedHttpRequest`), and
+only when `SERVER_TIMING_ENABLED` is exactly `true`. The e2e global setup
+turns it on, and production leaves it unset. The header carries durations
+only: no call names, counts, flags or request data.
+
+The gate exists because even durations say too much in production. On the
+dossier read, `limiterWait` shows any visitor how close the shared provider
+allowances are to running out, and whether `blizzard` or `raiderIoRankings`
+appears shows whether another visitor recently warmed the cache for that
+character. On an account route, an exact `total` would tell an address with an
+active account from one without, which is what those routes' neutral replies
+exist to hide. No other route opts in.
 
 ## Results
 
-Windows 11, local Docker PostgreSQL, 10 loads per warm scenario and 3
-gathering loads, 2026-09-27, `main` at the #654 fix. All values are p50 in
-milliseconds.
+Windows 11, local Docker PostgreSQL, default load counts (20 warm, 10
+provider, 5 gathering and 5 cold), provider latency 150 ms, 2026-09-27,
+`main` with the #654 fix. All values are p50 in milliseconds.
 
-| Phase                | Warm, 1 character | Warm, 12 characters | Gathering |
-| -------------------- | ----------------: | ------------------: | --------: |
-| shell                |                27 |                  33 |        37 |
-| requested            |               101 |                 109 |       105 |
-| headers              |               130 |                 155 |       138 |
-| rendered             |               142 |                 171 |       152 |
-| settled              |               130 |                 155 |     3,252 |
-| server total         |                25 |                  40 |        29 |
-| server `db` (summed) |                24 |                 189 |        26 |
+| Phase                     | Warm, 1 | Warm, 12 | Gathering | Providers |  Cold |
+| ------------------------- | ------: | -------: | --------: | --------: | ----: |
+| shell                     |      39 |       37 |        38 |        36 |    36 |
+| requested                 |     122 |      119 |       109 |       114 |   121 |
+| headers                   |     155 |      170 |       146 |       308 |   135 |
+| rendered                  |     171 |      190 |       162 |       322 |   208 |
+| settled                   |     155 |      171 |     3,253 |       309 | 3,281 |
+| server total              |      28 |       45 |        34 |       187 |    10 |
+| server `db` (summed)      |      26 |      207 |        23 |        27 |     9 |
+| server `raiderIoRankings` |         |          |           |       158 |       |
+| server `blizzard`         |         |          |        10 |       159 |       |
 
-Each scenario's warm-up load rendered at about 250–290 ms.
+The warm scenarios' warm-up loads rendered at 393 ms (1 character) and 280 ms
+(12 characters). In the cold scenario, the first response is the
+`discovery_not_ready` refusal (10 ms of server time), and the dossier renders
+once discovery has published a snapshot.
 
 ## Where the time goes
 
-1. **Before the read starts: about 75 ms after the shell, and about 100 ms
+1. **Before the read starts: about 80 ms after the shell, and about 110–120 ms
    from navigation.** The page is a server shell that renders
    `DossierPageClient` with `initialDossier={null}`, so nothing can be
    fetched until the page's JavaScript has loaded and started. That start-up
@@ -78,26 +113,40 @@ Each scenario's warm-up load rendered at about 250–290 ms.
    production it would cost a full round trip plus about 7–20 ms of server
    time (the `account_session` `http_request` records on `test`).
 
-2. **The server read: 25–40 ms locally.** This is almost all database time.
-   At 12 characters, `db` sums to about 190 ms within a 40 ms request, because
-   `assembleDossier` gathers each subject in parallel and the web scope sums
-   overlapping calls (see "Caveats").
-3. **Rendering: about 12–16 ms** after the response.
-4. **Gathering evidence: about 3.1 s longer than a warm load.** The settle time
-   falls where the page's poll backoff (1 s, then 2 s) puts the second
-   re-read, not where the worker finishes. A visitor sees new evidence only
-   at the next poll after it is published.
+2. **The server read: 28–45 ms locally when no provider is called.** This is
+   almost all database time. At 12 characters, `db` sums to about 210 ms
+   within a 45 ms request, because `assembleDossier` gathers each subject in
+   parallel and the web scope sums overlapping calls (see "Caveats").
+3. **Provider lookups: about one provider round trip, not the sum.** With both
+   fakes answering in 150 ms, the Raider.IO rankings lookup (two physical
+   requests, sent together) and the Blizzard achievement read each took about
+   160 ms. They overlap, so the read took 187 ms, not 320. A read that needs
+   both therefore costs roughly the slower provider's latency on top of the
+   database time. That holds until the lookups outnumber
+   `DOSSIER_PROVIDER_CONCURRENCY` (4), after which they queue in waves; one
+   character with one guild here needs only two.
+4. **Rendering: about 12–20 ms** after the response.
+5. **Gathering and cold reads: about 3.1 s longer than a warm load.** In both,
+   the settle time falls where the page's poll backoff (1 s, then 2 s) puts a
+   re-read, not where the worker finishes. A visitor sees new evidence only at
+   the next poll after it is published. A cold read also waits for discovery
+   before its dossier renders (208 ms, against 171 ms warm), but discovery
+   against the fake is fast enough that the evidence poll still dominates.
 
 ## Production is not this machine
 
 The one production-shaped sample, a dossier read on `test` on 2026-09-26, took
 1,184 ms on the server. It made 62 database calls (`dbMs` 1,891 summed, the
 largest `evidence.reserve` at 221 ms) and 751 ms of Raider.IO rankings lookups
-(6 physical calls). Locally the same kind of read takes 25–40 ms. The
-difference is database round-trip latency and live provider latency, and the
-local fakes and container remove both. The local profile therefore shows how
-many steps a load takes and in what order, but not how long each database step
-takes in production.
+(3 lookups, 6 physical calls, the slowest lookup 357 ms). That is about 250 ms
+per lookup. Its `limiterWaitMs` was 0, so the three were admitted together
+and probably overlapped, costing closer to the slowest lookup's 357 ms of wall
+time than the 751 ms summed. The provider scenario makes one such lookup per
+read, so it shows the cost of a single lookup at a chosen latency, not the
+overlap of several. Most of the remaining time is the database: locally a warm read takes 28–45 ms, and the local container removes
+the round-trip latency Railway adds to each of those 62 calls. The local
+profile therefore shows how many steps a load takes and in what order, but
+not how long each database step takes in production (#666).
 
 Railway keeps only the current deployment's logs. Across the last 40 web
 deployments on `test`, one dossier `http_request` record survived, so logs
@@ -106,7 +155,7 @@ cannot provide a production baseline either.
 ## Caveats
 
 - The web `MeasurementScope` sums overlapping calls, so `db` can exceed
-  `total` (190 ms against 40 ms at 12 characters). Read it as work done, not
+  `total` (207 ms against 45 ms at 12 characters). Read it as work done, not
   as wall time. The worker's `discovery_run` uses the `shared` mode instead.
 - The warm scenarios read seeded evidence with no stored Cutting Edge
   achievements. The fake Blizzard answers the achievement read, and the
@@ -117,14 +166,14 @@ cannot provide a production baseline either.
 
 ## Follow-ups
 
-- **Start the first read sooner.** The read cannot begin until the client
-  page has started, about 75 ms after the shell locally and more on a slow
-  device. The server shell could fetch the first read itself, or the page
+- **Start the first read sooner (#667).** The read cannot begin until the
+  client page has started, about 80 ms after the shell locally and more on a
+  slow device. The server shell could fetch the first read itself, or the page
   could start it before hydration.
 - **Profile a visitor with stored provider keys.** Their read waits on a
   serial `/api/account/session` round trip, and none of these scenarios
   covers that.
-- **Find out what production's 62 database calls are.** The local
+- **Find out what production's 62 database calls are (#666).** The local
   `dbCalls` for the same read would show whether production makes extra
   calls or makes the same calls more slowly. A profiler mode that adds
   latency to database calls would model Railway.
