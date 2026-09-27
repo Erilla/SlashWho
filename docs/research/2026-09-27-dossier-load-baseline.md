@@ -265,22 +265,22 @@ on the 1 s, 2 s, 4 s, 8 s, then 10 s backoff. It now watches its runs:
 
 Same machine and method as "Results", `PROFILE_LOADS=40` (10 gathering and
 10 cold loads), 2026-09-27, with no injected database round trip. `main` is
-`1fd50055` run with this branch's profiler, which adds `published`,
-`settleLag` and the read counts. #690 is this branch merged with `1428aa73`.
-A run of #690 on `1fd50055` itself gave a lower lag (p50 99 and 87 ms) with
-the same read counts.
+`0d9c816e` run with this branch's profiler, which adds `published`,
+`settleLag` and the read counts; #690 is this branch merged with it. Both
+include #704, before which the worker ignored `WARCRAFT_LOGS_BASE_URL`, so
+any gathering or cold figure taken before it is not comparable.
 
-| p50 / p95, ms  | Gathering, `main` | Gathering, #690 |  Cold, `main` |    Cold, #690 |
-| -------------- | ----------------: | --------------: | ------------: | ------------: |
-| published      |     1,262 / 1,471 |   1,298 / 1,485 | 1,475 / 1,788 | 1,363 / 1,479 |
-| settled        |     3,274 / 3,513 |   1,770 / 1,793 | 2,446 / 3,640 | 1,789 / 1,843 |
-| settleLag      |     1,966 / 2,102 |       296 / 475 |   934 / 2,041 |     431 / 513 |
-| dossier reads  |             3 / 3 |           3 / 3 |         6 / 6 |         5 / 5 |
-| progress reads |                   |           5 / 5 |               |         4 / 4 |
+| p50 / p95, ms  | Gathering, `main` | Gathering, #690 |  Cold, `main` | Cold, #690 |
+| -------------- | ----------------: | --------------: | ------------: | ---------: |
+| published      |         401 / 587 |       290 / 499 |     482 / 659 |  347 / 579 |
+| settled        |     1,215 / 1,240 |       694 / 705 | 1,198 / 1,222 |  752 / 786 |
+| settleLag      |         799 / 995 |       324 / 536 |     733 / 909 |  279 / 468 |
+| dossier reads  |             2 / 2 |           2 / 2 |         4 / 4 |      4 / 4 |
+| progress reads |                   |           2 / 2 |               |      2 / 2 |
 
 `settled` now follows the publish rather than the backoff: the page is late
 by at most one progress interval and one full read. Full reads per load are
-no higher, and one lower in the cold scenario. The progress reads replace
+unchanged. The progress reads replace
 full reads that, on `test`, cost about 635 ms of server time each (#666).
 
 A progress read counts against `PUBLIC_READS_PER_MINUTE` (300) like any
