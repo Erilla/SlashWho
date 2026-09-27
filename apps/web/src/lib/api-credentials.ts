@@ -1,4 +1,4 @@
-const STORAGE_KEY = "slashwho:api-credentials";
+export const credentialStorageKey = "slashwho:api-credentials";
 
 export type StoredApiCredentials = {
   blizzardClientId: string;
@@ -18,7 +18,7 @@ const empty: StoredApiCredentials = {
 
 export function readStoredCredentials(): StoredApiCredentials {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(credentialStorageKey);
     if (!raw) return { ...empty };
     const parsed = JSON.parse(raw) as Partial<StoredApiCredentials>;
     return {
@@ -35,7 +35,7 @@ export function readStoredCredentials(): StoredApiCredentials {
 
 export function writeStoredCredentials(value: StoredApiCredentials): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    window.localStorage.setItem(credentialStorageKey, JSON.stringify(value));
   } catch {
     // Storage unavailable (private browsing, quota). Credentials simply
     // won't persist across reloads; nothing else depends on this write.
@@ -44,7 +44,7 @@ export function writeStoredCredentials(value: StoredApiCredentials): void {
 
 export function clearStoredCredentials(): void {
   try {
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(credentialStorageKey);
   } catch {
     // See writeStoredCredentials.
   }
