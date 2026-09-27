@@ -1,11 +1,13 @@
 import {
   applicantDossierSchema,
   type ApplicantDossier as ContractApplicantDossier,
-  type CollectionPhase
+  type CollectionPhase,
+  type EvidenceRunProgressResponse
 } from "@slashwho/contracts";
 import type {
   DiscoveryQueue,
   EvidenceRunPhase,
+  EvidenceRunProgress,
   RecentDossierSearch,
   Repositories,
   StoredCharacterMythicKill,
@@ -188,6 +190,39 @@ export interface ApplicantDossierService {
   ): Promise<SearchDossierTierResult>;
   /** Backend-only progress projection for the dossier and operator monitor. */
   readEvidencePhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
+  /**
+   * Where each of these evidence runs has got to, for a page watching a
+   * dossier's collection (#690). One query, and none of the dossier's
+   * assembly: no reservation, no provider call.
+   */
+  readEvidenceRunProgress(
+    ids: readonly string[],
+    scope?: MeasurementScope
+  ): Promise<EvidenceRunProgressResponse["runs"]>;
+}
+
+/**
+ * A run's progress as the page sees it. The version is the status, any
+ * deferral and every step's state, so it moves exactly when a re-read of the
+ * dossier would show something new: a step starting or finishing, a deferral
+ * the row reports, or the run publishing. A deferred run is waiting, not
+ * collecting, however its status reads.
+ */
+export function evidenceRunProgressView(
+  progress: EvidenceRunProgress
+): EvidenceRunProgressResponse["runs"][number] {
+  return {
+    id: progress.id,
+    state: !ACTIVE_RUN_STATUSES.has(progress.status)
+      ? "settled"
+      : progress.status === "running" && !progress.deferred
+        ? "running"
+        : "queued",
+    version: [
+      progress.deferred ? `${progress.status}-deferred` : progress.status,
+      ...progress.phaseStates
+    ].join(":")
+  };
 }
 
 type DossierSubject = Readonly<{
@@ -310,12 +345,7 @@ async function gatherCharacterEvidence(
     /** The subject the evidence is shown under, when not `character` itself. */
     attributeTo?: CharacterKey;
   }
-): Promise<
-  EvidenceResult & {
-    gathering: boolean;
-    collectionProgress: readonly CollectionPhase[];
-  }
-> {
+): Promise<IdentityEvidence> {
   const attributed = options.attributeTo ?? character.key;
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
@@ -479,6 +509,7 @@ async function gatherCharacterEvidence(
     // below stays keyed on `kind` -- fresh evidence does not become incomplete
     // because a refresh is running over it.
     gathering: reservation.active !== null,
+    activeRunIds: reservation.active ? [reservation.active.id] : [],
     collectionProgress: activeRun
       ? collectionProgress(
           (await options.repositories.evidence.listPhases?.(activeRun.id)) ?? []
@@ -503,6 +534,12 @@ async function gatherCharacterEvidence(
           : "waiting"
   };
 }
+
+const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+  "retrying"
+]);
 
 function earliest(...times: readonly (Date | null)[]): Date | null {
   return times.reduce<Date | null>(
@@ -535,6 +572,8 @@ function uniqueBy<T>(items: readonly T[], keyOf: (item: T) => string | null) {
  */
 type IdentityEvidence = EvidenceResult & {
   gathering: boolean;
+  /** The runs collecting right now, which the page watches (#690). */
+  activeRunIds: readonly string[];
   collectionProgress: readonly CollectionPhase[];
 };
 
@@ -574,6 +613,7 @@ function mergeIdentityEvidence(
     // The soonest any name resumes: that read is the one that changes the row.
     resumesAt: earliest(...results.map((item) => item.resumesAt)),
     gathering: results.some((item) => item.gathering),
+    activeRunIds: results.flatMap((item) => item.activeRunIds),
     // One row shows one collection's steps: the subject's own while it runs,
     // otherwise whichever other name is still collecting.
     collectionProgress:
@@ -921,24 +961,37 @@ async function assembleDossier(options: {
         )
         .catch(() => undefined)
     );
+    const latestTierSearches = await excluded(() =>
+      Promise.resolve()
+        .then(() =>
+          options.repositories.evidence.latestTierSearches(
+            searchSubjects.flatMap((subject) => [
+              subject.key,
+              ...(subject.aliases ?? [])
+            ]),
+            new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
+          )
+        )
+        .catch(() => [])
+    );
     const tierSearches = tierSearchStates(
       searchSubjects,
-      await excluded(() =>
-        Promise.resolve()
-          .then(() =>
-            options.repositories.evidence.latestTierSearches(
-              searchSubjects.flatMap((subject) => [
-                subject.key,
-                ...(subject.aliases ?? [])
-              ]),
-              new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
-            )
-          )
-          .catch(() => [])
-      ),
+      latestTierSearches,
       searchedAt,
       withEvidence
     );
+    // A character past the display cap has no evidence row, so its tier
+    // search is the only way the page learns that run is still going.
+    const evidenceRunIds = [
+      ...new Set([
+        ...evidence.flatMap((item) => item.activeRunIds),
+        ...latestTierSearches.flatMap((search) =>
+          search.runId !== undefined && ACTIVE_RUN_STATUSES.has(search.status)
+            ? [search.runId]
+            : []
+        )
+      ])
+    ];
     return applicantDossierSchema.parse({
       ...dossier,
       raids: dossier.raids.map((raid) => {
@@ -952,6 +1005,7 @@ async function assembleDossier(options: {
         collectedTimes.length === 0
           ? null
           : new Date(Math.min(...collectedTimes)).toISOString(),
+      ...(evidenceRunIds.length > 0 ? { evidenceRunIds } : {}),
       // A provisional list is the page's cue to research the character itself,
       // so evidence still gathering beneath it must not replace that state.
       research:
@@ -1418,6 +1472,15 @@ export function createApplicantDossierService(options: {
     },
     async readEvidencePhases(runId) {
       return options.repositories.evidence.listPhases?.(runId) ?? [];
+    },
+    async readEvidenceRunProgress(ids, scope) {
+      if (ids.length === 0) return [];
+      const progress =
+        (await scopedRepositories(scope).evidence.readRunProgress?.(
+          ids,
+          new Date()
+        )) ?? [];
+      return progress.map(evidenceRunProgressView);
     },
     async start(input, scope) {
       // start does real database and queue work through search.create, so its

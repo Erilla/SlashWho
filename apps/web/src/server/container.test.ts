@@ -184,6 +184,9 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async removeHistoricAlias() {
       return "removed" as const;
     },
+    async readEvidenceRunProgress() {
+      return [];
+    },
     async read() {
       return { kind: "not_ready" as const };
     },

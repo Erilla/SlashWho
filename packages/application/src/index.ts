@@ -88,7 +88,10 @@ export {
   requiredSecret
 } from "./environment";
 export type { Environment } from "./environment";
-export { createApplicantDossierService } from "./applicant-dossier-service";
+export {
+  createApplicantDossierService,
+  evidenceRunProgressView
+} from "./applicant-dossier-service";
 export { BLIZZARD_WEB_REQUEST_LIMITS } from "./dossier-gateways";
 export type {
   ApplicantDossierService,

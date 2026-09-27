@@ -16,6 +16,8 @@ export type {
 } from "./character";
 export {
   applicantDossierSchema,
+  evidenceRunProgressMaxIds,
+  evidenceRunProgressResponseSchema,
   characterKeySchema,
   collectionPhaseSchema,
   connectedCharacterExclusionRequestSchema,
@@ -46,6 +48,7 @@ export type {
   ApplicantDossier,
   CharacterKey,
   CollectionPhase,
+  EvidenceRunProgressResponse,
   ConnectedCharacterExclusionRequest,
   CreateDossierRequest,
   WarcraftLogsCharacterResolution,

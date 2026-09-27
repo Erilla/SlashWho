@@ -125,6 +125,58 @@ describe("useAuthoritativePoll", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("follows the delay a read asks for, and its first delay when given one", async () => {
+    // #690: a dossier watching its runs asks again sooner than the backoff.
+    vi.useFakeTimers();
+    const read = vi
+      .fn<(signal: AbortSignal) => Promise<PollReadResult<string>>>()
+      .mockResolvedValueOnce({ kind: "unchanged", delayMs: 500 })
+      .mockResolvedValueOnce({ kind: "snapshot", value: "a", delayMs: 0 })
+      .mockResolvedValue({ kind: "snapshot", value: "b" });
+    const onSnapshot = vi.fn();
+
+    renderHook(() =>
+      useAuthoritativePoll({
+        active: true,
+        firstDelayMs: 0,
+        read,
+        onSnapshot,
+        onTerminalError: vi.fn()
+      })
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(onSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(onSnapshot).toHaveBeenLastCalledWith("a");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The fake clock runs a zero delay set during a tick one millisecond on.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+
+    // A snapshot that names no delay goes back to the backoff.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(read).toHaveBeenCalledTimes(4);
+  });
+
   it("aborts an older request and ignores its response after a newer snapshot", async () => {
     // Break caught: a late response could replace a snapshot fetched after visibility returns.
     vi.useFakeTimers();

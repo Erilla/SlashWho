@@ -53,6 +53,7 @@ export type {
   EvidenceRunMode,
   EvidenceRunStatus,
   EvidenceRunPhase,
+  EvidenceRunProgress,
   StoredEvidenceGuild,
   TierSearchReservationResult,
   LatestTierSearch,

@@ -387,6 +387,7 @@ export function createEvidenceRepositories(
         }
         if (keys.length === 0) return [];
         const result = await pool.query<{
+          id: string;
           region: CharacterKey["region"];
           realm_slug: string;
           normalized_name: string;
@@ -396,7 +397,7 @@ export function createEvidenceRepositories(
         }>(
           `SELECT DISTINCT ON (runs.region, runs.realm_slug,
                               runs.normalized_name, runs.tier_search_raid_id)
-                  runs.region, runs.realm_slug, runs.normalized_name,
+                  runs.id, runs.region, runs.realm_slug, runs.normalized_name,
                   runs.tier_search_raid_id, runs.status, runs.created_at
              FROM character_evidence_runs runs
              JOIN unnest($1::text[], $2::text[], $3::text[])
@@ -423,7 +424,8 @@ export function createEvidenceRepositories(
           },
           raidId: row.tier_search_raid_id,
           status: row.status,
-          createdAt: row.created_at
+          createdAt: row.created_at,
+          runId: row.id
         }));
       },
 
@@ -671,6 +673,47 @@ export function createEvidenceRepositories(
           [runId]
         );
         return result.rows;
+      },
+
+      async readRunProgress(ids, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_evidence_progress_time_invalid");
+        }
+        if (ids.length === 0) return [];
+        const result = await pool.query<{
+          id: string;
+          status: CharacterEvidenceRun["status"];
+          deferred: boolean;
+          phase_states: string[];
+        }>(
+          `SELECT runs.id, runs.status,
+                  runs.limitation_code IS NOT NULL AS deferred,
+                  COALESCE(
+                    array_agg(phases.state ORDER BY phases.ordinal)
+                      FILTER (WHERE phases.state IS NOT NULL),
+                    '{}'
+                  ) AS phase_states
+             FROM character_evidence_runs runs
+             LEFT JOIN character_evidence_run_phases phases
+               ON phases.run_id = runs.id
+            WHERE runs.id = ANY($1::uuid[])
+              AND NOT EXISTS (
+                SELECT 1 FROM suppressed_characters suppressed
+                 WHERE suppressed.region = runs.region
+                   AND suppressed.realm_slug = runs.realm_slug
+                   AND suppressed.normalized_name = runs.normalized_name
+                   AND (suppressed.expires_at IS NULL
+                        OR suppressed.expires_at > $2)
+              )
+            GROUP BY runs.id, runs.status, runs.limitation_code`,
+          [ids, at]
+        );
+        return result.rows.map((row) => ({
+          id: row.id,
+          status: row.status,
+          deferred: row.deferred,
+          phaseStates: row.phase_states
+        }));
       },
 
       async publish(runId, input) {

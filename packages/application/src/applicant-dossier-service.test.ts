@@ -2,6 +2,7 @@ import type { SearchService } from "./search-service";
 import type {
   DiscoveryQueue,
   EvidenceRunPhase,
+  EvidenceRunProgress,
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
@@ -115,7 +116,10 @@ function fixture(
       raidId: string;
       status: "queued" | "running" | "complete" | "partial" | "failed";
       createdAt: Date;
+      runId?: string;
     }[];
+    /** What `readRunProgress` reports for the runs a page watches. */
+    runProgress?: readonly EvidenceRunProgress[];
   } = {}
 ) {
   // One reading of the clock per fixture. The reservation mock runs once per
@@ -195,6 +199,7 @@ function fixture(
       addHistoricAlias: vi.fn().mockResolvedValue("added"),
       removeHistoricAlias: vi.fn().mockResolvedValue("removed"),
       latestTierSearches: vi.fn().mockResolvedValue(options.tierSearches ?? []),
+      readRunProgress: vi.fn().mockResolvedValue(options.runProgress ?? []),
       recordHistoricRankLookup: vi
         .fn()
         .mockImplementation(
@@ -1782,6 +1787,91 @@ describe("applicant dossier service", () => {
         ]
       }
     });
+  });
+
+  it("names the run a gathering dossier is waiting on, so the page can watch it", async () => {
+    // #690: the page watches these runs instead of re-reading the dossier.
+    const gathering = await fixture({ gatheringCharacter: alt }).dossiers.read(
+      root
+    );
+    const settled = await fixture().dossiers.read(root);
+
+    if (gathering.kind !== "ready" || settled.kind !== "ready")
+      throw new Error("expected_ready");
+    expect(gathering.dossier.evidenceRunIds).toEqual([
+      "10000000-0000-4000-8000-000000000013"
+    ]);
+    expect(settled.dossier).not.toHaveProperty("evidenceRunIds");
+  });
+
+  it("names an in-flight tier search's run, which no character row carries", async () => {
+    // A character past the display cap has no row, so its tier search is the
+    // only run the page could otherwise not see.
+    const createdAt = new Date(Date.now() - 60 * 1_000);
+    const result = await fixture({
+      tierSearches: [
+        {
+          key: root,
+          raidId: "42",
+          status: "running",
+          createdAt,
+          runId: "10000000-0000-4000-8000-000000000021"
+        },
+        {
+          key: alt,
+          raidId: "42",
+          status: "complete",
+          createdAt,
+          runId: "10000000-0000-4000-8000-000000000022"
+        }
+      ]
+    }).dossiers.read(root);
+
+    if (result.kind !== "ready") throw new Error("expected_ready");
+    expect(result.dossier.evidenceRunIds).toEqual([
+      "10000000-0000-4000-8000-000000000021"
+    ]);
+  });
+
+  it("reports watched runs' progress without assembling the dossier", async () => {
+    const running = "10000000-0000-4000-8000-000000000013";
+    const settled = "10000000-0000-4000-8000-000000000014";
+    const retrying = "10000000-0000-4000-8000-000000000015";
+    const deferred = "10000000-0000-4000-8000-000000000016";
+    const { dossiers, repositories } = fixture({
+      runProgress: [
+        {
+          id: running,
+          status: "running",
+          deferred: false,
+          phaseStates: ["completed", "active"]
+        },
+        {
+          id: settled,
+          status: "partial",
+          deferred: false,
+          phaseStates: ["completed"]
+        },
+        { id: retrying, status: "retrying", deferred: false, phaseStates: [] },
+        // Deferred for the points allowance: still `running`, but waiting,
+        // possibly for an hour, so the page must not ask twice a second.
+        { id: deferred, status: "running", deferred: true, phaseStates: [] }
+      ]
+    });
+
+    await expect(
+      dossiers.readEvidenceRunProgress([running, settled, retrying, deferred])
+    ).resolves.toEqual([
+      { id: running, state: "running", version: "running:completed:active" },
+      { id: settled, state: "settled", version: "partial:completed" },
+      { id: retrying, state: "queued", version: "retrying" },
+      { id: deferred, state: "queued", version: "running-deferred" }
+    ]);
+    expect(repositories.evidence.reserve).not.toHaveBeenCalled();
+    expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
+
+    await expect(dossiers.readEvidenceRunProgress([])).resolves.toEqual([]);
+    expect(repositories.evidence.readRunProgress).toHaveBeenCalledTimes(1);
   });
 
   it("shows the active run's collection steps beneath a gathering character", async () => {

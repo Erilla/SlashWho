@@ -28,13 +28,24 @@ export function createBackoff(delays: readonly number[] = pollDelaysMs): {
   };
 }
 
+/**
+ * What one read found. A read that knows when it should next run says so with
+ * `delayMs`; otherwise the next read follows the backoff.
+ */
 export type PollReadResult<T> =
-  | { kind: "snapshot"; value: T }
+  | { kind: "snapshot"; value: T; delayMs?: number | undefined }
+  /** Nothing new to show, found without a full read (#690). */
+  | { kind: "unchanged"; delayMs: number }
   | { kind: "retry"; retryAfterMs?: number | undefined }
   | { kind: "terminal"; response: Response };
 
 export interface AuthoritativePollOptions<T> {
   active: boolean;
+  /**
+   * How long the first read waits once polling starts, when not the
+   * backoff's first delay. Read when polling starts.
+   */
+  firstDelayMs?: number | undefined;
   read(signal: AbortSignal): Promise<PollReadResult<T>>;
   onSnapshot(snapshot: T): void;
   onTerminalError(response: Response): void;
@@ -132,7 +143,12 @@ export function useAuthoritativePoll<T>(
 
         if (result.kind === "snapshot") {
           optionsRef.current.onSnapshot(result.value);
-          scheduleRead(backoff.next());
+          scheduleRead(result.delayMs ?? backoff.next());
+          return;
+        }
+
+        if (result.kind === "unchanged") {
+          scheduleRead(result.delayMs);
           return;
         }
 
@@ -172,7 +188,7 @@ export function useAuthoritativePoll<T>(
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     if (options.active && document.visibilityState !== "hidden") {
-      scheduleRead(backoff.next());
+      scheduleRead(optionsRef.current.firstDelayMs ?? backoff.next());
     }
 
     return () => {
