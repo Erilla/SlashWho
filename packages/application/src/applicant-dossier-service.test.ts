@@ -88,6 +88,8 @@ function fixture(
     evidenceCompletedAt?: Date;
     /** When the last run said the next read may collect again. */
     evidenceRetryAfterAt?: Date;
+    /** When a capped tier search is next due to continue. */
+    tierSearchResumesAt?: Date;
     storedEvidence?: boolean;
     historicWorldRank?: number | null;
     historicRankCheckedAt?: string | null;
@@ -206,6 +208,7 @@ function fixture(
         ),
       reserve: vi.fn().mockImplementation(async ({ key }) => ({
         kind: options.gatheringCharacter === key ? "active" : "fresh",
+        tierSearchResumesAt: options.tierSearchResumesAt ?? null,
         active:
           options.gatheringCharacter === key ||
           options.refreshingCharacter === key
@@ -1890,6 +1893,27 @@ describe("applicant dossier service", () => {
         evidenceResumesAt: resumesAt.toISOString()
       }
     ]);
+
+    // A capped tier search adds to the evidence too, and the sooner of the
+    // two is the read that changes the row.
+    const tierSearchDue = new Date("2026-09-27T12:30:00.000Z");
+    const walking = await fixture({
+      evidenceStatus: "partial",
+      evidenceRetryAfterAt: resumesAt,
+      tierSearchResumesAt: tierSearchDue
+    }).dossiers.read(root);
+    if (walking.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(walking.dossier.characters[0]).toMatchObject({
+      evidenceResumesAt: tierSearchDue.toISOString()
+    });
+    const walkingOnly = await fixture({
+      evidenceStatus: "partial",
+      tierSearchResumesAt: tierSearchDue
+    }).dossiers.read(root);
+    if (walkingOnly.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(walkingOnly.dossier.characters[0]).toMatchObject({
+      evidenceResumesAt: tierSearchDue.toISOString()
+    });
 
     const final = await fixture({ evidenceStatus: "partial" }).dossiers.read(
       root

@@ -514,6 +514,12 @@ export type EvidenceReservationResult =
       completed: CompletedCharacterEvidence;
       /** An in-flight run collecting over this already-fresh evidence. */
       active: CharacterEvidenceRun | null;
+      /**
+       * When a capped tier search next continues, adding to this evidence
+       * without it going stale (#663). Optional for a store that keeps no tier
+       * searches.
+       */
+      tierSearchResumesAt?: Date | null;
     }
   | {
       kind: "active";

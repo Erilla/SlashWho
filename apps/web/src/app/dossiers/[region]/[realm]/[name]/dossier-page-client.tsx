@@ -613,13 +613,16 @@ function DossierPageState({
   // Wakes the poll when partial evidence reaches its retry time. The read
   // that follows is the one that queues the next run, so from there the row
   // reports it waiting and the poll follows it as any other collection.
+  // Measured against the clock the poll is judged by, not against now: a
+  // snapshot can arrive with a retry time already behind the wall clock -- a
+  // slow read, or a client clock ahead of the server's -- and that one is due
+  // at once rather than never.
   useEffect(() => {
-    const now = Date.now();
-    const resumesAt = nextEvidenceResume(dossier, now);
+    const resumesAt = nextEvidenceResume(dossier, evidenceClock);
     if (resumesAt === null) return;
     const timeout = setTimeout(
       () => setEvidenceClock(Date.now()),
-      Math.min(resumesAt - now, maxTimerDelayMs)
+      Math.min(Math.max(0, resumesAt - Date.now()), maxTimerDelayMs)
     );
     return () => clearTimeout(timeout);
   }, [dossier, evidenceClock]);

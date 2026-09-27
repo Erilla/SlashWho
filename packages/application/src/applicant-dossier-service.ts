@@ -484,9 +484,14 @@ async function gatherCharacterEvidence(
           (await options.repositories.evidence.listPhases?.(activeRun.id)) ?? []
         )
       : [],
+    // Either of two things adds to fresh evidence without a refresh: the last
+    // run's own retry, and a capped tier search continuing its walk.
     resumesAt:
       reservation.kind === "fresh"
-        ? (completed?.run.retryAfterAt ?? null)
+        ? earliest(
+            completed?.run.retryAfterAt ?? null,
+            reservation.tierSearchResumesAt ?? null
+          )
         : null,
     evidenceState:
       reservation.kind === "fresh"
@@ -499,7 +504,15 @@ async function gatherCharacterEvidence(
   };
 }
 
-const EVIDENCE_STATE_SEVERITY: Readonly<Record<DossierEvidenceState, number>> =
+function earliest(...times: readonly (Date | null)[]): Date | null {
+  return times.reduce<Date | null>(
+    (soonest, time) =>
+      time !== null && (soonest === null || time < soonest) ? time : soonest,
+    null
+  );
+}
+
+const EVIDENCE_STATE_SEVERITY:Readonly<Record<DossierEvidenceState, number>> =
   { complete: 0, partial: 1, scanning: 2, waiting: 3 };
 
 function uniqueBy<T>(items: readonly T[], keyOf: (item: T) => string | null) {
@@ -559,14 +572,7 @@ function mergeIdentityEvidence(
     collectedAt:
       collected.length === 0 ? null : new Date(Math.min(...collected)),
     // The soonest any name resumes: that read is the one that changes the row.
-    resumesAt: results.reduce<Date | null>(
-      (soonest, item) =>
-        item.resumesAt !== null &&
-        (soonest === null || item.resumesAt < soonest)
-          ? item.resumesAt
-          : soonest,
-      null
-    ),
+    resumesAt: earliest(...results.map((item) => item.resumesAt)),
     gathering: results.some((item) => item.gathering),
     // One row shows one collection's steps: the subject's own while it runs,
     // otherwise whichever other name is still collecting.

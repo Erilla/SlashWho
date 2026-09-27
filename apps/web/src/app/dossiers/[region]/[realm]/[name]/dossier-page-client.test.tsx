@@ -725,6 +725,42 @@ describe("DossierPageClient live evidence", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("reads at once a retry time that passed before its snapshot arrived (#663)", async () => {
+    // Break caught: the wake-up timer was armed only for times still ahead,
+    // and the clock the poll is judged by moved only when it fired, so a
+    // retry time already behind the wall clock was neither due nor timed.
+    vi.useFakeTimers();
+    const passed = new Date(Date.now() + 500).toISOString();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          resuming(withEvidenceState(partiallyExpanded, "partial"), passed)
+        )
+      )
+      .mockResolvedValue(
+        Response.json(withEvidenceState(expanded, "complete"))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={withEvidenceState(initial, "scanning")}
+        jobId={null}
+      />
+    );
+    await startFirstLiveEvidenceRead();
+    expect(screen.getByText("Partial evidence")).toBeVisible();
+    // Due already, so the wake-up fires without waiting; each act renders
+    // once, at its end, so the wake-up and the read it starts get one each.
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each([401, 403, 404, 200])(
     "retains a newer terminal discovery response %s when an older live snapshot arrives",
     async (status) => {

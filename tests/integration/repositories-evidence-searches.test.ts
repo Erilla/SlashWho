@@ -525,6 +525,18 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         tierBests: [],
         completedAt: ordinaryAt
       });
+      // Fresh evidence the walk will still add to says when (#663).
+      const waitingAt = new Date("2026-09-23T12:15:00.000Z");
+      await expect(
+        repositories.evidence.reserve({
+          key: rootKey,
+          freshnessCutoff: ordinaryAt,
+          at: waitingAt
+        })
+      ).resolves.toMatchObject({
+        kind: "fresh",
+        tierSearchResumesAt: dueAt
+      });
       await expect(
         repositories.evidence.listResumable(10, dueAt)
       ).resolves.toEqual([rootKey]);
@@ -822,6 +834,17 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
           new Date(failedAt.getTime() + 29 * 60 * 1000)
         )
       ).resolves.toEqual([]);
+      // The cool-down, not the walk's own retry time, is when it continues.
+      await expect(
+        repositories.evidence.reserve({
+          key: rootKey,
+          freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
+          at: new Date(failedAt.getTime() + 29 * 60 * 1000)
+        })
+      ).resolves.toMatchObject({
+        kind: "fresh",
+        tierSearchResumesAt: new Date(failedAt.getTime() + 30 * 60 * 1000)
+      });
       const retriedAt = new Date(failedAt.getTime() + 30 * 60 * 1000 + 1);
       await expect(
         repositories.evidence.listResumable(10, retriedAt)

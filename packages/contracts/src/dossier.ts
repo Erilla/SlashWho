@@ -116,9 +116,9 @@ export const dossierCharacterSchema = z
     evidenceState: dossierEvidenceStateSchema.optional(),
     /**
      * When the next read may collect this character's evidence again (#663).
-     * Present only while the last run asked to be retried later: partial
-     * evidence without it is final until it goes stale, so a page has nothing
-     * to wait for.
+     * Present only while the last run asked to be retried later, or a capped
+     * tier search is due to continue: partial evidence without it is final
+     * until it goes stale, so a page has nothing to wait for.
      */
     evidenceResumesAt: z.iso.datetime().optional(),
     /** A manually added character a reviewer has excluded from the evidence. */
