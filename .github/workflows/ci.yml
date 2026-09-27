@@ -43,9 +43,11 @@ jobs:
     timeout-minutes: 45
     outputs:
       run_full: ${{ steps.scope.outputs.run_full }}
+    # No checkout: the script reads the pull request's files through `gh api`
+    # with an explicit repository path, so it never touches a working tree.
+    # Every other job waits on this one; add a checkout only if a step here
+    # comes to need repository files.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       # Decides whether this change can affect the build. Anything unrecognised
       # runs the full suite: the failure mode of running too often is a slow
       # pull request, and of running too rarely is a broken main.
