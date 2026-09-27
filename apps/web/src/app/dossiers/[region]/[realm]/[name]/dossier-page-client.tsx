@@ -25,6 +25,7 @@ import {
   type DossierApiResult
 } from "../../../../../lib/dossier-api";
 import { raiderIoCharacterUrl } from "../../../../../lib/dossier-path";
+import { fetchFirstDossierRead } from "../../../../../lib/early-dossier-read";
 import { evidenceFilter } from "../../../../../lib/character-visibility";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
@@ -288,10 +289,11 @@ function DossierPageState({
     // initial view in place.
     async function readKnownDossier() {
       const sequence = ++requestSequence.current;
-      const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
-        cache: "no-store",
-        signal: controller.signal
-      });
+      const result = await fetchFirstDossierRead(
+        dossierApi,
+        applicantDossierSchema,
+        { cache: "no-store", signal: controller.signal }
+      );
       if (
         result.kind !== "ok" ||
         controller.signal.aborted ||
@@ -380,7 +382,7 @@ function DossierPageState({
 
     async function readCurrentOrStartResearch() {
       try {
-        const result = await fetchDossierApi(
+        const result = await fetchFirstDossierRead(
           dossierApi,
           applicantDossierSchema,
           { cache: "no-store", signal: controller.signal }
