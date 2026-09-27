@@ -156,6 +156,66 @@ describe("withHttpRequest", () => {
     expect(response.headers.get("cache-control")).toBe("private, max-age=5");
   });
 
+  it("reports the request's timing buckets as Server-Timing", async () => {
+    // Issue #646: the profiler and browser devtools attribute server time
+    // from this header, because the log records do not outlive a deployment.
+    let now = 0;
+    const clock = () => now;
+    const response = await withHttpRequest(
+      "dossier",
+      async (scope) => {
+        await scope.time("db", async () => {
+          now += 40;
+        });
+        await scope.time("blizzard", async () => {
+          now += 25;
+        });
+        scope.observe("limiterWaitMs", 5);
+        now += 10;
+        return Response.json({ ok: true });
+      },
+      silentLogger,
+      clock
+    );
+
+    expect(response.headers.get("server-timing")).toBe(
+      "total;dur=75, db;dur=40, blizzard;dur=25, limiterWait;dur=5"
+    );
+  });
+
+  it("puts durations alone in Server-Timing, never a call's name", async () => {
+    // Break caught: the header is readable by anyone who can load the page,
+    // so a label such as dbMaxCallName or a count must not leak into it.
+    const response = await withHttpRequest(
+      "dossier",
+      async (scope) => {
+        await scope.time("db", async () => "ok", "evidence.reserve");
+        await scope.time("raiderIoRankings", async () => "ok", "rankings");
+        scope.increment("cacheHits");
+        scope.mark("runJoined");
+        return Response.json({ ok: true });
+      },
+      silentLogger
+    );
+
+    const header = response.headers.get("server-timing") ?? "";
+    const metrics = header.split(", ").map((entry) => entry.split(";")[0]);
+    expect(metrics).toEqual(["total", "db", "raiderIoRankings"]);
+    for (const entry of header.split(", ")) {
+      expect(entry).toMatch(/^[A-Za-z]+;dur=\d+$/);
+    }
+  });
+
+  it("reports total alone when nothing was timed", async () => {
+    const response = await withHttpRequest(
+      "dossier",
+      async () => Response.json({ ok: true }),
+      silentLogger,
+      () => 0
+    );
+    expect(response.headers.get("server-timing")).toBe("total;dur=0");
+  });
+
   it("folds the scope's totals into the emitted record", async () => {
     const records: Record<string, unknown>[] = [];
     const logger = {

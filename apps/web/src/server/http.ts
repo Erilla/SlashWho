@@ -157,6 +157,28 @@ async function countedResponse(
   };
 }
 
+/**
+ * The scope's duration buckets as a `Server-Timing` value, led by the
+ * request's own total. A bucket is a `time` prefix (its `${prefix}Ms` has a
+ * matching `${prefix}Calls`) or an observed wait; the call names, counts and
+ * flags in the same totals are left out, because the header reaches anyone who
+ * can load the page and must carry durations alone.
+ */
+function serverTiming(
+  totals: Readonly<Record<string, number | boolean | string>>,
+  totalMs: number
+): string {
+  const entries = [`total;dur=${totalMs}`];
+  for (const [field, value] of Object.entries(totals)) {
+    if (typeof value !== "number" || !field.endsWith("Ms")) continue;
+    const metric = field.slice(0, -2);
+    if (`${metric}Calls` in totals || metric.endsWith("Wait")) {
+      entries.push(`${metric};dur=${value}`);
+    }
+  }
+  return entries.join(", ");
+}
+
 export async function withHttpRequest(
   endpoint: string,
   action: (scope: MeasurementScope, correlationId: string) => Promise<Response>,
@@ -183,6 +205,10 @@ export async function withHttpRequest(
     response.headers.set("cache-control", "no-store");
   }
   response.headers.set("x-request-id", correlationId);
+  response.headers.set(
+    "server-timing",
+    serverTiming(scope.totals(), Math.max(0, Math.round(clock() - startedAt)))
+  );
   let count: number | undefined;
   try {
     ({ response, count } = await countedResponse(response));
