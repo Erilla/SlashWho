@@ -98,14 +98,18 @@ describe("fingerprint continuation retry", () => {
    * resumed. `failing` makes every read throw a transient failure.
    */
   function blizzard() {
-    const state = { failing: false, reads: [] as string[] };
+    const state = {
+      failing: false,
+      retryAfterMs: 30_000,
+      reads: [] as string[]
+    };
     const rootFingerprint = new Map(
       Array.from({ length: 200 }, (_unused, index) => [index + 1, index])
     );
     const transient = () =>
       Object.assign(new Error("transient"), {
         kind: "transient",
-        retryAfterMs: 30_000
+        retryAfterMs: state.retryAfterMs
       });
     const gateway: BlizzardGateway = {
       async getGuildRoster(_root, _signal, onProfileRequest) {
@@ -190,21 +194,52 @@ describe("fingerprint continuation retry", () => {
     return { repositories, upstream, outcomes, run, cursor, cycleOneReads };
   }
 
+  const minutes = 60_000;
+
   /**
-   * What must follow a failed cycle: the admission job admits a fresh cycle,
-   * and that cycle resumes the sweep where the cursor left it.
+   * The next cycle of a chain whose cycle failed at `failedAt` waits
+   * `delayMs`: the admission job is told to come back then, and is admitted
+   * once that time has passed.
+   */
+  async function expectAdmittedOnlyAfter(
+    chain: Awaited<ReturnType<typeof admittedContinuation>>,
+    failedAt: number,
+    delayMs: number
+  ) {
+    const { repositories, run } = chain;
+    if (delayMs > 0) {
+      const early = await repositories.fingerprintSweeps.admitWaiting(
+        run.id,
+        new Date(failedAt + delayMs - 1_000)
+      );
+      expect(early.kind).toBe("waiting");
+      const retryAt = early.kind === "waiting" ? early.retryAt.getTime() : 0;
+      expect(retryAt).toBeGreaterThanOrEqual(failedAt + delayMs);
+      expect(retryAt).toBeLessThanOrEqual(Date.now() + delayMs);
+    }
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(
+        run.id,
+        new Date(Date.now() + delayMs + 1_000)
+      )
+    ).resolves.toEqual({ kind: "admitted" });
+  }
+
+  /**
+   * What must follow a failed cycle: after its delay the admission job admits
+   * a fresh cycle, and that cycle resumes the sweep where the cursor left it.
    */
   async function expectResumesFromCursor(
-    chain: Awaited<ReturnType<typeof admittedContinuation>>
+    chain: Awaited<ReturnType<typeof admittedContinuation>>,
+    failedAt: number,
+    delayMs: number
   ) {
     const { repositories, upstream, outcomes, run, cursor, cycleOneReads } =
       chain;
     await expect(
       repositories.fingerprintSweeps.getResumeState(rootKey)
     ).resolves.toEqual(cursor);
-    await expect(
-      repositories.fingerprintSweeps.admitWaiting(run.id, new Date())
-    ).resolves.toEqual({ kind: "admitted" });
+    await expectAdmittedOnlyAfter(chain, failedAt, delayMs);
 
     upstream.state.failing = false;
     upstream.state.reads.length = 0;
@@ -230,6 +265,7 @@ describe("fingerprint continuation retry", () => {
     const chain = await admittedContinuation();
     chain.upstream.state.failing = true;
 
+    const failedAt = Date.now();
     await handler(
       chain.repositories,
       chain.upstream.gateway,
@@ -237,7 +273,24 @@ describe("fingerprint continuation retry", () => {
     ).execute(chain.run.id, undefined, continuation(chain.run.id));
 
     expect(chain.outcomes.at(-1)).toBe("continuation_retrying");
-    await expectResumesFromCursor(chain);
+    // The first retry backs off two minutes, longer than the 30 s Retry-After.
+    await expectResumesFromCursor(chain, failedAt, 2 * minutes);
+  });
+
+  it("waits out a Retry-After longer than the back-off", async () => {
+    const chain = await admittedContinuation();
+    chain.upstream.state.failing = true;
+    chain.upstream.state.retryAfterMs = 10 * minutes;
+
+    const failedAt = Date.now();
+    await handler(
+      chain.repositories,
+      chain.upstream.gateway,
+      chain.outcomes
+    ).execute(chain.run.id, undefined, continuation(chain.run.id));
+
+    expect(chain.outcomes.at(-1)).toBe("continuation_retrying");
+    await expectResumesFromCursor(chain, failedAt, 10 * minutes);
   });
 
   it("admits a fresh cycle after a continuation that throws", async () => {
@@ -252,6 +305,7 @@ describe("fingerprint continuation retry", () => {
       }
     };
 
+    const failedAt = Date.now();
     await handler(throwing, chain.upstream.gateway, chain.outcomes).execute(
       chain.run.id,
       undefined,
@@ -259,7 +313,7 @@ describe("fingerprint continuation retry", () => {
     );
 
     expect(chain.outcomes.at(-1)).toBe("continuation_retrying");
-    await expectResumesFromCursor(chain);
+    await expectResumesFromCursor(chain, failedAt, 2 * minutes);
   });
 
   it("admits a fresh cycle after a continuation with no sweep configured", async () => {
@@ -267,6 +321,7 @@ describe("fingerprint continuation retry", () => {
     // sweep, so it must be released or it reads as a live admission.
     const chain = await admittedContinuation();
 
+    const failedAt = Date.now();
     await handler(chain.repositories, undefined, chain.outcomes).execute(
       chain.run.id,
       undefined,
@@ -274,26 +329,33 @@ describe("fingerprint continuation retry", () => {
     );
 
     expect(chain.outcomes.at(-1)).toBe("continuation_sweep_unavailable");
-    await expectResumesFromCursor(chain);
+    await expectResumesFromCursor(chain, failedAt, 2 * minutes);
   });
 
   it("still gives up on a chain that keeps failing", async () => {
     const chain = await admittedContinuation();
     chain.upstream.state.failing = true;
 
+    // Each retry waits twice as long as the last, so the four the bound
+    // allows span half an hour rather than a few seconds.
+    const delays = [2, 4, 8, 16].map((count) => count * minutes);
     for (let cycle = 1; cycle <= 5; cycle += 1) {
+      const failedAt = Date.now();
       await handler(
         chain.repositories,
         chain.upstream.gateway,
         chain.outcomes
       ).execute(chain.run.id, undefined, continuation(chain.run.id));
-      const admitted = await chain.repositories.fingerprintSweeps.admitWaiting(
-        chain.run.id,
-        new Date()
-      );
-      expect(admitted).toEqual(
-        cycle < 5 ? { kind: "admitted" } : { kind: "settled" }
-      );
+      if (cycle < 5) {
+        await expectAdmittedOnlyAfter(chain, failedAt, delays[cycle - 1]!);
+      } else {
+        await expect(
+          chain.repositories.fingerprintSweeps.admitWaiting(
+            chain.run.id,
+            new Date(Date.now() + 60 * minutes)
+          )
+        ).resolves.toEqual({ kind: "settled" });
+      }
     }
 
     expect(chain.outcomes.slice(-5)).toEqual([
@@ -350,7 +412,8 @@ describe("fingerprint continuation retry", () => {
       })
     ).resolves.toBe(0);
 
-    await expectResumesFromCursor(chain);
+    // Nothing failed, so there is nothing to wait out.
+    await expectResumesFromCursor(chain, Date.now(), 0);
   });
 
   it("leaves a chain whose cycle is still running alone", async () => {

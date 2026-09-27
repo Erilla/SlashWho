@@ -1275,8 +1275,15 @@ export interface FingerprintSweepRepository {
    * reservation the run still holds. It then queues nothing unless `runId`
    * owns its root's live cursor and has no admission waiting. Returns whether
    * it queued one.
+   *
+   * The admission is not considered until `notBefore`, so a retry waits out
+   * the fault that failed its cycle instead of spending the give-up bound on
+   * it in seconds.
    */
-  requeueContinuation(runId: string, at: Date): Promise<boolean>;
+  requeueContinuation(
+    runId: string,
+    input: { at: Date; notBefore: Date }
+  ): Promise<boolean>;
   /**
    * Queues the next cycle of every chain left with a cursor and no live
    * admission -- stranded by an interruption between a cycle's release and

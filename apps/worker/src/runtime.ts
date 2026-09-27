@@ -407,7 +407,11 @@ function fingerprintAdmissionRetry(retryAt: Date): Error & {
 } {
   return Object.assign(new Error("fingerprint_admission_waiting"), {
     retryable: true as const,
-    retryAfterMs: Math.max(1_000, retryAt.getTime() - Date.now())
+    // Whole seconds: the queue ignores any other delay and falls back to its
+    // default, which would miss a deferred continuation's time by up to a
+    // minute.
+    retryAfterMs:
+      Math.ceil(Math.max(1_000, retryAt.getTime() - Date.now()) / 1_000) * 1_000
   });
 }
 
@@ -700,6 +704,21 @@ async function evidenceResumeSweep(context: WorkerContext): Promise<void> {
   } catch (error) {
     logger?.info({
       event: "queue_depth_failed",
+      failure: error instanceof Error ? error.name : "unknown"
+    });
+  }
+  // A sweep chain can strand without a restart too: an admitted cycle whose
+  // discovery job was deduplicated onto the still-running cycle that queued
+  // it never runs, and its chain becomes recoverable once that reservation
+  // expires. Guarded for the same reason as the reads around it.
+  try {
+    const recovered = await recoverStrandedContinuations(repositories, queue);
+    if (recovered > 0) {
+      logger?.info({ event: "fingerprint_continuations_recovered", recovered });
+    }
+  } catch (error) {
+    logger?.info({
+      event: "fingerprint_continuation_recovery_failed",
       failure: error instanceof Error ? error.name : "unknown"
     });
   }

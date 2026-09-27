@@ -69,6 +69,7 @@ async function admitFingerprintWaitingRun(
       AND state.realm_slug = admission.realm_slug
       AND state.normalized_name = admission.normalized_name
      WHERE admission.status = 'waiting'
+       AND admission.requested_at <= $2
        AND (
          state.last_published_at IS NULL
          OR state.last_published_at <= admission.cadence_cutoff
@@ -77,7 +78,7 @@ async function admitFingerprintWaitingRun(
      ORDER BY admission.requested_at, admission.queue_order
      LIMIT 1
      FOR UPDATE OF admission`,
-    [bypassCadenceFor ?? null]
+    [bypassCadenceFor ?? null, at]
   );
   const candidate = head.rows[0];
   if (!candidate || candidate.id !== admissionId) {
@@ -85,10 +86,21 @@ async function admitFingerprintWaitingRun(
       `SELECT requested_at FROM fingerprint_sweep_admissions WHERE id = $1`,
       [admissionId]
     );
+    const requestedAt = requested.rows[0]?.requested_at;
+    // A retried continuation is queued for a later time so a passing fault
+    // clears first. It joins the queue only then, and retries at that time
+    // rather than when the budget next frees.
+    if (requestedAt && requestedAt > at) {
+      return {
+        kind: "waiting",
+        retryAt: requestedAt,
+        blockedSince: requestedAt
+      };
+    }
     return {
       kind: "waiting",
       retryAt: await fingerprintRetryAt(client, at),
-      blockedSince: requested.rows[0]?.requested_at
+      blockedSince: requestedAt
     };
   }
 
@@ -298,7 +310,8 @@ export async function finishFingerprintSweep(
 
 /**
  * Inserts a `waiting` admission for each chain that has a live cursor and no
- * live admission, optionally only the one `runId` owns. A live admission is
+ * live admission, optionally only the one `runId` owns. The row is requested
+ * at `notBefore`, and admission does not consider it until then. A live admission is
  * one still waiting, or admitted with a reservation that is neither released
  * nor expired. The caller holds the fingerprint lock, so two callers cannot
  * both find a chain bare and queue it twice.
@@ -312,6 +325,7 @@ async function requeueContinuations(
   client: Queryable,
   input: {
     at: Date;
+    notBefore: Date;
     runId: string | null;
     maxFailures: number | null;
     limit: number;
@@ -323,7 +337,7 @@ async function requeueContinuations(
        hourly_budget, cadence_cutoff, requested_at)
      SELECT snapshot.discovery_run_id, state.region, state.realm_slug,
             state.normalized_name, previous.request_cap,
-            previous.hourly_budget, $1, $1
+            previous.hourly_budget, $1, $5
      FROM fingerprint_sweep_states state
      JOIN snapshots snapshot ON snapshot.id = state.resume_snapshot_id
      CROSS JOIN LATERAL (
@@ -354,7 +368,7 @@ async function requeueContinuations(
      ORDER BY state.last_published_at, snapshot.discovery_run_id
      LIMIT $4
      RETURNING discovery_run_id`,
-    [input.at, input.runId, input.maxFailures, input.limit]
+    [input.at, input.runId, input.maxFailures, input.limit, input.notBefore]
   );
   return result.rows.map((row) => row.discovery_run_id);
 }
@@ -620,8 +634,8 @@ export function createFingerprintSweepRepositories(
         return Number(result.rows[0]?.continuation_failures ?? 0);
       },
 
-      async requeueContinuation(runId, at) {
-        if (Number.isNaN(at.valueOf())) {
+      async requeueContinuation(runId, { at, notBefore }) {
+        if (Number.isNaN(at.valueOf()) || Number.isNaN(notBefore.valueOf())) {
           throw new RangeError("fingerprint_admission_time_invalid");
         }
         return withTransaction(pool, async (client) => {
@@ -648,6 +662,7 @@ export function createFingerprintSweepRepositories(
           );
           const queued = await requeueContinuations(client, {
             at,
+            notBefore,
             runId,
             maxFailures: null,
             limit: 1
@@ -670,6 +685,7 @@ export function createFingerprintSweepRepositories(
           await lockFingerprintSweeps(client);
           return requeueContinuations(client, {
             at,
+            notBefore: at,
             runId: null,
             maxFailures,
             limit

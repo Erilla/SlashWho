@@ -1607,6 +1607,54 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("queues a sweep chain stranded after startup on the five-minute tick", async () => {
+    // Break caught: an admitted cycle deduplicated onto the job that queued it
+    // never runs, and only a restart used to find its chain again.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+    const stranded = "00000000-0000-4000-8000-000000000500";
+    fakes.strandedContinuationRuns.push(stranded);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.fingerprintAdmissions).toEqual([stranded]);
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "fingerprint_continuations_recovered",
+      recovered: 1
+    });
+    await runtime.stop();
+  });
+
+  it("still sweeps when stranded chain recovery fails", async () => {
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+    fakes.repositories.fingerprintSweeps.requeueStrandedContinuations =
+      async () => {
+        throw new RangeError("boom");
+      };
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "fingerprint_continuation_recovery_failed",
+      failure: "RangeError"
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "evidence_resume_sweep" })
+    );
+    await runtime.stop();
+  });
+
   it("releases abandoned runs before it resumes waiting ones", async () => {
     // Load-bearing ordering, not housekeeping: a character freed by recovery
     // is only resumable once its dead run is out of the active set, so
