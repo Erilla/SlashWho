@@ -325,10 +325,19 @@ describe("durable discovery queue", () => {
       const [job] = await inspector.findJobs(queueName, { id: jobId });
       return job?.state === "retry";
     });
+    // The backoff would wait 1, 2, 4 and then 8 seconds between attempts.
+    // Bring each scheduled retry forward instead of sleeping through it: this
+    // test is about the states and the attempt bound, and the stored backoff
+    // options are asserted below.
     await eventually(async () => {
+      await applicationPool.query(
+        `UPDATE pgboss.job SET start_after = now()
+         WHERE name = $1 AND id = $2 AND state = 'retry'`,
+        [queueName, jobId]
+      );
       const [job] = await inspector.findJobs(queueName, { id: jobId });
       return job?.state === "failed";
-    }, 40_000);
+    });
 
     const [failed] = await inspector.findJobs(queueName, { id: jobId });
     expect(failed).toMatchObject({
@@ -340,7 +349,7 @@ describe("durable discovery queue", () => {
       retryDelayMax: 1_800
     });
     expect(attempts).toBe(5);
-  }, 50_000);
+  });
 
   it("provides durable attempt metadata and cancellation to work", async () => {
     // Break caught: the handler could not distinguish a final delivery or observe shutdown.
