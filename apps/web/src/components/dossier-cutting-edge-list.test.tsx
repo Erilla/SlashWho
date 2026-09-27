@@ -60,14 +60,6 @@ afterEach(cleanup);
 
 function mockScrollViewport() {
   vi.stubGlobal(
-    "matchMedia",
-    vi.fn().mockReturnValue({
-      matches: true,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn()
-    })
-  );
-  vi.stubGlobal(
     "ResizeObserver",
     class {
       observe() {}
@@ -163,6 +155,8 @@ it("renders an official account-wide Cutting Edge achievement without character 
 it("exposes overflowing Cutting Edge achievements as a keyboard-scrollable list", async () => {
   // Break caught: overflowing achievement cards were not keyboard reachable,
   // so the same visual space used by their scrollbar could cover card content.
+  // The list is capped at every width, so no viewport query gates this: on a
+  // phone it was once left uncapped and a long history ran down the page.
   mockScrollViewport();
   renderWithDossierCharacters(
     <DossierCuttingEdgeList
