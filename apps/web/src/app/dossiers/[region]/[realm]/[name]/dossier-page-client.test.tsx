@@ -24,6 +24,10 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { headerIdentitySlotId } from "../../../../../components/site-header";
+import {
+  earlyDossierReadScript,
+  takeEarlyDossierRead
+} from "../../../../../lib/early-dossier-read";
 
 import { DossierPageClient } from "./dossier-page-client";
 
@@ -143,7 +147,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
   push.mockReset();
   clearStoredCredentials();
+  void takeEarlyDossierRead(dossierPath);
 });
+
+/** Runs the shell's inline read script, as the browser does before hydration. */
+function runShellScript() {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  new Function(earlyDossierReadScript(dossierPath))();
+}
 
 async function startFirstLiveEvidenceRead() {
   await act(async () => {
@@ -1242,6 +1253,53 @@ describe("DossierPageClient staged research", () => {
     expect(status).toBeVisible();
     expect(status).toHaveTextContent("Researching applicant dossier…");
     expect(status.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
+  });
+
+  it("shows the read the shell started rather than reading again", async () => {
+    const fetchMock = vi.fn((input: string) =>
+      input === dossierPath
+        ? Promise.resolve(Response.json(expanded))
+        : Promise.reject(new Error(`Unexpected request: ${input}`))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    runShellScript();
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+
+    expect(await screen.findByText("Expanded evidence")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("follows a job's research from the read the shell started", async () => {
+    const fetchMock = vi.fn((input: string) => {
+      if (input === dossierPath) return Promise.resolve(discoveryNotReady());
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return new Promise<Response>(() => undefined);
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    runShellScript();
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+
+    expect(await screen.findByText("Initial evidence")).toBeVisible();
+    expect(
+      fetchMock.mock.calls.filter(([input]) => input === dossierPath)
+    ).toHaveLength(1);
   });
 
   it("starts linked research for a direct visit, then shows initial evidence", async () => {

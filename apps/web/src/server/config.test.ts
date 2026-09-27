@@ -169,6 +169,20 @@ it("refuses a Blizzard base URL that is not HTTP", () => {
   ).toThrow("invalid_blizzard_base_url");
 });
 
+it("sends Server-Timing only when SERVER_TIMING_ENABLED is exactly true", () => {
+  // Break caught (#670 review): the header exposes limiter waits and cache
+  // warmth, so production must not send it unless someone turns it on.
+  expect(loadWebConfig(validEnv).serverTimingEnabled).toBe(false);
+  expect(
+    loadWebConfig({ ...validEnv, SERVER_TIMING_ENABLED: "1" })
+      .serverTimingEnabled
+  ).toBe(false);
+  expect(
+    loadWebConfig({ ...validEnv, SERVER_TIMING_ENABLED: "true" })
+      .serverTimingEnabled
+  ).toBe(true);
+});
+
 it("reads an optional Raider.IO access key and trims it", () => {
   // Break caught: a configured server key could be ignored, leaving the web
   // process on the anonymous rate limit it was configured to escape.

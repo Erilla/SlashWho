@@ -15,6 +15,7 @@
     "ops:rebuild": "tsx scripts/rebuild-character.mts",
     "ops:removals": "tsx scripts/removals.mts",
     "analyze:performance": "tsx scripts/analyze-performance-logs.mts",
+    "profile:dossier": "playwright test --config playwright.profile.config.ts",
     "ops:backfill-uploader-provenance": "tsx scripts/backfill-uploader-provenance.mts",
     "ops:operators": "tsx scripts/operators.mts",
     "typecheck": "tsc -p tsconfig.tools.json && pnpm -r typecheck",

@@ -17,6 +17,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import { randomUUID } from "node:crypto";
 
 import { parseCharacterRoute } from "../lib/character-route";
+import { loadWebConfig } from "./config";
 import { errorName } from "./error-name";
 import { webLogger } from "./logger";
 
@@ -157,11 +158,53 @@ async function countedResponse(
   };
 }
 
+/**
+ * The scope's duration buckets as a `Server-Timing` value, led by the
+ * request's own total. A bucket is a `time` prefix (its `${prefix}Ms` has a
+ * matching `${prefix}Calls`) or an observed wait; the call names, counts and
+ * flags in the same totals are left out, because the header reaches anyone who
+ * can load the page and must carry durations alone.
+ */
+function serverTiming(
+  totals: Readonly<Record<string, number | boolean | string>>,
+  totalMs: number
+): string {
+  const entries = [`total;dur=${totalMs}`];
+  for (const [field, value] of Object.entries(totals)) {
+    if (typeof value !== "number" || !field.endsWith("Ms")) continue;
+    const metric = field.slice(0, -2);
+    if (`${metric}Calls` in totals || metric.endsWith("Wait")) {
+      entries.push(`${metric};dur=${value}`);
+    }
+  }
+  return entries.join(", ");
+}
+
+export type HttpRequestOptions = Readonly<{
+  /**
+   * Whether this response may carry `Server-Timing`. Only the dossier read
+   * opts in, and it passes its configured gate: an exact server duration on
+   * an account route would tell an active account from none, and on a
+   * production read it shows the shared limiter's wait and cache warmth. Read
+   * after the action, so a gate that cannot be read counts as off.
+   */
+  serverTiming?: () => boolean;
+}>;
+
+function serverTimingAllowed(options: HttpRequestOptions): boolean {
+  try {
+    return options.serverTiming?.() === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function withHttpRequest(
   endpoint: string,
   action: (scope: MeasurementScope, correlationId: string) => Promise<Response>,
   logger: HttpLogger = webLogger,
-  clock: () => number = performance.now.bind(performance)
+  clock: () => number = performance.now.bind(performance),
+  options: HttpRequestOptions = {}
 ): Promise<Response> {
   const correlationId = randomUUID();
   const scope = createMeasurementScope(clock);
@@ -183,6 +226,12 @@ export async function withHttpRequest(
     response.headers.set("cache-control", "no-store");
   }
   response.headers.set("x-request-id", correlationId);
+  if (serverTimingAllowed(options)) {
+    response.headers.set(
+      "server-timing",
+      serverTiming(scope.totals(), Math.max(0, Math.round(clock() - startedAt)))
+    );
+  }
   let count: number | undefined;
   try {
     ({ response, count } = await countedResponse(response));
@@ -202,4 +251,17 @@ export async function withHttpRequest(
     ...(failure === undefined ? {} : { errorName: failure })
   });
   return response;
+}
+
+/**
+ * `withHttpRequest` for an endpoint that may send `Server-Timing` (#646),
+ * gated by SERVER_TIMING_ENABLED. Only the dossier read uses it.
+ */
+export function withTimedHttpRequest(
+  endpoint: string,
+  action: (scope: MeasurementScope, correlationId: string) => Promise<Response>
+): Promise<Response> {
+  return withHttpRequest(endpoint, action, webLogger, undefined, {
+    serverTiming: () => loadWebConfig().serverTimingEnabled === true
+  });
 }

@@ -10,12 +10,23 @@ type FakeBlizzard = Readonly<{
 export async function startFakeBlizzard(): Promise<FakeBlizzard> {
   // Proves a service reached this fake rather than live Blizzard (#654).
   let achievementRequests = 0;
+  // Delays achievement reads for the load profiler (#646); 0 otherwise.
+  let achievementLatencyMs = 0;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     response.setHeader("content-type", "application/json");
 
     if (request.method === "GET" && url.pathname === "/__control/stats") {
       response.end(JSON.stringify({ achievementRequests }));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/__control/latency") {
+      achievementLatencyMs = Math.max(
+        0,
+        Number(url.searchParams.get("ms")) || 0
+      );
+      response.end(JSON.stringify({ achievementLatencyMs }));
       return;
     }
 
@@ -28,7 +39,10 @@ export async function startFakeBlizzard(): Promise<FakeBlizzard> {
 
     if (request.method === "GET" && url.pathname.endsWith("/achievements")) {
       achievementRequests += 1;
-      response.end(JSON.stringify({ achievements: [] }));
+      setTimeout(
+        () => response.end(JSON.stringify({ achievements: [] })),
+        achievementLatencyMs
+      );
       return;
     }
 

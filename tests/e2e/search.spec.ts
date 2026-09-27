@@ -368,6 +368,51 @@ test("shows a grey no-log row when an entire supported tier has no evidence", as
   await expect(tier.getByRole("article")).toHaveCount(0);
 });
 
+test("starts a direct visit's dossier read while the page is still parsing", async ({
+  page
+}) => {
+  // Break caught: the first read waited for the client to hydrate (#667).
+  const key = { region: "eu", realm: "silvermoon", name: "earlyread" } as const;
+  await seedSnapshot({
+    key,
+    displayName: "Earlyread",
+    refreshedAt: new Date("2026-09-11T00:00:00.000Z")
+  });
+  await seedCharacterEvidence(key);
+  const readPath = "/api/dossiers/eu/silvermoon/earlyread";
+  const reads: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === readPath)
+      reads.push(url.search);
+  });
+  const firstRead = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === readPath
+  );
+
+  await page.goto(`/dossiers/eu/silvermoon/earlyread`);
+
+  await expect(
+    page.getByRole("heading", { name: "Connected characters" })
+  ).toBeVisible();
+  expect((await firstRead).headers()["cache-control"]).toBe("no-store");
+  expect(reads).toEqual([""]);
+  const timing = await page.evaluate((path) => {
+    const navigation = performance.getEntriesByType(
+      "navigation"
+    )[0] as PerformanceNavigationTiming;
+    const read = performance
+      .getEntriesByType("resource")
+      .find((entry) => new URL(entry.name).pathname === path);
+    return {
+      readStart: read?.startTime ?? null,
+      domInteractive: navigation.domInteractive
+    };
+  }, readPath);
+  expect(timing.readStart).not.toBeNull();
+  expect(timing.readStart!).toBeLessThan(timing.domInteractive);
+});
+
 test("reads Cutting Edge achievements from the fake Blizzard, never the live one", async ({
   page
 }) => {

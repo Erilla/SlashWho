@@ -18,6 +18,12 @@ export type WebConfig = Readonly<{
         encryptionKey: Buffer;
       }>
     | undefined;
+  /**
+   * Whether the dossier read sends `Server-Timing` (#646). Off unless
+   * SERVER_TIMING_ENABLED is exactly "true"; the e2e set-up and the load
+   * profiler turn it on.
+   */
+  serverTimingEnabled?: boolean;
   dossier: Readonly<{
     raiderIoBaseUrl: string;
     raiderIoTimeoutMs: number;
@@ -100,6 +106,7 @@ export function loadWebConfig(
       )
     },
     accountCredentialEncryptionKey: shared.accountCredentialEncryptionKey,
+    serverTimingEnabled: environment.SERVER_TIMING_ENABLED === "true",
     accountMail:
       optionalSecret(environment.RESEND_API_KEY) &&
       accountMailFrom &&
