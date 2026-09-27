@@ -51,7 +51,7 @@ export function readJsonBody(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
 }
 
-type Schema<T> = {
+export type DossierSchema<T> = {
   safeParse(
     value: unknown
   ): { success: true; data: T } | { success: false; data?: undefined };
@@ -75,11 +75,21 @@ export type DossierApiResult<T> =
  */
 export async function fetchDossierApi<T>(
   path: string,
-  schema: Schema<T>,
+  schema: DossierSchema<T>,
   init: DossierRequestInit = {},
   { answers = [] }: Readonly<{ answers?: readonly number[] }> = {}
 ): Promise<DossierApiResult<T>> {
-  const response = await dossierFetch(path, init);
+  return parseDossierResponse(await dossierFetch(path, init), schema, {
+    answers
+  });
+}
+
+/** A dossier API response read as `fetchDossierApi` reads its own. */
+export async function parseDossierResponse<T>(
+  response: Response,
+  schema: DossierSchema<T>,
+  { answers = [] }: Readonly<{ answers?: readonly number[] }> = {}
+): Promise<DossierApiResult<T>> {
   const body = await readJsonBody(response);
   if (!response.ok && !answers.includes(response.status))
     return { kind: "refused", response, body };
