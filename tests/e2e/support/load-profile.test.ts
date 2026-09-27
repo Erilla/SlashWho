@@ -87,10 +87,11 @@ describe("formatLoadSummary", () => {
           earlyRead: true,
           keysSent: false
         }
-      ])
+      ]),
+      { databaseRttMs: undefined }
     );
     expect(text.split("\n")).toEqual([
-      "warm (1 loads)",
+      "warm (1 loads, no injected database RTT)",
       "  shell                 p50      10  p95      10  max      10",
       "  firstResponse         p50      20  p95      20  max      20",
       "  rendered              p50      30  p95      30  max      30",
@@ -98,6 +99,17 @@ describe("formatLoadSummary", () => {
       "  early read fired      1 of 1 loads",
       "  saved keys sent       0 of 1 loads"
     ]);
+  });
+
+  it("states the injected database round trip", () => {
+    // Break caught: two runs at different PROFILE_DB_RTT_MS settings print
+    // identical headers and get compared as if they were like for like.
+    const text = formatLoadSummary("warm", summariseLoads([]), {
+      databaseRttMs: 5
+    });
+    expect(text.split("\n")[0]).toBe(
+      "warm (0 loads, database RTT +5 ms injected)"
+    );
   });
 });
 

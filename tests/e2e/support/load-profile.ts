@@ -156,11 +156,22 @@ function row(label: string, value: Spread): string {
   return `  ${label.padEnd(20)}  ${cell("p50", value.p50)}  ${cell("p95", value.p95)}  ${cell("max", value.max)}`;
 }
 
+/**
+ * `databaseRttMs` is the round trip the latency proxy added to the web's
+ * database connection (#685), or undefined when there was no proxy. It is
+ * required, and printed on every summary, so runs made at different settings
+ * cannot be compared by mistake.
+ */
 export function formatLoadSummary(
   scenario: string,
-  summary: LoadSummary
+  summary: LoadSummary,
+  options: Readonly<{ databaseRttMs: number | undefined }>
 ): string {
-  const lines = [`${scenario} (${summary.count} loads)`];
+  const rtt =
+    options.databaseRttMs === undefined
+      ? "no injected database RTT"
+      : `database RTT +${options.databaseRttMs} ms injected`;
+  const lines = [`${scenario} (${summary.count} loads, ${rtt})`];
   for (const phase of phases) {
     const value = summary.phases[phase];
     if (value) lines.push(row(phase.slice(0, -"Ms".length), value));
