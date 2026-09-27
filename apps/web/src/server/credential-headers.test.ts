@@ -218,6 +218,52 @@ describe("readCredentialOverrides", () => {
     }
   });
 
+  it("points a visitor's Blizzard gateway at the configured base URL", async () => {
+    // Break caught (#654): a visitor-supplied Blizzard client built without
+    // the configured base URL would reach live Blizzard from the e2e suite.
+    const configWithBaseUrl = loadWebConfig({
+      DATABASE_URL: "postgresql://slashwho:secret@db.internal/slashwho",
+      BOT_API_KEY: "b".repeat(32),
+      RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+      OPERATOR_ORIGIN: "https://operators.example.test",
+      OPERATOR_SESSION_HASH_SECRET: "s".repeat(32),
+      BLIZZARD_CLIENT_ID: "blizzard-client-id",
+      BLIZZARD_CLIENT_SECRET: "blizzard-client-secret",
+      EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY: "a".repeat(64),
+      BLIZZARD_BASE_URL: "http://127.0.0.1:4321"
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () =>
+        Response.json({ access_token: "token", expires_in: 3600 })
+      );
+    try {
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+      const overrides = readCredentialOverrides(
+        new Headers({
+          "x-blizzard-client-id": "visitor-id",
+          "x-blizzard-client-secret": "visitor-secret"
+        }),
+        configWithBaseUrl
+      );
+
+      await overrides
+        .blizzard!.getCompletedAchievements({
+          region: "eu",
+          realm: "silvermoon",
+          name: "ryii"
+        })
+        .catch(() => undefined);
+
+      expect(fetchMock).toHaveBeenCalled();
+      for (const [target] of fetchMock.mock.calls) {
+        expect(new URL(String(target)).origin).toBe("http://127.0.0.1:4321");
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("returns WCL credentials as plain data, not a gateway", () => {
     // Break caught: WCL credentials could be built into a gateway here even
     // though only the worker (Task 7) has the decrypted values it needs.

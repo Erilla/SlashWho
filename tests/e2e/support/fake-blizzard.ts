@@ -8,9 +8,16 @@ type FakeBlizzard = Readonly<{
 }>;
 
 export async function startFakeBlizzard(): Promise<FakeBlizzard> {
+  // Proves a service reached this fake rather than live Blizzard (#654).
+  let achievementRequests = 0;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     response.setHeader("content-type", "application/json");
+
+    if (request.method === "GET" && url.pathname === "/__control/stats") {
+      response.end(JSON.stringify({ achievementRequests }));
+      return;
+    }
 
     if (request.method === "POST" && url.pathname === "/token") {
       response.end(
@@ -20,6 +27,7 @@ export async function startFakeBlizzard(): Promise<FakeBlizzard> {
     }
 
     if (request.method === "GET" && url.pathname.endsWith("/achievements")) {
+      achievementRequests += 1;
       response.end(JSON.stringify({ achievements: [] }));
       return;
     }
