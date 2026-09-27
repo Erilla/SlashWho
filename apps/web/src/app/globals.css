@@ -1721,11 +1721,14 @@ td > .collection-progress {
   font-weight: 680;
 }
 
+/* Clipped so the scanning spinner's rotated box, whose corners reach past
+   1rem, cannot widen the row. The ring itself sits well inside the box. */
 .dossier-evidence-state {
   display: inline-flex;
   width: 1rem;
   height: 1rem;
   flex: none;
+  overflow: hidden;
   color: var(--muted);
 }
 
