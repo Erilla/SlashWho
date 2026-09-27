@@ -172,10 +172,20 @@ jobs:
   # The only job that needs a browser, so the only one that installs one.
   #
   # There is no build step. Playwright's global setup builds the web app when
-  # apps/web/.next is missing, which it always is on a fresh runner, and it
-  # overlaps that build with the PostgreSQL and fixture start-up. It builds only
-  # the web app: `pnpm build` would also run every other package's `build`,
-  # which is a `tsc --noEmit` that checks already does.
+  # apps/web/.next/BUILD_ID is missing, which it always is on a fresh runner,
+  # and it overlaps that build with the PostgreSQL and fixture start-up. It
+  # builds only the web app: `pnpm build` would also run every other package's
+  # `build`, which is a `tsc --noEmit` that checks already does.
+  #
+  # Only apps/web/.next/cache is restored. It holds Turbopack's build cache and
+  # no BUILD_ID, so the build still always runs; it just starts warm. The key
+  # names the commit, so each run saves what it built, and falls back to the
+  # newest cache for the same lockfile.
+  #
+  # The browser is Chromium's headless shell, which is what headless Chromium
+  # runs, and no system packages are installed. `--with-deps` spent 13-34s on
+  # apt for Xvfb and fonts: headless needs no X server, and every library the
+  # shell links against is already on the runner image.
   #
   # The suite runs on one worker against one database (see
   # playwright.config.ts), so it is split into shards instead. Each shard is a
@@ -196,8 +206,13 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-1.62.1-chromium
-      - run: corepack pnpm playwright install --with-deps chromium
+          key: playwright-${{ runner.os }}-1.62.1-chromium-headless-shell
+      - run: corepack pnpm playwright install --only-shell chromium
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/web/.next/cache
+          key: next-build-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: next-build-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: >-
           corepack pnpm playwright test --shard=${{ matrix.shard }}/2
           tests/e2e/search.spec.ts tests/e2e/connected-character-dialog.spec.ts
