@@ -10,7 +10,7 @@ import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
 import { releasePortPair } from "./port-reservation";
 import { webBuildFreshness } from "./web-build";
-import { postgresImage } from "../../support/postgres-image";
+import { postgresImage, tuneForTests } from "../../support/postgres-image";
 
 const webPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
 const workerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
@@ -153,11 +153,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       processes.push(build);
     }
 
-    postgres = await new PostgreSqlContainer(postgresImage)
-      .withDatabase("slashwho_e2e")
-      .withUsername("slashwho")
-      .withPassword("slashwho")
-      .start();
+    postgres = await tuneForTests(
+      new PostgreSqlContainer(postgresImage)
+        .withDatabase("slashwho_e2e")
+        .withUsername("slashwho")
+        .withPassword("slashwho")
+    ).start();
     fixture = await startFakeRaiderIo();
     blizzard = await startFakeBlizzard();
     warcraftLogs = await startFakeWarcraftLogs();
