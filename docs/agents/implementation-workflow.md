@@ -142,9 +142,8 @@ branch. `/code-review low --fix` applies the findings directly, which is worth
 using only when you intend to read the resulting diff.
 
 This runs in your session rather than on the API, so it costs nothing per run.
-Prefer it to the automated review on the pull request, which is billed and
-deliberately shallow — the point of reviewing here is that problems are cheaper
-to fix before anyone else has read the branch.
+The point of reviewing here is that problems are cheaper to fix before anyone
+else has read the branch.
 
 #### Codex
 
@@ -214,49 +213,6 @@ Fix anything that stands between the pull request and its merge:
 
 Auto-merge takes over once the checks are green and the conversations are
 resolved. Then validate the resulting `main` deployment in staging.
-
-### The automated review
-
-A pull request from a branch in this repository is reviewed automatically by
-the `claude-code-review` workflow when it opens, is reopened, or is marked
-ready for review. It runs `.claude/skills/pr-review` and posts one comment:
-the findings, or a note that it found nothing.
-
-It is a backstop, not the review. The review that matters is the
-`/code-review low` in step 5, which is free, deeper, and happens while the
-branch is still yours to fix quietly. This one exists to catch what reaches a
-pull request without having had that — work from another agent, or from someone
-who skipped the step.
-
-It deliberately does **not** run again on later pushes. Each run is billed, and
-what it costs grows with the size of the diff and the number of findings it has
-to check, so running once per pull request rather than once per push is the
-main control on the bill. A pull request that is already open therefore keeps
-its original review; push a fix and the comment stays until you resolve it
-yourself. Pull requests that touch only markdown, `docs/`, `LICENSE`, issue
-templates, or the web app's brand assets are skipped entirely.
-
-The reviewer is deliberately cheap, and the cost of that is precision: it
-reads the diff once rather than sending several agents over it, so it will
-occasionally flag something that turns out to be fine. Say so in a reply when
-it does.
-
-To get a fresh review after substantial changes, close and reopen the pull
-request, or re-run the workflow job from the Actions tab. Both are deliberate
-acts that cost money, which is the point.
-
-The review is advisory: it never approves the pull request and its job is not
-a required check, so it does not block auto-merge. Treat its comments like any
-other review — address them, or reply saying why the finding is wrong. A
-finding you disagree with is worth answering rather than silently resolving,
-because the reply is what tells a later reader the disagreement was considered.
-
-It reads `CLAUDE.md`, which imports `AGENTS.md`, so repository conventions
-belong in those files rather than in the workflow.
-
-The review runs on Anthropic's API and is billed per run, so a review that
-never finishes still costs what it used. If the check fails without posting
-anything, read the run log before re-running it.
 
 ## 8. Clean up
 
