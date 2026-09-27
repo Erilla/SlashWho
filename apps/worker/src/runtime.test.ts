@@ -547,7 +547,7 @@ describe("worker runtime", () => {
     });
     expect(integration.fingerprint).toEqual({
       requestCap: 300,
-      readConcurrency: 6,
+      readConcurrency: 10,
       hourlyBudget: 28_800,
       cadenceMs: 604_800_000,
       minimumCommon: 200,
@@ -592,21 +592,21 @@ describe("worker runtime", () => {
     }) as typeof globalThis.fetch;
     try {
       const integration = createFingerprintIntegration(config);
-      const reads = Array.from({ length: 10 }, (_, index) =>
+      const reads = Array.from({ length: 14 }, (_, index) =>
         integration.blizzardGateway!.getCompletedAchievements({
           region: "eu",
           realm: "silvermoon",
           name: `sentinel${String.fromCharCode(97 + index)}`
         })
       );
-      await vi.waitFor(() => expect(releases).toHaveLength(6));
+      await vi.waitFor(() => expect(releases).toHaveLength(10));
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(releases).toHaveLength(6);
+      expect(releases).toHaveLength(10);
 
       for (const release of releases.splice(0)) release();
       await vi.waitFor(() => expect(releases).toHaveLength(4));
       for (const release of releases.splice(0)) release();
-      await expect(Promise.all(reads)).resolves.toHaveLength(10);
+      await expect(Promise.all(reads)).resolves.toHaveLength(14);
     } finally {
       globalThis.fetch = originalFetch;
     }
