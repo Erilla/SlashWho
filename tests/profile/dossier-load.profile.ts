@@ -79,7 +79,10 @@ function instrumentDossierLoad(): void {
   const original = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const request = input instanceof Request ? input : undefined;
-    const url = new URL(request?.url ?? String(input), window.location.href);
+    const url = new URL(
+      request?.url ?? (input instanceof URL ? input.href : (input as string)),
+      window.location.href
+    );
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const dossierRead =
       method === "GET" &&
