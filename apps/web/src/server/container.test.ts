@@ -649,13 +649,13 @@ it("rate limits the web's shared Blizzard client, not each dossier read", async 
   let blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> | undefined;
   let apiReads = 0;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request) => {
     if (String(input).endsWith("/token")) {
       return Response.json({ access_token: "token", expires_in: 3600 });
     }
     apiReads += 1;
     return Response.json({ achievements: [] });
-  }) as typeof globalThis.fetch;
+  };
   try {
     await createWebContainer(
       {
@@ -693,7 +693,7 @@ it("rate limits the web's shared Blizzard client, not each dossier read", async 
               return {};
             },
             async end() {}
-          } as never;
+          };
         },
         async runMigrations() {},
         createRepositories() {
