@@ -1672,7 +1672,9 @@ describe("discovery job handler", () => {
         // character's guild, which the profile payload does not carry.
         raiderIoCallMs: 0,
         raiderIoCalls: 5,
-        raiderIoMaxCallMs: 0
+        raiderIoMaxCallMs: 0,
+        // The first Raider.IO call reaches the 0ms maximum, as for db above.
+        raiderIoMaxCallName: "getCharacter"
       }
     ]);
   });
@@ -1742,6 +1744,70 @@ describe("discovery job handler", () => {
       expect.objectContaining({ outcome: "snapshot", guildReadsDropped: 0 })
     ]);
   });
+
+  it.each(["getCharacter", "getClaimedCharacters", "resolveProfileGuess"])(
+    "names %s as the slowest Raider.IO call by operation, never by argument",
+    async (slowOperation) => {
+      // Break caught: every Raider.IO call was timed under one unnamed bucket,
+      // so a discovery_run's raiderIoMaxCallMs could only be attributed by
+      // replaying the run. The label must be the operation alone: an owner id,
+      // a profile guess or a character key reaching it would put request data
+      // in the logs.
+      const ownerMarker = "OWNER_MARKER_c81e2f";
+      const guessMarker = "GUESS_MARKER_5d93ab";
+      const repositories = createMemoryRepositories();
+      const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+      const records: Array<Record<string, unknown>> = [];
+      let tick = 0;
+      const slowWhen = async <T>(operation: string, result: T): Promise<T> => {
+        if (operation === slowOperation) tick += 1_000;
+        return result;
+      };
+      // Discovery resolves a profile guess only for a character with no
+      // public owner, so the root is ownerless in that case alone.
+      const isRoot = (key: CharacterKey) => key.name === rootKey.name;
+      const rootOwner =
+        slowOperation === "resolveProfileGuess" ? null : ownerMarker;
+      // The root names its guild so discovery reads only the alt's: guild
+      // reads run concurrently, and two overlapping slow reads would each time
+      // the other's delay as well.
+      const gateway: RaiderIoGateway = {
+        getCharacter: (key) =>
+          slowWhen("getCharacter", {
+            ...character(key),
+            ownerId: isRoot(key) ? rootOwner : null,
+            profileGuess: isRoot(key) ? guessMarker : null,
+            guild: isRoot(key) ? rosterGuild : null
+          }),
+        getClaimedCharacters: () =>
+          slowWhen("getClaimedCharacters", {
+            characters: [character(secondKey)]
+          }),
+        resolveProfileGuess: () => slowWhen("resolveProfileGuess", null)
+      };
+
+      await handlerFor(repositories, gateway, {
+        logger: {
+          info(record) {
+            records.push(record);
+          }
+        },
+        monotonic: () => tick
+      }).execute(run.id, delivery());
+
+      const label = records[0]?.raiderIoMaxCallName;
+      expect(label).toBe(slowOperation);
+      for (const argument of [
+        ownerMarker,
+        guessMarker,
+        rootKey.name,
+        secondKey.name
+      ]) {
+        expect(label).not.toContain(argument);
+      }
+      expect(records[0]?.raiderIoMaxCallMs).toBe(1_000);
+    }
+  );
 
   it("keeps provider and database buckets disjoint within the run duration", async () => {
     // Break caught: timing the orchestrating domain function instead of the
@@ -1958,7 +2024,8 @@ describe("discovery job handler", () => {
         raiderIoMs: 0,
         raiderIoCallMs: 0,
         raiderIoCalls: 1,
-        raiderIoMaxCallMs: 0
+        raiderIoMaxCallMs: 0,
+        raiderIoMaxCallName: "getCharacter"
       }
     ]);
     expect(JSON.stringify(events)).not.toContain(marker);

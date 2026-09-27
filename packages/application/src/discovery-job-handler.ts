@@ -43,15 +43,28 @@ function scopedRaiderIoGateway(
   gateway: RaiderIoGateway,
   scope: MeasurementScope
 ): RaiderIoGateway {
+  // Each call is labelled with its operation name, so `raiderIoMaxCallName`
+  // says which one set `raiderIoMaxCallMs`. Never with an argument: an owner
+  // id or a profile guess must not reach the logs.
   return {
     getCharacter: (key, signal) =>
-      scope.time("raiderIo", () => gateway.getCharacter(key, signal)),
+      scope.time(
+        "raiderIo",
+        () => gateway.getCharacter(key, signal),
+        "getCharacter"
+      ),
     getClaimedCharacters: (ownerId, signal) =>
-      scope.time("raiderIo", () =>
-        gateway.getClaimedCharacters(ownerId, signal)
+      scope.time(
+        "raiderIo",
+        () => gateway.getClaimedCharacters(ownerId, signal),
+        "getClaimedCharacters"
       ),
     resolveProfileGuess: (value, signal) =>
-      scope.time("raiderIo", () => gateway.resolveProfileGuess(value, signal))
+      scope.time(
+        "raiderIo",
+        () => gateway.resolveProfileGuess(value, signal),
+        "resolveProfileGuess"
+      )
   };
 }
 

@@ -237,6 +237,11 @@ function failureOutcome(error: unknown): DiscoveryOutcome {
   };
 }
 
+// Matches the evidence run's Raider.IO ranking concurrency. Four uncached reads
+// in flight were no slower per call than serial reads, with no 429s
+// (docs/research/2026-09-27-issue-656-raiderio-guild-reads.md).
+const GUILD_READ_CONCURRENCY = 4;
+
 export async function discoverCharacter(
   root: CharacterKey,
   gateway: RaiderIoGateway,
@@ -431,6 +436,13 @@ export async function discoverCharacter(
   // An upstream failure here costs one guild, never the snapshot. A timeout or
   // 5xx is retried once, charged to the same budget, and whatever is still lost
   // is counted so the run records it.
+  //
+  // The reads run a few at a time, so the sweep waits on its slowest read
+  // rather than the sum of them. Budget is reserved synchronously inside
+  // `optionalRequest`, so concurrent reads, and their retries, cannot overspend
+  // the cap. Near the cap a retry can lose the last request to another
+  // worker's first read; that guild was still lost to an upstream failure, so
+  // it counts as dropped, and only which guild loses depends on timing.
   let guildReadsDropped = 0;
   async function readGuild(
     observed: DiscoveredCharacter
@@ -461,15 +473,27 @@ export async function discoverCharacter(
     }
   }
 
-  const withGuilds: DiscoveredCharacter[] = [];
-  for (const observed of characters) {
-    withGuilds.push(
-      observed.guild !== null ||
-        guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
-        ? observed
-        : await readGuild(observed)
-    );
+  const withGuilds: DiscoveredCharacter[] = [...characters];
+  const guildReads = characters.flatMap((observed, index) =>
+    observed.guild !== null ||
+    guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
+      ? []
+      : [index]
+  );
+  let nextGuildRead = 0;
+  async function readGuilds(): Promise<void> {
+    while (nextGuildRead < guildReads.length) {
+      throwIfAborted();
+      const index = guildReads[nextGuildRead++]!;
+      withGuilds[index] = await readGuild(characters[index]!);
+    }
   }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(GUILD_READ_CONCURRENCY, guildReads.length) },
+      readGuilds
+    )
+  );
 
   // A snapshot is anchored to its root character. Without a root observation the
   // repository write cannot complete, so refuse rather than publishing a snapshot
