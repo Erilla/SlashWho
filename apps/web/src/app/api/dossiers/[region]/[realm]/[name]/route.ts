@@ -59,9 +59,13 @@ export async function GET(
           )
         : await dossiers.read(parsed.key, request.signal, overrides, scope);
     if (result.kind === "not_ready") return apiError("discovery_not_ready");
-    return jsonNoStore(
-      applicantDossierSchema,
-      compactDossierWipes(result.dossier)
+    // Compaction, validation and serialisation are CPU work on a finished
+    // dossier, timed as `respond` (#687); `withHttpRequest` adds its count.
+    const { dossier } = result;
+    return scope.time("respond", () =>
+      Promise.resolve().then(() =>
+        jsonNoStore(applicantDossierSchema, compactDossierWipes(dossier))
+      )
     );
   });
 }

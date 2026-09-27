@@ -79,6 +79,7 @@ const repositories = {
     },
     async markRetrying() {},
     async completeWithLiveSweepSnapshot() {},
+    async recordGuildReadsDropped() {},
     async fail() {},
     async find() {
       return null;

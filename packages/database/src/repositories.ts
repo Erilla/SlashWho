@@ -1678,6 +1678,11 @@ export interface Repositories {
       snapshotId: string
     ): Promise<void>;
     fail(id: string, code: PublicErrorCode): Promise<void>;
+    /**
+     * Records how many guild reads the run's discovery lost to an upstream
+     * failure, replacing any count an earlier attempt of the same run left.
+     */
+    recordGuildReadsDropped(id: string, count: number): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
     /** The most recently requested runs, newest first, for the operator monitor. */

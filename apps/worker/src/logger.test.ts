@@ -370,13 +370,19 @@ describe("worker logger", () => {
         state: "complete",
         limitationCode: null,
         characterCount: 3,
+        guildReadsDropped: 1,
         durationMs: 1,
         correlationId: null,
         queueWaitMs: null,
         fingerprintQueueWaitMs: null,
         fingerprintReservedRequests: 0,
         fingerprintUsedRequests: 0,
-        fingerprintDurationMs: 0
+        fingerprintDurationMs: 0,
+        raiderIoMs: 1,
+        raiderIoCallMs: 1,
+        raiderIoCalls: 1,
+        raiderIoMaxCallMs: 1,
+        raiderIoMaxCallName: "getCharacter"
       },
       {
         event: "upstream_throttle",

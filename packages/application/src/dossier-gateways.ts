@@ -1,5 +1,9 @@
 import { lookupCuttingEdgeAchievement } from "@slashwho/domain";
-import type { BlizzardGateway } from "@slashwho/blizzard";
+import type {
+  BlizzardGateway,
+  BlizzardSlotWait,
+  RequestLimits
+} from "@slashwho/blizzard";
 import type {
   RaiderIoGateway,
   MythicBossRankingsOptions,
@@ -7,14 +11,37 @@ import type {
 } from "@slashwho/raiderio";
 
 import { awaitWithAbort } from "./abort";
+import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { createConcurrencyLimiter } from "./concurrency";
 import type { ApplicationConfig } from "./config";
 import { rankingRequestKey } from "./historic-world-rank";
 import type { MeasurementScope } from "./measurement";
 
-/** How long one provider call the dossier read makes may take. */
+/**
+ * How long one provider call the dossier read makes may take. A Blizzard read
+ * that waits on BLIZZARD_WEB_REQUEST_LIMITS spends this timeout while it
+ * waits, and leaves the limiter's queue when it expires.
+ */
 export const PROVIDER_TIMEOUT_MS = 15_000;
+
+/**
+ * Limits on the web's shared Blizzard client, the one built from the server's
+ * own credentials. Blizzard allows those credentials 100 requests a second and
+ * the worker spends 40 of them, so the web takes a fifth, leaving two fifths
+ * spare; the worker runtime test holds the sum to 80. A cold dossier makes up
+ * to 25 reads, so the limit costs it about a second at worst. The concurrency
+ * is not meant to bind: it admits every read DOSSIER_PROVIDER_CONCURRENCY can,
+ * so the rate is the only bound on Blizzard. Visitor-supplied credentials are
+ * a different client id with an allowance of their own, and are not limited
+ * by this. Both are per process, so the split holds only while the web runs
+ * one replica. See
+ * docs/research/2026-09-26-issue-549-blizzard-sweep-concurrency.md.
+ */
+export const BLIZZARD_WEB_REQUEST_LIMITS = {
+  maxConcurrent: 12,
+  maxPerSecond: 20
+} as const satisfies RequestLimits;
 
 /**
  * Visitor-supplied credentials for a single dossier read. Gateways built from
@@ -101,7 +128,10 @@ export function createDossierGateways(options: {
     "NEGATIVE_CACHE_TTL_MS" | "DOSSIER_PROVIDER_CONCURRENCY"
   >;
   onCacheEvent?: ((source: string, event: string) => void) | undefined;
+  /** Times Blizzard limiter waits; must be the clock the read's scope uses. */
+  monotonic?: () => number;
 }) {
+  const monotonic = options.monotonic ?? performance.now.bind(performance);
   const achievements = createBoundedCache<
     Awaited<ReturnType<BlizzardGateway["getCompletedAchievements"]>>
   >({
@@ -143,12 +173,18 @@ export function createDossierGateways(options: {
       async getCompletedAchievements(key, signal) {
         signal?.throwIfAborted();
         const load = async () => {
-          const run = async () =>
+          const run = async (waitForSlot?: BlizzardSlotWait) =>
             source.getCompletedAchievements(
               key,
-              AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+              AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+              undefined,
+              waitForSlot
             );
-          const rows = scope ? await scope.time("blizzard", run) : await run();
+          const rows = scope
+            ? await scope.time("blizzard", (excluded) =>
+                run(excludeBlizzardSlotWait(scope, monotonic, excluded))
+              )
+            : await run();
           return rows
             .filter(
               (row) => lookupCuttingEdgeAchievement(row.achievementId) !== null

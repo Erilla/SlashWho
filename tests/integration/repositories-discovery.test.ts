@@ -369,6 +369,34 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
     expect(await repositories.runs.findActive(rootKey)).toBeNull();
   });
 
+  it("stores the guild reads a run dropped, replacing an earlier attempt's count", async () => {
+    // The count exists because logs rotate, so it has to survive on the row.
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const stored = async () =>
+      (
+        await pool.query<{ guild_reads_dropped: number }>(
+          "SELECT guild_reads_dropped FROM discovery_runs WHERE id = $1",
+          [run.id]
+        )
+      ).rows[0]?.guild_reads_dropped;
+
+    expect(await stored()).toBe(0);
+    await repositories.runs.recordGuildReadsDropped(run.id, 2);
+    expect(await stored()).toBe(2);
+    await repositories.runs.recordGuildReadsDropped(run.id, 0);
+    expect(await stored()).toBe(0);
+
+    await expect(
+      repositories.runs.recordGuildReadsDropped(run.id, -1)
+    ).rejects.toThrow("guild_reads_dropped_out_of_range");
+    await expect(
+      repositories.runs.recordGuildReadsDropped(
+        "00000000-0000-4000-8000-000000000000",
+        1
+      )
+    ).rejects.toThrow("discovery_run_not_found");
+  });
+
   it("clears a scheduled retry when the run starts again", async () => {
     const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
     await repositories.runs.markRetrying(
