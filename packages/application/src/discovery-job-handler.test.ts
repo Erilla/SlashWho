@@ -1688,8 +1688,15 @@ describe("discovery job handler", () => {
       const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
       const records: Array<Record<string, unknown>> = [];
       let tick = 0;
+      // Only the first call of the slow operation advances the clock. Guild
+      // reads run concurrently (#693), so a later getCharacter can be in
+      // flight across another's tick and would measure two of them.
+      let slowed = false;
       const slowWhen = async <T>(operation: string, result: T): Promise<T> => {
-        if (operation === slowOperation) tick += 1_000;
+        if (operation === slowOperation && !slowed) {
+          slowed = true;
+          tick += 1_000;
+        }
         return result;
       };
       // Discovery resolves a profile guess only for a character with no
