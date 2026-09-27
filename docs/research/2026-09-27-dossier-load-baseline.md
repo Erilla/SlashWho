@@ -113,6 +113,13 @@ once discovery has published a snapshot.
    production it would cost a full round trip plus about 7–20 ms of server
    time (the `account_session` `http_request` records on `test`).
 
+   Since this baseline was taken, #684 has started the first read from an
+   inline script while the HTML is parsed, so for an anonymous visitor the
+   read no longer waits for the page to start. The numbers above predate that
+   change; re-run the profiler to see the new gap. A visitor with saved
+   provider keys still takes the old path, because the early read stands
+   aside for them (#689).
+
 2. **The server read: 28–45 ms locally when no provider is called.** This is
    almost all database time. At 12 characters, `db` sums to about 210 ms
    within a 45 ms request, because `assembleDossier` gathers each subject in
@@ -190,20 +197,28 @@ count failed fetches separately. A total is valid only when no fetch failed.
 
 ## Follow-ups
 
-- **Start the first read sooner (#667).** The read cannot begin until the
-  client page has started, about 80 ms after the shell locally and more on a
-  slow device. The server shell could fetch the first read itself, or the page
-  could start it before hydration.
-- **Profile a visitor with stored provider keys.** Their read waits on a
-  serial `/api/account/session` round trip, and none of these scenarios
-  covers that.
+Done:
+
+- **Start the first read sooner: done (#667, #684).** The first read now
+  starts from an inline script before hydration.
 - **Production's 62 database calls: answered (#666, #682).** Production makes
   the same 31 calls as local, and slower. The 62-call read was a cache-miss
   outlier. See "Production records".
-- **Add a database-latency mode to the profiler.** #682 modelled Railway with a
-  local TCP proxy (set `noDelay`, and do not delay with `setTimeout` on
-  Windows, which rounds to about 15.6 ms). Folding that into
+
+Open:
+
+- **Profile a visitor with stored provider keys (#689).** Their read skips
+  #684's early read, waits on a serial `/api/account/session` round trip, and
+  uses gateways that bypass the shared provider caches. No scenario covers
+  that.
+- **Add a database-latency mode to the profiler (#685).** #682 modelled
+  Railway with a local TCP proxy (set `noDelay`, and do not delay with
+  `setTimeout` on Windows, which rounds to about 15.6 ms). Folding that into
   `profile:dossier` would let the local baseline include database latency.
-- **Evidence appears only at the next poll.** The 1 s, 2 s, 4 s backoff means
-  a visitor can wait up to one full interval after evidence is published.
-- **Unbounded polling on `partial`:** #663.
+- **Profile production-sized evidence (#686)** and **time assembly and
+  validation on the read path (#687).** Both target the roughly 370 ms of a
+  production read that the local fixtures do not exercise.
+- **Show new evidence without waiting for the next poll (#690).** The 1 s,
+  2 s, 4 s backoff means a visitor can wait up to one full interval after
+  evidence is published.
+- **Unbounded polling on `partial` (#663).**
