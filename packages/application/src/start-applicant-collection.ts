@@ -77,6 +77,7 @@ export async function startApplicantCollection(input: {
     return "suppressed";
   const evidence = await repositories.evidence.reserve({
     key,
+    origin: "applicant_sheet",
     at: new Date(),
     freshnessCutoff: new Date(
       input.observedAt.getTime() - input.evidenceFreshnessHours * 60 * 60_000

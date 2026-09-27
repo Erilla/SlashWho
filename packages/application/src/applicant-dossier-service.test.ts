@@ -766,6 +766,7 @@ describe("applicant dossier service", () => {
 
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
       expect.objectContaining({
+        origin: "dossier_read",
         phasePlan: [
           "warcraft_logs_identity_resolution",
           "warcraft_logs_history",
@@ -2641,8 +2642,10 @@ describe("applicant dossier service", () => {
       }
     });
     expect(repositories.evidence.getCompleted).toHaveBeenCalledWith(root);
+    // An ordinary read that found no snapshot is still an ordinary read, not
+    // the initial one (#708).
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: root })
+      expect.objectContaining({ key: root, origin: "dossier_read" })
     );
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
   });
@@ -2819,7 +2822,7 @@ describe("applicant dossier service", () => {
 
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: root })
+      expect.objectContaining({ key: root, origin: "dossier_initial" })
     );
     expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
     expect(repositories.snapshots.create).not.toHaveBeenCalled();
@@ -3725,7 +3728,27 @@ describe("manually connected characters", () => {
       alias
     );
     expect(repositories.evidence.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ key: alt })
+      expect.objectContaining({ key: alt, origin: "historic_alias" })
+    );
+  });
+
+  it("tells a reader's refresh from an operator's rebuild on the run", async () => {
+    // Break caught: both reach one `refreshCharacter`, which cannot tell them
+    // apart, so the run would record whichever the function assumed (#708).
+    const { dossiers, repositories } = fixture();
+    Object.assign(repositories.evidence, {
+      clearTerminalTiers: vi.fn().mockResolvedValue(0),
+      listStatus: vi.fn().mockResolvedValue([])
+    });
+
+    await dossiers.refreshCharacter(alt);
+    await dossiers.rebuildCharacter(third);
+
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: alt, origin: "refresh" })
+    );
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: third, origin: "rebuild" })
     );
   });
 

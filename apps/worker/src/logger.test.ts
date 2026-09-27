@@ -145,6 +145,7 @@ describe("worker logger", () => {
       dbCalls: 2,
       dbMaxCallMs: 6,
       dbMaxCallName: "applicantRuns.claimNext",
+      origin: "dossier_initial",
       outcome: "complete",
       limitationCode: null,
       parseLimitationCode: null,
@@ -153,6 +154,9 @@ describe("worker logger", () => {
     });
 
     const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+    // What queued the run is the point of #708; dropping it would leave the
+    // queue as unexplained as before.
+    expect(record.origin).toBe("dossier_initial");
     for (const [key, value] of Object.entries(record)) {
       expect(value, `${key} was redacted`).not.toBe("[Redacted]");
     }

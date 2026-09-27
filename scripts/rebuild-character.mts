@@ -60,6 +60,7 @@ async function main(): Promise<void> {
     const repositories = createPostgresRepositories(pool);
     const result = await refreshCharacter({
       key,
+      origin: "rebuild",
       at: new Date(),
       // A rebuild ignores the cooldown by construction: the mode is chosen
       // here rather than derived from how recently the character was read.

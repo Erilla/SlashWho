@@ -1260,7 +1260,8 @@ describe("worker runtime", () => {
 
     expect(fakes.evidenceReserve).toHaveBeenCalledWith(
       expect.objectContaining({
-        key: { region: "eu", realm: "draenor", name: "mistakinus" }
+        key: { region: "eu", realm: "draenor", name: "mistakinus" },
+        origin: "fingerprint_admission"
       })
     );
     expect(fakes.evidenceEnqueues).toEqual([

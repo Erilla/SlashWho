@@ -22,6 +22,7 @@ const inFlightMonitor: CollectionMonitorResponse = {
     {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
       status: "running",
+      origin: "dossier_initial",
       attempt: 1,
       startedAt: "2026-09-20T11:45:00.000Z",
       elapsedSeconds: 900,
@@ -30,6 +31,7 @@ const inFlightMonitor: CollectionMonitorResponse = {
     {
       character: { region: "us", realm: "illidan", name: "blocked" },
       status: "running",
+      origin: "dossier_read",
       attempt: 1,
       startedAt: "2026-09-20T11:50:00.000Z",
       elapsedSeconds: 600,
@@ -40,6 +42,7 @@ const inFlightMonitor: CollectionMonitorResponse = {
     {
       character: { region: "us", realm: "area-52", name: "unrelated" },
       state: "complete",
+      origin: "dossier_read",
       limitationCode: null,
       parseLimitationCode: null,
       completedAt: "2026-09-20T11:00:00.000Z",
@@ -59,6 +62,7 @@ const partialMonitor: CollectionMonitorResponse = {
     {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
       state: "partial",
+      origin: "dossier_read",
       limitationCode: "request_cap",
       parseLimitationCode: null,
       completedAt: "2026-09-20T12:01:00.000Z",
@@ -92,6 +96,7 @@ const multipleTerminalMonitor: CollectionMonitorResponse = {
   failed: [
     {
       character: { region: "us", realm: "illidan", name: "blocked" },
+      origin: "dossier_read",
       errorCode: "warcraft_logs_unavailable",
       stoppedAt: "2026-09-20T12:03:00.000Z"
     }
@@ -207,6 +212,39 @@ describe("CollectionMonitorClient", () => {
     expect(
       within(table).getByRole("link", { name: /newest — draenor/i })
     ).toHaveAttribute("href", "/dossiers/eu/draenor/newest");
+  });
+
+  it("says why each evidence run was queued", () => {
+    // Break caught: a backed-up queue could only be explained by inferring
+    // each run's origin from indirect clues (#708).
+    render(
+      <CollectionMonitorClient
+        initialMonitor={{
+          ...inFlightMonitor,
+          failed: multipleTerminalMonitor.failed
+        }}
+      />
+    );
+
+    const inFlight = screen.getByRole("table", {
+      name: "In flight and pending"
+    });
+    expect(
+      within(inFlight).getByRole("columnheader", { name: "Origin" })
+    ).toBeVisible();
+    expect(within(inFlight).getAllByRole("row")[1]).toHaveTextContent(
+      "dossier_initial"
+    );
+    expect(
+      within(screen.getByRole("table", { name: "Completed" })).getByText(
+        "dossier_read"
+      )
+    ).toBeVisible();
+    expect(
+      within(screen.getByRole("table", { name: "Failed" })).getByText(
+        "dossier_read"
+      )
+    ).toBeVisible();
   });
 
   it("says when no discovery runs have been requested", () => {
@@ -348,6 +386,7 @@ describe("CollectionMonitorClient", () => {
           name: `run${from + index}`
         },
         state: "complete",
+        origin: "dossier_read",
         limitationCode: null,
         parseLimitationCode: null,
         completedAt: new Date(

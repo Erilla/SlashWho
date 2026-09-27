@@ -43,7 +43,8 @@ const allowlist = new Set([
   "committedRequests",
   "hourlyBudget",
   // evidence_job, whose shape is fixed up front so every field is present on
-  // every record.
+  // every record. `origin` is a closed class of reserving path (#708).
+  "origin",
   "parseLimitationCode",
   "killCount",
   "raiderIoHistoricOutcome",

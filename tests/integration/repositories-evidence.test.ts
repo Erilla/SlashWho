@@ -49,6 +49,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Historical-guild traversal can only safely call Blizzard when the
     // region was observed with the public report; a realm alone is ambiguous.
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -84,6 +85,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // what a mistake there would corrupt.
     const awkward = 'Boss "Quoted", {braced} \\ back\\slash';
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -160,6 +162,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("persists a rankless successful lookup and carries it into later publications", async () => {
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -191,6 +194,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const later = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -218,6 +222,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // used to leave no ledger at all, so an operator could not distinguish a
     // queued run from one whose progress writer had failed.
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at: new Date("2026-09-22T11:00:00.000Z"),
@@ -265,6 +270,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("records a stopped collection as failed publication in the same transaction", async () => {
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at: new Date("2026-09-22T11:00:00.000Z"),
@@ -294,6 +300,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("settles publication when a run fails before it can publish", async () => {
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at: new Date("2026-09-22T11:00:00.000Z"),
@@ -321,6 +328,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("reopens a limited evidence phase on retry and records its recovered result", async () => {
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at: new Date("2026-09-22T11:00:00.000Z"),
@@ -377,6 +385,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // re-reading the whole dossier, so it has to see every step change.
     const at = new Date("2026-09-22T11:00:00.000Z");
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at,
@@ -385,6 +394,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     if (reservation.kind !== "reserved")
       throw new Error("evidence_not_reserved");
     const bare = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: altKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at
@@ -453,6 +463,7 @@ describe("PostgreSQL repositories: character evidence", () => {
   it("leaves a suppressed character's runs out of the progress read", async () => {
     const at = new Date("2026-09-22T11:00:00.000Z");
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at
@@ -468,6 +479,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Break caught: a provider phase that does not publish its normalized
     // result only recreates the same network call on every dossier read.
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
       at: new Date("2026-09-22T11:00:00.000Z"),
@@ -534,6 +546,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }
     });
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -551,6 +564,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     // The same fight, re-found by a run that skipped it as already hydrated.
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -615,6 +629,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     ) => {
       const at = new Date(start + minute * 60_000);
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date(at.getTime() - 60_000),
         at
@@ -672,6 +687,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
     const completedAt = new Date("2026-08-04T12:05:00.000Z");
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -731,6 +747,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // not terminal, so nothing is carried forward wholesale and the publish
     // has to consult the stored-performance loader.
     const later = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -755,6 +772,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // it (#540), and the dossier reads the mark to leave the last run's
     // notices standing (#541).
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -768,6 +786,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       repositories.evidence.find(reserved.run.id)
     ).resolves.toMatchObject({ lightRefresh: true });
     const joined = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -790,6 +809,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // settled whatever its marks say, and the application layer cannot see
     // the version to tell.
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -807,6 +827,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const stale = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-05T13:00:00.000Z"),
       at: new Date("2026-08-05T13:00:00.000Z")
@@ -829,6 +850,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       [rootKey.region, rootKey.realm, rootKey.name]
     );
     const outdated = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-05T13:00:00.000Z"),
       at: new Date("2026-08-05T14:00:00.000Z")
@@ -875,6 +897,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     } as const;
 
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -892,6 +915,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     // A later run whose budget reached only the newest zone.
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -944,6 +968,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }
     });
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -961,6 +986,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     // The same fight, re-found by a rate-limited run that enriched nothing.
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -1006,6 +1032,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=bare"
     });
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1045,6 +1072,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }
     });
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1084,6 +1112,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }
     });
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1108,6 +1137,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       [rootKey.region, rootKey.realm, rootKey.name, oldParse.raidId]
     );
     const next = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -1213,6 +1243,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=unasked"
     });
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1247,6 +1278,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       fightUrl: "https://www.warcraftlogs.com/reports/example#fight=answered"
     });
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1264,6 +1296,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-05T11:00:00.000Z"),
       at: new Date("2026-08-05T12:00:00.000Z")
@@ -1296,6 +1329,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // from costing a second full collection (#292). A stage that outlived its
     // publication would be republished over evidence already stored.
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1338,6 +1372,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // a copy of its evidence behind. Nothing will republish it once the run has
     // settled, so the hourly cleanup is what keeps it from accumulating.
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1390,6 +1425,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }) as const;
 
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1409,6 +1445,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // carried forward by `publish`, so it stays collected -- at its own,
     // earlier time, not this run's.
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -1439,6 +1476,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     const fightUrl =
       "https://www.warcraftlogs.com/reports/example#fight=superseded";
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1465,6 +1503,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T13:00:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -1506,6 +1545,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // collection needs the stored class to settle shared specialisation names.
     await seedCompleteSnapshot(repositories);
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1527,6 +1567,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // started reported no gathering at all -- and the refresh button that
     // started it stayed enabled.
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1544,6 +1585,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     // What the refresh button does: a cutoff of `at` leaves nothing fresh.
     const refresh = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:30:00.000Z"),
       at: new Date("2026-08-04T12:30:00.000Z")
@@ -1552,6 +1594,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     // What a dossier read does, concurrently, with the normal window.
     const read = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-03T12:30:00.000Z"),
       at: new Date("2026-08-04T12:30:00.000Z")
@@ -1564,6 +1607,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("reports no running collection when fresh evidence is simply at rest", async () => {
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1580,6 +1624,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const read = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-03T12:30:00.000Z"),
       at: new Date("2026-08-04T12:30:00.000Z")
@@ -1594,6 +1639,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // disappear until its replacement scan finishes.
     const completedAt = new Date("2026-08-04T12:00:00.000Z");
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: completedAt
@@ -1610,6 +1656,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const refresh = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:01:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -1632,6 +1679,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
     await expect(
       repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-08-04T12:01:00.000Z"),
         at: new Date("2026-08-04T13:01:00.000Z")
@@ -1648,6 +1696,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // cached kill fresh forever, so the worker would never recompute its metrics.
     const completedAt = new Date("2026-08-04T12:00:00.000Z");
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: completedAt
@@ -1669,6 +1718,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     await expect(
       repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
         at: new Date("2026-08-04T13:00:00.000Z")
@@ -1687,6 +1737,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // rather than serving a partial cached set forever.
     const completedAt = new Date("2026-08-04T12:00:00.000Z");
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: completedAt
@@ -1708,6 +1759,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     await expect(
       repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
         at: new Date("2026-08-04T13:00:00.000Z")
@@ -1722,6 +1774,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Break caught: a per-boss uniqueness key silently dropped earlier wipes,
     // even though the dossier must show the complete report history.
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1763,6 +1816,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Break caught: a reader could observe a completed run with only part of
     // its normalized WCL fights after a worker crashes during persistence.
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -1871,6 +1925,8 @@ describe("PostgreSQL repositories: character evidence", () => {
     expect(rows).toContainEqual({
       key: { region: "eu", realm: "silvermoon", name: "partial" },
       status: "partial",
+      // Inserted with no origin, as every row from before #708 was.
+      origin: "unknown",
       evidenceVersion: 13,
       attempt: 1,
       limitationCode: "request_cap",
@@ -1934,6 +1990,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "terminalcarry"
     } as const;
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-18T00:00:00.000Z"),
       at: new Date("2026-09-18T00:00:00.000Z")
@@ -1972,6 +2029,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // The second run never re-reads raid 42 -- that is what the mark is for --
     // so it reports only raid 99. Raid 42 must survive anyway.
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
       at: new Date("2026-09-19T00:00:00.000Z")
@@ -2011,6 +2069,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "nonterminaldrop"
     } as const;
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-18T00:00:00.000Z"),
       at: new Date("2026-09-18T00:00:00.000Z")
@@ -2026,6 +2085,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
       at: new Date("2026-09-19T00:00:00.000Z")
@@ -2059,6 +2119,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "dungeondrain"
     } as const;
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-18T00:00:00.000Z"),
       at: new Date("2026-09-18T00:00:00.000Z")
@@ -2083,6 +2144,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
       at: new Date("2026-09-19T00:00:00.000Z")
@@ -2117,6 +2179,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     const firstAt = new Date("2026-09-18T12:00:00.000Z");
     const secondAt = new Date("2026-09-19T12:00:00.000Z");
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: firstAt,
       at: firstAt
@@ -2147,6 +2210,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     );
 
     const next = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: secondAt,
       at: secondAt
@@ -2186,6 +2250,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     } as const;
     const at = new Date("2026-09-18T00:00:00.000Z");
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: at,
       at
@@ -2241,6 +2306,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     } as const;
     const firstAt = new Date("2026-09-19T10:00:00.000Z");
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: firstAt,
       at: firstAt
@@ -2260,6 +2326,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     const secondAt = new Date("2026-09-19T10:30:00.000Z");
     const second = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T10:00:01.000Z"),
       at: secondAt
@@ -2279,6 +2346,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
     const thirdAt = new Date("2026-09-19T11:00:00.000Z");
     const third = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T10:30:01.000Z"),
       at: thirdAt
@@ -2464,6 +2532,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     } as const;
     const at = new Date("2026-09-18T12:00:00.000Z");
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: at,
       at
@@ -2568,6 +2637,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("recovers complete evidence hidden behind a legacy partial refresh", async () => {
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -2594,6 +2664,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       ]
     );
     const refresh = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:31:00.000Z"),
       at: new Date("2026-08-04T13:00:00.000Z")
@@ -2622,6 +2693,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("marks pre-wipe-schema evidence as incapable of negative conclusions", async () => {
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T11:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -2661,6 +2733,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "parselimitations"
     } as const;
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
       at: new Date("2026-09-19T00:00:00.000Z")
@@ -2700,6 +2773,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "noparselimitation"
     } as const;
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date("2026-09-19T00:00:00.000Z"),
       at: new Date("2026-09-19T00:00:00.000Z")
@@ -2776,6 +2850,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     for (const [index, input] of cases.entries()) {
       const key = { ...rootKey, name: `limitation-${index}` };
       const reserved = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key,
         freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
         at: new Date("2026-08-04T12:00:00.000Z")
@@ -2814,6 +2889,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }
     ].entries()) {
       const reserved = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: { ...rootKey, name: `invalid-limitation-${index}` },
         freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
         at: new Date("2026-08-04T12:00:00.000Z")
@@ -2834,6 +2910,7 @@ describe("PostgreSQL repositories: character evidence", () => {
 
   it("stores permanent timestamp omissions on a complete run", async () => {
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: { ...rootKey, name: "timestampomissions" },
       freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -2863,6 +2940,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Break caught: storage could lose a normalized parse state or percentile,
     // including a valid zero, while replacing a completed evidence scan.
     const initial = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -2900,6 +2978,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     });
 
     const replacement = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:06:00.000Z"),
       at: new Date("2026-08-04T12:06:00.000Z")
@@ -2966,6 +3045,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Break caught: an out-of-range parse percentile could reach persistence
     // and violate the normalized state/value contract.
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -3002,6 +3082,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // Break caught: PostgreSQL CHECK treats a null available percentile as
     // unknown unless the available branch requires a concrete value.
     const reserved = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-08-04T12:00:00.000Z"),
       at: new Date("2026-08-04T12:00:00.000Z")
@@ -3057,6 +3138,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3083,12 +3165,14 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Accountjoined"
     } as const;
     const first = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
       credentials: { accountId: alice!, credentialVersion: 1 }
     });
     const joined = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3112,6 +3196,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     const concurrent = await Promise.all(
       callers.map((accountId) =>
         repositories.evidence.reserve({
+          origin: "dossier_read",
           key: concurrentKey,
           freshnessCutoff: new Date(0),
           at: new Date(),
@@ -3136,6 +3221,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter2"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3166,6 +3252,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter3"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3188,6 +3275,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter4"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3228,6 +3316,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter14"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3266,12 +3355,14 @@ describe("PostgreSQL repositories: character evidence", () => {
     } as const;
     const full = { ...light, name: "Testcharacterlight2" } as const;
     const lightRun = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: light,
       freshnessCutoff: new Date(0),
       at: new Date(),
       lightRefresh: true
     });
     const fullRun = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: full,
       freshnessCutoff: new Date(0),
       at: new Date()
@@ -3284,6 +3375,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     expect(fullRun.run.lightRefresh).toBeUndefined();
     // Joining the run in flight neither upgrades nor downgrades it.
     const joined = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: light,
       freshnessCutoff: new Date(0),
       at: new Date()
@@ -3302,6 +3394,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter15"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date()
@@ -3329,6 +3422,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       name: "Testcharacter5"
     } as const;
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(0),
       at: new Date(),
@@ -3363,6 +3457,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       // Reserved as of its own completion, so an earlier run of the same
       // character is never still fresh and this always gets a new run.
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key,
         freshnessCutoff: completedAt,
         at: completedAt
@@ -3425,6 +3520,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       await publishWaiting(rootKey, new Date("2026-09-18T12:40:00.000Z"));
       // A reader got there first, which leaves a run queued for this character.
       const active = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-09-18T13:00:00.000Z"),
         at
@@ -3470,6 +3566,7 @@ describe("PostgreSQL repositories: character evidence", () => {
     // every later read to a run that is running nowhere.
     async function reserveRun(key: CharacterKey, at: Date): Promise<string> {
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key,
         freshnessCutoff: at,
         at
@@ -3546,6 +3643,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       // the next read reserves a fresh run rather than joining a dead one.
       await expect(repositories.evidence.listActive(25)).resolves.toEqual([]);
       const next = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-09-18T13:30:00.000Z"),
         at: new Date("2026-09-18T13:30:00.000Z")
@@ -3558,6 +3656,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       // must not leave a visitor's ciphertext behind either.
       const at = new Date("2026-09-18T13:25:00.000Z");
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: at,
         at,
@@ -3704,6 +3803,7 @@ describe("PostgreSQL repositories: character evidence", () => {
         repositories.evidence.listResumable(25, at)
       ).resolves.toEqual([]);
       const next = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: at,
         at
@@ -3882,6 +3982,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       }>
     ) => {
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date(`2026-09-20T12:${minute}:00.000Z`),
         at: new Date(`2026-09-20T12:${minute + 1}:00.000Z`)
@@ -3937,6 +4038,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       historicAliasProgress: (typeof progress)[]
     ) => {
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date(`2026-09-20T12:${minute}:00.000Z`),
         at: new Date(`2026-09-20T12:${minute + 1}:00.000Z`)

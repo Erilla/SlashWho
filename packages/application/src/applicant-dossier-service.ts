@@ -94,6 +94,11 @@ export type CreateDossierCommand = CreateSearchCommand;
 export type CreateDossierResult = CreateSearchResult;
 export type ReadDossierResult =
   { kind: "ready"; dossier: ContractApplicantDossier } | { kind: "not_ready" };
+/**
+ * The two reads that can reserve collection: `readInitial`, the root-only
+ * answer while discovery runs, and an ordinary `read`.
+ */
+type DossierReadOrigin = "dossier_initial" | "dossier_read";
 /** `missing` covers a link another reviewer has already removed. */
 export type ConnectedCharacterExclusionResult =
   | { kind: "updated" }
@@ -334,6 +339,8 @@ function cachedWipe(
 async function gatherCharacterEvidence(
   character: DossierSubject,
   options: {
+    /** Which read this is, recorded on a run it reserves (#708). */
+    origin: DossierReadOrigin;
     repositories: Pick<Repositories, "evidence">;
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     freshnessCutoff: Date;
@@ -349,6 +356,7 @@ async function gatherCharacterEvidence(
   const attributed = options.attributeTo ?? character.key;
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
+    origin: options.origin,
     freshnessCutoff: options.freshnessCutoff,
     at: new Date(),
     credentials:
@@ -818,6 +826,8 @@ function tierSearchSubjects(
 
 async function assembleDossier(options: {
   root: CharacterKey;
+  /** Which read is assembling, recorded on any run it reserves (#708). */
+  evidenceOrigin: DossierReadOrigin;
   subjects: readonly DossierSubject[];
   skippedSubjects: readonly DossierSubject[];
   /**
@@ -853,6 +863,7 @@ async function assembleDossier(options: {
             gatherCharacterEvidence(
               { ...character, key },
               {
+                origin: options.evidenceOrigin,
                 repositories: options.repositories,
                 queue: options.queue,
                 freshnessCutoff: options.freshnessCutoff,
@@ -1178,6 +1189,7 @@ export function createApplicantDossierService(options: {
     try {
       await refreshCharacter({
         key: character,
+        origin: "historic_alias",
         at: new Date(),
         cooldownMs: 0,
         repositories: options.repositories,
@@ -1198,7 +1210,7 @@ export function createApplicantDossierService(options: {
     request: Pick<
       Parameters<typeof refreshCharacter>[0],
       "rebuild" | "credentials"
-    >
+    > & { origin: "refresh" | "rebuild" }
   ): Promise<RefreshCharacterResult> {
     return refreshCharacter({
       key,
@@ -1422,12 +1434,14 @@ export function createApplicantDossierService(options: {
   async function readRootOnly(
     key: CharacterKey,
     hasStoredEvidence: boolean,
+    evidenceOrigin: DossierReadOrigin,
     context: ReturnType<typeof assemblyContext>
   ): Promise<ReadDossierResult> {
     return {
       kind: "ready",
       dossier: await assembleDossier({
         root: key,
+        evidenceOrigin,
         subjects: [rootOnlySubject(key)],
         skippedSubjects: [],
         excludedSubjects: [],
@@ -1583,6 +1597,7 @@ export function createApplicantDossierService(options: {
       // the cooldown and `light` inside it, one run either way, and there is no
       // argument a caller could pass to turn it into a rebuild.
       return requestCollection(key, scope, {
+        origin: "refresh",
         credentials: overrides?.wclCredentialRef
       });
     },
@@ -1608,7 +1623,10 @@ export function createApplicantDossierService(options: {
     },
 
     async rebuildCharacter(key, scope) {
-      return requestCollection(key, scope, { rebuild: true });
+      return requestCollection(key, scope, {
+        origin: "rebuild",
+        rebuild: true
+      });
     },
 
     async readInitial(key, signal, overrides, scope) {
@@ -1645,6 +1663,7 @@ export function createApplicantDossierService(options: {
       return readRootOnly(
         key,
         hasStoredEvidence,
+        "dossier_initial",
         assemblyContext(repositories, signal, overrides, scope)
       );
     },
@@ -1661,6 +1680,7 @@ export function createApplicantDossierService(options: {
         return readRootOnly(
           key,
           true,
+          "dossier_read",
           assemblyContext(repositories, signal, overrides, scope)
         );
       }
@@ -1681,6 +1701,7 @@ export function createApplicantDossierService(options: {
         kind: "ready",
         dossier: await assembleDossier({
           root: snapshot.rootKey,
+          evidenceOrigin: "dossier_read",
           subjects: selected,
           skippedSubjects: skipped,
           excludedSubjects: excludedOrdered,

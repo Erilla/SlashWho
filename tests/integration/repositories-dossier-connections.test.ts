@@ -213,6 +213,7 @@ describe("PostgreSQL repositories: dossier connections", () => {
       at
     );
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: at,
       at
@@ -251,6 +252,7 @@ describe("PostgreSQL repositories: dossier connections", () => {
     ).toBeUndefined();
 
     const aliasRun = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2026-09-20T12:01:00.000Z"),
       at: new Date("2026-09-20T12:02:00.000Z")
@@ -339,6 +341,7 @@ describe("PostgreSQL repositories: dossier connections", () => {
     const at = new Date("2026-09-20T12:00:00.000Z");
     const dueAt = new Date(Date.now() + 5_000);
     const active = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: at,
       at
@@ -368,6 +371,7 @@ describe("PostgreSQL repositories: dossier connections", () => {
       repositories.evidence.listResumable(10, dueAt)
     ).resolves.toEqual([rootKey]);
     const following = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: rootKey,
       freshnessCutoff: new Date("2020-01-01T00:00:00.000Z"),
       at: new Date()

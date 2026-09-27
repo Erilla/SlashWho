@@ -156,6 +156,7 @@ export async function seedCharacterEvidence(
     const repositories = createPostgresRepositories(pool);
     const now = new Date();
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(now.valueOf() - 60_000),
       at: now
@@ -312,6 +313,7 @@ export async function seedSyntheticEvidence(
     const repositories = createPostgresRepositories(pool);
     const now = new Date();
     const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key,
       freshnessCutoff: new Date(now.valueOf() - 60_000),
       at: now

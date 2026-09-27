@@ -585,6 +585,57 @@ Time outside any timed call is in none of them. That includes Raider.IO
 rankings, Blizzard and the handler's own work. The Raider.IO historic lookup
 has its own column, `raiderio_historic_ms`.
 
+## What asked for the run
+
+Since #708 every run records `origin`, the path that reserved it, and each
+cost row copies it. It is set once, when the run is reserved, and kept on the
+run like `mode`. So a re-claimed attempt, or a job re-enqueued with no payload,
+still says what asked for it. A caller that joins a run already in flight does
+not change it.
+
+| `origin`                | Reserved by                                                            |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `dossier_initial`       | `readInitial`: the root-only dossier while discovery runs              |
+| `dossier_read`          | an ordinary dossier read that found stale or missing evidence          |
+| `refresh`               | the reader-facing refresh control                                      |
+| `rebuild`               | an operator's rebuild, from the console or `scripts/rebuild-character` |
+| `historic_alias`        | adding or removing a historic alias                                    |
+| `tier_search`           | an explicit tier search                                                |
+| `resume_sweep`          | the worker's sweep of runs whose retry is due                          |
+| `applicant_sheet`       | an applicant sheet submission                                          |
+| `fingerprint_admission` | a character newly connected by the fingerprint sweep                   |
+| `unknown`               | a run reserved before #708; never a guess at which path it was         |
+
+`origin` is a class, never an identity. It holds no visitor, account, request
+URL or referrer. The credential columns already show whether a visitor's key
+was supplied.
+
+Why the queue is long, with no other join:
+
+```sql
+SELECT origin, count(*) AS runs
+FROM character_evidence_runs
+WHERE status IN ('queued', 'running', 'retrying')
+GROUP BY origin
+ORDER BY runs DESC;
+```
+
+What each origin spent:
+
+```sql
+SELECT origin,
+       count(*) AS attempts,
+       round(sum(points_spent)::numeric, 1) AS points_spent,
+       count(*) - count(points_spent) AS unmeasured
+FROM character_evidence_run_costs
+WHERE recorded_at >= now() - interval '7 days'
+GROUP BY origin
+ORDER BY points_spent DESC NULLS LAST;
+```
+
+`unmeasured` counts the attempts whose allowance could not be read. Their
+spend is unknown, not zero, so `points_spent` leaves them out.
+
 ## Keeping this honest
 
 `tests/integration/repositories-evidence-searches.test.ts` extracts every query

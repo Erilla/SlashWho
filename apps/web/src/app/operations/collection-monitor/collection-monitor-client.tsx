@@ -225,6 +225,7 @@ export function CollectionMonitorView({
               <tr>
                 <th scope="col">Character</th>
                 <th scope="col">Status</th>
+                <th scope="col">Origin</th>
                 <th scope="col">Step</th>
                 <th scope="col">Attempt</th>
                 <th scope="col">Started</th>
@@ -235,7 +236,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.inFlight.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     No evidence runs are in flight or pending.
                   </td>
                 </tr>
@@ -248,6 +249,7 @@ export function CollectionMonitorView({
                         {run.status}
                       </span>
                     </td>
+                    <td>{code(run.origin)}</td>
                     <td>
                       {run.collectionProgress ? (
                         <CollectionProgress
@@ -283,6 +285,7 @@ export function CollectionMonitorView({
               <tr>
                 <th scope="col">Character</th>
                 <th scope="col">State</th>
+                <th scope="col">Origin</th>
                 <th scope="col">Limitation</th>
                 <th scope="col">Parse limitation</th>
                 <th scope="col">Completed</th>
@@ -292,7 +295,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.completed.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No completed evidence runs.</td>
+                  <td colSpan={7}>No completed evidence runs.</td>
                 </tr>
               ) : (
                 monitor.completed.map((run, index) => (
@@ -305,6 +308,7 @@ export function CollectionMonitorView({
                         {run.state}
                       </span>
                     </td>
+                    <td>{code(run.origin)}</td>
                     <td>{code(run.limitationCode)}</td>
                     <td>{code(run.parseLimitationCode)}</td>
                     <td>{dateTime(run.completedAt)}</td>
@@ -347,6 +351,7 @@ export function CollectionMonitorView({
             <thead>
               <tr>
                 <th scope="col">Character</th>
+                <th scope="col">Origin</th>
                 <th scope="col">Error</th>
                 <th scope="col">Stopped</th>
               </tr>
@@ -354,7 +359,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.failed.length === 0 ? (
                 <tr>
-                  <td colSpan={3}>No failed evidence runs.</td>
+                  <td colSpan={4}>No failed evidence runs.</td>
                 </tr>
               ) : (
                 monitor.failed.map((run, index) => (
@@ -362,6 +367,7 @@ export function CollectionMonitorView({
                     key={`${characterKey(run.character)}:${run.stoppedAt ?? index}`}
                   >
                     <CharacterCell character={run.character} />
+                    <td>{code(run.origin)}</td>
                     <td>{code(run.errorCode)}</td>
                     <td>{dateTime(run.stoppedAt)}</td>
                   </tr>

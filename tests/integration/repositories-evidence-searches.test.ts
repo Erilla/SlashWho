@@ -55,6 +55,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
 
     async function publishEvidence(key: CharacterKey, at: Date) {
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key,
         freshnessCutoff: at,
         at
@@ -122,6 +123,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
     it("joins nothing while any run for the character is in flight", async () => {
       await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
       const ordinary = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: searchedAt,
         at: searchedAt
@@ -311,6 +313,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       // reservation always refuses.
       await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
       const failed = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: altKey,
         freshnessCutoff: searchedAt,
         at: searchedAt
@@ -516,6 +519,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       // Its newer complete row must not hide the tier's outstanding cursor.
       const ordinaryAt = new Date("2026-09-23T12:10:00.000Z");
       const ordinary = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: ordinaryAt,
         at: ordinaryAt
@@ -537,6 +541,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       const waitingAt = new Date("2026-09-23T12:15:00.000Z");
       await expect(
         repositories.evidence.reserve({
+          origin: "dossier_read",
           key: rootKey,
           freshnessCutoff: ordinaryAt,
           at: waitingAt
@@ -549,6 +554,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         repositories.evidence.listResumable(10, dueAt)
       ).resolves.toEqual([rootKey]);
       const resumed = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
         at: dueAt
@@ -634,6 +640,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
 
       const refreshAt = new Date("2026-09-23T12:10:00.000Z");
       const refresh = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: refreshAt,
         at: refreshAt
@@ -664,6 +671,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
 
       const resumedAt = new Date("2026-09-23T12:30:00.000Z");
       const resumed = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
         at: resumedAt
@@ -682,6 +690,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       });
       const laterAt = new Date("2026-09-23T13:00:00.000Z");
       const later = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: laterAt,
         at: laterAt
@@ -774,6 +783,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
           []
         );
         const resumed = await repositories.evidence.reserve({
+          origin: "dossier_read",
           key: rootKey,
           freshnessCutoff: retryAt,
           at: retryAt
@@ -818,6 +828,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       });
       const dueAt = new Date();
       const continuation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         at: dueAt,
         freshnessCutoff: new Date(dueAt.getTime() - 24 * 60 * 60 * 1000)
@@ -845,6 +856,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       // The cool-down, not the walk's own retry time, is when it continues.
       await expect(
         repositories.evidence.reserve({
+          origin: "dossier_read",
           key: rootKey,
           freshnessCutoff: new Date("2026-09-22T12:00:00.000Z"),
           at: new Date(failedAt.getTime() + 29 * 60 * 1000)
@@ -858,6 +870,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         repositories.evidence.listResumable(10, retriedAt)
       ).resolves.toEqual([rootKey]);
       const retried = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key: rootKey,
         freshnessCutoff: new Date(retriedAt.getTime() - 24 * 60 * 60 * 1000),
         at: retriedAt
@@ -905,6 +918,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       // and a retry deadline behind, and collected cutting edges.
       async function publishOrdinary() {
         const reservation = await repositories.evidence.reserve({
+          origin: "dossier_read",
           key: rootKey,
           freshnessCutoff: ordinaryAt,
           at: ordinaryAt,
@@ -1184,6 +1198,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         ).resolves.toEqual([]);
         // Fresh by the search's clock, stale by the ordinary run's: stale.
         const reservation = await repositories.evidence.reserve({
+          origin: "dossier_read",
           key: rootKey,
           freshnessCutoff: new Date("2026-09-23T00:00:00.000Z"),
           at: new Date("2026-09-23T13:00:00.000Z")
@@ -1321,6 +1336,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
     // was an archaeology exercise nobody performed.
     async function reserveRun(key: CharacterKey, at: Date): Promise<string> {
       const reservation = await repositories.evidence.reserve({
+        origin: "dossier_read",
         key,
         freshnessCutoff: at,
         at
@@ -1775,8 +1791,40 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         (match) => match[1] as string
       );
 
-      it("finds exactly the six queries the document describes", () => {
-        expect(queries).toHaveLength(6);
+      it("finds exactly the eight queries the document describes", () => {
+        expect(queries).toHaveLength(8);
+      });
+
+      it("says why the queue is long from the runs alone", async () => {
+        await reserveRun(rootKey, new Date());
+        await reserveRun(altKey, new Date());
+
+        const result = await pool.query(queries[6] as string);
+
+        expect(result.rows).toEqual([{ origin: "dossier_read", runs: "2" }]);
+      });
+
+      it("reports what each origin spent, apart from spend nothing read", async () => {
+        const measured = await reserveRun(rootKey, new Date());
+        const unmeasured = await reserveRun(altKey, new Date());
+        await repositories.evidence.recordRunCost(
+          cost(measured, { origin: "refresh" })
+        );
+        await repositories.evidence.recordRunCost(
+          cost(unmeasured, { origin: "refresh", pointsSpent: null })
+        );
+
+        const result = await pool.query(queries[7] as string);
+
+        expect(result.rows).toEqual([
+          {
+            origin: "refresh",
+            attempts: "2",
+            // The unread allowance is unknown spend, never a zero.
+            points_spent: "760.3",
+            unmeasured: "1"
+          }
+        ]);
       });
 
       it("reports where a run's time goes, apart from rows nothing timed", async () => {

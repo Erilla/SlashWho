@@ -6,6 +6,7 @@ import type {
   DiscoveryWorkContext,
   EmptyAttendanceSearch,
   EvidenceRunCost,
+  EvidenceRunOrigin,
   EvidenceRunPhase,
   StagedEvidenceCollection,
   HistoricAliasScanProgress,
@@ -178,6 +179,8 @@ export type ApplicantEvidenceRun = Readonly<{
    * provider. Absent is `full`.
    */
   mode?: "full" | "tier_search";
+  /** Why the run was queued (#708). Absent is `unknown`. */
+  origin?: EvidenceRunOrigin;
   tierSearchRaidId?: string | null;
 }>;
 
@@ -620,6 +623,11 @@ type EvidenceJobRecord = {
   correlationId: string | null;
   queueWaitMs: number | null;
   attempt: number;
+  /**
+   * Why the run was queued, read off the claimed run. Null until the claim,
+   * so an attempt that never owned the run does not guess.
+   */
+  origin: EvidenceRunOrigin | null;
   outcome: EvidenceJobOutcome;
   limitationCode: string | null;
   parseLimitationCode: string | null;
@@ -741,6 +749,7 @@ export function createApplicantEvidenceJobHandler(
       correlationId: job.correlationId ?? null,
       queueWaitMs: queueWaitMs(job.enqueuedAt, now()),
       attempt,
+      origin: null,
       outcome: "unknown",
       limitationCode: null,
       parseLimitationCode: null,
@@ -1147,6 +1156,7 @@ export function createApplicantEvidenceJobHandler(
           requestCapUsed: record.requestCapUsed,
           parseRequestCapUsed: record.parseRequestCapUsed,
           mode: tierSearchRaidId === undefined ? "full" : "tier_search",
+          origin: record.origin ?? "unknown",
           tierSearch:
             tierSearchRaidId === undefined
               ? null
@@ -1278,6 +1288,7 @@ export function createApplicantEvidenceJobHandler(
         // point at which there is a character to name.
         state.announced = run.key;
         state.claimedRunId = run.id;
+        record.origin = run.origin ?? "unknown";
         const tierSearchRaidId =
           run.mode === "tier_search" && run.tierSearchRaidId
             ? run.tierSearchRaidId

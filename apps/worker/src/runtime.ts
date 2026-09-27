@@ -503,6 +503,7 @@ function buildHandlers(
       // duplicate work.
       const reservation = await repositories.evidence.reserve({
         key,
+        origin: "fingerprint_admission",
         freshnessCutoff: at,
         at,
         phasePlan: fullEvidencePhasePlan()

@@ -53,6 +53,7 @@ const monitor: CollectionMonitorResponse = {
     {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
       status: "retrying",
+      origin: "resume_sweep",
       attempt: 2,
       startedAt: "2026-09-20T11:45:00.000Z",
       elapsedSeconds: 900,
@@ -63,6 +64,7 @@ const monitor: CollectionMonitorResponse = {
     {
       character: { region: "us", realm: "area-52", name: "done" },
       state: "partial",
+      origin: "tier_search",
       limitationCode: "request_cap",
       parseLimitationCode: "parse_request_cap",
       completedAt: "2026-09-20T11:00:00.000Z",
@@ -73,6 +75,7 @@ const monitor: CollectionMonitorResponse = {
   failed: [
     {
       character: { region: "eu", realm: "draenor", name: "broken" },
+      origin: "fingerprint_admission",
       errorCode: "warcraft_logs_unavailable",
       stoppedAt: "2026-09-20T10:00:00.000Z"
     }

@@ -6,6 +6,7 @@ export type ResumableEvidenceStore = {
   listResumable(limit: number, at: Date): Promise<readonly CharacterKey[]>;
   reserve(input: {
     key: CharacterKey;
+    origin: "resume_sweep";
     freshnessCutoff: Date;
     at: Date;
     phasePlan?: readonly string[];
@@ -60,6 +61,7 @@ export async function resumeWaitingEvidence(
     try {
       const reservation = await evidence.reserve({
         key,
+        origin: "resume_sweep",
         freshnessCutoff: options.freshnessCutoff,
         at,
         phasePlan: fullEvidencePhasePlan()

@@ -299,6 +299,7 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
     expect((await recent.listRecent(10))[0]?.inProgress).toBe(false);
 
     const evidence = await repositories.evidence.reserve({
+      origin: "dossier_read",
       key: altKey,
       freshnessCutoff: new Date(),
       at: new Date()

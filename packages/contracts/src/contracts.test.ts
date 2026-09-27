@@ -587,6 +587,7 @@ it("defines a strict operator collection monitor without internal run fields", (
       {
         character: applicantCharacter,
         status: "retrying",
+        origin: "resume_sweep",
         attempt: 2,
         startedAt: "2026-09-20T11:45:00.000Z",
         elapsedSeconds: 900,
@@ -597,6 +598,7 @@ it("defines a strict operator collection monitor without internal run fields", (
       {
         character: applicantCharacter,
         state: "partial",
+        origin: "unknown",
         limitationCode: "request_cap",
         parseLimitationCode: null,
         completedAt: "2026-09-20T11:30:00.000Z",
@@ -607,6 +609,7 @@ it("defines a strict operator collection monitor without internal run fields", (
     failed: [
       {
         character: applicantCharacter,
+        origin: "tier_search",
         errorCode: "warcraft_logs_unavailable",
         stoppedAt: "2026-09-20T10:00:00.000Z"
       }
@@ -654,6 +657,19 @@ it("defines a strict operator collection monitor without internal run fields", (
         {
           ...response.discoveryRuns[0],
           snapshotId: "private-snapshot"
+        }
+      ]
+    })
+  ).toThrow();
+  // An origin is a closed class of reserving path, never free text that
+  // could carry a visitor, request URL or referrer (#708).
+  expect(() =>
+    collectionMonitorResponseSchema.parse({
+      ...response,
+      inFlight: [
+        {
+          ...response.inFlight[0],
+          origin: "https://example.com/?ref=visitor"
         }
       ]
     })
