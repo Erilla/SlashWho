@@ -16,7 +16,7 @@ on:
 # rather than by the sum of all of them. The heavier suites are split so that
 # no single job holds much more than a minute and a half of work:
 #
-#   scope ──┬── checks        format, lint, typecheck
+#   scope ──┬── checks (×3)   format, lint, typecheck, one script each
 #           ├── unit (×2)     unit tests, apps/web and the rest
 #           ├── integration
 #           ├── e2e (×2)      Playwright, one shard of the spec files each
@@ -43,9 +43,11 @@ jobs:
     timeout-minutes: 45
     outputs:
       run_full: ${{ steps.scope.outputs.run_full }}
+    # No checkout: the script reads the pull request's files through `gh api`
+    # with an explicit repository path, so it never touches a working tree.
+    # Every other job waits on this one; add a checkout only if a step here
+    # comes to need repository files.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       # Decides whether this change can affect the build. Anything unrecognised
       # runs the full suite: the failure mode of running too often is a slow
       # pull request, and of running too rarely is a broken main.
@@ -103,17 +105,23 @@ jobs:
   # it is the only place the workspace is typechecked: e2e and docker build the
   # web app, but neither needs the other packages' `build` scripts, which are
   # `tsc --noEmit` and nothing more.
+  #
+  # Each script runs on its own runner. Every leg pays the workspace setup
+  # again, but the three no longer queue behind one another, so the job takes
+  # as long as typecheck rather than as long as all three together.
   checks:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [format:check, lint, typecheck]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-workspace
-      - run: corepack pnpm format:check
-      - run: corepack pnpm lint
-      - run: corepack pnpm typecheck
+      - run: corepack pnpm ${{ matrix.script }}
 
   # The unit suite was first given a 6 GB heap and then, when that was still
   # not enough, split into one vitest process per workspace (d4739580,
@@ -200,6 +208,15 @@ jobs:
   # Actions cache, one scope per image so the two do not overwrite each other,
   # and mode=max keeps the intermediate build stage that holds the dependency
   # install.
+  #
+  # Every run reads the cache, but only pushes to main write it. Exporting took
+  # about half a minute of a pull request's docker job, and most of what it
+  # uploaded was the `COPY . .` and build layers, which change on every commit
+  # and so could never be reused. A pull request can restore caches created on
+  # its base branch, so main's copy is the one that matters.
+  #
+  # The builder is not cleaned up and the build record is not uploaded: the
+  # runner is thrown away, and nobody reads the record.
   docker:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
@@ -212,14 +229,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cleanup: false
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           file: Dockerfile.${{ matrix.image }}
           tags: slashwho-${{ matrix.image }}:ci
           push: false
           cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,scope={0},mode=max', matrix.image) || '' }}
 
   # The required check. It must report on every run, so it runs even when a
   # job it needs failed or was skipped: without `always()`, a failure upstream
