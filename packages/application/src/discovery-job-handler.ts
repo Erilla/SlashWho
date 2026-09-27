@@ -202,7 +202,11 @@ export type DiscoveryJobHandlerOptions = {
   };
   enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
   /** Queues full WCL collection before a newly admitted fingerprint match is published. */
-  enqueueFullEvidence?: (key: CharacterKey) => Promise<unknown>;
+  enqueueFullEvidence?: (
+    key: CharacterKey,
+    /** The root of the discovery run that admitted the match. */
+    root: CharacterKey
+  ) => Promise<unknown>;
   requestCap: number;
   now?: () => Date;
   random?: () => number;
@@ -859,7 +863,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   // applies to continuations, which amend their already
                   // published snapshot with newly discovered members.
                   for (const character of newlyAdmittedFingerprintMatches) {
-                    await options.enqueueFullEvidence?.(character.key);
+                    await options.enqueueFullEvidence?.(
+                      character.key,
+                      run.rootKey
+                    );
                   }
 
                   if (resume) {

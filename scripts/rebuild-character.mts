@@ -61,6 +61,7 @@ async function main(): Promise<void> {
     const result = await refreshCharacter({
       key,
       origin: "rebuild",
+      root: null,
       at: new Date(),
       // A rebuild ignores the cooldown by construction: the mode is chosen
       // here rather than derived from how recently the character was read.

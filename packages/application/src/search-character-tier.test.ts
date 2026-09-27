@@ -6,6 +6,7 @@ import { searchCharacterTier } from "./search-character-tier";
 import { TIER_SEARCH_SPACING_MS } from "./tier-search";
 
 const key = { region: "eu" as const, realm: "silvermoon", name: "ryun" };
+const root = { region: "eu" as const, realm: "silvermoon", name: "ryii" };
 const at = new Date("2026-09-23T12:00:00.000Z");
 const eternalPalace = supportedRaidCatalogue().find(
   (raid) => raid.raidName === "The Eternal Palace"
@@ -19,6 +20,7 @@ function harness(reservation: unknown) {
   const search = (raidId = eternalPalace) =>
     searchCharacterTier({
       key,
+      root,
       raidId,
       at,
       repositories: {
@@ -53,6 +55,8 @@ describe("searching one character's tier", () => {
 
     expect(test.reserveTierSearch).toHaveBeenCalledWith({
       key,
+      // The dossier it was pressed on, which is not the character searched.
+      root,
       raidId: eternalPalace,
       at,
       searchedSince: new Date(at.getTime() - TIER_SEARCH_SPACING_MS),

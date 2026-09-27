@@ -1252,16 +1252,17 @@ describe("worker runtime", () => {
     };
 
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
-    await handlerOptions?.enqueueFullEvidence?.({
-      region: "eu",
-      realm: "draenor",
-      name: "mistakinus"
-    });
+    const root = { region: "eu", realm: "draenor", name: "ryii" } as const;
+    await handlerOptions?.enqueueFullEvidence?.(
+      { region: "eu", realm: "draenor", name: "mistakinus" },
+      root
+    );
 
     expect(fakes.evidenceReserve).toHaveBeenCalledWith(
       expect.objectContaining({
         key: { region: "eu", realm: "draenor", name: "mistakinus" },
-        origin: "fingerprint_admission"
+        origin: "fingerprint_admission",
+        root
       })
     );
     expect(fakes.evidenceEnqueues).toEqual([

@@ -341,6 +341,8 @@ async function gatherCharacterEvidence(
   options: {
     /** Which read this is, recorded on a run it reserves (#708). */
     origin: DossierReadOrigin;
+    /** The dossier being read, recorded on a run it reserves. */
+    root: CharacterKey;
     repositories: Pick<Repositories, "evidence">;
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     freshnessCutoff: Date;
@@ -357,6 +359,7 @@ async function gatherCharacterEvidence(
   const reservation = await options.repositories.evidence.reserve({
     key: character.key,
     origin: options.origin,
+    root: options.root,
     freshnessCutoff: options.freshnessCutoff,
     at: new Date(),
     credentials:
@@ -864,6 +867,7 @@ async function assembleDossier(options: {
               { ...character, key },
               {
                 origin: options.evidenceOrigin,
+                root: options.root,
                 repositories: options.repositories,
                 queue: options.queue,
                 freshnessCutoff: options.freshnessCutoff,
@@ -1183,6 +1187,7 @@ export function createApplicantDossierService(options: {
     });
   }
   async function queueHistoricAliasRecollection(
+    root: CharacterKey,
     character: CharacterKey,
     scope?: MeasurementScope
   ): Promise<void> {
@@ -1190,6 +1195,7 @@ export function createApplicantDossierService(options: {
       await refreshCharacter({
         key: character,
         origin: "historic_alias",
+        root,
         at: new Date(),
         cooldownMs: 0,
         repositories: options.repositories,
@@ -1214,6 +1220,8 @@ export function createApplicantDossierService(options: {
   ): Promise<RefreshCharacterResult> {
     return refreshCharacter({
       key,
+      // Both are addressed to one character, not to a dossier.
+      root: null,
       at: new Date(),
       cooldownMs: REFRESH_COOLDOWN_MS,
       repositories: options.repositories,
@@ -1469,7 +1477,7 @@ export function createApplicantDossierService(options: {
         alias
       );
       if (result !== "added") return result ?? "missing";
-      await queueHistoricAliasRecollection(character, scope);
+      await queueHistoricAliasRecollection(root, character, scope);
       return "added";
     },
     async removeHistoricAlias(root, character, alias, scope) {
@@ -1481,7 +1489,7 @@ export function createApplicantDossierService(options: {
         alias
       );
       if (result !== "removed") return "missing";
-      await queueHistoricAliasRecollection(character, scope);
+      await queueHistoricAliasRecollection(root, character, scope);
       return "removed";
     },
     async readEvidencePhases(runId) {
@@ -1610,6 +1618,7 @@ export function createApplicantDossierService(options: {
         ? [...resolved.selected, ...resolved.skipped]
         : [rootOnlySubject(key)];
       return searchDossierTier({
+        root: key,
         subjects: tierSearchSubjects(subjects),
         raidId,
         at: new Date(),

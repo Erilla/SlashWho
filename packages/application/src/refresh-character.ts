@@ -78,6 +78,12 @@ export async function refreshCharacter(options: {
     EvidenceRunRequestOrigin,
     "refresh" | "rebuild" | "historic_alias"
   >;
+  /**
+   * The dossier this collection serves. A historic alias edit is made inside
+   * one; a refresh or rebuild is addressed to the character alone and passes
+   * null rather than a guess.
+   */
+  root: CharacterKey | null;
   at: Date;
   cooldownMs: number;
   repositories: Pick<Repositories, "evidence">;
@@ -140,6 +146,7 @@ export async function refreshCharacter(options: {
   const reservation = await evidence.reserve({
     key: options.key,
     origin: options.origin,
+    root: options.root,
     freshnessCutoff: options.at,
     at: options.at,
     phasePlan: fullEvidencePhasePlan(),

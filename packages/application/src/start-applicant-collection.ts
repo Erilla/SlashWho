@@ -78,6 +78,8 @@ export async function startApplicantCollection(input: {
   const evidence = await repositories.evidence.reserve({
     key,
     origin: "applicant_sheet",
+    // The applicant is the root of the discovery queued just above.
+    root: key,
     at: new Date(),
     freshnessCutoff: new Date(
       input.observedAt.getTime() - input.evidenceFreshnessHours * 60 * 60_000

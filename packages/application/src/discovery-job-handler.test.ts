@@ -1030,7 +1030,8 @@ describe("discovery job handler", () => {
     }).execute(run.id, delivery());
 
     expect(enqueueFullEvidence).toHaveBeenCalledTimes(1);
-    expect(enqueueFullEvidence).toHaveBeenCalledWith(match);
+    // The match's run names the root whose discovery admitted it.
+    expect(enqueueFullEvidence).toHaveBeenCalledWith(match, rootKey);
   });
 
   it("queues full evidence before publishing a newly admitted fingerprint match", async () => {

@@ -44,6 +44,33 @@ function CharacterCell({
   );
 }
 
+/**
+ * The dossier root a run was reserved for: the character whose search it
+ * serves. A refresh, a rebuild, the resume sweep and every run from before
+ * roots were recorded have none, and say so rather than showing a guess.
+ */
+function RootCell({
+  root
+}: Readonly<{
+  root: CollectionMonitorResponse["inFlight"][number]["root"];
+}>) {
+  if (root === null) {
+    return (
+      <td>
+        <span aria-hidden="true">—</span>
+        <span className="visually-hidden">No root recorded</span>
+      </td>
+    );
+  }
+  return (
+    <td>
+      <Link className="collection-monitor-character" href={dossierPath(root)}>
+        {characterText(root)}
+      </Link>
+    </td>
+  );
+}
+
 function characterKey(character: {
   region: string;
   realm: string;
@@ -229,6 +256,7 @@ export function CollectionMonitorView({
             <thead>
               <tr>
                 <th scope="col">Character</th>
+                <th scope="col">Started by</th>
                 <th scope="col">Status</th>
                 <th scope="col">Origin</th>
                 <th scope="col">Step</th>
@@ -241,7 +269,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.inFlight.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     No evidence runs are in flight or pending.
                   </td>
                 </tr>
@@ -249,6 +277,7 @@ export function CollectionMonitorView({
                 monitor.inFlight.map((run) => (
                   <tr key={characterKey(run.character)}>
                     <CharacterCell character={run.character} />
+                    <RootCell root={run.root} />
                     <td>
                       <span className="state-badge" data-state={run.status}>
                         {run.status}
@@ -289,6 +318,7 @@ export function CollectionMonitorView({
             <thead>
               <tr>
                 <th scope="col">Character</th>
+                <th scope="col">Started by</th>
                 <th scope="col">State</th>
                 <th scope="col">Origin</th>
                 <th scope="col">Limitation</th>
@@ -300,7 +330,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.completed.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No completed evidence runs.</td>
+                  <td colSpan={8}>No completed evidence runs.</td>
                 </tr>
               ) : (
                 monitor.completed.map((run, index) => (
@@ -308,6 +338,7 @@ export function CollectionMonitorView({
                     key={`${characterKey(run.character)}:${run.completedAt ?? index}`}
                   >
                     <CharacterCell character={run.character} />
+                    <RootCell root={run.root} />
                     <td>
                       <span className="state-badge" data-state={run.state}>
                         {run.state}
@@ -361,6 +392,7 @@ export function CollectionMonitorView({
             <thead>
               <tr>
                 <th scope="col">Character</th>
+                <th scope="col">Started by</th>
                 <th scope="col">Origin</th>
                 <th scope="col">Error</th>
                 <th scope="col">Stopped</th>
@@ -369,7 +401,7 @@ export function CollectionMonitorView({
             <tbody>
               {monitor.failed.length === 0 ? (
                 <tr>
-                  <td colSpan={4}>No failed evidence runs.</td>
+                  <td colSpan={5}>No failed evidence runs.</td>
                 </tr>
               ) : (
                 monitor.failed.map((run, index) => (
@@ -377,6 +409,7 @@ export function CollectionMonitorView({
                     key={`${characterKey(run.character)}:${run.stoppedAt ?? index}`}
                   >
                     <CharacterCell character={run.character} />
+                    <RootCell root={run.root} />
                     <td>{code(run.origin)}</td>
                     <td>{code(run.errorCode)}</td>
                     <td>{dateTime(run.stoppedAt)}</td>

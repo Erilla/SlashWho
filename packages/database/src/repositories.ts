@@ -387,6 +387,8 @@ export type EvidenceMonitorRun = Readonly<{
   key: CharacterKey;
   status: EvidenceRunStatus;
   origin: EvidenceRunOrigin;
+  /** The dossier root recorded at reservation; null when none was. */
+  root: CharacterKey | null;
   evidenceVersion: number;
   attempt: number;
   limitationCode: string | null;
@@ -871,6 +873,12 @@ export interface EvidenceRepository {
      * call creates; a run it joins keeps the origin it was reserved with.
      */
     origin: EvidenceRunRequestOrigin;
+    /**
+     * The dossier root this collection serves, recorded like `origin`: on a
+     * run this call creates, never on one it joins. Absent or null is a
+     * caller with no root.
+     */
+    root?: CharacterKey | null;
     freshnessCutoff: Date;
     at: Date;
     /** The ordered collection plan fixed when a new run is reserved. */
@@ -926,6 +934,8 @@ export interface EvidenceRepository {
   ): Promise<readonly CharacterKey[]>;
   reserveTierSearch(input: {
     key: CharacterKey;
+    /** The dossier whose tier search this is; see `reserve`. */
+    root?: CharacterKey | null;
     raidId: string;
     at: Date;
     searchedSince: Date;

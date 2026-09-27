@@ -54,6 +54,8 @@ export type SearchDossierTierResult =
  * several names is searched once, under the name the dossier shows.
  */
 export async function searchDossierTier(options: {
+  /** The dossier the search was pressed on. */
+  root: CharacterKey;
   subjects: readonly TierSearchSubject[];
   raidId: string;
   at: Date;
@@ -93,6 +95,7 @@ export async function searchDossierTier(options: {
     try {
       const outcome = await searchCharacterTier({
         key: subject.key,
+        root: options.root,
         raidId: options.raidId,
         at: options.at,
         repositories: options.repositories,
