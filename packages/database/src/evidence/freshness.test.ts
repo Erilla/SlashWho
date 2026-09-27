@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isEvidenceFresh } from "./postgres-repositories";
+import { isEvidenceFresh } from "./freshness";
 
 describe("evidence freshness", () => {
   const freshnessCutoff = new Date("2026-09-14T00:00:00.000Z");
