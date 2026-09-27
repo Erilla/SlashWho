@@ -749,3 +749,126 @@ test("keeps the source pill intact beside a long guild name", async ({
     }
   }
 });
+
+test("keeps the dossier heading below the header in every search form state on mobile", async ({
+  page
+}) => {
+  // Break caught: the phone header reserved a fixed 7rem while its search
+  // form stacked the icon button, the structured fields and any error beneath
+  // the input, so the header covered the "Applicant dossier" eyebrow.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/demo");
+
+  const header = page.locator(".site-header");
+  const eyebrow = page.getByText("Applicant dossier", { exact: true });
+  const characterName = page.locator(".dossier-heading h1");
+  const headingClearance = async () => {
+    const headerBottom = await header.evaluate(
+      (element) => element.getBoundingClientRect().bottom
+    );
+    const eyebrowTop = await eyebrow.evaluate(
+      (element) => element.getBoundingClientRect().top
+    );
+    const nameTop = await characterName.evaluate(
+      (element) => element.getBoundingClientRect().top
+    );
+    return Math.min(eyebrowTop, nameTop) - headerBottom;
+  };
+
+  await expect(eyebrow).toBeVisible();
+  await expect.poll(headingClearance).toBeGreaterThanOrEqual(0);
+  // The collapsed search keeps its button beside the input.
+  const input = header.getByLabel("Character/URL");
+  const button = header.getByRole("button", { name: "Research applicant" });
+  const [inputBox, buttonBox] = await Promise.all([
+    input.boundingBox(),
+    button.boundingBox()
+  ]);
+  expect(buttonBox!.y).toBeLessThan(inputBox!.y + inputBox!.height);
+
+  await input.fill("Ryii");
+  await expect(header.getByLabel("Realm")).toBeVisible();
+  await expect.poll(headingClearance).toBeGreaterThanOrEqual(0);
+
+  await input.press("Enter");
+  await expect(
+    header.getByText(
+      "Enter a valid character URL, or character name, realm, and region."
+    )
+  ).toBeVisible();
+  await expect.poll(headingClearance).toBeGreaterThanOrEqual(0);
+
+  // Anchored sections still land below the grown header.
+  await page
+    .getByRole("navigation", { name: "Dossier sections" })
+    .getByRole("link", { name: "Historic Cutting Edge" })
+    .click();
+  await expect
+    .poll(async () => {
+      const headerBottom = await header.evaluate(
+        (element) => element.getBoundingClientRect().bottom
+      );
+      const headingTop = await page
+        .getByRole("heading", { name: "Historic Cutting Edge" })
+        .evaluate((element) => element.getBoundingClientRect().top);
+      return headingTop - headerBottom;
+    })
+    .toBeGreaterThanOrEqual(0);
+
+  // Clearing the form lets the header, and the space kept for it, shrink back.
+  await input.fill("");
+  await expect(header.getByLabel("Realm")).toBeHidden();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          Number.parseFloat(
+            document.documentElement.style.getPropertyValue("--header-offset")
+          ) -
+          document.querySelector(".site-header")!.getBoundingClientRect().height
+      )
+    )
+    .toBe(0);
+});
+
+test("keeps connected character rows on one line and scrolls Cutting Edge within its panel on mobile", async ({
+  page
+}) => {
+  // Break caught: phone rows stacked their actions under the name, doubling
+  // each row, and a long Cutting Edge history ran uncapped down the page.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/demo");
+
+  const rows = page.locator(".dossier-character-row");
+  await expect(rows.first()).toBeVisible();
+  const rowLayout = await rows.evaluateAll((elements) =>
+    elements.map((element) => {
+      const lead = element
+        .querySelector(".dossier-character-lead")!
+        .getBoundingClientRect();
+      const actions = element
+        .querySelector(".dossier-character-actions")!
+        .getBoundingClientRect();
+      return {
+        overflow: element.scrollWidth - element.clientWidth,
+        besideLead: actions.left >= lead.right && actions.top < lead.bottom
+      };
+    })
+  );
+  expect(rowLayout.length).toBeGreaterThan(1);
+  for (const row of rowLayout) {
+    expect(row).toEqual({ overflow: 0, besideLead: true });
+  }
+
+  const cuttingEdges = page.getByRole("list", {
+    name: "Historic Cutting Edge"
+  });
+  await expect(cuttingEdges).toHaveAttribute("tabindex", "0");
+  expect(
+    await cuttingEdges.evaluate((element) => ({
+      overflowY: getComputedStyle(element).overflowY,
+      overflowing: element.scrollHeight > element.clientHeight,
+      capped: element.clientHeight <= 24 * 16
+    }))
+  ).toEqual({ overflowY: "auto", overflowing: true, capped: true });
+});

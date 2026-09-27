@@ -35,11 +35,12 @@ export function DossierCuttingEdgeList({
 
   useEffect(() => {
     const list = listRef.current;
-    if (!list || typeof window.matchMedia !== "function") return;
+    if (!list) return;
 
-    const desktop = window.matchMedia("(width > 48rem)");
+    // The list is capped at every width, so overflow alone decides. A change
+    // of breakpoint changes the cap, which resizes the list and is observed.
     const updateScrollable = () => {
-      setIsScrollable(desktop.matches && list.scrollHeight > list.clientHeight);
+      setIsScrollable(list.scrollHeight > list.clientHeight);
     };
     const resizeObserver =
       typeof ResizeObserver === "function"
@@ -48,11 +49,9 @@ export function DossierCuttingEdgeList({
 
     updateScrollable();
     resizeObserver?.observe(list);
-    desktop.addEventListener("change", updateScrollable);
 
     return () => {
       resizeObserver?.disconnect();
-      desktop.removeEventListener("change", updateScrollable);
     };
   }, [cuttingEdges]);
 
