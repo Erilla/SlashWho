@@ -1,4 +1,3 @@
-import { parseGroupPlan, type ParseGroupPlan } from "../collection-plan";
 import { isLimitation } from "../decode/primitives";
 import {
   canonicalRankingCharacterIdsByIdentity,
@@ -13,6 +12,7 @@ import {
   rankingCharacterIdentityQuery,
   reportFightParsesQuery
 } from "../queries";
+import type { WarcraftLogsParseGroupPlan as ParseGroupPlan } from "../types";
 import { unavailableOnTimeout, type CollectionRun } from "./context";
 
 type DecodedGroup = Readonly<{
@@ -72,7 +72,7 @@ export async function hydrateFightParses(
   ledger: ParseLedger
 ): Promise<FightParseHydration> {
   const { key, options } = run;
-  const plan = parseGroupPlan(run.kills.values(), options);
+  const plan = options.plan.parseGroups([...run.kills.values()]);
   const decodedGroups: DecodedGroup[] = [];
   const identities = new Map<number, RankingIdentity>();
   for (const [index, group] of plan.groups.entries()) {

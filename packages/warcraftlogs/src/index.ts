@@ -2,12 +2,15 @@ export { createWarcraftLogsClient } from "./client";
 export { MYTHIC_DIFFICULTY } from "./queries";
 export type { CreateWarcraftLogsClientOptions } from "./client";
 export type {
+  WarcraftLogsCollectionPlan,
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
   WarcraftLogsIdentity,
   WarcraftLogsIdentityResult,
   WarcraftLogsLimitation,
   WarcraftLogsLimitationCode,
+  WarcraftLogsParseGroup,
+  WarcraftLogsParseGroupPlan,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
   WarcraftLogsQueryType,
@@ -18,6 +21,7 @@ export type {
   WarcraftLogsReportResult,
   WarcraftLogsRequestEvent,
   WarcraftLogsTierBestParse,
+  WarcraftLogsTierZone,
   WarcraftLogsTierSearch,
   WarcraftLogsTierSearchOutcome,
   WarcraftLogsVerifiedKill,

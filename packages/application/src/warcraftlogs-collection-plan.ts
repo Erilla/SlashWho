@@ -1,58 +1,65 @@
 /**
- * What a collection run spends its requests on. Pure: nothing here issues a
- * request, so the choices can be read and tested on their own.
+ * What a Warcraft Logs collection run spends its parse budget on. Pure:
+ * nothing here issues a request, so the choices can be read and tested on
+ * their own. The gateway executes the plan; which zones and fights are worth
+ * a request is this service's policy, handed over as a
+ * `WarcraftLogsCollectionPlan`.
  */
 import {
   currentContentEligibility,
   lookupRaidForEvidence,
   raidOffersMythicRankings
 } from "@slashwho/domain";
-
-import type { RankingScope, ZoneScope } from "./decode/rankings";
-import type { ReportSpan } from "./decode/reports";
 import type {
+  WarcraftLogsCollectionPlan,
   WarcraftLogsFirstKillEvidence,
-  WarcraftLogsVerifiedKill
-} from "./types";
+  WarcraftLogsParseGroup,
+  WarcraftLogsParseGroupPlan,
+  WarcraftLogsTierZone
+} from "@slashwho/warcraftlogs";
 
-/**
- * How long before a kill its report may have started. A raid night's log
- * opens at the pull, but some loggers leave one running across an evening.
- */
-export const ATTENDANCE_REPORT_LEAD_MS = 16 * 60 * 60 * 1_000;
-/**
- * How far past the earliest wanted report the attendance walk still pages.
- * Pages are newest first but overlap by hours at a boundary (measured
- * 2026-09-23), so one page wholly older than a kill does not prove the next
- * holds nothing newer.
- */
-export const ATTENDANCE_PAGE_OVERLAP_MS = 2 * 24 * 60 * 60 * 1_000;
-/**
- * How far outside a report's span a verified kill's time may fall and still be
- * accounted for by it, on either side. The other provider's clock can be a
- * whole hour off: Raider.IO dates Ryun's Queen Azshara 19:34Z against the
- * log's 20:34Z (measured 2026-09-23).
- */
-export const REPORT_COVER_SLACK_MS = 2 * 60 * 60 * 1_000;
+export type WarcraftLogsCollectionPlanOptions = Readonly<{
+  /**
+   * Fight URLs whose parses are already stored, so a budget-limited run
+   * spends its requests on what is still missing.
+   */
+  hydratedFightUrls?: ReadonlySet<string>;
+  /**
+   * When each zone's tier bests were last collected, keyed by raid id. A
+   * zone collected after its newest kill has nothing left to fetch, so it
+   * neither spends a request nor counts towards the zone budget -- without
+   * this a veteran's zone list always exceeds the budget and the run
+   * raises `parse_request_cap` forever, however saturated it is.
+   */
+  collectedTierZones?: ReadonlyMap<string, string>;
+  /**
+   * Raids this character is finished with, per parse domain. A terminal raid
+   * costs no request: its zone is dropped before the zone budget is
+   * measured, and its kills are never grouped for hydration.
+   */
+  terminalRaidIds?: Readonly<{
+    parses: ReadonlySet<string>;
+    tierBests: ReadonlySet<string>;
+  }>;
+  /**
+   * The one Journal raid whose kills are parsed. A targeted search's
+   * reports can hold another raid's fights from the same nights, and
+   * parsing them would spend its budget on work it does not publish.
+   * Resolved by boss as well as zone, so a combined zone's kills are
+   * placed in their own raid.
+   */
+  parseJournalRaidId?: string;
+}>;
 
-/**
- * The verified kills no cleanly decoded history page accounts for. Only these
- * are worth searching guild attendance for.
- */
-export function uncoveredVerifiedKills(
-  verifiedKills: readonly WarcraftLogsVerifiedKill[],
-  scannedSpans: readonly ReportSpan[]
-): { verified: WarcraftLogsVerifiedKill; at: number }[] {
-  return verifiedKills.flatMap((verified) => {
-    const at = Date.parse(verified.at);
-    if (Number.isNaN(at)) return [];
-    const covered = scannedSpans.some(
-      (span) =>
-        span.start - REPORT_COVER_SLACK_MS <= at &&
-        at <= span.end + REPORT_COVER_SLACK_MS
-    );
-    return covered ? [] : [{ verified, at }];
-  });
+/** The plan one `getFirstKillReports` call executes. */
+export function createWarcraftLogsCollectionPlan(
+  options: WarcraftLogsCollectionPlanOptions
+): WarcraftLogsCollectionPlan {
+  return {
+    tierZones: (kills, parseRequestCap) =>
+      tierZonePlan(kills, { ...options, parseRequestCap }),
+    parseGroups: (kills) => parseGroupPlan(kills, options)
+  };
 }
 
 /**
@@ -66,12 +73,15 @@ export function tierZonePlan(
     collectedTierZones?: ReadonlyMap<string, string>;
     terminalRaidIds?: Readonly<{ tierBests: ReadonlySet<string> }>;
   }>
-): Readonly<{ zones: readonly ZoneScope[]; unreached: readonly ZoneScope[] }> {
+): Readonly<{
+  zones: readonly WarcraftLogsTierZone[];
+  unreached: readonly WarcraftLogsTierZone[];
+}> {
   // The zones whose kills this dossier can display. A kill outside its raid's
   // current-content window is never shown, so its zone is not worth a
   // request; an unknown window is left in, because missing catalogue data
   // must not silently disable collection.
-  const zones = new Map<string, ZoneScope>();
+  const zones = new Map<string, WarcraftLogsTierZone>();
   for (const kill of kills) {
     if (currentContentEligibility(kill.killedAt, kill.raidName) === false) {
       continue;
@@ -134,19 +144,6 @@ export function tierZonePlan(
   };
 }
 
-export type ParseGroupPlan = Readonly<{
-  /** Report groups in the order the budget should reach them. */
-  groups: readonly RankingScope[];
-  /** Every raid a group's fights belong to, keyed by report code. */
-  raidIds: ReadonlyMap<string, ReadonlySet<string>>;
-  /**
-   * The fights each group covers, by URL, so a group that reaches an answer
-   * can say which fights were answered. The group itself is keyed by fight id
-   * within a report, and only the kill carries the URL a caller stores.
-   */
-  fightUrls: ReadonlyMap<string, ReadonlySet<string>>;
-}>;
-
 /**
  * Which kills to hydrate parses for, grouped by report. A raid night's kills
  * share one report, and one ranking request returns all of them, so grouping
@@ -160,9 +157,9 @@ export function parseGroupPlan(
     terminalRaidIds?: Readonly<{ parses: ReadonlySet<string> }>;
     parseJournalRaidId?: string;
   }>
-): ParseGroupPlan {
+): WarcraftLogsParseGroupPlan {
   const candidates = [...kills];
-  const groups = new Map<string, RankingScope>();
+  const groups = new Map<string, WarcraftLogsParseGroup>();
   const raidIds = new Map<string, Set<string>>();
   const fightUrls = new Map<string, Set<string>>();
   // A boss's first kill is the evidence the dossier headlines, so the budget

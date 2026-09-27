@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createWarcraftLogsClient } from "./index";
+import { createPlannedWarcraftLogsClient as createWarcraftLogsClient } from "./planned-client.test-support";
 
 const key = { region: "eu", realm: "silvermoon", name: "ryun" } as const;
 const report = (code: string, fightId: number, canonicalID = 40989140) => ({

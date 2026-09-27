@@ -159,6 +159,7 @@ import {
   raiderIoRankingRequest,
   rankingRequestKey
 } from "./historic-world-rank";
+import { createWarcraftLogsCollectionPlan } from "./warcraftlogs-collection-plan";
 
 export type ApplicantEvidenceRun = Readonly<{
   id: string;
@@ -1733,15 +1734,15 @@ export function createApplicantEvidenceJobHandler(
                 requestCap: historyCaps.get(0)!,
                 parseRequestCap: parseCapFor(0),
                 ...(run.className ? { className: run.className } : {}),
-                hydratedFightUrls,
-                collectedTierZones,
-                terminalRaidIds:
-                  historicAliases.length > 0
-                    ? { ...terminalRaidIds, kills: new Set<string>() }
-                    : terminalRaidIds,
-                ...(targeted && tierSearchRaidId
-                  ? { targetedOnly: true, parseJournalRaidId: tierSearchRaidId }
-                  : {}),
+                plan: createWarcraftLogsCollectionPlan({
+                  hydratedFightUrls,
+                  collectedTierZones,
+                  terminalRaidIds,
+                  ...(targeted && tierSearchRaidId
+                    ? { parseJournalRaidId: tierSearchRaidId }
+                    : {})
+                }),
+                ...(targeted && tierSearchRaidId ? { targetedOnly: true } : {}),
                 ...(!targeted && historicAliases.length === 0 && killScanFloor
                   ? { killScanFloor }
                   : {}),
@@ -1864,13 +1865,10 @@ export function createApplicantEvidenceJobHandler(
                   }
                 : {}),
               ...(run.className ? { className: run.className } : {}),
-              hydratedFightUrls,
-              collectedTierZones,
-              terminalRaidIds: {
-                kills: new Set<string>(),
-                parses: new Set<string>(),
-                tierBests: new Set<string>()
-              },
+              plan: createWarcraftLogsCollectionPlan({
+                hydratedFightUrls,
+                collectedTierZones
+              }),
               onRequest: (event) => {
                 observePhase(event.query);
                 observeRequest(scope, event);
