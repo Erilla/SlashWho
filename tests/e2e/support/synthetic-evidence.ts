@@ -47,6 +47,15 @@ const killsPerReport = 3;
 const parsedEvery = 5; // one kill in five has no parse
 const rankedEvery = 77; // one kill in 77 has a world rank
 
+/**
+ * No synthetic kill or wipe is dated after this, so the fixture never holds
+ * evidence from the future, whatever day it runs. A raid still open has no
+ * window end, and weekly kills from its start would otherwise run past today.
+ * If the catalogue gains a raid that opens after this date, the unit test
+ * fails; move the cutoff past its start.
+ */
+export const syntheticEvidenceCutoff = "2026-09-01T00:00:00.000Z";
+
 const spec = {
   name: "Fire",
   iconUrl:
@@ -63,6 +72,8 @@ type Encounter = Readonly<{
   raidIndex: number;
   /** A time inside the raid's current-content window, or a fixed fallback. */
   baseMs: number;
+  /** The latest time a row may carry: the window's end or the cutoff. */
+  latestMs: number;
 }>;
 
 /** Every catalogued boss, newest raid first, in boss order. */
@@ -70,6 +81,9 @@ function encounters(): readonly Encounter[] {
   return supportedRaidCatalogue().flatMap((raid, raidIndex) => {
     const window = lookupRaidCurrentContentWindow(raid.raidId);
     const baseMs = Date.parse(window?.startsAt ?? "2020-01-07T19:00:00.000Z");
+    const cutoffMs = Date.parse(syntheticEvidenceCutoff);
+    const endMs = window?.endsAt ? Date.parse(window.endsAt) : cutoffMs;
+    const latestMs = Math.max(baseMs, Math.min(endMs, cutoffMs));
     return raid.encounters.map((encounter) => ({
       raidId: raid.raidId,
       raidName: raid.raidName,
@@ -77,7 +91,8 @@ function encounters(): readonly Encounter[] {
       bossName: encounter.bossName,
       bossOrder: encounter.bossOrder,
       raidIndex,
-      baseMs
+      baseMs,
+      latestMs
     }));
   });
 }
@@ -105,6 +120,10 @@ export function syntheticEvidence(
     name: `Profile${label}${Math.floor(encounter.raidIndex / 2) % 2 === 0 ? "Main" : "Old"}`,
     realm: "silvermoon"
   });
+  const at = (encounter: Encounter, offsetMs: number) =>
+    new Date(
+      Math.min(encounter.baseMs + offsetMs, encounter.latestMs)
+    ).toISOString();
   const report = (index: number) =>
     `https://www.warcraftlogs.com/reports/profile${label}${index}`;
 
@@ -126,9 +145,7 @@ export function syntheticEvidence(
       bossName: encounter.bossName,
       journalBossId: encounter.bossId,
       bossOrder: encounter.bossOrder,
-      killedAt: new Date(
-        encounter.baseMs + (index % killsPerBoss) * weekMs
-      ).toISOString(),
+      killedAt: at(encounter, (index % killsPerBoss) * weekMs),
       reportUrl,
       fightUrl: `${reportUrl}#fight=${index + 1}`,
       guild: { ...guildFor(encounter), region: "eu" as const },
@@ -159,9 +176,7 @@ export function syntheticEvidence(
       bossName: encounter.bossName,
       journalBossId: encounter.bossId,
       bossOrder: encounter.bossOrder,
-      attemptedAt: new Date(
-        encounter.baseMs + (index % wipesPerBoss) * hourMs
-      ).toISOString(),
+      attemptedAt: at(encounter, (index % wipesPerBoss) * hourMs),
       reportUrl,
       fightUrl: `${reportUrl}#fight=${index + 1}`,
       guild: guildFor(encounter),

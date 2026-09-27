@@ -17,8 +17,9 @@ only part of the gap.**
   reproduces less than half of production's request time.
 - The rest of a production read, about 370 ms at the median, is spent outside
   anything the local fixtures exercise. Evidence volume accounts for about
-  90 ms of it, roughly a quarter (#686, "Evidence volume" below). About
-  220 ms of a production read is still unexplained.
+  90 ms of it, roughly a quarter (#686, "Evidence volume" below). Between
+  220 and 280 ms of a production read is still unexplained; the range is how
+  much slower the local baseline ran in #686's runs than in this note's.
 
 ## Production records
 
@@ -261,9 +262,22 @@ between the two measurements.
 
 **About 90 ms of the 370 ms.** Within each 5 ms run, the median-sized
 dossier took 59, 226, 96 and 81 ms longer than twelve small characters. The
-median of those is 89 ms. At 5 ms the median-sized read took about 415 ms,
-against production's 635 ms, so about 220 ms of a production read is still
-unexplained.
+median of those is 89 ms.
+
+That leaves 220–280 ms unexplained, and the two ends come from two
+baselines:
+
+- **280 ms** is 370 less 90. The 370 ms is production's 635 ms less the
+  266 ms the 12-character scenario took at 5 ms in "Modelling Railway's
+  latency".
+- **220 ms** is production's 635 ms less the 415 ms the median-sized read
+  took in these runs.
+
+They differ because the 12-character scenario itself ran at 308–389 ms in
+these runs (median about 340), roughly 60–75 ms slower than the 266 ms
+above. The same-run difference, 90 ms, is the figure for volume. Which end
+of the remainder is right depends on which absolute baseline matches
+production, and neither can be checked against it.
 
 Without latency, volume costs more: 110–190 ms. At 5 ms, each subject's
 reservation spends most of its time waiting on round trips, and building

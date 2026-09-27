@@ -4,7 +4,10 @@ import {
 } from "@slashwho/domain";
 import { describe, expect, it } from "vitest";
 
-import { syntheticEvidence } from "./synthetic-evidence";
+import {
+  syntheticEvidence,
+  syntheticEvidenceCutoff
+} from "./synthetic-evidence";
 
 const volume = { kills: 76, wipes: 161, tierBests: 2, cuttingEdges: 6 };
 
@@ -77,6 +80,20 @@ describe("syntheticEvidence", () => {
     for (const edge of evidence.cuttingEdges) {
       expect(lookupCuttingEdgeAchievement(edge.achievementId)).not.toBeNull();
     }
+  });
+
+  it("dates every kill and wipe in the past, whatever the calendar says", () => {
+    const evidence = syntheticEvidence("alpha", {
+      ...volume,
+      kills: 3_000,
+      wipes: 13_000
+    });
+
+    const latest = Math.max(
+      ...evidence.kills.map((kill) => Date.parse(kill.killedAt)),
+      ...evidence.wipes.map((wipe) => Date.parse(wipe.attemptedAt))
+    );
+    expect(latest).toBeLessThanOrEqual(Date.parse(syntheticEvidenceCutoff));
   });
 
   it("marks every kill's rank as looked up, so a warm read makes no lookup", () => {
