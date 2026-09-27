@@ -99,7 +99,7 @@ export type {
 } from "./applicant-dossier-service";
 export { allowlistedRecord, createAllowlistLogger } from "./allowlist-logger";
 export type { AllowlistLoggerOptions } from "./allowlist-logger";
-export { createMeasurementScope } from "./measurement";
+export { BLIZZARD_FAST_CALL_MS, createMeasurementScope } from "./measurement";
 export type { MeasurementScope, MeasurementScopeOptions } from "./measurement";
 export {
   attributeThrottlesTo,

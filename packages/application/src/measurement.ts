@@ -80,6 +80,16 @@ export type MeasurementScopeOptions = {
   fastCallThresholdMs?: Readonly<Record<string, number>>;
 };
 
+/**
+ * The Blizzard response time the per-second budget was sized on (see
+ * `docs/research/2026-09-26-issue-549-blizzard-sweep-concurrency.md`). The
+ * worker's discovery runs and the web's dossier requests both count their
+ * calls faster than this, beside the shortest, so the records can confirm or
+ * refute the figure rather than assume it. One constant, so the two counts
+ * stay comparable.
+ */
+export const BLIZZARD_FAST_CALL_MS = 100;
+
 type Frame = { charged: number };
 
 export function createMeasurementScope(
