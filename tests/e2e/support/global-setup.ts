@@ -10,7 +10,7 @@ import { startFakeRaiderIo } from "./fake-raiderio";
 import { startFakeWarcraftLogs } from "./fake-warcraftlogs";
 import { releasePortPair } from "./port-reservation";
 import { webBuildFreshness } from "./web-build";
-import { postgresImage } from "../../support/postgres-image";
+import { postgresImage, tuneForTests } from "../../support/postgres-image";
 
 const webPort = Number(process.env.SLASHWHO_E2E_WEB_PORT);
 const workerPort = Number(process.env.SLASHWHO_E2E_WORKER_PORT);
@@ -136,8 +136,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   try {
     // The browser suite runs the production build rather than `next dev`,
-    // which compiles each route on its first request. CI builds immediately
-    // beforehand; locally, build only when the sources have moved on, so a
+    // which compiles each route on its first request. Build when there is no
+    // build, as on every CI runner, or when the sources have moved on, so a
     // bare `test:e2e` still works but never exercises a stale bundle. The
     // build overlaps the container and fixture start-up below.
     const freshness = webBuildFreshness(process.cwd());
@@ -153,11 +153,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       processes.push(build);
     }
 
-    postgres = await new PostgreSqlContainer(postgresImage)
-      .withDatabase("slashwho_e2e")
-      .withUsername("slashwho")
-      .withPassword("slashwho")
-      .start();
+    postgres = await tuneForTests(
+      new PostgreSqlContainer(postgresImage)
+        .withDatabase("slashwho_e2e")
+        .withUsername("slashwho")
+        .withPassword("slashwho")
+    ).start();
     fixture = await startFakeRaiderIo();
     blizzard = await startFakeBlizzard();
     warcraftLogs = await startFakeWarcraftLogs();
