@@ -281,6 +281,17 @@ export function createDiscoveryRunRepositories(
         );
       },
 
+      async recordGuildReadsDropped(id, count) {
+        if (!Number.isInteger(count) || count < 0) {
+          throw new RangeError("guild_reads_dropped_out_of_range");
+        }
+        await requireUpdated(
+          pool,
+          "UPDATE discovery_runs SET guild_reads_dropped = $2 WHERE id = $1",
+          [id, count]
+        );
+      },
+
       async find(id) {
         const result = await pool.query<RunRow>(
           "SELECT * FROM discovery_runs WHERE id = $1",

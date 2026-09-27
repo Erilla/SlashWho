@@ -239,6 +239,8 @@ type DiscoveryRunRecord = {
   state: string | null;
   limitationCode: string | null;
   characterCount: number;
+  /** Guild reads this delivery's discovery lost to an upstream failure. */
+  guildReadsDropped: number;
   durationMs: number;
   correlationId: string | null;
   queueWaitMs: number | null;
@@ -451,6 +453,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         state: null,
         limitationCode: null,
         characterCount: 0,
+        guildReadsDropped: 0,
         durationMs: 0,
         correlationId: context.correlationId ?? null,
         queueWaitMs: queueWaitMs(context.enqueuedAt, startedAt),
@@ -538,7 +541,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               // discovery, so this value must never reach the snapshot: the
               // real limitation is `resume.limitationCode`, stored by cycle 1.
               limitationCode: "privacy_hidden",
-              characters: []
+              characters: [],
+              guildReadsDropped: 0
             }
           : await discoverCharacter(
               run.rootKey,
@@ -554,6 +558,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               }
             );
         context.signal.throwIfAborted();
+        if (!resume && outcome.kind === "snapshot") {
+          record.guildReadsDropped = outcome.guildReadsDropped;
+          // A new row already holds 0, so only a loss, or a redelivery that may
+          // be replacing an earlier attempt's count, needs the write.
+          if (outcome.guildReadsDropped > 0 || context.attempt > 1) {
+            await repositories.runs.recordGuildReadsDropped(
+              runId,
+              outcome.guildReadsDropped
+            );
+          }
+        }
         const persistenceTime = now();
         if (!withinJobLifetime(persistenceTime)) {
           record.outcome = "lifetime_exceeded";

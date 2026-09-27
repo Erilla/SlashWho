@@ -206,6 +206,190 @@ describe("discoverCharacter", () => {
     ]);
   });
 
+  describe("guild read retry", () => {
+    const guild = { name: "Rancour", region: "eu" as const, realm: "draenor" };
+
+    function upstreamFailure(failure: object): Error {
+      return Object.assign(new Error("upstream"), failure);
+    }
+
+    /**
+     * The root claims one alt whose guild has to be read. The root's own
+     * payload names its guild, so the alt's reads are the only guild reads.
+     * `guildReads` answers each read of that alt in turn; the last repeats.
+     */
+    function guildReadGateway(
+      guildReads: readonly (RaiderIoCharacter | Error)[]
+    ): { gateway: RaiderIoGateway; altReads: () => number } {
+      let altReads = 0;
+      const gateway = scriptedGateway({
+        characters: [[altKey, character(altKey, { ownerId: "owner" })]],
+        claimed: { owner: [character(altKey), character(secondAltKey)] }
+      });
+      gateway.getCharacter = async (key) => {
+        if (key.name === "alt") {
+          return character(altKey, { ownerId: "owner", guild });
+        }
+        const answer = guildReads[Math.min(altReads, guildReads.length - 1)]!;
+        altReads += 1;
+        if (answer instanceof Error) throw answer;
+        return answer;
+      };
+      return { gateway, altReads: () => altReads };
+    }
+
+    function guildOf(
+      outcome: Awaited<ReturnType<typeof discoverCharacter>>
+    ): unknown {
+      if (outcome.kind !== "snapshot") throw new Error("expected_snapshot");
+      return outcome.characters.find((item) => item.key.name === "second-alt")
+        ?.guild;
+    }
+
+    it("recovers a timed-out guild read with one retry", async () => {
+      // Break caught: a read abandoned at the client timeout is completed and
+      // cached upstream, so dropping it on the first failure published a
+      // snapshot without a guild Raider.IO had (run ed908d81, #656).
+      const { gateway, altReads } = guildReadGateway([
+        upstreamFailure({ kind: "transient" }),
+        character(secondAltKey, { guild })
+      ]);
+
+      const outcome = await discoverCharacter(altKey, gateway, options);
+
+      expect(outcome).toMatchObject({
+        kind: "snapshot",
+        state: "complete",
+        guildReadsDropped: 0
+      });
+      expect(guildOf(outcome)).toEqual(guild);
+      expect(altReads()).toBe(2);
+    });
+
+    it("retries a 5xx exactly once, then counts the guild as dropped", async () => {
+      const { gateway, altReads } = guildReadGateway([
+        upstreamFailure({ kind: "transient", status: 502 })
+      ]);
+
+      const outcome = await discoverCharacter(altKey, gateway, options);
+
+      expect(outcome).toMatchObject({
+        kind: "snapshot",
+        state: "complete",
+        guildReadsDropped: 1
+      });
+      expect(guildOf(outcome)).toBeNull();
+      expect(altReads()).toBe(2);
+    });
+
+    it.each([
+      ["a 429", { kind: "transient", status: 429 }],
+      [
+        "a 503 carrying Retry-After",
+        { kind: "transient", status: 503, retryAfterMs: 30_000 }
+      ],
+      ["a 403", { kind: "forbidden" }],
+      ["a 404", { kind: "not_found" }],
+      ["schema drift", { kind: "schema_drift" }],
+      ["a 401", { kind: "transient", status: 401 }]
+    ])(
+      "does not retry %s, and counts the guild as dropped",
+      async (_, failure) => {
+        // Break caught: retrying a throttled or permanent answer spends budget on
+        // a read that cannot succeed, and hammers an upstream asking us to wait.
+        const { gateway, altReads } = guildReadGateway([
+          upstreamFailure(failure),
+          character(secondAltKey, { guild })
+        ]);
+
+        const outcome = await discoverCharacter(altKey, gateway, options);
+
+        expect(outcome).toMatchObject({
+          kind: "snapshot",
+          state: "complete",
+          guildReadsDropped: 1
+        });
+        expect(guildOf(outcome)).toBeNull();
+        expect(altReads()).toBe(1);
+      }
+    );
+
+    it("counts a guild answer that fails validation as dropped, without retrying", async () => {
+      const { gateway, altReads } = guildReadGateway([
+        { key: secondAltKey } as unknown as RaiderIoCharacter,
+        character(secondAltKey, { guild })
+      ]);
+
+      const outcome = await discoverCharacter(altKey, gateway, options);
+
+      expect(outcome).toMatchObject({ guildReadsDropped: 1 });
+      expect(guildOf(outcome)).toBeNull();
+      expect(altReads()).toBe(1);
+    });
+
+    it("charges the retry to the request cap, and skips it when the cap is spent", async () => {
+      // Break caught: an uncharged retry lets a sweep exceed the request cap it
+      // was sized against. Root, claimed list and one guild read use all three.
+      const { gateway, altReads } = guildReadGateway([
+        upstreamFailure({ kind: "transient" }),
+        character(secondAltKey, { guild })
+      ]);
+
+      const outcome = await discoverCharacter(altKey, gateway, {
+        ...options,
+        requestCap: 3
+      });
+
+      expect(outcome).toMatchObject({
+        kind: "snapshot",
+        state: "complete",
+        guildReadsDropped: 1
+      });
+      expect(guildOf(outcome)).toBeNull();
+      expect(altReads()).toBe(1);
+    });
+
+    it("counts neither a guildless answer nor a read the cap never allowed", async () => {
+      // Break caught: counting these would report upstream loss that never
+      // happened, and the count exists to measure exactly that loss.
+      const guildless = guildReadGateway([character(secondAltKey)]);
+      await expect(
+        discoverCharacter(altKey, guildless.gateway, options)
+      ).resolves.toMatchObject({ guildReadsDropped: 0 });
+
+      const uncharged = guildReadGateway([
+        upstreamFailure({ kind: "transient" })
+      ]);
+      await expect(
+        discoverCharacter(altKey, uncharged.gateway, {
+          ...options,
+          requestCap: 2
+        })
+      ).resolves.toMatchObject({ state: "complete", guildReadsDropped: 0 });
+      expect(uncharged.altReads()).toBe(0);
+    });
+
+    it("never retries a read the run itself aborted", async () => {
+      const controller = new AbortController();
+      const { gateway, altReads } = guildReadGateway([
+        upstreamFailure({ kind: "transient" })
+      ]);
+      const read = gateway.getCharacter;
+      gateway.getCharacter = async (key, signal) => {
+        if (key.name === "second-alt") controller.abort();
+        return read(key, signal);
+      };
+
+      await expect(
+        discoverCharacter(altKey, gateway, {
+          ...options,
+          signal: controller.signal
+        })
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(altReads()).toBe(1);
+    });
+  });
+
   it("records a visible owner and its claimed characters in canonical order", async () => {
     // Break caught: owner records could omit claims or depend on upstream array order.
     const outcome = await discoverCharacter(
@@ -551,7 +735,8 @@ describe("discoverCharacter", () => {
           raiderIoUrl: "https://raider.io/characters/eu/silvermoon/alt",
           source: "input"
         }
-      ]
+      ],
+      guildReadsDropped: 0
     });
   });
 

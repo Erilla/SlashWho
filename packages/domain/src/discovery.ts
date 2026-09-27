@@ -53,13 +53,20 @@ export interface RaiderIoGateway {
   ): Promise<RaiderIoProfile | null>;
 }
 
+/**
+ * Guild reads that ended without a guild because Raider.IO failed, after the
+ * one retry a timeout or 5xx earns. Neither a guildless answer nor a read the
+ * request cap never allowed counts: this measures upstream loss only.
+ */
+type GuildReadsDropped = { guildReadsDropped: number };
+
 export type DiscoveryOutcome =
-  | {
+  | ({
       kind: "snapshot";
       state: "complete";
       characters: readonly DiscoveredCharacter[];
-    }
-  | {
+    } & GuildReadsDropped)
+  | ({
       kind: "snapshot";
       state: "partial";
       limitationCode: "privacy_hidden" | "request_cap" | "unsupported_member";
@@ -68,7 +75,7 @@ export type DiscoveryOutcome =
       /** Transient exclusions for subsequent discovery stages; never persist or expose. */
       excludedTournamentCharacterIds?: readonly string[];
       characters: readonly DiscoveredCharacter[];
-    }
+    } & GuildReadsDropped)
   | {
       kind: "failure";
       code:
@@ -184,6 +191,21 @@ function discoveredCharacter(
     raiderIoUrl: toRaiderIoUrl(character.key),
     source
   };
+}
+
+/**
+ * Whether a failed guild read is worth one more attempt. A read the client
+ * abandons is still completed by Raider.IO and cached at Cloudflare, so the
+ * retry is usually answered from that cache (#656). That holds for a timeout, a
+ * network error and a 5xx. A 429, or any answer carrying Retry-After, is the
+ * upstream asking us to wait; a 403, 404 or schema drift will not change.
+ */
+function isRetryableGuildReadFailure(error: unknown): boolean {
+  if (!isUpstreamFailure(error) || error.kind !== "transient") return false;
+  if (error.retryAfterMs !== undefined) return false;
+  return (
+    error.status === undefined || (error.status >= 500 && error.status < 600)
+  );
 }
 
 function failureOutcome(error: unknown): DiscoveryOutcome {
@@ -405,30 +427,48 @@ export async function discoverCharacter(
   // payload, spent from whatever budget the relationship sweep left behind and
   // only after deduplication, so no request is wasted on a character the
   // snapshot will not carry.
+  //
+  // An upstream failure here costs one guild, never the snapshot. A timeout or
+  // 5xx is retried once, charged to the same budget, and whatever is still lost
+  // is counted so the run records it.
+  let guildReadsDropped = 0;
+  async function readGuild(
+    observed: DiscoveredCharacter
+  ): Promise<DiscoveredCharacter> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const detailed = await optionalRequest(() =>
+          gateway.getCharacter(observed.key, options.signal)
+        );
+        throwIfAborted();
+        // Only a retry can meet an exhausted budget unread here: the first
+        // attempt found none and was never made, which is not upstream loss.
+        if (detailed === budgetExhausted) {
+          if (attempt > 1) guildReadsDropped += 1;
+          return observed;
+        }
+        if (isRaiderIoCharacter(detailed)) {
+          return { ...observed, guild: detailed.guild };
+        }
+        guildReadsDropped += 1;
+        return observed;
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason;
+        if (attempt === 1 && isRetryableGuildReadFailure(error)) continue;
+        guildReadsDropped += 1;
+        return observed;
+      }
+    }
+  }
+
   const withGuilds: DiscoveredCharacter[] = [];
   for (const observed of characters) {
-    if (
+    withGuilds.push(
       observed.guild !== null ||
-      guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
-    ) {
-      withGuilds.push(observed);
-      continue;
-    }
-    try {
-      const detailed = await optionalRequest(() =>
-        gateway.getCharacter(observed.key, options.signal)
-      );
-      throwIfAborted();
-      withGuilds.push(
-        detailed !== budgetExhausted && isRaiderIoCharacter(detailed)
-          ? { ...observed, guild: detailed.guild }
-          : observed
-      );
-    } catch {
-      if (options.signal?.aborted) throw options.signal.reason;
-      // An upstream failure here costs one guild, never the snapshot.
-      withGuilds.push(observed);
-    }
+        guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
+        ? observed
+        : await readGuild(observed)
+    );
   }
 
   // A snapshot is anchored to its root character. Without a root observation the
@@ -450,7 +490,8 @@ export async function discoverCharacter(
       ...(tournamentCharacters.size > 0
         ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
         : {}),
-      characters: withGuilds
+      characters: withGuilds,
+      guildReadsDropped
     };
   }
   if (privacyHidden) {
@@ -461,7 +502,8 @@ export async function discoverCharacter(
       ...(tournamentCharacters.size > 0
         ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
         : {}),
-      characters: withGuilds
+      characters: withGuilds,
+      guildReadsDropped
     };
   }
   if (omittedMembers) {
@@ -472,8 +514,14 @@ export async function discoverCharacter(
       ...(tournamentCharacters.size > 0
         ? { excludedTournamentCharacterIds: [...tournamentCharacters] }
         : {}),
-      characters: withGuilds
+      characters: withGuilds,
+      guildReadsDropped
     };
   }
-  return { kind: "snapshot", state: "complete", characters: withGuilds };
+  return {
+    kind: "snapshot",
+    state: "complete",
+    characters: withGuilds,
+    guildReadsDropped
+  };
 }

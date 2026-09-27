@@ -282,6 +282,7 @@ function policyFixture(
       },
       async markRetrying() {},
       async completeWithLiveSweepSnapshot() {},
+      async recordGuildReadsDropped() {},
       async fail() {},
       async find(id) {
         return activeRun?.id === id ? activeRun : null;
