@@ -123,6 +123,47 @@ it("shows the details in a tooltip on hover and on focus", () => {
   ).toContain("3 raid nights: Ryun");
 });
 
+it("anchors every tooltip to the top of the frame, whatever its lane", () => {
+  // SeriouslyCasual raids alongside Rancour, so the bars take two lanes.
+  const [casualHistory, , rancourHistory] = guildHistory;
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={[
+        {
+          ...casualHistory!,
+          nights: nights(["2025-03-12", "2025-06-18"], [ryun])
+        },
+        rancourHistory!
+      ]}
+      today="2026-09-26"
+    />
+  );
+  const tooltip = () =>
+    document.querySelector<HTMLElement>(".dossier-guild-timeline-tooltip");
+  const bars = screen.getAllByRole("img", { name: /raid night/ });
+  const lanes = new Set(
+    bars.map((bar) => bar.querySelector("rect")!.getAttribute("y"))
+  );
+  expect(lanes.size).toBeGreaterThan(1);
+  const targets = [
+    ...bars,
+    ...screen.getAllByRole("img", { name: / today\./ }),
+    document.querySelector(".dossier-guild-timeline-band")!
+  ];
+  for (const target of targets) {
+    fireEvent.mouseEnter(target);
+    // Out of the scroller, and placed above the frame by its stylesheet
+    // rather than at a lane's y, so it never covers the chart.
+    expect(tooltip()?.parentElement).toHaveClass(
+      "dossier-guild-timeline-frame"
+    );
+    expect(tooltip()?.style.top).toBe("");
+    expect(tooltip()?.style.bottom).toBe("");
+    fireEvent.mouseLeave(target.closest("svg")!);
+  }
+});
+
 /** Gives the scroller a view width and a scroll offset jsdom does not have. */
 function withScroller(clientWidth: number, run: () => void) {
   const original = Object.getOwnPropertyDescriptor(

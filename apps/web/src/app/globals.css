@@ -1177,8 +1177,11 @@ a {
   pointer-events: none;
 }
 
+/* Above the timeline rather than over it, growing upwards however long the
+   roster, so it never covers the bars a reader is comparing. */
 .dossier-guild-timeline-tooltip {
   position: absolute;
+  bottom: calc(100% + 0.35rem);
   z-index: 2;
   display: grid;
   gap: 0.1rem;

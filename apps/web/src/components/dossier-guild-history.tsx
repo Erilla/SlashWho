@@ -99,7 +99,6 @@ type Tooltip = Readonly<{
   anchor: number;
   /** Where it is drawn, against what is scrolled into view. */
   x: number;
-  y: number;
   /** Shown by keyboard focus, so it follows its bar through a scroll. */
   focused: boolean;
 }>;
@@ -229,7 +228,8 @@ export function DossierGuildHistory({
       )
     : [];
   // The tooltip sits outside the scroller so a short timeline cannot clip
-  // it, which means placing it against what is scrolled into view.
+  // it, which means placing it against what is scrolled into view. Its
+  // stylesheet draws it above the frame, never over the lanes.
   const place = (anchor: number) => {
     const scroll = scrollRef.current;
     const left = anchor - (scroll?.scrollLeft ?? 0);
@@ -239,9 +239,8 @@ export function DossierGuildHistory({
   const showTooltip = (
     lines: readonly ReactNode[],
     anchor: number,
-    y: number,
     focused = false
-  ) => setTooltip({ lines, anchor, x: place(anchor), y, focused });
+  ) => setTooltip({ lines, anchor, x: place(anchor), focused });
   // Focusing an off-screen bar makes the browser scroll it into view, and
   // that scroll arrives after `focus`: a focused tooltip is moved with its
   // bar rather than hidden. A hovered one would be left pointing at
@@ -312,8 +311,7 @@ export function DossierGuildHistory({
                           event.clientX -
                             (event.currentTarget.ownerSVGElement?.getBoundingClientRect()
                               .left ?? 0) +
-                            8,
-                          TOP
+                            8
                         )
                       }
                       width={layout.x(band.to) - x}
@@ -365,12 +363,8 @@ export function DossierGuildHistory({
                       className="dossier-guild-timeline-bar"
                       key={`${bar.guildId}-${bar.firstNight}`}
                       onBlur={() => setTooltip(null)}
-                      onFocus={() =>
-                        showTooltip(lines, bar.x, y + BAR_HEIGHT + 4, true)
-                      }
-                      onMouseEnter={() =>
-                        showTooltip(lines, bar.x, y + BAR_HEIGHT + 4)
-                      }
+                      onFocus={() => showTooltip(lines, bar.x, true)}
+                      onMouseEnter={() => showTooltip(lines, bar.x)}
                       role="img"
                       tabIndex={0}
                     >
@@ -419,8 +413,8 @@ export function DossierGuildHistory({
                       className="dossier-guild-timeline-current"
                       key={guildId}
                       onBlur={() => setTooltip(null)}
-                      onFocus={() => showTooltip(lines, x - 120, cy + 12, true)}
-                      onMouseEnter={() => showTooltip(lines, x - 120, cy + 12)}
+                      onFocus={() => showTooltip(lines, x - 120, true)}
+                      onMouseEnter={() => showTooltip(lines, x - 120)}
                       role="img"
                       tabIndex={0}
                     >
@@ -451,7 +445,7 @@ export function DossierGuildHistory({
             <div
               aria-hidden="true"
               className="dossier-guild-timeline-tooltip"
-              style={{ left: `${tooltip.x}px`, top: `${tooltip.y}px` }}
+              style={{ left: `${tooltip.x}px` }}
             >
               {tooltip.lines.map((line, index) =>
                 index === 0 ? (
