@@ -3,7 +3,7 @@ import {
   ATTENDANCE_REPORT_LEAD_MS,
   REPORT_COVER_SLACK_MS,
   uncoveredVerifiedKills
-} from "../collection-plan";
+} from "../attendance-coverage";
 import { guildAttendancePage, guildIsAbsent } from "../decode/attendance";
 import { decodedHydratedReport } from "../decode/reports";
 import { guildAttendanceQuery, reportByCodeQuery } from "../queries";

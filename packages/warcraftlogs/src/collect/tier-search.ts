@@ -2,7 +2,7 @@ import {
   ATTENDANCE_PAGE_OVERLAP_MS,
   ATTENDANCE_REPORT_LEAD_MS,
   REPORT_COVER_SLACK_MS
-} from "../collection-plan";
+} from "../attendance-coverage";
 import { guildAttendancePage, guildIsAbsent } from "../decode/attendance";
 import { characterGuilds } from "../decode/character";
 import { decodedHydratedReport } from "../decode/reports";
