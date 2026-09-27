@@ -1,4 +1,5 @@
 import {
+  applicationConfigSchema,
   encryptAccountMail,
   encryptCredential,
   upstreamThrottleRecord
@@ -33,6 +34,7 @@ import {
   createFingerprintAlertNotifier
 } from "./notifiers";
 import {
+  BLIZZARD_WORKER_REQUEST_LIMITS,
   createFingerprintIntegration,
   createRaiderIoGateway,
   createWorkerRuntime,
@@ -551,6 +553,26 @@ describe("worker runtime", () => {
       minimumCommon: 200,
       minimumIdenticalPercent: 20
     });
+  });
+
+  it("leaves the web service headroom inside Blizzard's per-second allowance", () => {
+    // Break caught: the worker's rate limit and the web service's provider
+    // concurrency are set in different packages and carve the same 100 a
+    // second, so raising either could overrun the shared credentials with
+    // nothing to say so. The web reads are bounded only by concurrency, so its
+    // share is taken at the pessimistic 100 ms response the limit was sized on.
+    const blizzardPerSecond = 100;
+    const pessimisticResponseSeconds = 0.1;
+    const webConcurrency =
+      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.parse(
+        undefined
+      );
+    const webPerSecond = webConcurrency / pessimisticResponseSeconds;
+
+    expect(BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond).toBe(40);
+    expect(
+      BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond + webPerSecond
+    ).toBeLessThanOrEqual(blizzardPerSecond * 0.8);
   });
 
   it("bounds the worker's shared Blizzard client, not each caller", async () => {
