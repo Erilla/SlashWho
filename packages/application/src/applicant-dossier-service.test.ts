@@ -92,6 +92,11 @@ function fixture(
     /** When a capped tier search is next due to continue. */
     tierSearchResumesAt?: Date;
     storedEvidence?: boolean;
+    /**
+     * A discovery run for the key is queued or running, as it is straight after
+     * a search. The initial read collects nothing for a character without one.
+     */
+    activeDiscoveryRun?: boolean;
     historicWorldRank?: number | null;
     historicRankCheckedAt?: string | null;
     storedCuttingEdges?: readonly {
@@ -178,7 +183,14 @@ function fixture(
       setExcluded: vi.fn().mockResolvedValue("updated"),
       remove: vi.fn().mockResolvedValue("removed")
     },
-    runs: { create: runsCreate },
+    runs: {
+      create: runsCreate,
+      findActive: vi
+        .fn()
+        .mockResolvedValue(
+          options.activeDiscoveryRun ? { id: "discovery-run" } : null
+        )
+    },
     evidence: {
       listPhases: vi
         .fn()
@@ -967,9 +979,55 @@ describe("applicant dossier service", () => {
     });
   });
 
+  it("queues no collection for an initial read nobody searched for", async () => {
+    // Break caught (#709): a direct `?scope=initial` call for a character with
+    // no discovery run and no evidence queued a full Warcraft Logs collection
+    // at public-read limits, the expensive half of a search without its limit
+    // or its record. 190 such runs queued on web-test on 2026-09-27.
+    const { dossiers, repositories, raiderio, enqueueCharacterEvidence } =
+      fixture({ storedEvidence: false, activeDiscoveryRun: false });
+
+    await expect(dossiers.readInitial(root)).resolves.toEqual({
+      kind: "not_ready"
+    });
+    expect(repositories.runs.findActive).toHaveBeenCalledWith(root);
+    expect(repositories.evidence.reserve).not.toHaveBeenCalled();
+    expect(enqueueCharacterEvidence).not.toHaveBeenCalled();
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
+  });
+
+  it("collects initial evidence for a character whose search is running", async () => {
+    // The only case the web client sends `?scope=initial` in: straight after a
+    // search, while its discovery run is queued or running.
+    const { dossiers, repositories } = fixture({
+      storedEvidence: false,
+      activeDiscoveryRun: true
+    });
+
+    await expect(dossiers.readInitial(root)).resolves.toMatchObject({
+      kind: "ready",
+      dossier: { research: { state: "initial" } }
+    });
+    expect(repositories.evidence.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ key: root })
+    );
+  });
+
+  it("shows stored initial evidence without asking after a discovery run", async () => {
+    // Completed evidence is already public dossier material, so showing it
+    // needs no search; the ordinary read serves it the same way.
+    const { dossiers, repositories } = fixture({ activeDiscoveryRun: false });
+
+    await expect(dossiers.readInitial(root)).resolves.toMatchObject({
+      kind: "ready"
+    });
+    expect(repositories.runs.findActive).not.toHaveBeenCalled();
+  });
+
   it("withholds initial evidence for a tournament root before discovery finishes", async () => {
     const { dossiers, raiderio, warcraftLogs, blizzard } = fixture({
-      storedEvidence: false
+      storedEvidence: false,
+      activeDiscoveryRun: true
     });
     vi.mocked(raiderio.getCharacter).mockResolvedValue({
       key: root,
@@ -985,19 +1043,22 @@ describe("applicant dossier service", () => {
     await expect(dossiers.readInitial(root)).resolves.toEqual({
       kind: "not_ready"
     });
+    expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
     expect(blizzard.getCompletedAchievements).not.toHaveBeenCalled();
   });
 
   it("withholds unchecked initial evidence when the eligibility lookup fails", async () => {
     const { dossiers, raiderio, warcraftLogs } = fixture({
-      storedEvidence: false
+      storedEvidence: false,
+      activeDiscoveryRun: true
     });
     vi.mocked(raiderio.getCharacter).mockRejectedValue({ kind: "transient" });
     await expect(dossiers.readInitial(root)).resolves.toEqual({
       kind: "not_ready"
     });
     expect(warcraftLogs.getFirstKillReports).not.toHaveBeenCalled();
+    expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
   });
 
   it("shows stored root evidence without rechecking an unavailable discovery provider", async () => {
@@ -1024,7 +1085,10 @@ describe("applicant dossier service", () => {
   });
 
   it("preserves cancellation during initial eligibility checking", async () => {
-    const { dossiers, raiderio } = fixture({ storedEvidence: false });
+    const { dossiers, raiderio } = fixture({
+      storedEvidence: false,
+      activeDiscoveryRun: true
+    });
     const controller = new AbortController();
     const reason = new DOMException("cancelled", "AbortError");
     vi.mocked(raiderio.getCharacter).mockImplementation(async () => {
@@ -1559,10 +1623,11 @@ describe("applicant dossier service", () => {
       repositories: {
         snapshots: {},
         evidence: {},
-        manualConnections: {}
+        manualConnections: {},
+        runs: {}
       } as unknown as Pick<
         Repositories,
-        "snapshots" | "evidence" | "manualConnections"
+        "snapshots" | "evidence" | "manualConnections" | "runs"
       >,
       search,
       queue: { enqueueCharacterEvidence: vi.fn() },
@@ -3072,13 +3137,16 @@ describe("applicant dossier service", () => {
     const scope = createMeasurementScope(
       (() => {
         let index = 0;
-        // The stored-evidence eligibility check is measured first (0 ms), then
-        // the provider lookup occupies the next 12 ms slice.
-        const steps = [0, 0, 0, 12, 12, 12];
+        // The stored-evidence and discovery-run checks are measured first
+        // (0 ms each), then the provider lookup occupies the next 12 ms slice.
+        const steps = [0, 0, 0, 0, 0, 12, 12, 12];
         return () => steps[Math.min(index++, steps.length - 1)]!;
       })()
     );
-    const { dossiers, raiderio } = fixture({ storedEvidence: false });
+    const { dossiers, raiderio } = fixture({
+      storedEvidence: false,
+      activeDiscoveryRun: true
+    });
     vi.mocked(raiderio.getCharacter).mockResolvedValue({
       key: root,
       displayName: "Ryii",
@@ -3265,7 +3333,10 @@ describe("applicant dossier service", () => {
   });
 
   it("checks initial eligibility with a supplied Raider.IO gateway", async () => {
-    const { dossiers, raiderio } = fixture({ storedEvidence: false });
+    const { dossiers, raiderio } = fixture({
+      storedEvidence: false,
+      activeDiscoveryRun: true
+    });
     const override = {
       getCharacter: vi.fn().mockResolvedValue({
         key: root,

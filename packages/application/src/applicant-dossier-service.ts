@@ -1076,7 +1076,7 @@ function parseTarget(url: string): CharacterKey | null {
 export function createApplicantDossierService(options: {
   repositories: Pick<
     Repositories,
-    "snapshots" | "evidence" | "manualConnections" | "recentSearches"
+    "snapshots" | "evidence" | "manualConnections" | "recentSearches" | "runs"
   >;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
@@ -1616,6 +1616,13 @@ export function createApplicantDossierService(options: {
       const hasStoredEvidence =
         (await repositories.evidence.getCompleted(key)) !== null;
       if (!hasStoredEvidence) {
+        // Collecting a character nobody has evidence for is the expensive half
+        // of a search, so it happens only while a search's discovery run is
+        // active: the one case the web client asks for the initial scope in.
+        // Without that, a direct call queued a full collection at public-read
+        // limits and left no search behind (#709).
+        if (!(await repositories.runs.findActive(key)))
+          return { kind: "not_ready" };
         // Initial evidence precedes the worker's snapshot filter. Completed
         // evidence is already public dossier material; without it, one bounded
         // lookup prevents a tournament root from appearing before the current
