@@ -334,9 +334,11 @@ within the pool's 10 s connection timeout, but if `dbMaxCallMs` grows in
   it as capacity. Neither page mentions regions or IPs.
 - **Whether Blizzard sends `Retry-After` or rate-limit headers.** Not
   documented. The code copes either way.
-- **Latency floor.** Only the mean and maximum are recorded (`blizzardMs`,
-  `blizzardCalls`, `blizzardMaxCallMs`). A minimum or p5 per `discovery_run`
-  would replace the 100 ms assumption with a measurement.
+- **Latency floor.** Since #672, each `discovery_run` also records the shortest
+  successful Blizzard call (`blizzardMinCallMs`) and how many took under 100 ms
+  (`blizzardFastCalls`, against `blizzardFastCallThresholdMs`), beside the
+  mean and maximum. No run on Railway has been read against them yet, so the
+  100 ms figure is still an assumption.
 - **Web replica count and `DOSSIER_PROVIDER_CONCURRENCY` in production.** Not
   in the repository. Both scale the web term above linearly.
 - **Uncharged hourly volume.** Web Cutting Edge misses per hour and evidence

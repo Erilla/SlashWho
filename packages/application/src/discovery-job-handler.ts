@@ -55,6 +55,14 @@ function scopedRaiderIoGateway(
   };
 }
 
+/**
+ * The Blizzard response time the per-second budget was sized on (see
+ * `docs/research/2026-09-26-issue-549-blizzard-sweep-concurrency.md`). Each
+ * run counts its calls faster than this, beside the shortest, so the records
+ * can confirm or refute the figure rather than assume it.
+ */
+const BLIZZARD_FAST_CALL_MS = 100;
+
 function scopedBlizzardGateway(
   gateway: BlizzardGateway,
   scope: MeasurementScope,
@@ -412,7 +420,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       // buckets would run past `durationMs` on any sweep of real size.
       const observedAt = monotonic();
       const scope = createMeasurementScope(monotonic, {
-        overlapping: "shared"
+        overlapping: "shared",
+        fastCallThresholdMs: { blizzard: BLIZZARD_FAST_CALL_MS }
       });
       bindThrottleScope(scope);
       const repositories = measuredRepositories(options.repositories, scope);

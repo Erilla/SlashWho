@@ -1843,6 +1843,14 @@ describe("discovery job handler", () => {
     // 100 ms request, not its 20 ms wait on top. The root reads the same way.
     expect(value("blizzardLimiterWaitMs")).toBe(20 * (members.length + 1));
     expect(value("blizzardCallMs")).toBe(100 * (members.length + 1));
+    // The fast end is the call's own time too: the roster, which the fake
+    // answers at once and successfully, is the only call under 100 ms. Its shared split would
+    // have made every overlapping read look fast.
+    expect(record).toMatchObject({
+      blizzardMinCallMs: 0,
+      blizzardFastCalls: 1,
+      blizzardFastCallThresholdMs: 100
+    });
   });
 
   it("records a failure outcome without upstream detail", async () => {
