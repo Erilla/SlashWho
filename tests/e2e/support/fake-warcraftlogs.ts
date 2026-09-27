@@ -15,12 +15,20 @@ export const fakeWarcraftLogsCharacterId = 40989140;
 type FakeWarcraftLogs = Readonly<{ baseUrl: string; close(): Promise<void> }>;
 
 export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
+  // GraphQL requests per character name. Proves the worker's evidence run
+  // reached this fake rather than live Warcraft Logs; keyed by name so a test
+  // counts only its own character's run.
+  const characterRequests: Record<string, number> = {};
   const handle = async (
     request: IncomingMessage,
     response: ServerResponse
   ): Promise<void> => {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && url.pathname === "/__control/stats") {
+      response.end(JSON.stringify({ characterRequests }));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/oauth/token") {
       response.end(
         JSON.stringify({ access_token: "e2e-token", expires_in: 3600 })
@@ -35,6 +43,9 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
         query?: string;
         variables?: { name?: string; realm?: string; id?: number };
       };
+      const requested = body.variables?.name?.toLowerCase();
+      if (requested)
+        characterRequests[requested] = (characterRequests[requested] ?? 0) + 1;
       // A pasted character-ID URL resolves to Ryun; any other ID is
       // absent, as Warcraft Logs answers an unknown one.
       if (body.query?.includes("ResolveCharacterById")) {

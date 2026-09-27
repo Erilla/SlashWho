@@ -112,9 +112,10 @@ them on the worker service alone. `BLIZZARD_CLIENT_ID` and
 `BLIZZARD_CLIENT_SECRET` are required by both services and must be Railway
 secret variables. Leave `BLIZZARD_BASE_URL` unset in both: it exists so the
 test suite can point both services at a local fake, and an unset value keeps
-Blizzard's own hosts. The fingerprint budget defaults shown below are the
-application defaults and can be omitted after the required credentials and
-sweep cap are configured:
+Blizzard's own hosts. Leave `WARCRAFT_LOGS_BASE_URL` unset in both for the same
+reason: unset, both services use warcraftlogs.com. The fingerprint budget
+defaults shown below are the application defaults and can be omitted after the
+required credentials and sweep cap are configured:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
