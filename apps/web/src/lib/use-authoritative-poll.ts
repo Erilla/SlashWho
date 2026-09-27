@@ -30,7 +30,7 @@ export function createBackoff(delays: readonly number[] = pollDelaysMs): {
 
 export type PollReadResult<T> =
   | { kind: "snapshot"; value: T }
-  | { kind: "retry"; retryAfterMs?: number }
+  | { kind: "retry"; retryAfterMs?: number | undefined }
   | { kind: "terminal"; response: Response };
 
 export interface AuthoritativePollOptions<T> {

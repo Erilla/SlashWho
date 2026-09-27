@@ -9,9 +9,9 @@ export const evidenceResumeQueueName = "evidence-resume";
 
 /** Optional so jobs enqueued before this deployment stay valid in flight. */
 export type JobTelemetry = {
-  correlationId?: string;
+  correlationId?: string | undefined;
   /** ISO 8601. Absent yields a null queueWaitMs rather than a wrong one. */
-  enqueuedAt?: string;
+  enqueuedAt?: string | undefined;
 };
 
 export type DiscoverCharacterJob = {

@@ -856,7 +856,8 @@ export interface EvidenceRepository {
           wclClientIdEncrypted?: never;
           wclClientSecretEncrypted?: never;
         }
-      | null;
+      | null
+      | undefined;
   }): Promise<EvidenceReservationResult>;
   /**
    * Reserves a tier search, under the same per-character lock as `reserve`.
@@ -892,7 +893,7 @@ export interface EvidenceRepository {
     at: Date;
     searchedSince: Date;
     phasePlan?: readonly string[];
-    credentials?: { accountId: string; credentialVersion: number };
+    credentials?: { accountId: string; credentialVersion: number } | undefined;
   }): Promise<TierSearchReservationResult>;
   find(id: string): Promise<CharacterEvidenceRun | null>;
   claim(id: string, attempt: number): Promise<CharacterEvidenceRun | null>;
@@ -1207,7 +1208,7 @@ export type ActiveEvidenceRunRow = Readonly<{
 
 export type FingerprintAdmission =
   | { kind: "not_due" }
-  | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
+  | { kind: "waiting"; retryAt: Date; blockedSince?: Date | undefined }
   | {
       kind: "admitted";
       reservationId: string;
@@ -1218,7 +1219,7 @@ export type FingerprintAdmission =
 
 export type FingerprintAdmissionDispatch =
   | { kind: "admitted" }
-  | { kind: "waiting"; retryAt: Date; blockedSince?: Date }
+  | { kind: "waiting"; retryAt: Date; blockedSince?: Date | undefined }
   | { kind: "not_due" }
   | { kind: "settled" };
 
@@ -1456,7 +1457,7 @@ export interface AccountMailRepository {
     /** Kept only inside encryptedMessage, never duplicated as plaintext. */
     destination: string;
     /** Required for reset: guards a mailbox snapshot under the account row lock. */
-    expectedCanonicalEmail?: string;
+    expectedCanonicalEmail?: string | undefined;
     encryptedMessage: string;
     tokenDigest: string;
     expiresAt: Date;

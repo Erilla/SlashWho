@@ -198,7 +198,10 @@ export type ApplicantEvidenceStore = {
     runId: string,
     result: Readonly<{
       state: "complete" | "partial";
-      historicAliasProgress?: StagedEvidenceCollection["historicAliasProgress"];
+      historicAliasProgress?: Exclude<
+        StagedEvidenceCollection["historicAliasProgress"],
+        undefined
+      >;
       limitationCode: EvidenceLimitationCode | null;
       parseLimitationCode: EvidenceLimitationCode | null;
       retryAfterAt?: Date | null;
@@ -428,8 +431,8 @@ export type ApplicantEvidenceJobInput =
   | string
   | Readonly<{
       runId: string;
-      correlationId?: string;
-      enqueuedAt?: string;
+      correlationId?: string | undefined;
+      enqueuedAt?: string | undefined;
       /**
        * `light` reads only the most recent page of reports. A manual refresh
        * inside its cooldown uses it to look for a new raid night without
@@ -667,7 +670,7 @@ type AttemptState = {
    * The tier this run was reserved to search, read off the run itself so a
    * re-claimed attempt is still a search. Undefined on every other run.
    */
-  tierSearchRaidId?: string;
+  tierSearchRaidId?: string | undefined;
   tierSearchResult?: WarcraftLogsTierSearchOutcome;
   tierSearchStarved: boolean;
   /** Whether the attempt got as far as spending the allowance. */

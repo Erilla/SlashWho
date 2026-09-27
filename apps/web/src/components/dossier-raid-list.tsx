@@ -92,7 +92,7 @@ function ReportControl({
 function reportName(report: {
   source: "guild_log" | "personal_log";
   uploader: string | null;
-  guild?: { name: string } | null;
+  guild?: { name: string } | null | undefined;
 }) {
   return report.source === "guild_log"
     ? (report.guild?.name ?? "Guild log")

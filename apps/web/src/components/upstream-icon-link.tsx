@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 type UpstreamIconLinkProps = Readonly<{
   children?: ReactNode;
-  evidenceState?: "kill" | "wipe";
+  evidenceState?: "kill" | "wipe" | undefined;
   href: string;
   label: string;
   source: "raiderio" | "warcraft_logs";

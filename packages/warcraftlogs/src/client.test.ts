@@ -296,7 +296,7 @@ function windowedZoneReport(
 function performanceRankings(
   values: Readonly<{ damage: unknown; healing: unknown; bossDamage: unknown }>,
   options: Readonly<{
-    code?: string;
+    code?: string | undefined;
     fightId?: number;
     encounterId?: number;
     difficulty?: number;

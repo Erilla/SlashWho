@@ -9,7 +9,7 @@ export type ClientCredentialsTokenSourceOptions = Readonly<{
   url: URL;
   clientId: string;
   clientSecret: string;
-  onThrottle?: ThrottleObserver;
+  onThrottle?: ThrottleObserver | undefined;
   /** How long one token request may take. Defaults to 15 seconds. */
   deadlineMs?: number;
 }>;

@@ -57,7 +57,7 @@ export function createAllowlistLogger(
   options: AllowlistLoggerOptions = {}
 ): Logger {
   const loggerOptions = {
-    base: undefined,
+    base: null,
     formatters: { log: allowlistedRecord(fields, options) }
   };
   return destination ? pino(loggerOptions, destination) : pino(loggerOptions);

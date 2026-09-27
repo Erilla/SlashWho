@@ -10,15 +10,17 @@ export type WebConfig = Readonly<{
   databaseUrl: string;
   application: ApplicationConfig;
   operatorAuth: Readonly<{ origin: string; sessionHashSecret: string }>;
-  accountCredentialEncryptionKey?: Buffer;
-  accountMail?: Readonly<{
-    from: string;
-    encryptionKey: Buffer;
-  }>;
+  accountCredentialEncryptionKey?: Buffer | undefined;
+  accountMail?:
+    | Readonly<{
+        from: string;
+        encryptionKey: Buffer;
+      }>
+    | undefined;
   dossier: Readonly<{
     raiderIoBaseUrl: string;
     raiderIoTimeoutMs: number;
-    raiderIoAccessKey?: string;
+    raiderIoAccessKey?: string | undefined;
     blizzardClientId: string;
     blizzardClientSecret: string;
     evidenceJobCredentialEncryptionKey: Buffer;
@@ -27,7 +29,7 @@ export type WebConfig = Readonly<{
      * the web process still serves everything else, and an ID URL reports
      * the upstream as unavailable.
      */
-    warcraftLogs?: WarcraftLogsCredentials;
+    warcraftLogs?: WarcraftLogsCredentials | undefined;
   }>;
 }>;
 
