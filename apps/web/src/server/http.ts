@@ -1,5 +1,6 @@
 import {
   attributeThrottlesTo,
+  BLIZZARD_FAST_CALL_MS,
   bindThrottleScope,
   createMeasurementScope,
   type CreateSearchResult,
@@ -207,7 +208,11 @@ export async function withHttpRequest(
   options: HttpRequestOptions = {}
 ): Promise<Response> {
   const correlationId = randomUUID();
-  const scope = createMeasurementScope(clock);
+  // The fast end of Blizzard's successful calls (#696), on the same threshold
+  // as the worker's discovery runs, so the two can be compared.
+  const scope = createMeasurementScope(clock, {
+    fastCallThresholdMs: { blizzard: BLIZZARD_FAST_CALL_MS }
+  });
   const startedAt = clock();
   let response: Response;
   let failure: string | undefined;
