@@ -296,6 +296,69 @@ export async function finishFingerprintSweep(
   }
 }
 
+/**
+ * Inserts a `waiting` admission for each chain that has a live cursor and no
+ * live admission, optionally only the one `runId` owns. A live admission is
+ * one still waiting, or admitted with a reservation that is neither released
+ * nor expired. The caller holds the fingerprint lock, so two callers cannot
+ * both find a chain bare and queue it twice.
+ *
+ * The caps come from the run's previous admission, which every chain has:
+ * the cursor is only ever written by an admitted cycle. `cadence_cutoff` is
+ * set to the admission time, so the row passes the cadence filter everywhere
+ * -- a continuation finishes a sweep in progress and was never cadence-gated.
+ */
+async function requeueContinuations(
+  client: Queryable,
+  input: {
+    at: Date;
+    runId: string | null;
+    maxFailures: number | null;
+    limit: number;
+  }
+): Promise<readonly string[]> {
+  const result = await client.query<{ discovery_run_id: string }>(
+    `INSERT INTO fingerprint_sweep_admissions
+      (discovery_run_id, region, realm_slug, normalized_name, request_cap,
+       hourly_budget, cadence_cutoff, requested_at)
+     SELECT snapshot.discovery_run_id, state.region, state.realm_slug,
+            state.normalized_name, previous.request_cap,
+            previous.hourly_budget, $1, $1
+     FROM fingerprint_sweep_states state
+     JOIN snapshots snapshot ON snapshot.id = state.resume_snapshot_id
+     CROSS JOIN LATERAL (
+       SELECT request_cap, hourly_budget
+       FROM fingerprint_sweep_admissions
+       WHERE discovery_run_id = snapshot.discovery_run_id
+       ORDER BY requested_at DESC, queue_order DESC
+       LIMIT 1
+     ) previous
+     WHERE state.resume_after IS NOT NULL
+       AND ($2::uuid IS NULL OR snapshot.discovery_run_id = $2::uuid)
+       AND ($3::integer IS NULL OR state.continuation_failures < $3::integer)
+       AND NOT EXISTS (
+         SELECT 1
+         FROM fingerprint_sweep_admissions live
+         LEFT JOIN fingerprint_sweep_reservations reservation
+           ON reservation.admission_id = live.id
+         WHERE live.discovery_run_id = snapshot.discovery_run_id
+           AND (
+             live.status = 'waiting'
+             OR (
+               live.status = 'admitted'
+               AND reservation.released_at IS NULL
+               AND reservation.expires_at > $1
+             )
+           )
+       )
+     ORDER BY state.last_published_at, snapshot.discovery_run_id
+     LIMIT $4
+     RETURNING discovery_run_id`,
+    [input.at, input.runId, input.maxFailures, input.limit]
+  );
+  return result.rows.map((row) => row.discovery_run_id);
+}
+
 export function createFingerprintSweepRepositories(
   pool: Pool
 ): Pick<Repositories, "fingerprintSweeps"> {
@@ -555,6 +618,63 @@ export function createFingerprintSweepRepositories(
         );
         // No state row means no cursor to be stuck on, so nothing to bound.
         return Number(result.rows[0]?.continuation_failures ?? 0);
+      },
+
+      async requeueContinuation(runId, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("fingerprint_admission_time_invalid");
+        }
+        return withTransaction(pool, async (client) => {
+          await lockFingerprintSweeps(client);
+          // The caller is the cycle that ended, so a reservation the run still
+          // holds is its own: one whose release failed, or one a cycle with no
+          // sweep configured never used. Left held, it would count as a live
+          // admission and keep the next cycle from being queued.
+          await client.query(
+            `WITH released AS (
+               UPDATE fingerprint_sweep_reservations reservation
+               SET released_at = $2
+               FROM fingerprint_sweep_admissions admission
+               WHERE reservation.admission_id = admission.id
+                 AND admission.discovery_run_id = $1
+                 AND admission.status = 'admitted'
+                 AND reservation.released_at IS NULL
+               RETURNING reservation.admission_id
+             )
+             UPDATE fingerprint_sweep_admissions
+             SET status = 'released'
+             WHERE id IN (SELECT admission_id FROM released)`,
+            [runId, at]
+          );
+          const queued = await requeueContinuations(client, {
+            at,
+            runId,
+            maxFailures: null,
+            limit: 1
+          });
+          return queued.length > 0;
+        });
+      },
+
+      async requeueStrandedContinuations({ at, maxFailures, limit }) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("fingerprint_admission_time_invalid");
+        }
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+          throw new RangeError("fingerprint_stranded_limit_out_of_range");
+        }
+        if (!Number.isInteger(maxFailures) || maxFailures < 1) {
+          throw new RangeError("fingerprint_stranded_failures_out_of_range");
+        }
+        return withTransaction(pool, async (client) => {
+          await lockFingerprintSweeps(client);
+          return requeueContinuations(client, {
+            at,
+            runId: null,
+            maxFailures,
+            limit
+          });
+        });
       },
 
       async listWaiting(limit, offset = 0) {

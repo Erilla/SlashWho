@@ -1,4 +1,7 @@
-export { createDiscoveryJobHandler } from "./discovery-job-handler";
+export {
+  createDiscoveryJobHandler,
+  recoverStrandedContinuations
+} from "./discovery-job-handler";
 export { collectionProgress } from "./collection-progress";
 export { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 export { startApplicantCollection } from "./start-applicant-collection";

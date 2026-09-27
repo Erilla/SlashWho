@@ -248,6 +248,9 @@ function runtimeFakes(
   }> = [];
   const fingerprintAdmissions: string[] = [];
   const waitingFingerprintRuns: string[] = [];
+  // Chains with a cursor and no live admission. Queuing one consumes it, as
+  // the repository's inserted `waiting` row takes it out of the next batch.
+  const strandedContinuationRuns: string[] = [];
   const admittedFingerprintRuns = new Set<string>();
   const admittedUndispatchedFingerprintRuns: string[] = [];
   const dispatchedFingerprintRuns: string[] = [];
@@ -441,6 +444,9 @@ function runtimeFakes(
       async listWaiting(limit: number, offset = 0) {
         return waitingFingerprintRuns.slice(offset, offset + limit);
       },
+      async requeueStrandedContinuations({ limit }: { limit: number }) {
+        return strandedContinuationRuns.splice(0, limit);
+      },
       async listAdmittedUndispatched() {
         return [...admittedUndispatchedFingerprintRuns];
       },
@@ -492,6 +498,7 @@ function runtimeFakes(
     evidenceEnqueues,
     fingerprintAdmissions,
     waitingFingerprintRuns,
+    strandedContinuationRuns,
     admittedFingerprintRuns,
     admittedUndispatchedFingerprintRuns,
     dispatchedFingerprintRuns,
@@ -2359,6 +2366,23 @@ describe("worker runtime", () => {
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
     expect(fakes.fingerprintAdmissions).toEqual(fakes.waitingFingerprintRuns);
+    await runtime.stop();
+  });
+
+  it("queues every stranded sweep chain before readiness", async () => {
+    // Break caught: a process that died between a failed continuation's
+    // release and its re-admission left a cursor nothing would ever resume.
+    const fakes = runtimeFakes();
+    const stranded = Array.from(
+      { length: 101 },
+      (_unused, index) =>
+        `00000000-0000-4000-8000-${String(index + 300).padStart(12, "0")}`
+    );
+    fakes.strandedContinuationRuns.push(...stranded);
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual(stranded);
     await runtime.stop();
   });
 

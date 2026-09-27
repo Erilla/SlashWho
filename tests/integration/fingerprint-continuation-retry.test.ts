@@ -1,0 +1,365 @@
+import type {
+  CharacterKey,
+  RaiderIoCharacter,
+  RaiderIoGateway
+} from "@slashwho/domain";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  createDiscoveryJobHandler,
+  recoverStrandedContinuations
+} from "../../packages/application/src";
+import type {
+  BlizzardGateway,
+  BlizzardRosterCharacter
+} from "../../packages/blizzard/src";
+import {
+  createPostgresRepositories,
+  runMigrations,
+  type Repositories
+} from "../../packages/database/src";
+import { startPostgres } from "./postgres";
+
+/**
+ * A continuation cycle that ends without publishing must leave something the
+ * admission job can admit. These drive the real handler against PostgreSQL,
+ * because the bug was in the seam between them: the handler re-enqueued a
+ * bare admission job, and the repository had no `waiting` row for it to find.
+ */
+describe("fingerprint continuation retry", () => {
+  let postgres: Awaited<ReturnType<typeof startPostgres>>;
+
+  beforeAll(async () => {
+    postgres = await startPostgres();
+    await runMigrations(postgres.pool);
+  });
+
+  beforeEach(async () => {
+    await postgres.pool.query(`
+      TRUNCATE TABLE fingerprint_sweep_request_events,
+        fingerprint_sweep_reservations, fingerprint_sweep_admissions,
+        fingerprint_sweep_states, snapshot_characters, snapshots,
+        discovery_runs, characters CASCADE;
+    `);
+  });
+
+  afterAll(async () => {
+    await postgres.stop();
+  });
+
+  const rootKey: CharacterKey = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "retryroot"
+  };
+
+  function raiderIoCharacter(key: CharacterKey): RaiderIoCharacter {
+    return {
+      key,
+      displayName: key.name,
+      className: "Mage",
+      level: 80,
+      ownerId: "owner",
+      profileGuess: null,
+      declaredMain: null,
+      guild: null
+    };
+  }
+
+  const raiderIo: RaiderIoGateway = {
+    async getCharacter(key) {
+      return raiderIoCharacter(key);
+    },
+    async getClaimedCharacters() {
+      return { characters: [] };
+    },
+    async resolveProfileGuess() {
+      return null;
+    }
+  };
+
+  const roster: BlizzardRosterCharacter[] = Array.from(
+    { length: 20 },
+    (_unused, index) => ({
+      key: {
+        region: "eu",
+        realm: "silvermoon",
+        name: `member${String.fromCharCode(97 + index)}`
+      },
+      displayName: `member${index}`,
+      className: "Priest",
+      level: 80,
+      guild: { name: "Retry Guild", region: "eu", realm: "silvermoon" }
+    })
+  );
+
+  /**
+   * Every candidate read is recorded, so a test can tell where a cycle
+   * resumed. `failing` makes every read throw a transient failure.
+   */
+  function blizzard() {
+    const state = { failing: false, reads: [] as string[] };
+    const rootFingerprint = new Map(
+      Array.from({ length: 200 }, (_unused, index) => [index + 1, index])
+    );
+    const transient = () =>
+      Object.assign(new Error("transient"), {
+        kind: "transient",
+        retryAfterMs: 30_000
+      });
+    const gateway: BlizzardGateway = {
+      async getGuildRoster(_root, _signal, onProfileRequest) {
+        if (state.failing) throw transient();
+        await onProfileRequest?.();
+        return roster;
+      },
+      async getGuildRosterByIdentity() {
+        return [];
+      },
+      async getAchievementFingerprint(key, _signal, onProfileRequest) {
+        if (state.failing) throw transient();
+        await onProfileRequest?.();
+        if (key.name === rootKey.name) return rootFingerprint;
+        state.reads.push(key.name);
+        return new Map();
+      },
+      async getCompletedAchievements() {
+        return [];
+      }
+    };
+    return { state, gateway };
+  }
+
+  function handler(
+    repositories: Repositories,
+    blizzardGateway: BlizzardGateway | undefined,
+    outcomes: unknown[]
+  ) {
+    return createDiscoveryJobHandler({
+      repositories,
+      gateway: raiderIo,
+      ...(blizzardGateway
+        ? {
+            blizzardGateway,
+            fingerprint: {
+              requestCap: 5,
+              hourlyBudget: 1_000,
+              cadenceMs: 7 * 24 * 60 * 60 * 1_000,
+              minimumCommon: 200,
+              minimumIdenticalPercent: 20
+            }
+          }
+        : {}),
+      enqueueFingerprintAdmission: async () => {},
+      requestCap: 12,
+      logger: {
+        info(event) {
+          if (event.event === "discovery_run") outcomes.push(event.outcome);
+        }
+      }
+    });
+  }
+
+  function continuation(runId: string) {
+    return {
+      runId,
+      key: rootKey,
+      enqueuedAt: new Date().toISOString(),
+      continuation: true as const
+    };
+  }
+
+  /**
+   * Publishes cycle 1 of a capped chain and admits its first continuation, as
+   * the admission job would before dispatching it.
+   */
+  async function admittedContinuation() {
+    const repositories = createPostgresRepositories(postgres.pool);
+    const upstream = blizzard();
+    const outcomes: unknown[] = [];
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handler(repositories, upstream.gateway, outcomes).execute(run.id);
+    expect(outcomes).toEqual(["snapshot"]);
+    const cursor = await repositories.fingerprintSweeps.getResumeState(rootKey);
+    expect(cursor).not.toBeNull();
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(run.id, new Date())
+    ).resolves.toEqual({ kind: "admitted" });
+    const cycleOneReads = [...upstream.state.reads];
+    upstream.state.reads.length = 0;
+    return { repositories, upstream, outcomes, run, cursor, cycleOneReads };
+  }
+
+  /**
+   * What must follow a failed cycle: the admission job admits a fresh cycle,
+   * and that cycle resumes the sweep where the cursor left it.
+   */
+  async function expectResumesFromCursor(
+    chain: Awaited<ReturnType<typeof admittedContinuation>>
+  ) {
+    const { repositories, upstream, outcomes, run, cursor, cycleOneReads } =
+      chain;
+    await expect(
+      repositories.fingerprintSweeps.getResumeState(rootKey)
+    ).resolves.toEqual(cursor);
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(run.id, new Date())
+    ).resolves.toEqual({ kind: "admitted" });
+
+    upstream.state.failing = false;
+    upstream.state.reads.length = 0;
+    await handler(repositories, upstream.gateway, outcomes).execute(
+      run.id,
+      undefined,
+      continuation(run.id)
+    );
+
+    expect(outcomes.at(-1)).toBe("snapshot");
+    // It picked up after the candidates cycle 1 swept, not from the start.
+    expect(upstream.state.reads.length).toBeGreaterThan(0);
+    expect(
+      upstream.state.reads.filter((name) => cycleOneReads.includes(name))
+    ).toEqual([]);
+    const next = await repositories.fingerprintSweeps.getResumeState(rootKey);
+    expect(next?.resumeAfter).not.toBe(cursor?.resumeAfter);
+  }
+
+  it("admits a fresh cycle after a continuation whose sweep fails", async () => {
+    // Break caught: the retry re-enqueued a bare admission job, which found no
+    // `waiting` row, settled, and stranded the chain with its cursor set.
+    const chain = await admittedContinuation();
+    chain.upstream.state.failing = true;
+
+    await handler(
+      chain.repositories,
+      chain.upstream.gateway,
+      chain.outcomes
+    ).execute(chain.run.id, undefined, continuation(chain.run.id));
+
+    expect(chain.outcomes.at(-1)).toBe("continuation_retrying");
+    await expectResumesFromCursor(chain);
+  });
+
+  it("admits a fresh cycle after a continuation that throws", async () => {
+    const chain = await admittedContinuation();
+    const throwing: Repositories = {
+      ...chain.repositories,
+      snapshots: {
+        ...chain.repositories.snapshots,
+        amendAndFinishFingerprintSweep: async () => {
+          throw new Error("controlled_amend_failure");
+        }
+      }
+    };
+
+    await handler(throwing, chain.upstream.gateway, chain.outcomes).execute(
+      chain.run.id,
+      undefined,
+      continuation(chain.run.id)
+    );
+
+    expect(chain.outcomes.at(-1)).toBe("continuation_retrying");
+    await expectResumesFromCursor(chain);
+  });
+
+  it("admits a fresh cycle after a continuation with no sweep configured", async () => {
+    // The admitted reservation is never used by a handler that skips the
+    // sweep, so it must be released or it reads as a live admission.
+    const chain = await admittedContinuation();
+
+    await handler(chain.repositories, undefined, chain.outcomes).execute(
+      chain.run.id,
+      undefined,
+      continuation(chain.run.id)
+    );
+
+    expect(chain.outcomes.at(-1)).toBe("continuation_sweep_unavailable");
+    await expectResumesFromCursor(chain);
+  });
+
+  it("still gives up on a chain that keeps failing", async () => {
+    const chain = await admittedContinuation();
+    chain.upstream.state.failing = true;
+
+    for (let cycle = 1; cycle <= 5; cycle += 1) {
+      await handler(
+        chain.repositories,
+        chain.upstream.gateway,
+        chain.outcomes
+      ).execute(chain.run.id, undefined, continuation(chain.run.id));
+      const admitted = await chain.repositories.fingerprintSweeps.admitWaiting(
+        chain.run.id,
+        new Date()
+      );
+      expect(admitted).toEqual(
+        cycle < 5 ? { kind: "admitted" } : { kind: "settled" }
+      );
+    }
+
+    expect(chain.outcomes.slice(-5)).toEqual([
+      "continuation_retrying",
+      "continuation_retrying",
+      "continuation_retrying",
+      "continuation_retrying",
+      "continuation_abandoned"
+    ]);
+    // Recovery leaves an abandoned chain alone too.
+    await expect(
+      recoverStrandedContinuations(chain.repositories, {
+        async enqueueFingerprintAdmission() {
+          throw new Error("abandoned chain re-enqueued");
+        }
+      })
+    ).resolves.toBe(0);
+  });
+
+  it("recovers a chain interrupted between its release and its re-admission", async () => {
+    const chain = await admittedContinuation();
+    // The process dies after the failed cycle released its reservation and
+    // before it queued the next one.
+    const { rows } = await postgres.pool.query<{ id: string }>(
+      `SELECT reservation.id
+       FROM fingerprint_sweep_reservations reservation
+       JOIN fingerprint_sweep_admissions admission
+         ON admission.id = reservation.admission_id
+       WHERE admission.discovery_run_id = $1
+         AND reservation.released_at IS NULL`,
+      [chain.run.id]
+    );
+    await chain.repositories.fingerprintSweeps.release(rows[0]!.id, new Date());
+    await expect(
+      chain.repositories.fingerprintSweeps.admitWaiting(
+        chain.run.id,
+        new Date()
+      )
+    ).resolves.toEqual({ kind: "settled" });
+
+    const enqueued: string[] = [];
+    await expect(
+      recoverStrandedContinuations(chain.repositories, {
+        async enqueueFingerprintAdmission(runId) {
+          enqueued.push(runId);
+        }
+      })
+    ).resolves.toBe(1);
+    expect(enqueued).toEqual([chain.run.id]);
+    // Running it again finds the chain queued, not stranded.
+    await expect(
+      recoverStrandedContinuations(chain.repositories, {
+        async enqueueFingerprintAdmission() {}
+      })
+    ).resolves.toBe(0);
+
+    await expectResumesFromCursor(chain);
+  });
+
+  it("leaves a chain whose cycle is still running alone", async () => {
+    const chain = await admittedContinuation();
+
+    await expect(
+      recoverStrandedContinuations(chain.repositories, {
+        async enqueueFingerprintAdmission() {}
+      })
+    ).resolves.toBe(0);
+  });
+});

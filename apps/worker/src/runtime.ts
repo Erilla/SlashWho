@@ -4,6 +4,7 @@ import {
   cleanupExpired,
   createDiscoveryJobHandler,
   recoverPendingSearches,
+  recoverStrandedContinuations,
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
@@ -593,15 +594,20 @@ function fingerprintRunDispatcher(
 }
 
 /**
- * Picks up fingerprint work a previous process left behind: re-enqueues every
- * run still waiting for admission, and dispatches every run that was admitted
- * but never sent back to discovery.
+ * Picks up fingerprint work a previous process left behind: queues the next
+ * cycle of every sweep chain it stranded, re-enqueues every run still waiting
+ * for admission, and dispatches every run that was admitted but never sent
+ * back to discovery.
  */
 async function drainFingerprintBacklog(
   context: WorkerContext,
   dispatch: (runId: string) => Promise<void>
 ): Promise<void> {
-  const { repositories, queue } = context;
+  const { repositories, queue, logger } = context;
+  const recovered = await recoverStrandedContinuations(repositories, queue);
+  if (recovered > 0) {
+    logger?.info({ event: "fingerprint_continuations_recovered", recovered });
+  }
   for (let offset = 0; ;) {
     const waitingFingerprintRuns =
       await repositories.fingerprintSweeps.listWaiting(100, offset);

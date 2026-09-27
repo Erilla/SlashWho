@@ -298,6 +298,37 @@ function isFingerprintReleaseRetryableError(
  */
 const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
 
+/**
+ * Queues the next cycle of every chain left with a cursor and no live
+ * admission, and re-enqueues its admission job. A cycle that ends without
+ * publishing queues its own successor, but a process that dies between the
+ * cycle's release and that re-admission leaves nothing that would ever resume
+ * the chain. A chain that already gave up stays given up. Returns how many
+ * chains it queued.
+ */
+export async function recoverStrandedContinuations(
+  repositories: Pick<Repositories, "fingerprintSweeps">,
+  queue: { enqueueFingerprintAdmission(runId: string): Promise<unknown> },
+  at: Date = new Date()
+): Promise<number> {
+  let recovered = 0;
+  for (;;) {
+    // Each batch leaves its chains with a waiting admission, so the next one
+    // finds only chains it has not seen.
+    const runIds =
+      await repositories.fingerprintSweeps.requeueStrandedContinuations({
+        at,
+        maxFailures: MAX_CONTINUATION_NON_PROGRESS_CYCLES,
+        limit: 100
+      });
+    for (const runId of runIds) {
+      await queue.enqueueFingerprintAdmission(runId);
+    }
+    recovered += runIds.length;
+    if (runIds.length < 100) return recovered;
+  }
+}
+
 function historicalGuildsFromEvidence(
   evidenceSets: readonly Awaited<
     ReturnType<Repositories["evidence"]["getCompleted"]>
@@ -461,6 +492,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
        * Re-enqueues a continuation cycle that made no progress, giving up once
        * the same chain has done so too many times in a row. Returns true when
        * the chain was re-enqueued and false when it gave up.
+       *
+       * The admission job admits only a `waiting` row, and a cycle that did
+       * not publish leaves none, so the next cycle's row is queued here: a
+       * bare re-enqueue settled without dispatching and stranded the chain.
        */
       const continueWithoutProgress = async (): Promise<boolean> => {
         const failures =
@@ -468,6 +503,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
             run.rootKey
           );
         if (failures >= MAX_CONTINUATION_NON_PROGRESS_CYCLES) return false;
+        await repositories.fingerprintSweeps.requeueContinuation(runId, now());
         await options.enqueueFingerprintAdmission?.(runId);
         return true;
       };
