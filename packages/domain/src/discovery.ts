@@ -354,9 +354,9 @@ export async function discoverCharacter(
 
       observations.push(discoveredCharacter(character, pending.source));
       inspectedCharacters.push(character);
-      if (pending.source === "input" && options.rootCharacter) {
-        guildKnownCharacterIds.add(canonicalCharacterId(character.key));
-      }
+      // This payload is the character's own, so its guild, null included, is
+      // already the answer the guild pass would read for.
+      guildKnownCharacterIds.add(canonicalCharacterId(character.key));
       if (character.declaredMain) {
         pendingCharacters.push({
           key: character.declaredMain,

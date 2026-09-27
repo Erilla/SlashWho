@@ -206,6 +206,41 @@ describe("discoverCharacter", () => {
     ]);
   });
 
+  it("reads a guildless root and declared main once, even when they are claimed", async () => {
+    // Break caught: a directly read character whose own payload reported no
+    // guild was read again in the guild pass, spending a request from the cap
+    // on an answer already in hand. The owner's claim list names both again,
+    // and that later observation must not reintroduce the read.
+    const reads = new Map<string, number>();
+    const gateway = scriptedGateway({
+      characters: [
+        [
+          altKey,
+          character(altKey, { ownerId: "owner", declaredMain: mainKey })
+        ],
+        [mainKey, character(mainKey, { ownerId: "owner" })]
+      ],
+      claimed: { owner: [character(altKey), character(mainKey)] }
+    });
+    const read = gateway.getCharacter;
+    gateway.getCharacter = (key, signal) => {
+      reads.set(key.name, (reads.get(key.name) ?? 0) + 1);
+      return read(key, signal);
+    };
+
+    const outcome = await discoverCharacter(altKey, gateway, options);
+
+    expect(outcome).toMatchObject({
+      kind: "snapshot",
+      state: "complete",
+      characters: [
+        expect.objectContaining({ key: altKey, guild: null }),
+        expect.objectContaining({ key: mainKey, guild: null })
+      ]
+    });
+    expect(Object.fromEntries(reads)).toEqual({ alt: 1, main: 1 });
+  });
+
   describe("guild read retry", () => {
     const guild = { name: "Rancour", region: "eu" as const, realm: "draenor" };
 

@@ -24,6 +24,7 @@ import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
 import {
+  BLIZZARD_FAST_CALL_MS,
   createMeasurementScope,
   type ExcludeFromBucket,
   type MeasurementScope
@@ -67,14 +68,6 @@ function scopedRaiderIoGateway(
       )
   };
 }
-
-/**
- * The Blizzard response time the per-second budget was sized on (see
- * `docs/research/2026-09-26-issue-549-blizzard-sweep-concurrency.md`). Each
- * run counts its calls faster than this, beside the shortest, so the records
- * can confirm or refute the figure rather than assume it.
- */
-const BLIZZARD_FAST_CALL_MS = 100;
 
 function scopedBlizzardGateway(
   gateway: BlizzardGateway,

@@ -1,4 +1,4 @@
-import { test, type Browser } from "playwright/test";
+import { test, type APIRequestContext, type Browser } from "playwright/test";
 import type { CharacterKey } from "@slashwho/domain";
 
 import {
@@ -17,8 +17,10 @@ import {
 import {
   latestEvidencePublishedAt,
   seedCharacterEvidence,
-  seedSnapshot
+  seedSnapshot,
+  seedSyntheticEvidence
 } from "../e2e/support/seed";
+import type { EvidenceVolume } from "../e2e/support/synthetic-evidence";
 
 /**
  * The dossier load profiler (#646): `corepack pnpm profile:dossier`. It runs
@@ -332,6 +334,50 @@ function title(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/**
+ * The serialised size of a full dossier read, in bytes. Taken from its own
+ * request, so the measured loads stay exactly as the page makes them.
+ */
+async function dossierBytes(
+  request: APIRequestContext,
+  root: CharacterKey
+): Promise<number> {
+  const response = await request.get(
+    `/api/dossiers/${root.region}/${root.realm}/${root.name}`
+  );
+  if (!response.ok()) throw new Error("profile_dossier_read_failed");
+  return (await response.body()).byteLength;
+}
+
+/**
+ * A dossier of `size` connected characters, each seeded by `seed`. The root
+ * is one of them.
+ */
+async function seedDossier(
+  root: CharacterKey,
+  size: number,
+  seed: (character: CharacterKey) => Promise<void>
+): Promise<void> {
+  const characters = [
+    root,
+    ...Array.from({ length: size - 1 }, (_, index) =>
+      key(`${root.name}alt${suffix(index)}`)
+    )
+  ];
+  await seedSnapshot({
+    key: root,
+    displayName: title(root.name),
+    refreshedAt: new Date(),
+    characters: characters.map((character) => ({
+      key: character,
+      displayName: title(character.name),
+      className: "Mage",
+      level: 80
+    }))
+  });
+  for (const character of characters) await seed(character);
+}
+
 async function profile(
   browser: Browser,
   scenario: string,
@@ -354,7 +400,7 @@ async function profile(
 
 test.describe.configure({ mode: "serial" });
 
-test("warm read of a single character", async ({ browser }) => {
+test("warm read of a single character", async ({ browser, request }) => {
   // A fresh snapshot and completed evidence: nothing to discover or gather.
   const root = key("profilesingle");
   await seedSnapshot({
@@ -364,6 +410,7 @@ test("warm read of a single character", async ({ browser }) => {
   });
   await seedCharacterEvidence(root);
 
+  console.log(`warm single: ${await dossierBytes(request, root)} bytes`);
   await profile(
     browser,
     "warm single",
@@ -372,29 +419,16 @@ test("warm read of a single character", async ({ browser }) => {
   );
 });
 
-test("warm read of a dossier at the character ceiling", async ({ browser }) => {
+test("warm read of a dossier at the character ceiling", async ({
+  browser,
+  request
+}) => {
   // Twelve connected characters, the default DOSSIER_CHARACTER_CEILING, each
-  // with completed evidence: the largest read the page makes.
+  // with completed evidence: the most characters the page reads.
   const root = key("profilewide");
-  const characters = [
-    root,
-    ...Array.from({ length: 11 }, (_, index) =>
-      key(`profilealt${suffix(index)}`)
-    )
-  ];
-  await seedSnapshot({
-    key: root,
-    displayName: title(root.name),
-    refreshedAt: new Date(),
-    characters: characters.map((character) => ({
-      key: character,
-      displayName: title(character.name),
-      className: "Mage",
-      level: 80
-    }))
-  });
-  for (const character of characters) await seedCharacterEvidence(character);
+  await seedDossier(root, 12, (character) => seedCharacterEvidence(character));
 
+  console.log(`warm at ceiling: ${await dossierBytes(request, root)} bytes`);
   await profile(
     browser,
     "warm at ceiling",
@@ -402,6 +436,43 @@ test("warm read of a dossier at the character ceiling", async ({ browser }) => {
     loads
   );
 });
+
+/**
+ * Evidence per character for the production-sized scenarios (#686), from the
+ * six ten-character dossiers on `test` on 2026-09-27. Each dossier's total was
+ * spread evenly over its ten characters. Aggregates only; see
+ * `docs/research/2026-09-27-issue-666-dossier-db-calls.md`.
+ */
+const productionVolumes = {
+  /** The median dossier: 759 kills, 1,613 wipes, 15 tier bests, 58 Cutting Edge. */
+  median: { kills: 76, wipes: 161, tierBests: 2, cuttingEdges: 6 },
+  /** The largest: 3,072 kills, 13,779 wipes, 70 tier bests, 184 Cutting Edge. */
+  largest: { kills: 307, wipes: 1_378, tierBests: 7, cuttingEdges: 18 }
+} as const satisfies Record<string, EvidenceVolume>;
+
+for (const [size, volume] of Object.entries(productionVolumes)) {
+  test(`warm read of a ${size} production-sized dossier`, async ({
+    browser,
+    request
+  }) => {
+    // Ten characters, the size of most production dossier reads, each with
+    // synthetic completed evidence at production volume. Nothing to discover,
+    // gather or look up, as in the other warm scenarios.
+    const root = key(`profile${size}`);
+    await seedDossier(root, 10, (character) =>
+      seedSyntheticEvidence(character, volume)
+    );
+
+    const scenario = `warm, production ${size}`;
+    console.log(`${scenario}: ${await dossierBytes(request, root)} bytes`);
+    await profile(
+      browser,
+      scenario,
+      `/dossiers/eu/silvermoon/${root.name}`,
+      loads
+    );
+  });
+}
 
 test("read that gathers Warcraft Logs evidence", async ({ browser }) => {
   // A fresh snapshot with no evidence, so the read queues an evidence run the

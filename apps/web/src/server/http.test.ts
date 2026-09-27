@@ -344,6 +344,52 @@ describe("withHttpRequest", () => {
     });
   });
 
+  it("records the fast end of Blizzard's successful calls", async () => {
+    // Issue #696: the worker's fast end was measured with 10 reads in flight;
+    // nothing showed whether the web's dossier reads, at lower concurrency,
+    // see a faster Blizzard.
+    const records: Record<string, unknown>[] = [];
+    const logger = {
+      info: (value: Record<string, unknown>) => records.push(value)
+    };
+    let now = 0;
+
+    const response = await withHttpRequest(
+      "dossier",
+      async (scope) => {
+        await scope.time("blizzard", async () => {
+          now += 240;
+        });
+        await scope.time("blizzard", async () => {
+          now += 60;
+        });
+        // A quick failure says nothing about how fast Blizzard answers.
+        await scope
+          .time("blizzard", async () => {
+            now += 5;
+            throw new Error("not_found");
+          })
+          .catch(() => undefined);
+        return Response.json({ ok: true });
+      },
+      logger,
+      () => now,
+      timed
+    );
+
+    expect(records[0]).toMatchObject({
+      blizzardCalls: 3,
+      blizzardMinCallMs: 60,
+      blizzardFastCalls: 1,
+      blizzardFastCallThresholdMs: 100
+    });
+    // A per-request header, not a record: it keeps durations of buckets
+    // alone, and the fast end is read from the records.
+    const header = response.headers.get("server-timing") ?? "";
+    expect(header).toContain("blizzard;dur=305");
+    expect(header).not.toMatch(/MinCall|FastCall/);
+  });
+
   it("charges an upstream throttle to the request that hit it", async () => {
     // Break caught: the shared clients' onThrottle hook runs with no scope in
     // hand, so without the request's attribution the throttle would reach
