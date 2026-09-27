@@ -67,7 +67,7 @@ function instrumentDossierLoad(): void {
       method === "GET" &&
       /^\/api\/dossiers\/[^/]+\/[^/]+\/[^/]+$/.test(url.pathname);
     const startedAt = performance.now();
-    const prelude =
+    const prelude: PageMarks["prelude"][number] | undefined =
       !dossierRead && marks.requestedMs === undefined
         ? { path: `${method} ${url.pathname}`, startMs: startedAt }
         : undefined;
