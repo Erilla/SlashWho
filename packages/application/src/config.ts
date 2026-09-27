@@ -86,7 +86,10 @@ export const applicationConfigSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(12)
+    // The web's Blizzard reads have no rate limiter, only this, and they share
+    // the per-second allowance with the worker's limited client. The worker
+    // runtime test holds this maximum to what fits beside the worker's limit.
+    .max(4)
     .default(4),
   NEGATIVE_CACHE_TTL_MS: z
     .string()
