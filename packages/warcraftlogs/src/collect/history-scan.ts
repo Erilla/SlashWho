@@ -7,12 +7,12 @@ import {
   reportSpans,
   type ReportSpan
 } from "../decode/reports";
-import { characterVariables, recentReportsQuery } from "../queries";
 import type {
   WarcraftLogsLimitation,
   WarcraftLogsReportResult
 } from "../types";
-import { unavailableOnTimeout, type CollectionRun } from "./context";
+import type { CollectionRun } from "./context";
+import { readHistoryPage } from "./history-page";
 
 /** What the character's own report history yielded, and where it stopped. */
 export type HistoryScan = {
@@ -73,13 +73,7 @@ export async function scanHistory(
     // backdated one). The final report code on the last proved page is an
     // anchor: any insertion above the resume point moves it. This probe is
     // a history request and therefore belongs to the same hard budget.
-    const probe = await run.counted("history_scan", () =>
-      run.ctx.graphql(
-        recentReportsQuery(lookup),
-        { ...characterVariables(lookup), page: startPage - 1 },
-        options.signal
-      )
-    );
+    const probe = await readHistoryPage(run, lookup, startPage - 1, false);
     run.historyRequests += 1;
     if (probe.kind !== "success") return probe;
     const decodedProbe = firstKillReports(probe.value, key);
@@ -117,15 +111,7 @@ export async function scanHistory(
   const resumedFromCursor = startPage > 1;
   let finished = false;
   for (let page = startPage; run.historyRequests < options.requestCap; page++) {
-    const result = await run.counted("history_scan", () =>
-      run.ctx
-        .graphql(
-          recentReportsQuery(lookup),
-          { ...characterVariables(lookup), page },
-          options.signal
-        )
-        .catch(unavailableOnTimeout(options.signal))
-    );
+    const result = await readHistoryPage(run, lookup, page, true);
     run.historyRequests += 1;
     if (result.kind !== "success") {
       limitation = result;

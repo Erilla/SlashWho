@@ -2947,6 +2947,7 @@ describe("applicant evidence job handler", () => {
             tierSearch: null,
             requests: {
               historyScan: 2,
+              historyActors: 0,
               characterGuilds: 0,
               guildAttendance: 0,
               reportHydration: 0,

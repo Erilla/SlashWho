@@ -475,6 +475,7 @@ const RAIDER_IO_RANKING_CONCURRENCY = 4;
 const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
   {
     history_scan: "warcraftLogsHistoryScan",
+    history_actors: "warcraftLogsHistoryActors",
     character_guilds: "warcraftLogsCharacterGuilds",
     guild_attendance: "warcraftLogsGuildAttendance",
     report_hydration: "warcraftLogsReportHydration",
@@ -1175,6 +1176,7 @@ export function createApplicantEvidenceJobHandler(
                 },
           requests: {
             historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
+            historyActors: requests(REQUEST_COUNTER_PREFIX.history_actors),
             characterGuilds: requests(REQUEST_COUNTER_PREFIX.character_guilds),
             guildAttendance: requests(REQUEST_COUNTER_PREFIX.guild_attendance),
             reportHydration: requests(REQUEST_COUNTER_PREFIX.report_hydration),

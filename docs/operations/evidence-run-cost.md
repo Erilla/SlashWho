@@ -239,6 +239,37 @@ saves no points because they scale by report. It would also:
 
 The one thing it would save is round trips.
 
+### Which parts of a report are charged
+
+Measured on 2026-09-27 (#712), the same way. Every request costs at least one
+point, and a report is charged per part that is loaded, not per field:
+
+| Selection                                                   | Points |
+| ----------------------------------------------------------- | ------ |
+| Any request (the floor)                                     | 1      |
+| 10 reports, `code startTime zone owner guild` only          | 1      |
+| 100 reports, the same fields                                | 2.03   |
+| 10 reports with `fights`                                    | 10.11  |
+| 10 reports with `masterData`                                | 10.11  |
+| 10 reports with both                                        | 20.11  |
+| 10 `report(code)` aliases with both, in one request         | 20     |
+| `rankedCharacters`, once `fights` or `masterData` is loaded | 0      |
+
+Filters do not change it: `fights(difficulty: 5)` costs the same as `fights`.
+
+Only about a third of a character's reports hold a Mythic encounter fight (40
+of 117 across six raiders), and nothing else can become a kill or a wipe. So
+since #712 a history page selects `fights` without `masterData`, and the actors
+of the page's reports that hold a Mythic encounter follow in one aliased
+`ReportActors` request. A page of ten costs about 10 points plus one for each
+Mythic report, instead of 20.81.
+
+The follow-up is part of reading the page. It is counted apart, in
+`history_actor_requests`, and spends none of the scan cap, so
+`history_scan_requests` still counts pages and a capped scan reaches as deep
+as it did. A page with no Mythic encounter sends none. Rows recorded before
+#712 read zero there, because their pages carried actors themselves.
+
 ## What attendance recovery costs, and what it finds
 
 Guild attendance is searched only for Mythic kills Raider.IO attributes to the
@@ -507,7 +538,8 @@ SELECT mode,
        max(blizzard_achievements_requests) AS max_blizzard,
        round(
          avg(
-           history_scan_requests + character_guilds_requests
+           history_scan_requests + history_actor_requests
+           + character_guilds_requests
            + guild_attendance_requests + report_hydration_requests
            + zone_rankings_requests + fight_parses_requests
            + ranking_identities_requests

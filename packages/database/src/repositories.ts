@@ -794,6 +794,11 @@ export type EvidenceRunCost = Readonly<{
   origin?: EvidenceRunOrigin;
   requests: Readonly<{
     historyScan: number;
+    /**
+     * `ReportActors`, at most one per history page. Absent is zero: callers
+     * written before #712 never sent one.
+     */
+    historyActors?: number;
     /** Absent is zero: only a tier search reads it. */
     characterGuilds?: number;
     guildAttendance: number;

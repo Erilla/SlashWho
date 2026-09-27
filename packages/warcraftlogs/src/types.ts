@@ -46,6 +46,12 @@ export type WarcraftLogsQueryType =
   /** `RecentReports`, one per page of the history scan, boundary probe included. */
   | "history_scan"
   /**
+   * `ReportActors`, at most one per history page: the player actors of the
+   * page's reports that hold a Mythic encounter fight. Part of reading the
+   * page, so it spends no request of the history cap.
+   */
+  | "history_actors"
+  /**
    * `CharacterGuilds`, at most one per tier search: the guilds Warcraft Logs
    * lists for the character, as places to walk attendance for.
    */
