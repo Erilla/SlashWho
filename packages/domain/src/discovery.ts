@@ -215,6 +215,11 @@ function failureOutcome(error: unknown): DiscoveryOutcome {
   };
 }
 
+// Matches the evidence run's Raider.IO ranking concurrency. Four uncached reads
+// in flight were no slower per call than serial reads, with no 429s
+// (docs/research/2026-09-27-issue-656-raiderio-guild-reads.md).
+const GUILD_READ_CONCURRENCY = 4;
+
 export async function discoverCharacter(
   root: CharacterKey,
   gateway: RaiderIoGateway,
@@ -405,31 +410,43 @@ export async function discoverCharacter(
   // payload, spent from whatever budget the relationship sweep left behind and
   // only after deduplication, so no request is wasted on a character the
   // snapshot will not carry.
-  const withGuilds: DiscoveredCharacter[] = [];
-  for (const observed of characters) {
-    if (
-      observed.guild !== null ||
-      guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
-    ) {
-      withGuilds.push(observed);
-      continue;
-    }
-    try {
-      const detailed = await optionalRequest(() =>
-        gateway.getCharacter(observed.key, options.signal)
-      );
+  //
+  // The reads run a few at a time, so the sweep waits on its slowest read
+  // rather than the sum of them. Budget is reserved synchronously inside
+  // `optionalRequest`, so concurrent reads cannot overspend the cap.
+  const withGuilds: DiscoveredCharacter[] = [...characters];
+  const guildReads = characters.flatMap((observed, index) =>
+    observed.guild !== null ||
+    guildKnownCharacterIds.has(canonicalCharacterId(observed.key))
+      ? []
+      : [index]
+  );
+  let nextGuildRead = 0;
+  async function readGuilds(): Promise<void> {
+    while (nextGuildRead < guildReads.length) {
       throwIfAborted();
-      withGuilds.push(
-        detailed !== budgetExhausted && isRaiderIoCharacter(detailed)
-          ? { ...observed, guild: detailed.guild }
-          : observed
-      );
-    } catch {
-      if (options.signal?.aborted) throw options.signal.reason;
-      // An upstream failure here costs one guild, never the snapshot.
-      withGuilds.push(observed);
+      const index = guildReads[nextGuildRead++]!;
+      const observed = characters[index]!;
+      try {
+        const detailed = await optionalRequest(() =>
+          gateway.getCharacter(observed.key, options.signal)
+        );
+        throwIfAborted();
+        if (detailed !== budgetExhausted && isRaiderIoCharacter(detailed)) {
+          withGuilds[index] = { ...observed, guild: detailed.guild };
+        }
+      } catch {
+        if (options.signal?.aborted) throw options.signal.reason;
+        // An upstream failure here costs one guild, never the snapshot.
+      }
     }
   }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(GUILD_READ_CONCURRENCY, guildReads.length) },
+      readGuilds
+    )
+  );
 
   // A snapshot is anchored to its root character. Without a root observation the
   // repository write cannot complete, so refuse rather than publishing a snapshot
