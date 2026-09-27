@@ -201,8 +201,8 @@ const dossiers = createApplicantDossierService({
   >,
   search,
   queue: { enqueueCharacterEvidence: vi.fn() },
-  blizzard: { getCompletedAchievements: vi.fn() } as never,
-  raiderio: { getMythicBossRankings: vi.fn(), getCharacter: vi.fn() } as never,
+  blizzard: { getCompletedAchievements: vi.fn() },
+  raiderio: { getMythicBossRankings: vi.fn(), getCharacter: vi.fn() },
   config,
   evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "k")
 });

@@ -21,6 +21,17 @@ const emptyCredentials: StoredApiCredentials = {
   wclClientSecret: ""
 };
 
+type AccountSession = {
+  account?: { email: string; passwordChangeRequired: boolean } | null;
+};
+
+// A credential form holds only text inputs, so a `File` entry is not a value
+// any field can carry.
+function formText(data: FormData, name: string): string {
+  const value = data.get(name);
+  return typeof value === "string" ? value : "";
+}
+
 export default function SettingsPage() {
   const [credentials, setCredentials] = useState(emptyCredentials);
   const [saved, setSaved] = useState(false);
@@ -63,53 +74,47 @@ export default function SettingsPage() {
     void fetch("/api/account/session", { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("session_unavailable");
-        return response.json();
+        return (await response.json()) as AccountSession;
       })
-      .then(
-        async (result: {
-          account?: { email: string; passwordChangeRequired: boolean } | null;
-        }) => {
-          if (!live) return;
-          if (
-            result.account &&
-            typeof result.account.email === "string" &&
-            !result.account.passwordChangeRequired
-          ) {
-            setAccountEmail(result.account.email);
-            setSessionStatus("signed-in");
-            const response = await fetch("/api/account/credentials", {
-              cache: "no-store"
-            });
-            if (response.ok) {
-              const data = (await response.json()) as {
-                providers: {
-                  provider: BrowserCredentialProvider;
-                  present: boolean;
-                  version: number;
-                }[];
-              };
-              if (live)
-                setPresence(
-                  Object.fromEntries(
-                    data.providers.map(({ provider, present, version }) => [
-                      provider,
-                      { present, version }
-                    ])
-                  ) as typeof presence
-                );
-              if (live) setCredentialStatusReady(true);
-            } else if (live) {
-              setFeedback(
-                "Account key storage is unavailable. Try again later."
+      .then(async (result) => {
+        if (!live) return;
+        if (
+          result.account &&
+          typeof result.account.email === "string" &&
+          !result.account.passwordChangeRequired
+        ) {
+          setAccountEmail(result.account.email);
+          setSessionStatus("signed-in");
+          const response = await fetch("/api/account/credentials", {
+            cache: "no-store"
+          });
+          if (response.ok) {
+            const data = (await response.json()) as {
+              providers: {
+                provider: BrowserCredentialProvider;
+                present: boolean;
+                version: number;
+              }[];
+            };
+            if (live)
+              setPresence(
+                Object.fromEntries(
+                  data.providers.map(({ provider, present, version }) => [
+                    provider,
+                    { present, version }
+                  ])
+                ) as typeof presence
               );
-            }
-          } else if (result.account === null) {
-            setSessionStatus("signed-out");
-          } else {
-            throw new Error("invalid_session_response");
+            if (live) setCredentialStatusReady(true);
+          } else if (live) {
+            setFeedback("Account key storage is unavailable. Try again later.");
           }
+        } else if (result.account === null) {
+          setSessionStatus("signed-out");
+        } else {
+          throw new Error("invalid_session_response");
         }
-      )
+      })
       .catch(() => {
         if (live) {
           setSessionStatus("unknown");
@@ -129,15 +134,13 @@ export default function SettingsPage() {
   }, [refreshNonce]);
 
   async function currentSlot(provider: BrowserCredentialProvider) {
-    let session: {
-      account?: { email: string; passwordChangeRequired: boolean } | null;
-    };
+    let session: AccountSession;
     try {
       const sessionResponse = await fetch("/api/account/session", {
         cache: "no-store"
       });
       if (!sessionResponse.ok) throw new Error("session_unavailable");
-      session = await sessionResponse.json();
+      session = (await sessionResponse.json()) as AccountSession;
     } catch {
       throw new Error("session_unavailable");
     }
@@ -402,13 +405,11 @@ export default function SettingsPage() {
                           const values: Record<string, string> =
                             provider === "raiderio"
                               ? {
-                                  accessKey: String(data.get("accessKey") ?? "")
+                                  accessKey: formText(data, "accessKey")
                                 }
                               : {
-                                  clientId: String(data.get("clientId") ?? ""),
-                                  clientSecret: String(
-                                    data.get("clientSecret") ?? ""
-                                  )
+                                  clientId: formText(data, "clientId"),
+                                  clientSecret: formText(data, "clientSecret")
                                 };
                           const form = event.currentTarget;
                           void accountWrite(

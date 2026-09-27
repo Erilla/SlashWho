@@ -140,7 +140,7 @@ function historicalGuildsFromDatabase(
 ): readonly CharacterGuild[] {
   if (!Array.isArray(value)) return [];
   const guilds = new Map<string, CharacterGuild>();
-  for (const guild of value) {
+  for (const guild of value as unknown[]) {
     if (
       typeof guild !== "object" ||
       guild === null ||

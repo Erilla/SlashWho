@@ -186,7 +186,7 @@ describe("filterBoss", () => {
         ...killBoss,
         firstKills: [killBoss.firstKill],
         wipes: [wipe("2025-01-13T20:00:00.000Z", [ryii, ryalts])]
-      } as Boss,
+      },
       hiding(ryalts)
     );
     expect(filtered).toEqual({
