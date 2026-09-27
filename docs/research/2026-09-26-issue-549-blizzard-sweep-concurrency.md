@@ -335,7 +335,7 @@ within the pool's 10 s connection timeout, but if `dbMaxCallMs` grows in
 - **Whether Blizzard sends `Retry-After` or rate-limit headers.** Not
   documented. The code copes either way.
 - **Latency floor.** Since #672, each `discovery_run` also records the shortest
-  Blizzard call (`blizzardMinCallMs`) and how many calls took under 100 ms
+  successful Blizzard call (`blizzardMinCallMs`) and how many took under 100 ms
   (`blizzardFastCalls`, against `blizzardFastCallThresholdMs`), beside the
   mean and maximum. No run on Railway has been read against them yet, so the
   100 ms figure is still an assumption.

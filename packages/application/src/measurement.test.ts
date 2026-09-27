@@ -252,6 +252,45 @@ describe("createMeasurementScope", () => {
       });
     });
 
+    it("leaves a failed call out of the fast end", async () => {
+      // Break caught: a fast 404, a 429 rejection or an aborted call that did
+      // no I/O counting as a fast response, which pushes the fast end down
+      // by exactly the failures the figure is meant to predict.
+      const scope = createMeasurementScope(fakeClock([0, 150, 150, 155]), {
+        fastCallThresholdMs: { blizzard: 100 }
+      });
+
+      await scope.time("blizzard", async () => undefined);
+      await expect(
+        scope.time("blizzard", async () => {
+          throw new Error("not_found");
+        })
+      ).rejects.toThrow("not_found");
+
+      expect(scope.totals()).toMatchObject({
+        // The failure still counts towards the call totals and the maximum.
+        blizzardCalls: 2,
+        blizzardMaxCallMs: 150,
+        blizzardMinCallMs: 150,
+        blizzardFastCalls: 0
+      });
+    });
+
+    it("emits no fast end when every measured call failed", async () => {
+      const scope = createMeasurementScope(fakeClock([0, 5]), {
+        fastCallThresholdMs: { blizzard: 100 }
+      });
+
+      await expect(
+        scope.time("blizzard", async () => {
+          throw new Error("rate_limited");
+        })
+      ).rejects.toThrow("rate_limited");
+
+      expect(Object.keys(scope.totals())).not.toContain("blizzardMinCallMs");
+      expect(Object.keys(scope.totals())).not.toContain("blizzardFastCalls");
+    });
+
     it("emits nothing for a measured prefix that was never timed", () => {
       const scope = createMeasurementScope(fakeClock([0]), {
         fastCallThresholdMs: { blizzard: 100 }

@@ -74,7 +74,8 @@ export type MeasurementScopeOptions = {
    * on its own says what "fast" meant. A minimum alone can be set by a single
    * cached response; the count shows how often the fast end occurred. Both
    * use each call's own elapsed time, as the maximum does, never its shared
-   * split.
+   * split, and only calls that succeeded: a failed call still counts towards
+   * `${prefix}Calls` and the maximum, but not towards the fast end.
    */
   fastCallThresholdMs?: Readonly<Record<string, number>>;
 };
@@ -145,8 +146,11 @@ export function createMeasurementScope(
           }
         }
       };
+      let succeeded = false;
       try {
-        return await work(excluded);
+        const result = await work(excluded);
+        succeeded = true;
+        return result;
       } finally {
         // finally, not a catch: a timed-out or failed upstream call is the
         // expensive case and must still contribute its duration.
@@ -168,8 +172,11 @@ export function createMeasurementScope(
         }
         add(`${prefix}Calls`, 1);
         slowest(`${prefix}MaxCall`, elapsed, label);
+        // Successes only: a failure's time says nothing about how fast
+        // Blizzard answers, since a 404, a 429 or an abort before any I/O
+        // all come back quickly.
         const threshold = fastCallThresholdMs[prefix];
-        if (threshold !== undefined) {
+        if (succeeded && threshold !== undefined) {
           const minField = `${prefix}MinCallMs`;
           values.set(
             minField,
