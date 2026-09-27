@@ -9,6 +9,7 @@ import {
   type ReactNode,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -43,6 +44,8 @@ const AXIS_HEIGHT = 22;
 const CHARACTER_WIDTH = 7;
 // Matches the tooltip's max-width, 15rem, so it is kept inside the frame.
 const TOOLTIP_WIDTH = 240;
+// Between the tooltip and the top of the frame; the stylesheet uses it too.
+const TOOLTIP_GAP = 6;
 
 // Categorical, in a fixed order, so a guild keeps its colour however the
 // viewer filters: colours are assigned by first appearance in the whole
@@ -99,6 +102,7 @@ type Tooltip = Readonly<{
   anchor: number;
   /** Where it is drawn, against what is scrolled into view. */
   x: number;
+  /** Where it goes, below its anchor, when there is no room above the frame. */
   y: number;
   /** Shown by keyboard focus, so it follows its bar through a scroll. */
   focused: boolean;
@@ -115,6 +119,32 @@ export function DossierGuildHistory({
   // instance; useId's colons are not valid in a url(#...) reference.
   const clipPrefix = `guild-label-${useId().replace(/:/g, "")}`;
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [tooltipBelow, setTooltipBelow] = useState(false);
+  // Above the frame the tooltip covers none of the lanes, but the fixed site
+  // header is drawn over it. Once the page is scrolled so the frame's top is
+  // near or under the header, a tooltip there would be hidden while its bar
+  // is in view, so it goes back beside its anchor. Checked again as the page
+  // scrolls, which is also how focus brings a bar into view.
+  useLayoutEffect(() => {
+    if (!tooltip) return;
+    const fit = () => {
+      const frame = frameRef.current;
+      const shown = tooltipRef.current;
+      if (!frame || !shown) return;
+      const header = Math.max(
+        0,
+        document.querySelector(".site-header")?.getBoundingClientRect()
+          .bottom ?? 0
+      );
+      const room = frame.getBoundingClientRect().top - header;
+      setTooltipBelow(room < shown.offsetHeight + TOOLTIP_GAP);
+    };
+    fit();
+    window.addEventListener("scroll", fit, { passive: true });
+    return () => window.removeEventListener("scroll", fit);
+  }, [tooltip]);
   const tiers = useMemo(() => raidTiers(), []);
   // Assigned over every character's history rather than what is visible, so
   // hiding a character never repaints the guilds that remain; and over drawn
@@ -229,7 +259,9 @@ export function DossierGuildHistory({
       )
     : [];
   // The tooltip sits outside the scroller so a short timeline cannot clip
-  // it, which means placing it against what is scrolled into view.
+  // it, which means placing it against what is scrolled into view. Its
+  // stylesheet draws it above the frame, never over the lanes, unless the
+  // header leaves no room there.
   const place = (anchor: number) => {
     const scroll = scrollRef.current;
     const left = anchor - (scroll?.scrollLeft ?? 0);
@@ -268,7 +300,7 @@ export function DossierGuildHistory({
           No guild has more than one raid night in the stored evidence.
         </p>
       ) : (
-        <div className="dossier-guild-timeline-frame">
+        <div className="dossier-guild-timeline-frame" ref={frameRef}>
           <div
             aria-label="Guild history timeline, scrolls horizontally"
             className="dossier-guild-timeline-scroll"
@@ -450,8 +482,17 @@ export function DossierGuildHistory({
           {tooltip ? (
             <div
               aria-hidden="true"
-              className="dossier-guild-timeline-tooltip"
-              style={{ left: `${tooltip.x}px`, top: `${tooltip.y}px` }}
+              className={
+                tooltipBelow
+                  ? "dossier-guild-timeline-tooltip dossier-guild-timeline-tooltip--below"
+                  : "dossier-guild-timeline-tooltip"
+              }
+              ref={tooltipRef}
+              style={
+                tooltipBelow
+                  ? { left: `${tooltip.x}px`, top: `${tooltip.y}px` }
+                  : { left: `${tooltip.x}px` }
+              }
             >
               {tooltip.lines.map((line, index) =>
                 index === 0 ? (

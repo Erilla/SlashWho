@@ -1179,8 +1179,12 @@ a {
   pointer-events: none;
 }
 
+/* Above the timeline rather than over it, growing upwards however long the
+   roster, so it never covers the bars a reader is comparing. The gap is
+   TOOLTIP_GAP in dossier-guild-history.tsx. */
 .dossier-guild-timeline-tooltip {
   position: absolute;
+  bottom: calc(100% + 6px);
   z-index: 2;
   display: grid;
   gap: 0.1rem;
@@ -1193,6 +1197,12 @@ a {
   font-size: 0.75rem;
   line-height: 1.4;
   pointer-events: none;
+}
+
+/* Beside its anchor instead, when the fixed header leaves no room above the
+   frame; the component sets its top. */
+.dossier-guild-timeline-tooltip--below {
+  bottom: auto;
 }
 
 .dossier-guild-timeline-tooltip strong {
