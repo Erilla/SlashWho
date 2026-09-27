@@ -9,14 +9,14 @@ import {
   jsonNoStore,
   publicReadAuthorizationResponse,
   resolveCharacterRoute,
-  withHttpRequest
+  withTimedHttpRequest
 } from "../../../../../../server/http";
 
 export async function GET(
   request: Request,
   context: RouteContext<"/api/dossiers/[region]/[realm]/[name]">
 ): Promise<Response> {
-  return withHttpRequest("dossier", async (scope) => {
+  return withTimedHttpRequest("dossier", async (scope) => {
     // A non-canonical spelling redirects rather than being refused.
     const parsed = await resolveCharacterRoute(context, {
       requireCanonical: false

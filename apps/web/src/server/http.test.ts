@@ -13,6 +13,8 @@ import {
 } from "./http";
 
 const silentLogger = { info: () => {} };
+/** Opts a request into Server-Timing with the gate on. */
+const timed = { serverTiming: () => true };
 
 async function errorCode(response: Response): Promise<string> {
   return ((await response.json()) as { error: { code: string } }).error.code;
@@ -175,12 +177,69 @@ describe("withHttpRequest", () => {
         return Response.json({ ok: true });
       },
       silentLogger,
-      clock
+      clock,
+      timed
     );
 
     expect(response.headers.get("server-timing")).toBe(
       "total;dur=75, db;dur=40, blizzard;dur=25, limiterWait;dur=5"
     );
+  });
+
+  it("sends no Server-Timing from an endpoint that did not opt in", async () => {
+    // Break caught (#670 review): account recovery answers neutrally whether
+    // or not an address has an account, but only an active account costs the
+    // outbox write, so an exact server duration would let anyone tell them
+    // apart. Only the dossier read opts in.
+    const response = await withHttpRequest(
+      "account_recovery",
+      async (scope) => {
+        await scope.time("db", async () => "ok");
+        return Response.json({ ok: true });
+      },
+      silentLogger
+    );
+    expect(response.headers.has("server-timing")).toBe(false);
+  });
+
+  it("sends no Server-Timing while the flag that gates it is off", async () => {
+    // Break caught (#670 review): on a production dossier read the header
+    // would show any visitor the shared limiter's wait and whether another
+    // visitor's read had warmed the cache.
+    const off = await withHttpRequest(
+      "dossier",
+      async () => Response.json({ ok: true }),
+      silentLogger,
+      undefined,
+      { serverTiming: () => false }
+    );
+    const unreadable = await withHttpRequest(
+      "dossier",
+      async () => Response.json({ ok: true }),
+      silentLogger,
+      undefined,
+      {
+        serverTiming: () => {
+          throw new Error("invalid_configuration");
+        }
+      }
+    );
+    expect(off.headers.has("server-timing")).toBe(false);
+    expect(unreadable.headers.has("server-timing")).toBe(false);
+  });
+
+  it("times a request that failed as well as one that succeeded", async () => {
+    const response = await withHttpRequest(
+      "dossier",
+      async () => {
+        throw new Error("boom");
+      },
+      silentLogger,
+      () => 0,
+      timed
+    );
+    expect(response.status).toBe(500);
+    expect(response.headers.get("server-timing")).toBe("total;dur=0");
   });
 
   it("puts durations alone in Server-Timing, never a call's name", async () => {
@@ -195,7 +254,9 @@ describe("withHttpRequest", () => {
         scope.mark("runJoined");
         return Response.json({ ok: true });
       },
-      silentLogger
+      silentLogger,
+      undefined,
+      timed
     );
 
     const header = response.headers.get("server-timing") ?? "";
@@ -211,7 +272,8 @@ describe("withHttpRequest", () => {
       "dossier",
       async () => Response.json({ ok: true }),
       silentLogger,
-      () => 0
+      () => 0,
+      timed
     );
     expect(response.headers.get("server-timing")).toBe("total;dur=0");
   });

@@ -17,11 +17,13 @@ describe("API route handlers", () => {
     // Break caught: withHttpRequest is what marks a response no-store when the
     // handler names no caching policy, so a handler that bypasses it could let
     // an assembled dossier be cached (CLAUDE.md: always no-store).
+    // withTimedHttpRequest is withHttpRequest with Server-Timing allowed.
     const files = routeFiles(apiRoot);
     expect(files.length).toBeGreaterThan(0);
     const bypassing = files
       .filter(
-        (file) => !readFileSync(file, "utf8").includes("withHttpRequest(")
+        (file) =>
+          !/\bwith(?:Timed)?HttpRequest\(/.test(readFileSync(file, "utf8"))
       )
       .map((file) => relative(apiRoot, file));
     expect(bypassing).toEqual([]);
