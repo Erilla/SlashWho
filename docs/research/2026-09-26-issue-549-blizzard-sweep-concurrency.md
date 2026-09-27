@@ -10,8 +10,10 @@ Issue #549. Investigated 2026-09-26 against `origin/main` at `2922426c`.
 > enforced. See
 > [Addendum: the 40 a second limit](#addendum-the-40-a-second-limit) and
 > [Addendum: the web's own rate limit](#addendum-the-webs-own-rate-limit) for
-> the figures and the reasons. The rest of this note is the 2026-09-26 analysis
-> as written.
+> the figures and the reasons. The 100 ms response time the earlier estimate
+> assumed was measured on 2026-09-27 (#672); see
+> [Addendum: the fast end, measured](#addendum-the-fast-end-measured). The rest
+> of this note is the 2026-09-26 analysis as written.
 
 ## Question
 
@@ -382,6 +384,47 @@ The replica assumption above still stands: both limits are per process, so the
 two web replicas it is 80, which is still within the ceiling; the test cannot
 see replica counts.
 
+## Addendum: the fast end, measured
+
+Added 2026-09-27 (#672). Until #675, each `discovery_run` recorded only a mean
+and a maximum Blizzard call, so the 100 ms response time behind the
+40 a second addendum's estimate of the web's share was never checked. Each run
+now also records the shortest successful call (`blizzardMinCallMs`) and how
+many successful calls took under 100 ms (`blizzardFastCalls`). Failed calls
+are left out: a 404, a 429 or an abort comes back fast without saying how fast
+Blizzard answers.
+
+A full ryun run on Railway test measured them (run `0be0adbe`, `origin/main`
+at `1fd50055`, before #681's web limiter; the worker at 40 a second with 10 in
+flight). It made 3,429 calls in 12 cycles over 2 min 58 s, with no 429s:
+
+| Figure                        | Run       | Range across cycles |
+| ----------------------------- | --------- | ------------------- |
+| Mean call                     | 380 ms    | 210 to 479 ms       |
+| Shortest successful call      | 42 ms     | 42 to 64 ms         |
+| Successful calls under 100 ms | 61 (1.8%) | 3 to 8 of 299       |
+| Longest call                  | 1,620 ms  | 1,191 to 1,620 ms   |
+
+Read against the 100 ms assumption:
+
+- **As a floor it was wrong.** Blizzard answered a successful read in 42 ms,
+  and every cycle had a call under 65 ms.
+- **As a sustained figure it was cautious.** About 1 call in 56 came in under
+  100 ms. The 57 a second worst case at 70 ms needed fast answers back to back,
+  and they are rare. Even the lowest-concurrency run on record (6 in flight,
+  run `39295b4f`) averaged 219 ms.
+- **These are worker timings.** They include in-process work (body read, JSON
+  parse, normalisation) under 10 reads in flight, which #655 saw raise the mean
+  from 219 to 339 ms as reads in flight went from 5.2 to 8.5. The web's reads
+  may be faster, and its dossier records do not carry the fast-end fields.
+
+**Decision: keep the worker at 40 a second.** Nothing here argues for 30.
+Since #673, the composition no longer depends on latency at all: the two
+limiters cap worker plus web at 60 a second however fast Blizzard answers. The
+measurement confirms that the 80 a second estimate those limiters replaced was
+cautious, not optimistic. Returning to 30 is still the response to any 429 in
+`upstream_throttle`.
+
 ## Open questions and things not verified
 
 - **Same credentials in both services: settled.** The service owner confirmed
@@ -401,11 +444,11 @@ see replica counts.
   it as capacity. Neither page mentions regions or IPs.
 - **Whether Blizzard sends `Retry-After` or rate-limit headers.** Not
   documented. The code copes either way.
-- **Latency floor.** Since #672, each `discovery_run` also records the shortest
-  successful Blizzard call (`blizzardMinCallMs`) and how many took under 100 ms
-  (`blizzardFastCalls`, against `blizzardFastCallThresholdMs`), beside the
-  mean and maximum. No run on Railway has been read against them yet, so the
-  100 ms figure is still an assumption.
+- **Latency floor: measured for the worker.** A ryun run on 2026-09-27 found a
+  42 ms minimum and 1.8% of successful calls under 100 ms (see
+  [Addendum: the fast end, measured](#addendum-the-fast-end-measured)). The
+  web's own Blizzard latency is unmeasured, but since #673 its rate limiter
+  bounds its share whatever that latency is.
 - **Web replica count and `DOSSIER_PROVIDER_CONCURRENCY` in production.** Not
   in the repository. Since #673 only the replica count scales the web's
   Blizzard share; `DOSSIER_PROVIDER_CONCURRENCY` no longer does.
