@@ -836,11 +836,22 @@ test("keeps connected character rows on one line and scrolls Cutting Edge within
 }) => {
   // Break caught: phone rows stacked their actions under the name, doubling
   // each row, and a long Cutting Edge history ran uncapped down the page.
+  // Also caught: the scanning spinner's rotated box spilled past the row's
+  // right edge, overflowing by up to 3px depending on the frame measured.
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/demo");
 
   const rows = page.locator(".dossier-character-row");
   await expect(rows.first()).toBeVisible();
+  // Pin the spinner at 45 degrees, where its rotated box is widest, so the
+  // overflow check does not depend on when the frame is sampled.
+  await expect(
+    rows.locator(".dossier-evidence-state--scanning svg")
+  ).not.toHaveCount(0);
+  await page.addStyleTag({
+    content:
+      ".dossier-evidence-state--scanning svg { animation: none !important; transform: rotate(45deg); }"
+  });
   const rowLayout = await rows.evaluateAll((elements) =>
     elements.map((element) => {
       const lead = element
