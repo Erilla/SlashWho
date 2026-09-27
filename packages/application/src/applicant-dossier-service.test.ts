@@ -622,7 +622,7 @@ describe("a stale dossier read (#540)", () => {
     staleReservation(repositories);
     settle(repositories);
     vi.mocked(repositories.evidence.storedEvidenceTiers).mockResolvedValue(
-      storedTiers(overrides) as never
+      storedTiers(overrides)
     );
 
     await dossiers.read(root);
@@ -738,7 +738,7 @@ describe("a stale dossier read (#540)", () => {
     reserve.mockImplementation(async (request) => {
       const reserved = await stale(request);
       const run = { ...reserved.run, mode: "tier_search" as const };
-      return { ...reserved, run, active: run } as typeof reserved;
+      return { ...reserved, run, active: run };
     });
     settle(repositories);
 
@@ -788,9 +788,6 @@ describe("applicant dossier service", () => {
       fightUrl: "https://www.warcraftlogs.com/reports/wipe#fight=5",
       guild: { name: "Example Guild", realm: "silvermoon" },
       uploader: "Dorian"
-    } as StoredCharacterMythicWipe & {
-      guild: { name: string; realm: string };
-      uploader: string;
     };
     const complete = await fixture({
       includeCachedKills: false,
@@ -1562,14 +1559,11 @@ describe("applicant dossier service", () => {
       queue: { enqueueCharacterEvidence: vi.fn() },
       blizzard: {
         getCompletedAchievements: vi.fn()
-      } as unknown as Pick<BlizzardGateway, "getCompletedAchievements">,
+      },
       raiderio: {
         getMythicBossRankings: vi.fn(),
         getCharacter: vi.fn()
-      } as unknown as Pick<
-        RaiderIoGateway,
-        "getMythicBossRankings" | "getCharacter"
-      >,
+      },
       config,
       evidenceJobCredentialEncryptionKey: encryptionKey
     });

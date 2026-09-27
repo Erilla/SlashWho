@@ -1,6 +1,6 @@
 import type { CharacterKey } from "@slashwho/domain";
 
-import { validCharacterKey, record } from "../decode/primitives";
+import { isLimitation, validCharacterKey, record } from "../decode/primitives";
 import {
   decodedRankedKill,
   historicEncounterIds,
@@ -257,11 +257,8 @@ export async function getRankedKillReports(
             journalRaidId: options.journalRaidId,
             region: key.region
           });
-          if (!Array.isArray(decoded))
-            return limited(
-              "report_hydration",
-              decoded as WarcraftLogsLimitation
-            );
+          if (isLimitation(decoded))
+            return limited("report_hydration", decoded);
           const report = record(
             record(record(detail.value)?.data)?.reportData
           )?.report;

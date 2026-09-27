@@ -42,8 +42,8 @@ export function validValues(
     expected.every(
       (key) =>
         typeof fields[key] === "string" &&
-        (fields[key] as string).trim().length > 0 &&
-        (fields[key] as string).length <= 2048
+        fields[key].trim().length > 0 &&
+        fields[key].length <= 2048
     )
   );
 }

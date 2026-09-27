@@ -1,5 +1,6 @@
 import type { CharacterKey } from "@slashwho/domain";
 
+import { record } from "../decode/primitives";
 import type { CharacterLookup } from "../queries";
 import type { GraphqlResult, WarcraftLogsTransport } from "../transport";
 import type {
@@ -86,7 +87,7 @@ export function unavailableOnTimeout(
   signal: AbortSignal | undefined
 ): (error: unknown) => WarcraftLogsLimitation {
   return (error) => {
-    if (signal?.reason?.name !== "TimeoutError") throw error;
+    if (record(signal?.reason)?.name !== "TimeoutError") throw error;
     return { kind: "limitation", code: "unavailable" };
   };
 }

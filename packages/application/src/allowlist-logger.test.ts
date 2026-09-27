@@ -53,7 +53,7 @@ describe("createAllowlistLogger", () => {
     const lines: string[] = [];
     const logger = createAllowlistLogger(new Set(["event"]), {
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({ event: "x", battleTag: "Name#1234" });
 

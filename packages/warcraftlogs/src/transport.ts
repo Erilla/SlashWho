@@ -229,7 +229,7 @@ export function createTransport(
     if (response.status === 401) return rejected();
     if (!response.ok) return responseLimitation(response, options.onThrottle);
     try {
-      const body = await response.json();
+      const body: unknown = await response.json();
       signal?.throwIfAborted();
       if (graphQlAuthRejected(body)) return rejected();
       return graphQlErrorLimitation(body) ?? { kind: "success", value: body };

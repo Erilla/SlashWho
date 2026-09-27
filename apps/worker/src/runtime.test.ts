@@ -583,13 +583,13 @@ describe("worker runtime", () => {
     // caller would again be free to overrun Blizzard's per-second allowance.
     const releases: (() => void)[] = [];
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: string | URL | Request) => {
+    globalThis.fetch = async (input: string | URL | Request) => {
       if (String(input).endsWith("/token")) {
         return Response.json({ access_token: "token", expires_in: 3600 });
       }
       await new Promise<void>((resolve) => releases.push(resolve));
       return Response.json({ achievements: [] });
-    }) as typeof globalThis.fetch;
+    };
     try {
       const integration = createFingerprintIntegration(config);
       const reads = Array.from({ length: 14 }, (_, index) =>
@@ -626,7 +626,7 @@ describe("worker runtime", () => {
         })
     );
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+    globalThis.fetch = fetchSpy;
     try {
       const integration = createFingerprintIntegration(config, logger);
       await expect(

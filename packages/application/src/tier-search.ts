@@ -148,7 +148,8 @@ export function tierSearchStates(
   for (const search of latest) {
     const index = subjectOf.get(canonicalCharacterId(search.key));
     if (index === undefined) continue;
-    const bySubject = newest.get(search.raidId) ?? new Map();
+    const bySubject =
+      newest.get(search.raidId) ?? new Map<number, LatestTierSearch>();
     const current = bySubject.get(index);
     if (!current || search.createdAt > current.createdAt) {
       bySubject.set(index, search);

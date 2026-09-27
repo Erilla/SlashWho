@@ -79,7 +79,7 @@ export function collectGuildRaidNights(
     const entry = guilds.get(id) ?? {
       guild: kill.guild,
       seenAt: kill.killedAt,
-      nights: new Map()
+      nights: new Map<string, Map<string, CharacterKey>>()
     };
     if (kill.killedAt > entry.seenAt) {
       entry.guild = kill.guild;
