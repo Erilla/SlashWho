@@ -4780,7 +4780,10 @@ describe("applicant evidence job handler", () => {
       evidence.recordPhaseTransitions = async (_runId, updates) => {
         for (const update of updates) {
           transitions.push({ id: update.id, state: update.state });
-          Object.assign(phases.find((item) => item.id === update.id)!, update);
+          Object.assign(
+            phases.find((item) => item.id === update.id)!,
+            update
+          );
         }
       };
       const handler = terminalHandler(
